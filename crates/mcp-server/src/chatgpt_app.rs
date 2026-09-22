@@ -1,16 +1,15 @@
 use super::{
     agent_native_claim, compile_objective_with_cloud_agent, fund_bounty_with_x402, get_paid_status,
-    get_x402_relay_status, inspect_open_competition_v2, list_autonomous_bounties,
-    list_autonomous_verification_jobs, list_opportunities, list_unfunded_bounties,
-    mcp_base_url_from_env, plan_autonomous_attestation_settlement, plan_autonomous_bounty_claim,
+    get_x402_relay_status, list_autonomous_bounties, list_autonomous_verification_jobs,
+    list_opportunities, list_unfunded_bounties, mcp_base_url_from_env,
+    plan_autonomous_attestation_settlement, plan_autonomous_bounty_claim,
     plan_autonomous_module_settlement, plan_autonomous_verification_attestation,
-    prepare_agent_to_earn, prepare_autonomous_bounty_submission, prepare_open_competition_v2,
-    proxy_hosted_json, public_base_url_from_env, publish_autonomous_submission_evidence,
-    publish_unfunded_bounty, submit_unfunded_bounty_solution, tools, AgentNativeClaimArgs,
-    AutonomousBountyFeedArgs, AutonomousVerificationJobsArgs, CompileObjectiveWithCloudAgentArgs,
-    GetX402RelayStatusArgs, ListUnfundedBountiesArgs, ObservedInterface, ObservedProtocolEra,
-    OpenCompetitionV2InspectArgs, OpenCompetitionV2MutationArgs, OpportunityListArgs,
-    PaidStatusArgs, PlanAutonomousAttestationSettlementArgs, PlanAutonomousBountyClaimArgs,
+    prepare_agent_to_earn, prepare_autonomous_bounty_submission, proxy_hosted_json,
+    public_base_url_from_env, publish_autonomous_submission_evidence, publish_unfunded_bounty,
+    submit_unfunded_bounty_solution, tools, AgentNativeClaimArgs, AutonomousBountyFeedArgs,
+    AutonomousVerificationJobsArgs, CompileObjectiveWithCloudAgentArgs, GetX402RelayStatusArgs,
+    ListUnfundedBountiesArgs, OpportunityListArgs, PaidStatusArgs,
+    PlanAutonomousAttestationSettlementArgs, PlanAutonomousBountyClaimArgs,
     PlanAutonomousModuleSettlementArgs, PlanAutonomousVerificationAttestationArgs,
     PrepareAgentToEarnInput, PrepareAutonomousBountySubmissionArgs, PrepareBountyPostArgs,
     PublishAutonomousSubmissionEvidenceArgs, PublishUnfundedBountyArgs, SharedState,
@@ -19,133 +18,43 @@ use super::{
 #[cfg(test)]
 use super::{AppState, ChatgptFileInput};
 use axum::{
-    extract::{Path, State},
-    http::{header::ORIGIN, HeaderMap, HeaderValue, StatusCode},
+    extract::State,
+    http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
 use base64::Engine as _;
-use db::{
-    distribution_acquisition_token_hash, normalize_distribution_rail,
-    sign_distribution_acquisition_token, DistributionCompetitionBinding, NewBountyImageAsset,
-};
+use db::NewBountyImageAsset;
 use domain::BountyImageReference;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::{env, net::IpAddr};
 use url::Url;
 use uuid::Uuid;
 
-const MCP_PROTOCOL_VERSION: &str = "2026-07-28";
-const MCP_LEGACY_PROTOCOL_VERSION: &str = "2025-06-18";
-const MCP_CATALOG_TTL_MS: u64 = 300_000;
-const MCP_PROTOCOL_VERSION_META: &str = "io.modelcontextprotocol/protocolVersion";
-const MCP_CLIENT_INFO_META: &str = "io.modelcontextprotocol/clientInfo";
-const MCP_CLIENT_CAPABILITIES_META: &str = "io.modelcontextprotocol/clientCapabilities";
-const MCP_SERVER_INFO_META: &str = "io.modelcontextprotocol/serverInfo";
-const MCP_PROTOCOL_VERSION_HEADER: &str = "mcp-protocol-version";
-const MCP_METHOD_HEADER: &str = "mcp-method";
-const MCP_NAME_HEADER: &str = "mcp-name";
-const MCP_ALLOWED_ORIGINS_ENV: &str = "MCP_ALLOWED_ORIGINS";
-const ACQUISITION_HEADER: &str = "x-agent-bounties-acquisition-id";
-const ATTRIBUTION_RAIL_HEADER: &str = "x-agent-bounties-attribution-rail";
-const FIRST_TOUCH_RAIL_HEADER: &str = "x-agent-bounties-first-touch-rail";
-const CANARY_HEADER: &str = "x-agent-bounties-canary";
-const MEASUREMENT_ELIGIBLE_HEADER: &str = "x-agent-bounties-measurement-eligible";
-const INTERNAL_ATTRIBUTION_META: &str = "agentbounties.internal/attribution";
+const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const CHATGPT_SANDBOX_ENV: &str = "CHATGPT_APP_SANDBOX_MODE";
 const FEED_WIDGET_URI: &str = "ui://agent-bounties/live-feed-v4.html";
 const POST_PAGE_URL: &str = "https://agentbounties.app/post.html";
-const FEED_WIDGET_HTML: &str = include_str!("../assets/chatgpt-bounty-feed-widget.html");
-const BOUNTY_CARD_PREVIEW_HTML: &str = include_str!("../assets/chatgpt-bounty-card-preview.html");
-const FEED_CARD_ART: &[u8] =
-    include_bytes!("../../../site/assets/solarpunk/characters-helping.webp");
+const FEED_WIDGET_HTML: &str = include_str!("../../../site/chatgpt-bounty-feed-widget.html");
+const BOUNTY_CARD_PREVIEW_HTML: &str =
+    include_str!("../../../site/chatgpt-bounty-card-preview.html");
+const FEED_CARD_ART: &[u8] = include_bytes!("../../../site/assets/bounty-quest-agent-v1.webp");
 const MAX_BOUNTY_IMAGE_BYTES: usize = 5 * 1024 * 1024;
-const REGRESSION_ENGINE: &str = "sandboxed_regression_v1";
-const RECONCILED_REGRESSION_BENCHMARK_DIGESTS: &[&str] = &[
-    "sha256:b61a96a7d07ca01337ea3576de734f5b62ccab966a6d0da42a8736cfc0287ce6",
-    "sha256:b9b0d026347a2922f913e9a8ed3651dd74e7eba930598981a169da3bf42e7c3f",
-    "sha256:30bb17e3e3916747144c7087f49fb1ce41ddaf1aec4d717f878d2840203895a2",
-    "sha256:6c7a300bcdd84f125bf9811297d72f3717d5ebd65f326c5e23687f44ba553043",
-    "sha256:94eff483d0fbba47037a1dedaae1e9339e23f218eb29ea3182fbc256e7e1c587",
-    "sha256:63e28323ea17da7ef0fb79e447256540e28f9c7525a8657707aea1598ce05bff",
-    "sha256:73fc58dcd45e551344f8889095b7d3a71546170ba7f05fb1876aaf6aa796ac3d",
-    "sha256:3bfb647d41539693c9598a01d9f9f7953a285dfb7c1986a190560a8745f64731",
-    "sha256:a14e53feada2f49b646d340a494c822ec3112a2a6c468ce1cdb21fd7ee23a3d7",
-    "sha256:eed1340e372c85f87f8718696c03973748fb3fbaec7b4e90041d77d3513f9656",
-];
-const RECONCILED_REGRESSION_BENCHMARK_COMMIT: &str = "fa946859a3379b8c9128183e20dedb3b8319a646";
-// Keep the paid-rail canary bound to the independently rehearsed historical tree.
-const RECONCILED_GLAMA_CANARY_COMMIT: &str = "0fae18cf9be464132cde52dfb9d464d836e8f024";
-const RECONCILED_GLAMA_CANARY_DIGEST: &str =
-    "sha256:eed1340e372c85f87f8718696c03973748fb3fbaec7b4e90041d77d3513f9656";
-const RECONCILED_REGRESSION_BENCHMARK_SOURCES: &[(&str, &str)] = &[
-    (
-        RECONCILED_REGRESSION_BENCHMARK_DIGESTS[0],
-        "benchmarks/direct-growth-v2/a2a-agent-card",
-    ),
-    (
-        RECONCILED_REGRESSION_BENCHMARK_DIGESTS[1],
-        "benchmarks/direct-growth-v2/hermes-integration",
-    ),
-    (
-        RECONCILED_REGRESSION_BENCHMARK_DIGESTS[2],
-        "benchmarks/direct-growth-v2/openhands-integration",
-    ),
-    (
-        RECONCILED_REGRESSION_BENCHMARK_DIGESTS[3],
-        "benchmarks/direct-growth-v2/mini-swe-agent-environment",
-    ),
-    (
-        RECONCILED_REGRESSION_BENCHMARK_DIGESTS[4],
-        "benchmarks/direct-inventory-v1/rpc-failover",
-    ),
-    (
-        RECONCILED_REGRESSION_BENCHMARK_DIGESTS[5],
-        "benchmarks/direct-inventory-v1/inventory-breakdown",
-    ),
-    (
-        RECONCILED_REGRESSION_BENCHMARK_DIGESTS[6],
-        "benchmarks/direct-inventory-v1/wallet-liquidity",
-    ),
-    (
-        RECONCILED_REGRESSION_BENCHMARK_DIGESTS[7],
-        "benchmarks/direct-inventory-v1/replenishment-plan",
-    ),
-    (
-        RECONCILED_REGRESSION_BENCHMARK_DIGESTS[8],
-        "benchmarks/direct-inventory-v1/stalled-work",
-    ),
-    (
-        RECONCILED_GLAMA_CANARY_DIGEST,
-        "benchmarks/distribution-v1/glama-onboarding-audit",
-    ),
-];
-const CHATGPT_ADVERTISED_TOOL_NAMES: &[&str] = &[
+const CHATGPT_FULL_TOOL_NAMES: &[&str] = &[
     "get_bounty_feed",
     "render_bounty_feed",
     "prepare_moonpay_onramp",
-    "prepare_bounty_post",
     "prepare_bounty_action",
     "get_bounty_action_status",
     "compile_objective_with_cloud_agent",
     "list_bounty_comments",
     "add_bounty_comment",
     "create_share_bundle",
+    "prepare_bounty_post",
+    "list_autonomous_bounties",
 ];
-const CHATGPT_COMPATIBILITY_TOOL_NAMES: &[&str] = &["list_autonomous_bounties"];
-const CORE_MCP_EXTENSION_TOOL_NAMES: &[&str] =
-    &["inspect_open_competition_v2", "prepare_open_competition_v2"];
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct McpDistributionAttribution {
-    acquisition_id: Uuid,
-    acquisition_token: String,
-    first_touch_rail: String,
-    current_rail: String,
-    measurement_eligible: bool,
-}
 #[derive(Debug, Clone, Deserialize)]
 struct ChatgptFeedArgs {
     network: Option<String>,
@@ -355,229 +264,18 @@ fn custom_tool_descriptors() -> Vec<ToolDescriptor> {
 pub(super) async fn prepare_bounty_post_handoff(
     state: &SharedState,
     args: &PrepareBountyPostArgs,
-    attribution: Option<&McpDistributionAttribution>,
 ) -> Result<Value, String> {
-    // Fail closed on every non-file field before downloading or persisting an
-    // optional approved image.
-    let mut stable_args = args.clone();
-    stable_args.posting_operation_id = Some(prepared_posting_operation_id(args)?);
-    let args = &stable_args;
+    // Fail closed on every non-file field before downloading or persisting the
+    // approved image.
     let validation_image = sandbox_bounty_image_reference(args)?;
-    let validation_handoff = build_bounty_post_handoff(args, validation_image.as_ref())?;
-    let handoff = if validation_image.is_none() {
-        validation_handoff
-    } else {
-        let image = persist_chatgpt_bounty_image(state, args).await?;
-        build_bounty_post_handoff(args, Some(&image))?
-    };
-    attach_distribution_attribution(state, args, handoff, attribution).await
-}
-
-async fn attach_distribution_attribution(
-    state: &SharedState,
-    args: &PrepareBountyPostArgs,
-    mut handoff: Value,
-    attribution: Option<&McpDistributionAttribution>,
-) -> Result<Value, String> {
-    let Some(attribution) = attribution else {
-        return Ok(handoff);
-    };
-    let store = state.store.as_ref().ok_or_else(|| {
-        "durable distribution attribution is unavailable for this rail".to_string()
-    })?;
-    let request_fingerprint = Sha256::digest(
-        serde_json::to_vec(args)
-            .map_err(|error| format!("could not fingerprint the prepared handoff: {error}"))?,
-    )
-    .iter()
-    .map(|byte| format!("{byte:02x}"))
-    .collect::<String>();
-    let reserved = store
-        .reserve_distribution_handoff(
-            attribution.acquisition_id,
-            &request_fingerprint,
-            chrono::Utc::now(),
-        )
-        .await
-        .map_err(|error| format!("could not persist the attributed handoff: {error}"))?;
-    let post_url = handoff
-        .get("post_url")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "prepared handoff did not contain a post URL".to_string())?;
-    let mut post_url =
-        Url::parse(post_url).map_err(|_| "prepared handoff post URL is invalid".to_string())?;
-    post_url
-        .query_pairs_mut()
-        .append_pair("acquisition", &attribution.acquisition_token)
-        .append_pair("handoff", &reserved.id.to_string());
-    if post_url.as_str().len() > 12_000 {
-        return Err(
-            "the attributed bounty is too large for a safe browser handoff; shorten the goal or acceptance criteria"
-                .to_string(),
-        );
-    }
-    let object = handoff
-        .as_object_mut()
-        .ok_or_else(|| "prepared handoff is not an object".to_string())?;
-    object.insert("post_url".to_string(), Value::String(post_url.to_string()));
-    object.insert(
-        "attribution".to_string(),
-        json!({
-            "acquisition_id": attribution.acquisition_token,
-            "handoff_id": reserved.id,
-            "first_touch_rail": attribution.first_touch_rail,
-            "current_rail": attribution.current_rail,
-            "terms_publish_headers": {
-                "x-agent-bounties-acquisition-id": attribution.acquisition_token,
-                "x-agent-bounties-handoff-id": reserved.id,
-            },
-            "authority": "analytics_only"
-        }),
-    );
-    Ok(handoff)
-}
-
-fn distribution_request_fingerprint(arguments: &Value) -> String {
-    hex::encode(Sha256::digest(
-        serde_json::to_vec(arguments).unwrap_or_else(|_| b"invalid-json-value".to_vec()),
-    ))
-}
-
-fn competition_preparation_binding(
-    result: &Value,
-    attribution: &McpDistributionAttribution,
-) -> Result<DistributionCompetitionBinding, String> {
-    if !result
-        .get("http_status")
-        .and_then(Value::as_u64)
-        .is_some_and(|status| (200..300).contains(&status))
-    {
-        return Err("creation API did not return a successful HTTP status".to_string());
-    }
-    let plan: chain_base::OpenCompetitionV2CreationPlan = serde_json::from_value(
-        result
-            .pointer("/body/plan")
-            .cloned()
-            .ok_or("creation result has no plan")?,
-    )
-    .map_err(|_| "creation result has an invalid plan".to_string())?;
-    if plan.schema_version != "agent-bounties/open-competition-v2-creation-plan-v1"
-        || plan.protocol_version != "agent-bounties/open-competition-v2-beta3"
-    {
-        return Err("creation attribution requires the supported Beta3 plan".to_string());
-    }
-    let network_name = match plan.network.name.as_str() {
-        "Base" => "base-mainnet",
-        "Base Sepolia" => "base-sepolia",
-        name => name,
-    };
-    let expected_network = chain_base::base_network_descriptor(network_name)
-        .map_err(|_| "creation plan has an unsupported network".to_string())?;
-    if plan.network.chain_id != expected_network.chain_id {
-        return Err("creation plan network and chain ID disagree".to_string());
-    }
-    let network = match expected_network.chain_id {
-        8_453 => "base-mainnet",
-        84_532 => "base-sepolia",
-        _ => return Err("creation plan has an unsupported chain ID".to_string()),
-    };
-    let creates: Vec<_> = plan
-        .wallet_calls
-        .iter()
-        .filter(|call| call.function.starts_with("createCompetition("))
-        .collect();
-    if creates.len() != 1 {
-        return Err("creation plan must contain exactly one factory creation call".to_string());
-    }
-    let create = creates[0];
-    let address = |value: &str| {
-        chain_base::normalize_evm_address(value)
-            .map(|value| value.to_ascii_lowercase())
-            .map_err(|_| "creation plan has an invalid address".to_string())
-    };
-    let creator = address(
-        create
-            .from
-            .as_deref()
-            .ok_or("creation plan has no creator")?,
-    )?;
-    let bounty_id = plan.bounty_id.to_ascii_lowercase();
-    if bounty_id.len() != 66
-        || !bounty_id.starts_with("0x")
-        || !bounty_id[2..].bytes().all(|byte| byte.is_ascii_hexdigit())
-    {
-        return Err("creation plan has an invalid bounty ID".to_string());
-    }
-    Ok(DistributionCompetitionBinding {
-        acquisition_id: attribution.acquisition_id,
-        protocol_version: plan.protocol_version,
-        network: network.to_string(),
-        factory_contract: address(&create.to)?,
-        bounty_id,
-        competition_contract: address(&plan.predicted_competition)?,
-        creator_wallet: creator,
-        // Timestamp the successfully parsed response, never the earlier request.
-        prepared_at: chrono::Utc::now(),
-    })
-}
-
-async fn attach_competition_preparation_attribution(
-    state: &SharedState,
-    mut result: Value,
-    attribution: Option<&McpDistributionAttribution>,
-) -> Result<Value, String> {
-    let Some(attribution) = attribution else {
-        return Ok(result);
-    };
-    let binding = competition_preparation_binding(&result, attribution)?;
-    state
-        .store
-        .as_ref()
-        .ok_or("durable competition attribution is unavailable")?
-        .bind_distribution_competition(&binding)
-        .await
-        .map_err(|_| "competition preparation attribution could not be preserved".to_string())?;
-    result.as_object_mut().ok_or("creation response is not an object")?.insert(
-        "attribution".to_string(),
-        json!({
-            "authority": "analytics_only",
-            "state": "unsigned_preparation_recorded",
-            "first_touch_rail": attribution.first_touch_rail,
-            "current_rail": attribution.current_rail,
-            "measurement_eligible": attribution.measurement_eligible,
-            "protocol_version": binding.protocol_version,
-            "network": binding.network,
-            "factory_contract": binding.factory_contract,
-            "bounty_id": binding.bounty_id,
-            "competition_contract": binding.competition_contract,
-            "evidence_boundary": "A preparation is not creation, funding, activation, or settlement. Only matching confirmed canonical events establish those outcomes."
-        }),
-    );
-    Ok(result)
-}
-
-async fn record_prepare_handoff_failure(
-    state: &SharedState,
-    attribution: Option<&McpDistributionAttribution>,
-    request_fingerprint: &str,
-    failure_code: &str,
-) {
-    let (Some(store), Some(attribution)) = (state.store.as_ref(), attribution) else {
-        return;
-    };
-    let _ = store
-        .record_distribution_handoff_failure(
-            attribution.acquisition_id,
-            request_fingerprint,
-            failure_code,
-            chrono::Utc::now(),
-        )
-        .await;
+    build_bounty_post_handoff(args, &validation_image)?;
+    let image = persist_chatgpt_bounty_image(state, args).await?;
+    build_bounty_post_handoff(args, &image)
 }
 
 pub(super) fn build_bounty_post_handoff(
     args: &PrepareBountyPostArgs,
-    image: Option<&BountyImageReference>,
+    image: &BountyImageReference,
 ) -> Result<Value, String> {
     let title = bounded_text(&args.title, "title", 200)?;
     let goal = bounded_text(&args.goal, "goal", 4_000)?;
@@ -591,18 +289,6 @@ pub(super) fn build_bounty_post_handoff(
         .collect::<Result<Vec<_>, _>>()?;
     let solver_reward = parse_usdc(&args.solver_reward_usdc, "solver_reward_usdc")?;
     let verifier_reward = parse_usdc(&args.verifier_reward_usdc, "verifier_reward_usdc")?;
-    let meta_child = validate_prepared_parent(args.meta_child.as_ref())?;
-    let qualifying_child_draft = meta_child.is_some()
-        && solver_reward > 0
-        && verifier_reward >= 10_000
-        && verifier_reward % 2 == 0
-        && solver_reward.checked_add(verifier_reward) == Some(1_000_000);
-    if solver_reward < 2_000_000 && !qualifying_child_draft {
-        return Err("public bounties require at least 2 USDC for the solver".to_string());
-    }
-    if verifier_reward < 10_000 {
-        return Err("public bounties require at least 0.01 USDC for the verifier".to_string());
-    }
     let target = solver_reward
         .checked_add(verifier_reward)
         .ok_or_else(|| "combined USDC target is too large".to_string())?;
@@ -616,92 +302,22 @@ pub(super) fn build_bounty_post_handoff(
         .as_deref()
         .map(|value| bounded_text(value, "discovery_source", 500))
         .transpose()?;
-    let review_mode = args.review_mode.as_deref().unwrap_or("automated");
-    match review_mode {
-        "creator" => {
-            if meta_child.is_some() || args.benchmark.is_some() || args.evidence_schema.is_some() {
-                return Err("Creator review cannot replace a meta-child verifier or an automated benchmark. Omit benchmark and evidence_schema when explicitly selecting creator review.".to_string());
-            }
-            let deadline = args.delivery_deadline.as_deref().ok_or(
-                "Creator review requires the exact agreed delivery_deadline with timezone offset.",
-            )?;
-            let parsed = chrono::DateTime::parse_from_rfc3339(deadline).map_err(|_| {
-                "delivery_deadline must be an ISO timestamp including its timezone offset"
-                    .to_string()
-            })?;
-            let now = chrono::Utc::now();
-            if parsed <= now || parsed > now + chrono::Duration::days(366) {
-                return Err(
-                    "Creator review requires a future delivery deadline within 366 days."
-                        .to_string(),
-                );
-            }
-        }
-        "automated" => {
-            if args.delivery_deadline.is_some() {
-                return Err("An automated benchmark does not enforce a calendar delivery deadline. Select creator review or explicitly agree a relative work window.".to_string());
-            }
-            validate_prepared_verifier(args.benchmark.as_ref(), args.evidence_schema.as_ref())?;
-        }
-        _ => return Err("review_mode must be creator or automated".to_string()),
-    }
-    let posting_operation_id = prepared_posting_operation_id(args)?;
-    validate_prepared_reference(args.reference_attachment.as_ref())?;
-    match (
-        image,
-        args.image_prompt.as_deref(),
-        args.image_alt_text.as_deref(),
-        args.bounty_image.as_ref(),
-    ) {
-        (None, None, None, None) => {}
-        (Some(image), Some(prompt), Some(alt_text), Some(_)) => {
-            let image_prompt = bounded_text(prompt, "image_prompt", 4_000)?;
-            let image_alt_text = bounded_text(alt_text, "image_alt_text", 500)?;
-            if image.source != "chatgpt_user_generated"
-                || image.prompt != image_prompt
-                || image.alt_text != image_alt_text
-            {
-                return Err(
-                    "the stored bounty image must match the prompt and alt text approved in the AI conversation"
-                        .to_string(),
-                );
-            }
-        }
-        _ => {
-            return Err(
-                "bounty_image, image_prompt, and image_alt_text must be supplied together or all omitted"
-                    .to_string(),
-            );
-        }
+    let image_prompt = bounded_text(&args.image_prompt, "image_prompt", 4_000)?;
+    let image_alt_text = bounded_text(&args.image_alt_text, "image_alt_text", 500)?;
+    if image.source != "chatgpt_user_generated"
+        || image.prompt != image_prompt
+        || image.alt_text != image_alt_text
+    {
+        return Err(
+            "the stored bounty image must match the prompt and alt text approved in ChatGPT"
+                .to_string(),
+        );
     }
 
     let mut post_url = Url::parse(POST_PAGE_URL).expect("static post URL is valid");
     {
         let mut query = post_url.query_pairs_mut();
-        query.append_pair("from", "ai-app");
-        query.append_pair("operation_id", &posting_operation_id.to_string());
-        query.append_pair("reviewMode", review_mode);
-        if let Some(deadline) = &args.delivery_deadline {
-            query.append_pair("deliveryDeadline", deadline);
-        }
-        if let Some(parent) = &meta_child {
-            query.append_pair(
-                "parentBounty",
-                parent["parent_bounty_contract"]
-                    .as_str()
-                    .expect("validated parent"),
-            );
-            if let Some(solver) = parent["intended_child_solver"].as_str() {
-                query.append_pair("intendedChildSolver", solver);
-            }
-        }
-        if let Some(reference) = &args.reference_attachment {
-            query.append_pair(
-                "referenceAttachment",
-                &serde_json::to_string(reference)
-                    .map_err(|_| "reference_attachment could not be encoded")?,
-            );
-        }
+        query.append_pair("from", "chatgpt-app");
         query.append_pair("title", &title);
         query.append_pair("goal", &goal);
         for criterion in &acceptance_criteria {
@@ -716,32 +332,13 @@ pub(super) fn build_bounty_post_handoff(
         }
         query.append_pair(
             "discoverySource",
-            discovery_source
-                .as_deref()
-                .unwrap_or("AI assistant via MCP"),
+            discovery_source.as_deref().unwrap_or("ChatGPT app"),
         );
-        if let Some(benchmark) = args.benchmark.as_ref() {
-            query.append_pair(
-                "benchmark",
-                &serde_json::to_string(benchmark)
-                    .map_err(|_| "benchmark could not be encoded for browser review".to_string())?,
-            );
-        }
-        if let Some(evidence_schema) = args.evidence_schema.as_ref() {
-            query.append_pair(
-                "evidenceSchema",
-                &serde_json::to_string(evidence_schema).map_err(|_| {
-                    "evidence_schema could not be encoded for browser review".to_string()
-                })?,
-            );
-        }
-        if let Some(image) = image {
-            query.append_pair("imageUrl", &image.asset_url);
-            query.append_pair("imageSha256", &image.sha256);
-            query.append_pair("imageMimeType", &image.mime_type);
-            query.append_pair("imagePrompt", &image.prompt);
-            query.append_pair("imageAlt", &image.alt_text);
-        }
+        query.append_pair("imageUrl", &image.asset_url);
+        query.append_pair("imageSha256", &image.sha256);
+        query.append_pair("imageMimeType", &image.mime_type);
+        query.append_pair("imagePrompt", &image.prompt);
+        query.append_pair("imageAlt", &image.alt_text);
     }
     if post_url.as_str().len() > 12_000 {
         return Err(
@@ -753,13 +350,6 @@ pub(super) fn build_bounty_post_handoff(
     Ok(json!({
         "schema": "agent-bounties/chatgpt-post-handoff-v1",
         "state": "review_required_not_published",
-        "posting_operation_id": posting_operation_id,
-        "review_mode": review_mode,
-        "delivery_deadline": args.delivery_deadline,
-        "meta_child": meta_child,
-        "reference_attachment": args.reference_attachment,
-        "verification_prepared": review_mode == "creator" || args.benchmark.is_some(),
-        "review_disclosure": if review_mode == "creator" { Some("The creator reviews every published check and confirms the verdict. The creator-review reserve is paid to the creator on pass or fail. This is human review; wallet and legal confirmations remain with the creator.") } else { None },
         "title": title,
         "goal": goal,
         "acceptance_criteria": acceptance_criteria,
@@ -770,8 +360,6 @@ pub(super) fn build_bounty_post_handoff(
         "initial_funding_usdc": if args.crowdfund { "0".to_string() } else { format_usdc(target) },
         "crowdfund": args.crowdfund,
         "source_url": source_url,
-        "benchmark": args.benchmark,
-        "evidence_schema": args.evidence_schema,
         "image": image,
         "post_url": post_url.as_str(),
         "bounty_created": false,
@@ -781,454 +369,19 @@ pub(super) fn build_bounty_post_handoff(
     }))
 }
 
-fn prepared_posting_operation_id(args: &PrepareBountyPostArgs) -> Result<uuid::Uuid, String> {
-    if let Some(id) = args.posting_operation_id {
-        return Ok(id);
-    }
-    // An unchanged request remains the same journey across MCP retries. This is
-    // only an identifier: every persisted draft still requires its owner's session.
-    let bytes = serde_json::to_vec(args).map_err(|_| "could not identify the posting operation")?;
-    Ok(uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, &bytes))
-}
-
-fn validate_prepared_reference(reference: Option<&Value>) -> Result<(), String> {
-    let Some(value) = reference else {
-        return Ok(());
-    };
-    // Same immutable homepage originals as site/posting-reference.js. Validate
-    // before fetching any optional cover image; this descriptor cannot fetch URLs.
-    let (hash, length) = match (value["phase"].as_str(), value["variant"].as_str()) {
-        (Some("dawn"), Some("desktop")) => (
-            "a7cdaf198c5ed18cf4921d5d5a180353d7f461f96906822cfc3489e229d0c29a",
-            202068,
-        ),
-        (Some("dawn"), Some("mobile")) => (
-            "ded24e4a5aaa0593caf7411ba998bc8e36dea6cb6a5042b69762035645858629",
-            96120,
-        ),
-        (Some("day"), Some("desktop")) => (
-            "f9143ee70ca0551bc97562c89c96cc56b4a54391ab4034315148253b757fcaef",
-            256228,
-        ),
-        (Some("day"), Some("mobile")) => (
-            "7a62291ef8cafe5ce7371a55c79e44432cfe338c8e884d98c95b3fd1a4a172cd",
-            98768,
-        ),
-        (Some("dusk"), Some("desktop")) => (
-            "73e5628a4184a854654df37cc6cf46d18ba14a5f45962619a6606c5627bb24a9",
-            255156,
-        ),
-        (Some("dusk"), Some("mobile")) => (
-            "6a478e020ba6362ce8899d761d858e4dd6ba35221bc89fc76a078bd911bad5ad",
-            113114,
-        ),
-        (Some("night"), Some("desktop")) => (
-            "06fc595b47101033af0ac00a71b4052f31c84d924cc1078e37a42e855d7883fa",
-            149004,
-        ),
-        (Some("night"), Some("mobile")) => (
-            "9705a9ccb07c91ff4cdb360fc6dc6393c5fb7f149bb7479877b9bef4dfcc8b9c",
-            61982,
-        ),
-        _ => {
-            return Err(
-                "reference_attachment must identify a supported homepage background".to_string(),
-            )
-        }
-    };
-    let asset_url = format!("https://raw.githubusercontent.com/NSPG13/agent-bounties/933c9c446a76d26f148a4f2defacf6453d02a7b2/site/assets/solarpunk/scene-{}{}.webp", value["phase"].as_str().unwrap(), if value["variant"] == "mobile" { "-mobile" } else { "" });
-    let valid = value.as_object().is_some_and(|object| {
-        object.len() == 10
-            && object.keys().all(|key| {
-                [
-                    "version",
-                    "kind",
-                    "phase",
-                    "variant",
-                    "source_url",
-                    "asset_url",
-                    "captured_at",
-                    "sha256",
-                    "mime_type",
-                    "byte_length",
-                ]
-                .contains(&key.as_str())
-            })
-    }) && value["version"] == 1
-        && value["kind"] == "homepage_background"
-        && value["source_url"] == "https://agentbounties.app/"
-        && value["asset_url"] == asset_url
-        && value["sha256"] == format!("sha256:{hash}")
-        && value["byte_length"] == length
-        && value["mime_type"] == "image/webp"
-        && value["captured_at"]
-            .as_str()
-            .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
-            .is_some_and(|time| time <= chrono::Utc::now() + chrono::Duration::minutes(5));
-    if !valid {
-        return Err(
-            "reference_attachment does not match its immutable image, digest and capture time"
-                .to_string(),
-        );
-    }
-    Ok(())
-}
-
-fn validate_prepared_parent(value: Option<&Value>) -> Result<Option<Value>, String> {
-    let Some(value) = value else { return Ok(None) };
-    let object = value.as_object().ok_or("meta_child must be an object")?;
-    if object
-        .keys()
-        .any(|key| !["parent_bounty_contract", "intended_child_solver"].contains(&key.as_str()))
-    {
-        return Err("meta_child contains unsupported fields".to_string());
-    }
-    let address = |key: &str| -> Result<Option<String>, String> {
-        match object.get(key) {
-            None | Some(Value::Null) if key != "parent_bounty_contract" => Ok(None),
-            Some(Value::String(value)) => {
-                let normalized = chain_base::normalize_evm_address(value)
-                    .map_err(|_| format!("{key} must be an EVM address"))?;
-                if normalized.eq_ignore_ascii_case("0x0000000000000000000000000000000000000000") {
-                    return Err(format!("{key} must not be the zero address"));
-                }
-                Ok(Some(normalized.to_ascii_lowercase()))
-            }
-            _ => Err(format!("{key} must be an EVM address")),
-        }
-    };
-    Ok(Some(
-        json!({"parent_bounty_contract": address("parent_bounty_contract")?, "intended_child_solver": address("intended_child_solver")?}),
-    ))
-}
-
-fn validate_prepared_verifier(
-    benchmark: Option<&Value>,
-    evidence_schema: Option<&Value>,
-) -> Result<(), String> {
-    match (benchmark, evidence_schema) {
-        (None, None) => return Ok(()),
-        (None, Some(_)) => {
-            return Err("benchmark is required when evidence_schema is supplied".to_string())
-        }
-        (Some(_), None) => {
-            return Err("evidence_schema is required when benchmark is supplied".to_string())
-        }
-        (Some(_), Some(_)) => {}
-    }
-    let benchmark = benchmark.expect("matched benchmark presence");
-    let evidence_schema = evidence_schema.expect("matched evidence schema presence");
-    for (value, label) in [
-        (benchmark, "benchmark"),
-        (evidence_schema, "evidence_schema"),
-    ] {
-        let encoded = serde_json::to_vec(value)
-            .map_err(|_| format!("{label} could not be encoded safely"))?;
-        if encoded.len() > 20_000 {
-            return Err(format!("{label} exceeds the 20,000-byte handoff limit"));
-        }
-        if !value.is_object() {
-            return Err(format!("{label} must be an object"));
-        }
-    }
-    if evidence_schema.get("type").and_then(Value::as_str) != Some("object") {
-        return Err("evidence_schema.type must be object".to_string());
-    }
-    let required = evidence_schema
-        .get("required")
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
-            "evidence_schema.required must include source_snapshot_digest".to_string()
-        })?;
-    if !required
-        .iter()
-        .any(|field| field.as_str() == Some("source_snapshot_digest"))
-    {
-        return Err("evidence_schema must require source_snapshot_digest".to_string());
-    }
-    let source_digest = evidence_schema
-        .get("properties")
-        .and_then(Value::as_object)
-        .and_then(|properties| properties.get("source_snapshot_digest"))
-        .and_then(Value::as_object)
-        .ok_or_else(|| {
-            "evidence_schema.properties.source_snapshot_digest is required".to_string()
-        })?;
-    if source_digest.get("type").and_then(Value::as_str) != Some("string")
-        || source_digest.get("pattern").and_then(Value::as_str) != Some("^sha256:[0-9a-f]{64}$")
-    {
-        return Err(
-            "evidence_schema.source_snapshot_digest must require sha256:<64 lowercase hex>"
-                .to_string(),
-        );
-    }
-    if benchmark.get("engine").and_then(Value::as_str) != Some(REGRESSION_ENGINE) {
-        return Err(format!("benchmark.engine must be {REGRESSION_ENGINE}"));
-    }
-    let source = benchmark
-        .get("source")
-        .and_then(Value::as_object)
-        .ok_or_else(|| "benchmark.source must be an object".to_string())?;
-    if source.get("kind").and_then(Value::as_str) != Some("github_commit") {
-        return Err("benchmark.source.kind must be github_commit".to_string());
-    }
-    let repository = source
-        .get("repository")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "benchmark.source.repository is required".to_string())?;
-    let repository_parts = repository.split('/').collect::<Vec<_>>();
-    if repository_parts.len() != 2
-        || repository_parts.iter().any(|part| {
-            part.is_empty()
-                || part.len() > 100
-                || !part
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-        })
-    {
-        return Err("benchmark.source.repository must be owner/repository".to_string());
-    }
-    let commit = source
-        .get("commit")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "benchmark.source.commit is required".to_string())?;
-    if commit.len() != 40
-        || !commit
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-    {
-        return Err(
-            "benchmark.source.commit must be 40 lowercase hexadecimal characters".to_string(),
-        );
-    }
-    let subdirectory = source
-        .get("subdirectory")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "benchmark.source.subdirectory is required".to_string())?;
-    if subdirectory.is_empty()
-        || subdirectory.len() > 500
-        || subdirectory.starts_with('/')
-        || subdirectory.ends_with('/')
-        || subdirectory.contains('\\')
-        || subdirectory
-            .split('/')
-            .any(|part| part.is_empty() || matches!(part, "." | ".."))
-    {
-        return Err("benchmark.source.subdirectory must be a normalized non-root path".to_string());
-    }
-    let runner = benchmark
-        .get("runner_manifest")
-        .and_then(Value::as_object)
-        .ok_or_else(|| "benchmark.runner_manifest must be an object".to_string())?;
-    let expected_runner_keys = [
-        "schema_version",
-        "image",
-        "command",
-        "workdir",
-        "benchmark_digest",
-        "timeout_seconds",
-        "cpu_millis",
-        "memory_bytes",
-        "pids_limit",
-        "max_output_bytes",
-        "tmpfs_bytes",
-        "max_source_bytes",
-        "max_source_files",
-        "max_benchmark_bytes",
-        "max_benchmark_files",
-        "platform",
-        "test_seed",
-    ];
-    if runner.len() != expected_runner_keys.len()
-        || expected_runner_keys
-            .iter()
-            .any(|key| !runner.contains_key(*key))
-    {
-        return Err(
-            "benchmark.runner_manifest must contain the complete regression-sandbox-v1 field set"
-                .to_string(),
-        );
-    }
-    if runner.get("schema_version").and_then(Value::as_str)
-        != Some("agent-bounties/regression-sandbox-v1")
-    {
-        return Err(
-            "benchmark.runner_manifest.schema_version must be agent-bounties/regression-sandbox-v1"
-                .to_string(),
-        );
-    }
-    let image = runner
-        .get("image")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "benchmark.runner_manifest.image is required".to_string())?;
-    let image_parts = image.split('@').collect::<Vec<_>>();
-    if image_parts.len() != 2
-        || image_parts[0].is_empty()
-        || image_parts[0].starts_with('-')
-        || image_parts[0].contains("..")
-        || image_parts[0].bytes().any(|byte| {
-            !(byte.is_ascii_lowercase()
-                || byte.is_ascii_digit()
-                || matches!(byte, b'.' | b'/' | b':' | b'_' | b'-'))
-        })
-        || !valid_sha256_digest(image_parts[1])
-    {
-        return Err(
-            "benchmark.runner_manifest.image must be one lowercase OCI reference pinned by sha256 digest"
-                .to_string(),
-        );
-    }
-    let command = runner
-        .get("command")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "benchmark.runner_manifest.command must be an array".to_string())?;
-    if command.is_empty() || command.len() > 64 {
-        return Err(
-            "benchmark.runner_manifest.command must contain 1 to 64 direct argv entries"
-                .to_string(),
-        );
-    }
-    let mut command_bytes = 0usize;
-    for argument in command {
-        let argument = argument.as_str().ok_or_else(|| {
-            "benchmark.runner_manifest.command entries must be strings".to_string()
-        })?;
-        if argument.is_empty() || argument.len() > 4_096 || argument.contains(['\0', '\n', '\r']) {
-            return Err(
-                "benchmark.runner_manifest.command contains an invalid argv entry".to_string(),
-            );
-        }
-        command_bytes = command_bytes.saturating_add(argument.len());
-    }
-    if command_bytes > 16_384 {
-        return Err("benchmark.runner_manifest.command exceeds the argv byte limit".to_string());
-    }
-    let executable = command[0]
-        .as_str()
-        .unwrap_or_default()
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if matches!(
-        executable.as_str(),
-        "sh" | "bash" | "dash" | "zsh" | "cmd" | "cmd.exe" | "powershell" | "pwsh"
-    ) {
-        return Err(
-            "benchmark.runner_manifest.command must use direct argv and cannot invoke a shell"
-                .to_string(),
-        );
-    }
-    if runner.get("workdir").and_then(Value::as_str) != Some("/workspace") {
-        return Err("benchmark.runner_manifest.workdir must be /workspace".to_string());
-    }
-    let benchmark_digest = runner
-        .get("benchmark_digest")
-        .and_then(Value::as_str)
-        .filter(|value| valid_sha256_digest(value))
-        .ok_or_else(|| {
-            "benchmark.runner_manifest.benchmark_digest must use sha256:<64 lowercase hex>"
-                .to_string()
-        })?;
-    if !RECONCILED_REGRESSION_BENCHMARK_DIGESTS.contains(&benchmark_digest) {
-        return Err(
-            "sandboxed regression benchmark exact digest must be independently reconciled and approved before funding or verifier signing".to_string(),
-        );
-    }
-    let approved_subdirectory = RECONCILED_REGRESSION_BENCHMARK_SOURCES.iter().find_map(
-        |(digest, approved_subdirectory)| {
-            (*digest == benchmark_digest).then_some(*approved_subdirectory)
-        },
-    );
-    let approved_commit = (commit == RECONCILED_REGRESSION_BENCHMARK_COMMIT
-        && benchmark_digest != RECONCILED_GLAMA_CANARY_DIGEST)
-        || (commit == RECONCILED_GLAMA_CANARY_COMMIT
-            && benchmark_digest == RECONCILED_GLAMA_CANARY_DIGEST);
-    if !repository.eq_ignore_ascii_case("NSPG13/agent-bounties")
-        || !approved_commit
-        || approved_subdirectory != Some(subdirectory)
-    {
-        return Err(
-            "sandboxed regression benchmark immutable source tuple must match its independently approved digest"
-                .to_string(),
-        );
-    }
-    let bounds = [
-        ("timeout_seconds", 1, 900),
-        ("cpu_millis", 100, 4_000),
-        ("memory_bytes", 67_108_864, 4_294_967_296),
-        ("pids_limit", 16, 512),
-        ("max_output_bytes", 1_024, 16_777_216),
-        ("tmpfs_bytes", 67_108_864, 4_294_967_296),
-        ("max_source_bytes", 1, 2_147_483_648),
-        ("max_source_files", 1, 100_000),
-        ("max_benchmark_bytes", 1, 536_870_912),
-        ("max_benchmark_files", 1, 50_000),
-        ("test_seed", 0, 9_007_199_254_740_991),
-    ];
-    for (field, minimum, maximum) in bounds {
-        if !runner
-            .get(field)
-            .and_then(Value::as_u64)
-            .is_some_and(|value| (minimum..=maximum).contains(&value))
-        {
-            return Err(format!(
-                "benchmark.runner_manifest.{field} is outside protocol bounds"
-            ));
-        }
-    }
-    if runner["tmpfs_bytes"].as_u64() > runner["memory_bytes"].as_u64() {
-        return Err("benchmark.runner_manifest.tmpfs_bytes cannot exceed memory_bytes".to_string());
-    }
-    if !matches!(
-        runner.get("platform").and_then(Value::as_str),
-        Some("linux/amd64" | "linux/arm64")
-    ) {
-        return Err(
-            "benchmark.runner_manifest.platform must be linux/amd64 or linux/arm64".to_string(),
-        );
-    }
-    Ok(())
-}
-
-fn valid_sha256_digest(value: &str) -> bool {
-    let Some(hex) = value.strip_prefix("sha256:") else {
-        return false;
-    };
-    hex.len() == 64
-        && hex
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-}
-
 async fn persist_chatgpt_bounty_image(
     state: &SharedState,
     args: &PrepareBountyPostArgs,
 ) -> Result<BountyImageReference, String> {
-    let prompt = bounded_text(
-        args.image_prompt
-            .as_deref()
-            .ok_or_else(|| "image_prompt is required when bounty_image is supplied".to_string())?,
-        "image_prompt",
-        4_000,
-    )?;
-    let alt_text = bounded_text(
-        args.image_alt_text.as_deref().ok_or_else(|| {
-            "image_alt_text is required when bounty_image is supplied".to_string()
-        })?,
-        "image_alt_text",
-        500,
-    )?;
-    let bounty_image = args
-        .bounty_image
-        .as_ref()
-        .ok_or_else(|| "bounty_image is required when image text is supplied".to_string())?;
-    let file_id = bounded_text(&bounty_image.file_id, "bounty_image.file_id", 512)?;
-    let download_url = validate_chatgpt_download_url(&bounty_image.download_url)?;
+    let prompt = bounded_text(&args.image_prompt, "image_prompt", 4_000)?;
+    let alt_text = bounded_text(&args.image_alt_text, "image_alt_text", 500)?;
+    let file_id = bounded_text(&args.bounty_image.file_id, "bounty_image.file_id", 512)?;
+    let download_url = validate_chatgpt_download_url(&args.bounty_image.download_url)?;
     let bytes = download_chatgpt_image(&download_url).await?;
     let mime_type = detect_bounty_image_mime(&bytes)
         .ok_or_else(|| "bounty_image must be a valid PNG, JPEG, or WebP file".to_string())?;
-    if let Some(declared) = bounty_image
+    if let Some(declared) = args
+        .bounty_image
         .mime_type
         .as_deref()
         .map(str::trim)
@@ -1240,7 +393,7 @@ async fn persist_chatgpt_bounty_image(
             ));
         }
     }
-    if let Some(file_name) = bounty_image.file_name.as_deref() {
+    if let Some(file_name) = args.bounty_image.file_name.as_deref() {
         bounded_text(file_name, "bounty_image.file_name", 255)?;
     }
     let sha256 = Sha256::digest(&bytes)
@@ -1369,306 +522,25 @@ fn detect_bounty_image_mime(bytes: &[u8]) -> Option<&'static str> {
 
 fn sandbox_bounty_image_reference(
     args: &PrepareBountyPostArgs,
-) -> Result<Option<BountyImageReference>, String> {
-    match (
-        args.image_prompt.as_deref(),
-        args.image_alt_text.as_deref(),
-        args.bounty_image.as_ref(),
-    ) {
-        (None, None, None) => Ok(None),
-        (Some(prompt), Some(alt_text), Some(_)) => Ok(Some(BountyImageReference {
-            source: "chatgpt_user_generated".to_string(),
-            prompt: bounded_text(prompt, "image_prompt", 4_000)?,
-            alt_text: bounded_text(alt_text, "image_alt_text", 500)?,
-            asset_url: "https://agentbounties.app/assets/solarpunk/characters-helping.webp"
-                .to_string(),
-            sha256: "0".repeat(64),
-            mime_type: "image/webp".to_string(),
-        })),
-        _ => Err(
-            "bounty_image, image_prompt, and image_alt_text must be supplied together or all omitted"
-                .to_string(),
-        ),
-    }
+) -> Result<BountyImageReference, String> {
+    Ok(BountyImageReference {
+        source: "chatgpt_user_generated".to_string(),
+        prompt: bounded_text(&args.image_prompt, "image_prompt", 4_000)?,
+        alt_text: bounded_text(&args.image_alt_text, "image_alt_text", 500)?,
+        asset_url: "https://agentbounties.app/assets/bounty-quest-agent-v1.webp".to_string(),
+        sha256: "0".repeat(64),
+        mime_type: "image/webp".to_string(),
+    })
 }
 
 pub(super) async fn mcp_post(
     State(state): State<SharedState>,
-    headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> Response {
-    mcp_post_inner(state, headers, payload, None).await
-}
-
-pub(super) async fn attributed_mcp_post(
-    Path(rail): Path<String>,
-    State(state): State<SharedState>,
-    headers: HeaderMap,
-    Json(payload): Json<Value>,
-) -> Response {
-    let Some(rail) = normalize_distribution_rail(&rail).map(str::to_string) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let canary_kind = match headers.get(CANARY_HEADER) {
-        None => None,
-        Some(value) => match value.to_str() {
-            Ok(kind @ ("dry-run-v1" | "mainnet-v1")) => Some(kind.to_string()),
-            _ => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    "x-agent-bounties-canary must be dry-run-v1 or mainnet-v1.",
-                )
-                    .into_response()
-            }
-        },
-    };
-    let requested_measurement_eligible = canary_kind.is_none();
-    let excluded = super::analytics_exclusion_is_authorized(&state, &headers);
-    if excluded {
-        return mcp_post_inner(state, headers, payload, None).await;
-    }
-    let Some(store) = state.store.as_ref() else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Durable attribution is required on rail-specific MCP routes.",
-        )
-            .into_response();
-    };
-    let Some(signing_secret) = state.distribution_attribution_signing_secret.as_deref() else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Rail attribution signing is not configured.",
-        )
-            .into_response();
-    };
-    let acquisition_token = match headers.get(ACQUISITION_HEADER) {
-        Some(value) => match value.to_str() {
-            Ok(value) if distribution_acquisition_token_hash(value, signing_secret).is_some() => {
-                value.trim().to_string()
-            }
-            _ => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    "Malformed x-agent-bounties-acquisition-id header.",
-                )
-                    .into_response()
-            }
-        },
-        None => sign_distribution_acquisition_token(
-            &format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple()),
-            signing_secret,
-        )
-        .unwrap_or_default(),
-    };
-    let Some(token_hash) = distribution_acquisition_token_hash(&acquisition_token, signing_secret)
-    else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Rail attribution signing secret must contain at least 32 bytes.",
-        )
-            .into_response();
-    };
-    let acquisition = match store
-        .observe_distribution_acquisition(
-            &rail,
-            &token_hash,
-            canary_kind.as_deref(),
-            chrono::Utc::now(),
-        )
-        .await
-    {
-        Ok(acquisition) => acquisition,
-        Err(db::DbError::DistributionAttributionConflict(message)) => {
-            return (StatusCode::CONFLICT, message).into_response();
-        }
-        Err(_) => {
-            let store = store.clone();
-            let rail = rail.clone();
-            tokio::spawn(async move {
-                let _ = store
-                    .record_distribution_rail_request(
-                        &rail,
-                        false,
-                        requested_measurement_eligible,
-                        chrono::Utc::now(),
-                    )
-                    .await;
-            });
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Durable attribution could not be recorded.",
-            )
-                .into_response();
-        }
-    };
-    let measurement_eligible = acquisition.measurement_eligible;
-    let attribution = McpDistributionAttribution {
-        acquisition_id: acquisition.id,
-        acquisition_token: acquisition_token.clone(),
-        first_touch_rail: acquisition.first_touch_rail.clone(),
-        current_rail: rail.clone(),
-        measurement_eligible,
-    };
-    let mut response = mcp_post_inner(state.clone(), headers, payload, Some(attribution)).await;
-    response.headers_mut().insert(
-        ACQUISITION_HEADER,
-        HeaderValue::from_str(&acquisition_token)
-            .expect("validated attribution token is a header value"),
-    );
-    if let Some(canary_kind) = &acquisition.canary_kind {
-        response.headers_mut().insert(
-            CANARY_HEADER,
-            HeaderValue::from_str(canary_kind).expect("bounded canary kind is a header value"),
-        );
-    }
-    response.headers_mut().insert(
-        MEASUREMENT_ELIGIBLE_HEADER,
-        HeaderValue::from_static(if measurement_eligible {
-            "true"
-        } else {
-            "false"
-        }),
-    );
-    response.headers_mut().insert(
-        ATTRIBUTION_RAIL_HEADER,
-        HeaderValue::from_str(&rail).expect("approved rail is a header value"),
-    );
-    response.headers_mut().insert(
-        FIRST_TOUCH_RAIL_HEADER,
-        HeaderValue::from_str(&acquisition.first_touch_rail)
-            .expect("approved first-touch rail is a header value"),
-    );
-    let succeeded = mcp_response_succeeded(&response);
-    let store = store.clone();
-    tokio::spawn(async move {
-        let _ = store
-            .record_distribution_rail_request(
-                &rail,
-                succeeded,
-                measurement_eligible,
-                chrono::Utc::now(),
-            )
-            .await;
-    });
-    response
-}
-
-async fn mcp_post_inner(
-    state: SharedState,
-    headers: HeaderMap,
-    mut payload: Value,
-    attribution: Option<McpDistributionAttribution>,
-) -> Response {
-    set_internal_attribution(&mut payload, attribution.as_ref());
-    let era = mcp_protocol_era(&headers, &payload);
-    let catalog_profile = mcp_catalog_profile(&headers, &payload);
-    let excluded = super::analytics_exclusion_is_authorized(&state, &headers);
-    let mut response = handle_mcp_post(state.clone(), headers, payload, era, catalog_profile).await;
-    super::attest_analytics_exclusion(&mut response, excluded);
-    let protocol_era = match era {
-        McpProtocolEra::Legacy => ObservedProtocolEra::McpLegacy,
-        McpProtocolEra::Modern => ObservedProtocolEra::McpModern,
-    };
-    if excluded {
-        super::emit_interface_usage_excluded(protocol_era);
-    } else if let Some(store) = state.store.clone() {
-        let succeeded = mcp_response_succeeded(&response);
-        tokio::spawn(async move {
-            let _ = store
-                .record_interface_usage(
-                    ObservedInterface::Mcp,
-                    protocol_era,
-                    succeeded,
-                    chrono::Utc::now(),
-                )
-                .await;
-        });
-    }
-    response
-}
-
-fn set_internal_attribution(payload: &mut Value, attribution: Option<&McpDistributionAttribution>) {
-    let requests = match payload {
-        Value::Array(requests) => requests.iter_mut().collect::<Vec<_>>(),
-        request => vec![request],
-    };
-    for request in requests {
-        let Some(object) = request.as_object_mut() else {
-            continue;
-        };
-        let params = object
-            .entry("params")
-            .or_insert_with(|| json!({}))
-            .as_object_mut();
-        let Some(params) = params else {
-            continue;
-        };
-        let metadata = params
-            .entry("_meta")
-            .or_insert_with(|| json!({}))
-            .as_object_mut();
-        let Some(metadata) = metadata else {
-            continue;
-        };
-        metadata.remove(INTERNAL_ATTRIBUTION_META);
-        if let Some(attribution) = attribution {
-            metadata.insert(
-                INTERNAL_ATTRIBUTION_META.to_string(),
-                serde_json::to_value(attribution)
-                    .expect("distribution attribution is serializable"),
-            );
-        }
-    }
-}
-
-async fn handle_mcp_post(
-    state: SharedState,
-    headers: HeaderMap,
-    payload: Value,
-    era: McpProtocolEra,
-    catalog_profile: McpCatalogProfile,
-) -> Response {
-    if !mcp_origin_is_allowed(&headers) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-
-    if era == McpProtocolEra::Modern {
-        if payload.is_array() {
-            return mcp_error_response(
-                StatusCode::BAD_REQUEST,
-                payload_id(&payload),
-                -32600,
-                "MCP 2026-07-28 accepts one JSON-RPC request per HTTP POST",
-                None,
-            );
-        }
-        if let Err(error) = validate_modern_request(&headers, &payload) {
-            return error.into_response(payload_id(&payload));
-        }
-        let Some((status, response)) =
-            handle_request(state, payload, McpProtocolEra::Modern, catalog_profile).await
-        else {
-            return StatusCode::ACCEPTED.into_response();
-        };
-        let succeeded = json_rpc_payload_succeeded(&response);
-        let mut http_response = (status, Json(response)).into_response();
-        http_response
-            .extensions_mut()
-            .insert(McpJsonRpcSucceeded(succeeded));
-        return http_response;
-    }
-
     let responses = if let Some(batch) = payload.as_array() {
         let mut responses = Vec::new();
         for request in batch {
-            if let Some((_, response)) = handle_request(
-                state.clone(),
-                request.clone(),
-                McpProtocolEra::Legacy,
-                catalog_profile,
-            )
-            .await
-            {
+            if let Some(response) = handle_request(state.clone(), request.clone()).await {
                 responses.push(response);
             }
         }
@@ -1676,53 +548,16 @@ async fn handle_mcp_post(
             return StatusCode::ACCEPTED.into_response();
         }
         Value::Array(responses)
-    } else if let Some((_, response)) =
-        handle_request(state, payload, McpProtocolEra::Legacy, catalog_profile).await
-    {
+    } else if let Some(response) = handle_request(state, payload).await {
         response
     } else {
         return StatusCode::ACCEPTED.into_response();
     };
 
-    let succeeded = json_rpc_payload_succeeded(&responses);
-    let mut response = (StatusCode::OK, Json(responses)).into_response();
-    response
-        .extensions_mut()
-        .insert(McpJsonRpcSucceeded(succeeded));
-    response
+    (StatusCode::OK, Json(responses)).into_response()
 }
 
-#[derive(Debug, Clone, Copy)]
-struct McpJsonRpcSucceeded(bool);
-
-fn json_rpc_payload_succeeded(payload: &Value) -> bool {
-    match payload {
-        Value::Array(items) => !items.is_empty() && items.iter().all(json_rpc_payload_succeeded),
-        Value::Object(object) => {
-            !object.contains_key("error")
-                && object
-                    .get("result")
-                    .and_then(Value::as_object)
-                    .and_then(|result| result.get("isError"))
-                    .and_then(Value::as_bool)
-                    != Some(true)
-        }
-        _ => false,
-    }
-}
-
-fn mcp_response_succeeded(response: &Response) -> bool {
-    response.status().is_success()
-        && response
-            .extensions()
-            .get::<McpJsonRpcSucceeded>()
-            .is_none_or(|outcome| outcome.0)
-}
-
-pub(super) async fn mcp_get(headers: HeaderMap) -> Response {
-    if !mcp_origin_is_allowed(&headers) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
+pub(super) async fn mcp_get() -> Response {
     (
         StatusCode::METHOD_NOT_ALLOWED,
         [("allow", "POST")],
@@ -1731,576 +566,91 @@ pub(super) async fn mcp_get(headers: HeaderMap) -> Response {
         .into_response()
 }
 
-pub(super) async fn attributed_mcp_get(Path(rail): Path<String>, headers: HeaderMap) -> Response {
-    if normalize_distribution_rail(&rail).is_none() {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    mcp_get(headers).await
+pub(super) async fn mcp_delete() -> Response {
+    StatusCode::METHOD_NOT_ALLOWED.into_response()
 }
 
-pub(super) async fn mcp_delete(headers: HeaderMap) -> Response {
-    if !mcp_origin_is_allowed(&headers) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    (StatusCode::METHOD_NOT_ALLOWED, [("allow", "POST")]).into_response()
-}
-
-pub(super) async fn attributed_mcp_delete(
-    Path(rail): Path<String>,
-    headers: HeaderMap,
-) -> Response {
-    if normalize_distribution_rail(&rail).is_none() {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    mcp_delete(headers).await
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum McpProtocolEra {
-    Legacy,
-    Modern,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum McpCatalogProfile {
-    Chatgpt,
-    Core,
-}
-
-#[derive(Debug)]
-struct McpProtocolError {
-    status: StatusCode,
-    code: i64,
-    message: String,
-    data: Option<Value>,
-}
-
-impl McpProtocolError {
-    fn header_mismatch(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            code: -32020,
-            message: message.into(),
-            data: None,
-        }
-    }
-
-    fn invalid_request(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            code: -32600,
-            message: message.into(),
-            data: None,
-        }
-    }
-
-    fn invalid_params(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            code: -32602,
-            message: message.into(),
-            data: None,
-        }
-    }
-
-    fn unsupported_version(requested: &str) -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            code: -32022,
-            message: format!("Unsupported MCP protocol version: {requested}"),
-            data: Some(json!({
-                "supported": [MCP_PROTOCOL_VERSION],
-                "requested": requested
-            })),
-        }
-    }
-
-    fn into_response(self, id: Value) -> Response {
-        mcp_error_response(self.status, id, self.code, &self.message, self.data)
-    }
-}
-
-fn mcp_protocol_era(headers: &HeaderMap, payload: &Value) -> McpProtocolEra {
-    let header_is_modern = headers
-        .get(MCP_PROTOCOL_VERSION_HEADER)
-        .is_some_and(|value| {
-            value.to_str().map_or(true, |version| {
-                !matches!(version, "2024-11-05" | "2025-03-26" | "2025-06-18")
-            })
-        });
-    let body_has_request_metadata = payload
-        .get("params")
-        .and_then(|params| params.get("_meta"))
-        .and_then(|metadata| metadata.get(MCP_PROTOCOL_VERSION_META))
-        .is_some();
-    let is_discovery = payload
-        .get("method")
-        .and_then(Value::as_str)
-        .is_some_and(|method| method == "server/discover");
-
-    if header_is_modern || body_has_request_metadata || is_discovery {
-        McpProtocolEra::Modern
-    } else {
-        McpProtocolEra::Legacy
-    }
-}
-
-fn mcp_catalog_profile(headers: &HeaderMap, payload: &Value) -> McpCatalogProfile {
-    let exact_chatgpt_origin = headers
-        .get(ORIGIN)
-        .and_then(|value| value.to_str().ok())
-        .and_then(normalized_mcp_origin)
-        .is_some_and(|origin| {
-            matches!(
-                origin.as_str(),
-                "https://chatgpt.com" | "https://chat.openai.com"
-            )
-        });
-    let exact_openai_client = payload
-        .get("params")
-        .and_then(|params| params.get("_meta"))
-        .and_then(|metadata| metadata.get(MCP_CLIENT_INFO_META))
-        .and_then(|client_info| client_info.get("name"))
-        .and_then(Value::as_str)
-        == Some("openai-mcp");
-    if exact_chatgpt_origin || exact_openai_client {
-        McpCatalogProfile::Chatgpt
-    } else {
-        McpCatalogProfile::Core
-    }
-}
-
-fn validate_modern_request(headers: &HeaderMap, request: &Value) -> Result<(), McpProtocolError> {
-    let object = request
-        .as_object()
-        .ok_or_else(|| McpProtocolError::invalid_request("Invalid Request"))?;
-    if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
-        return Err(McpProtocolError::invalid_request(
-            "jsonrpc must be exactly '2.0'",
-        ));
-    }
-    if !object
-        .get("id")
-        .is_some_and(|id| id.is_string() || id.is_number())
-    {
-        return Err(McpProtocolError::invalid_request(
-            "MCP 2026-07-28 HTTP messages must be JSON-RPC requests with a string or number id",
-        ));
-    }
-    let method = object
-        .get("method")
-        .and_then(Value::as_str)
-        .ok_or_else(|| McpProtocolError::invalid_request("method must be a string"))?;
-    let params = object
-        .get("params")
-        .and_then(Value::as_object)
-        .ok_or_else(|| McpProtocolError::invalid_params("params must be an object"))?;
-    let metadata = params
-        .get("_meta")
-        .and_then(Value::as_object)
-        .ok_or_else(|| McpProtocolError::invalid_params("params._meta must be an object"))?;
-    let body_version = metadata
-        .get(MCP_PROTOCOL_VERSION_META)
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            McpProtocolError::header_mismatch(format!(
-                "params._meta.{MCP_PROTOCOL_VERSION_META} is required"
-            ))
-        })?;
-    let header_version = required_header(headers, MCP_PROTOCOL_VERSION_HEADER)?;
-    if header_version != body_version {
-        return Err(McpProtocolError::header_mismatch(format!(
-            "{MCP_PROTOCOL_VERSION_HEADER} header does not match request metadata"
-        )));
-    }
-    if body_version != MCP_PROTOCOL_VERSION {
-        return Err(McpProtocolError::unsupported_version(body_version));
-    }
-
-    let header_method = required_header(headers, MCP_METHOD_HEADER)?;
-    if header_method != method {
-        return Err(McpProtocolError::header_mismatch(format!(
-            "{MCP_METHOD_HEADER} header does not match method"
-        )));
-    }
-
-    if matches!(method, "tools/call" | "resources/read" | "prompts/get") {
-        let source_field = if method == "resources/read" {
-            "uri"
-        } else {
-            "name"
-        };
-        let body_name = params
-            .get(source_field)
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                McpProtocolError::invalid_params(format!(
-                    "{method} requires a string params.{source_field}"
-                ))
-            })?;
-        let header_name = decode_mcp_header_value(required_header(headers, MCP_NAME_HEADER)?)?;
-        if header_name != body_name {
-            return Err(McpProtocolError::header_mismatch(format!(
-                "{MCP_NAME_HEADER} header does not match params.{source_field}"
-            )));
-        }
-    }
-
-    if !metadata
-        .get(MCP_CLIENT_CAPABILITIES_META)
-        .is_some_and(Value::is_object)
-    {
-        return Err(McpProtocolError::invalid_params(format!(
-            "params._meta.{MCP_CLIENT_CAPABILITIES_META} must be an object"
-        )));
-    }
-    if let Some(client_info) = metadata.get(MCP_CLIENT_INFO_META) {
-        let valid = client_info.as_object().is_some_and(|client_info| {
-            client_info.get("name").is_some_and(Value::is_string)
-                && client_info.get("version").is_some_and(Value::is_string)
-        });
-        if !valid {
-            return Err(McpProtocolError::invalid_params(format!(
-                "params._meta.{MCP_CLIENT_INFO_META} must include string name and version fields"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn required_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str, McpProtocolError> {
-    headers
-        .get(name)
-        .ok_or_else(|| McpProtocolError::header_mismatch(format!("missing {name} header")))?
-        .to_str()
-        .map_err(|_| McpProtocolError::header_mismatch(format!("malformed {name} header")))
-}
-
-fn decode_mcp_header_value(value: &str) -> Result<String, McpProtocolError> {
-    const PREFIX: &str = "=?base64?";
-    const SUFFIX: &str = "?=";
-    if value.starts_with(PREFIX) {
-        let encoded = value
-            .strip_prefix(PREFIX)
-            .and_then(|value| value.strip_suffix(SUFFIX))
-            .ok_or_else(|| McpProtocolError::header_mismatch("malformed Base64 header sentinel"))?;
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(encoded)
-            .map_err(|_| McpProtocolError::header_mismatch("invalid Base64 header value"))?;
-        return String::from_utf8(decoded)
-            .map_err(|_| McpProtocolError::header_mismatch("Base64 header value is not UTF-8"));
-    }
-    Ok(value.to_string())
-}
-
-fn payload_id(payload: &Value) -> Value {
-    payload.get("id").cloned().unwrap_or(Value::Null)
-}
-
-fn mcp_error_response(
-    status: StatusCode,
-    id: Value,
-    code: i64,
-    message: &str,
-    data: Option<Value>,
-) -> Response {
-    (
-        status,
-        Json(json_rpc_error_with_data(id, code, message, data)),
-    )
-        .into_response()
-}
-
-async fn handle_request(
-    state: SharedState,
-    request: Value,
-    era: McpProtocolEra,
-    catalog_profile: McpCatalogProfile,
-) -> Option<(StatusCode, Value)> {
+async fn handle_request(state: SharedState, request: Value) -> Option<Value> {
     let Some(object) = request.as_object() else {
-        return Some((
-            StatusCode::OK,
-            json_rpc_error(Value::Null, -32600, "Invalid Request"),
-        ));
+        return Some(json_rpc_error(Value::Null, -32600, "Invalid Request"));
     };
     let id = object.get("id").cloned();
     let Some(method) = object.get("method").and_then(Value::as_str) else {
-        return Some((
-            StatusCode::OK,
-            json_rpc_error(id.unwrap_or(Value::Null), -32600, "Invalid Request"),
+        return Some(json_rpc_error(
+            id.unwrap_or(Value::Null),
+            -32600,
+            "Invalid Request",
         ));
     };
     let id = id?;
     let params = object.get("params").cloned().unwrap_or_else(|| json!({}));
-    let attribution = params
-        .get("_meta")
-        .and_then(|metadata| metadata.get(INTERNAL_ATTRIBUTION_META))
-        .cloned()
-        .and_then(|value| serde_json::from_value::<McpDistributionAttribution>(value).ok());
 
     let result = match method {
-        "server/discover" if era == McpProtocolEra::Modern => Ok(discover_result()),
-        "initialize" if era == McpProtocolEra::Legacy => Ok(initialize_result(&params)),
-        "ping" if era == McpProtocolEra::Legacy => Ok(json!({})),
-        "tools/list" => {
-            let mut tools = mcp_tools_for_catalog(catalog_profile).await;
-            if era == McpProtocolEra::Modern {
-                tools.sort_by(|left, right| {
-                    left.get("name")
-                        .and_then(Value::as_str)
-                        .cmp(&right.get("name").and_then(Value::as_str))
-                });
-            }
-            Ok(json!({"tools": tools}))
-        }
-        "tools/call" => call_tool(state, &params, attribution.as_ref()).await,
+        "initialize" => Ok(initialize_result(&params)),
+        "ping" => Ok(json!({})),
+        "tools/list" => Ok(json!({"tools": chatgpt_tools().await})),
+        "tools/call" => call_tool(state, &params).await,
         "resources/list" => Ok(json!({"resources": [feed_widget_resource_descriptor()]})),
         "resources/templates/list" => Ok(json!({"resourceTemplates": []})),
         "resources/read" => read_resource(&params),
-        _ => {
-            return Some((
-                if era == McpProtocolEra::Modern {
-                    StatusCode::NOT_FOUND
-                } else {
-                    StatusCode::OK
-                },
-                json_rpc_error(id, -32601, "Method not found"),
-            ))
-        }
+        _ => return Some(json_rpc_error(id, -32601, "Method not found")),
     };
 
     Some(match result {
-        Ok(mut result) => {
-            if let Some(attribution) = attribution {
-                attach_attribution_metadata(&mut result, &attribution);
-            }
-            (
-                StatusCode::OK,
-                json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "result": if era == McpProtocolEra::Modern {
-                        modern_result(method, result)
-                    } else {
-                        result
-                    }
-                }),
-            )
-        }
-        Err(error) => (
-            if era == McpProtocolEra::Modern {
-                StatusCode::BAD_REQUEST
-            } else {
-                StatusCode::OK
-            },
-            json_rpc_error(id, -32602, &error),
-        ),
+        Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
+        Err(error) => json_rpc_error(id, -32602, &error),
     })
-}
-
-fn attach_attribution_metadata(result: &mut Value, attribution: &McpDistributionAttribution) {
-    let Some(object) = result.as_object_mut() else {
-        return;
-    };
-    let metadata = object
-        .entry("_meta")
-        .or_insert_with(|| json!({}))
-        .as_object_mut();
-    if let Some(metadata) = metadata {
-        metadata.insert(
-            "agentbounties.app/acquisition".to_string(),
-            json!({
-                "acquisition_id": attribution.acquisition_token,
-                "first_touch_rail": attribution.first_touch_rail,
-                "current_rail": attribution.current_rail,
-                "measurement_eligible": attribution.measurement_eligible,
-                "request_header": ACQUISITION_HEADER,
-                "authority": "analytics_only"
-            }),
-        );
-    }
 }
 
 fn initialize_result(params: &Value) -> Value {
     let requested = params
         .get("protocolVersion")
         .and_then(Value::as_str)
-        .unwrap_or(MCP_LEGACY_PROTOCOL_VERSION);
-    // Exact whole-token membership: echo a requested version only when it is one
-    // of the supported legacy tokens. Prefix/suffix lookalikes, unknown, missing,
-    // and non-string input all deterministically select the server legacy version
-    // instead of being echoed or rejected. The modern `MCP_PROTOCOL_VERSION` path
-    // is enforced separately in `discover_result` and must not appear here.
+        .unwrap_or(MCP_PROTOCOL_VERSION);
     let protocol_version = match requested {
         "2024-11-05" | "2025-03-26" | "2025-06-18" => requested,
-        _ => MCP_LEGACY_PROTOCOL_VERSION,
+        _ => MCP_PROTOCOL_VERSION,
     };
-    json!({
-        "protocolVersion": protocol_version,
-        "capabilities": mcp_server_capabilities(),
-        "serverInfo": mcp_server_info(),
-        "instructions": mcp_server_instructions()
-    })
-}
-
-fn discover_result() -> Value {
-    json!({
-        "supportedVersions": [MCP_PROTOCOL_VERSION],
-        "capabilities": mcp_server_capabilities(),
-        "instructions": mcp_server_instructions()
-    })
-}
-
-fn mcp_server_instructions() -> &'static str {
     let sandbox = chatgpt_sandbox_mode();
     let public_review = !sandbox && chatgpt_public_review_mode();
-    if sandbox {
+    let instructions = if sandbox {
         "Sandbox mode is active. Use get_bounty_feed and render_bounty_feed to exercise the complete in-chat bounty UI. Use prepare_moonpay_onramp to exercise the external top-up handoff without opening MoonPay, and use prepare_bounty_action plus get_bounty_action_status to exercise the hosted bounty lifecycle without opening a wallet. Every tool returns deterministic fixture data and performs no network write, wallet action, public comment, publication, funding, claim, submission, verification, settlement, purchase, or payment. Never describe sandbox output as canonical evidence."
     } else if public_review {
         "Public review mode is active. Show only voluntary, unfunded community requests with no payment promise. Use render_bounty_feed for the compact in-chat work queue, publish_unfunded_bounty only when the user explicitly asks to publish a voluntary request, compile_objective_with_cloud_agent only for non-economic task decomposition, and the comment and share tools for public collaboration. Funding, claiming, completion, verification, wallet, settlement, token, and payment actions are unavailable in this app configuration. Never imply otherwise or direct a user around this boundary."
     } else {
-        "Use get_bounty_feed to inspect fresh structured bounty data, then render_bounty_feed to show the mounted read-only feed in ChatGPT. The widget has only Post bounty, Comment, Share, and Solve actions; each action starts a conversation. For a new bounty, interview the person until the terms are complete, summarize them, and obtain explicit confirmation. If this AI can create and attach an image, show the exact image for approval and pass it to prepare_bounty_post with its prompt and alt text. Otherwise omit all three optional image fields and let the first-party review page use its deterministic content-derived visual. Agent Bounties never generates a replacement with a platform model key. For fund, solve or claim, complete, or verify, call prepare_bounty_action and open only its first-party HTTPS authorization URL. If a funder needs Base USDC, call prepare_moonpay_onramp and open only its first-party HTTPS handoff; provider purchase, wallet connection, identity checks, and card entry stay outside ChatGPT, and buying USDC is not bounty funding. Never request or accept a wallet signature, private key, seed phrase, payment authorization, verifier signature, or card data in ChatGPT. Refresh with get_bounty_action_status; only confirmed canonical events change the card, and only BountySettled proves solver payment. Use compile_objective_with_cloud_agent to break a broad objective into smaller reviewable child bounties. Use create_share_bundle after every meaningful step."
-    }
-}
-
-fn mcp_server_capabilities() -> Value {
+        "Use get_bounty_feed to inspect fresh structured bounty data, then render_bounty_feed to show the mounted read-only feed in ChatGPT. The widget has only Post bounty, Comment, Share, and Solve actions; each action starts a conversation. For a new bounty, interview the person until the terms and image direction are complete, generate a unique bounty image in their ChatGPT account, show it for approval, summarize the complete bounty, and obtain explicit confirmation. Then call prepare_bounty_post with that approved ChatGPT image file; Agent Bounties stores the exact file and never generates a replacement. For fund, solve or claim, complete, or verify, call prepare_bounty_action and open only its first-party HTTPS authorization URL. If a funder needs Base USDC, call prepare_moonpay_onramp and open only its first-party HTTPS handoff; MoonPay purchase, wallet connection, identity checks, and card entry stay outside ChatGPT, and buying USDC is not bounty funding. Never request or accept a wallet signature, private key, seed phrase, payment authorization, verifier signature, or card data in ChatGPT. Refresh with get_bounty_action_status; only confirmed canonical events change the card, and only BountySettled proves solver payment. Use compile_objective_with_cloud_agent to break a broad objective into smaller reviewable child bounties. Use create_share_bundle after every meaningful step."
+    };
     json!({
-        "tools": {"listChanged": false},
-        "resources": {"subscribe": false, "listChanged": false}
+        "protocolVersion": protocol_version,
+        "capabilities": {
+            "tools": {"listChanged": false},
+            "resources": {"subscribe": false, "listChanged": false}
+        },
+        "serverInfo": {
+            "name": if sandbox {
+                "agent-bounties-sandbox"
+            } else if public_review {
+                "agent-bounties-community"
+            } else {
+                "agent-bounties"
+            },
+            "title": if sandbox {
+                "Agent Bounties Sandbox"
+            } else if public_review {
+                "Agent Bounties Community"
+            } else {
+                "Agent Bounties"
+            },
+            "version": env!("CARGO_PKG_VERSION")
+        },
+        "instructions": instructions
     })
 }
 
-fn mcp_server_info() -> Value {
+async fn chatgpt_tools() -> Vec<Value> {
     let sandbox = chatgpt_sandbox_mode();
     let public_review = !sandbox && chatgpt_public_review_mode();
-    json!({
-        "name": if sandbox {
-            "agent-bounties-sandbox"
-        } else if public_review {
-            "agent-bounties-community"
-        } else {
-            "agent-bounties"
-        },
-        "title": if sandbox {
-            "Agent Bounties Sandbox"
-        } else if public_review {
-            "Agent Bounties Community"
-        } else {
-            "Agent Bounties"
-        },
-        "version": env!("CARGO_PKG_VERSION")
-    })
-}
-
-fn modern_result(method: &str, mut result: Value) -> Value {
-    let object = result
-        .as_object_mut()
-        .expect("every implemented MCP method returns an object result");
-    object.insert("resultType".to_string(), json!("complete"));
-    let metadata = object
-        .entry("_meta".to_string())
-        .or_insert_with(|| json!({}));
-    if !metadata.is_object() {
-        *metadata = json!({});
-    }
-    metadata[MCP_SERVER_INFO_META] = mcp_server_info();
-    if matches!(
-        method,
-        "server/discover"
-            | "tools/list"
-            | "resources/list"
-            | "resources/templates/list"
-            | "resources/read"
-    ) {
-        object.insert("ttlMs".to_string(), json!(MCP_CATALOG_TTL_MS));
-        object.insert("cacheScope".to_string(), json!("public"));
-    }
-    result
-}
-
-fn mcp_origin_is_allowed(headers: &HeaderMap) -> bool {
-    let Some(origin) = headers.get(ORIGIN) else {
-        return true;
-    };
-    let Ok(origin) = origin.to_str() else {
-        return false;
-    };
-    mcp_origin_is_allowed_with_config(
-        origin,
-        env::var("MCP_BASE_URL").ok().as_deref(),
-        env::var(MCP_ALLOWED_ORIGINS_ENV).ok().as_deref(),
-    )
-}
-
-fn mcp_origin_is_allowed_with_config(
-    origin: &str,
-    mcp_base_url: Option<&str>,
-    configured_origins: Option<&str>,
-) -> bool {
-    let Some(origin) = normalized_mcp_origin(origin) else {
-        return false;
-    };
-    let defaults = [
-        "https://chatgpt.com",
-        "https://chat.openai.com",
-        "https://agentbounties.app",
-        "https://www.agentbounties.app",
-        "https://mcp.agentbounties.app",
-    ];
-    if defaults.contains(&origin.as_str()) || is_loopback_http_origin(&origin) {
-        return true;
-    }
-    if mcp_base_url
-        .and_then(normalized_mcp_origin)
-        .is_some_and(|allowed| allowed == origin)
-    {
-        return true;
-    }
-    configured_origins.is_some_and(|configured| {
-        configured.split(',').any(|allowed| {
-            normalized_mcp_origin(allowed.trim()).is_some_and(|allowed| allowed == origin)
-        })
-    })
-}
-
-fn normalized_mcp_origin(value: &str) -> Option<String> {
-    let url = Url::parse(value).ok()?;
-    if !url.username().is_empty()
-        || url.password().is_some()
-        || !matches!(url.path(), "" | "/")
-        || url.query().is_some()
-        || url.fragment().is_some()
-        || url.host_str().is_none()
-        || !matches!(url.scheme(), "http" | "https")
-    {
-        return None;
-    }
-    Some(url.origin().ascii_serialization())
-}
-
-fn is_loopback_http_origin(origin: &str) -> bool {
-    let Ok(url) = Url::parse(origin) else {
-        return false;
-    };
-    if url.scheme() != "http" {
-        return false;
-    }
-    match url.host_str() {
-        Some("localhost") => true,
-        Some(host) => host
-            .parse::<IpAddr>()
-            .is_ok_and(|address| address.is_loopback()),
-        None => false,
-    }
-}
-
-async fn mcp_tools_for_catalog(catalog_profile: McpCatalogProfile) -> Vec<Value> {
-    let sandbox = chatgpt_sandbox_mode();
-    let public_review = !sandbox && chatgpt_public_review_mode();
-    let tool_names = match catalog_profile {
-        McpCatalogProfile::Chatgpt => chatgpt_tool_names(sandbox, public_review).to_vec(),
-        McpCatalogProfile::Core => core_mcp_tool_names(),
-    };
+    let tool_names = chatgpt_tool_names(sandbox, public_review);
     let mut descriptors = tools().await.0;
     descriptors.extend(custom_tool_descriptors());
     descriptors
@@ -2348,12 +698,9 @@ fn mcp_tool_descriptor_for_mode(
             "idempotentHint": idempotent
         }),
     );
-    let security_schemes = analytics_security_schemes(
-        std::env::var("ANALYTICS_EXCLUSION_TOKEN").is_ok_and(|value| !value.trim().is_empty()),
-    );
-    value.insert("securitySchemes".to_string(), security_schemes.clone());
+    value.insert("securitySchemes".to_string(), json!([{"type": "noauth"}]));
     let mut metadata = json!({
-        "securitySchemes": security_schemes,
+        "securitySchemes": [{"type": "noauth"}],
         "ui": {"visibility": ["model", "app"]},
         "agentBountiesSandbox": sandbox,
         "agentBountiesPublicReview": public_review
@@ -2368,15 +715,6 @@ fn mcp_tool_descriptor_for_mode(
         value.insert(
             "outputSchema".to_string(),
             autonomous_bounty_feed_output_schema(),
-        );
-    }
-    if matches!(
-        descriptor.name,
-        "inspect_open_competition_v2" | "prepare_open_competition_v2"
-    ) {
-        value.insert(
-            "outputSchema".to_string(),
-            open_competition_v2_output_schema(),
         );
     }
     if matches!(
@@ -2427,17 +765,6 @@ fn mcp_tool_descriptor_for_mode(
     Value::Object(value)
 }
 
-fn analytics_security_schemes(exclusion_link_enabled: bool) -> Value {
-    if exclusion_link_enabled {
-        json!([
-            {"type": "noauth"},
-            {"type": "oauth2", "scopes": [super::ANALYTICS_EXCLUSION_SCOPE]}
-        ])
-    } else {
-        json!([{"type": "noauth"}])
-    }
-}
-
 fn tool_impact(name: &str) -> (bool, bool, bool, bool) {
     match name {
         "prepare_moonpay_onramp" => (true, false, false, true),
@@ -2451,17 +778,11 @@ fn tool_impact(name: &str) -> (bool, bool, bool, bool) {
         "submit_unfunded_bounty_solution" => (false, true, true, true),
         "publish_autonomous_submission_evidence" => (false, true, true, true),
         "add_bounty_comment" => (false, true, true, false),
-        "inspect_open_competition_v2" => (true, false, false, true),
-        "prepare_open_competition_v2" => (false, true, true, false),
         _ => (true, false, false, true),
     }
 }
 
-async fn call_tool(
-    state: SharedState,
-    params: &Value,
-    attribution: Option<&McpDistributionAttribution>,
-) -> Result<Value, String> {
+async fn call_tool(state: SharedState, params: &Value) -> Result<Value, String> {
     let name = params
         .get("name")
         .and_then(Value::as_str)
@@ -2473,7 +794,7 @@ async fn call_tool(
 
     let sandbox = chatgpt_sandbox_mode();
     let public_review = !sandbox && chatgpt_public_review_mode();
-    if !chatgpt_tool_is_callable(name) {
+    if !chatgpt_tool_names(sandbox, public_review).contains(&name) {
         return Err(format!(
             "unknown or unavailable public ChatGPT app tool: {name}"
         ));
@@ -2650,39 +971,6 @@ async fn call_tool(
                 false,
             ));
         }
-        "inspect_open_competition_v2" => {
-            let args: OpenCompetitionV2InspectArgs =
-                serde_json::from_value(arguments).map_err(|error| {
-                    format!("invalid inspect_open_competition_v2 arguments: {error}")
-                })?;
-            return Ok(tool_result(
-                legacy_result(inspect_open_competition_v2(State(state), Json(args)).await.0)?,
-                "Returned indexed Open Competition V2 Beta3 state. Only CompetitionSettledV2 proves solver payment.",
-                false,
-            ));
-        }
-        "prepare_open_competition_v2" => {
-            let args: OpenCompetitionV2MutationArgs =
-                serde_json::from_value(arguments).map_err(|error| {
-                    format!("invalid prepare_open_competition_v2 arguments: {error}")
-                })?;
-            let is_creation = args.operation == "create";
-            let result = legacy_result(
-                prepare_open_competition_v2(State(state.clone()), Json(args))
-                    .await
-                    .0,
-            )?;
-            let result = if is_creation {
-                attach_competition_preparation_attribution(&state, result, attribution).await?
-            } else {
-                result
-            };
-            return Ok(tool_result(
-                result,
-                "Prepared one exact Open Competition V2 Beta3 action. A plan, signature, proof, or transaction hash is not canonical settlement evidence.",
-                false,
-            ));
-        }
         _ => {}
     }
 
@@ -2851,36 +1139,12 @@ async fn call_tool(
             )
         }
         "prepare_bounty_post" => {
-            let request_fingerprint = distribution_request_fingerprint(&arguments);
-            let args: PrepareBountyPostArgs = match serde_json::from_value(arguments) {
-                Ok(args) => args,
-                Err(error) => {
-                    record_prepare_handoff_failure(
-                        &state,
-                        attribution,
-                        &request_fingerprint,
-                        "invalid_arguments",
-                    )
-                    .await;
-                    return Err(format!("invalid prepare_bounty_post arguments: {error}"));
-                }
-            };
-            let value = match prepare_bounty_post_handoff(&state, &args, attribution).await {
-                Ok(value) => value,
-                Err(error) => {
-                    record_prepare_handoff_failure(
-                        &state,
-                        attribution,
-                        &request_fingerprint,
-                        "preparation_failed",
-                    )
-                    .await;
-                    return Err(error);
-                }
-            };
+            let args: PrepareBountyPostArgs = serde_json::from_value(arguments)
+                .map_err(|error| format!("invalid prepare_bounty_post arguments: {error}"))?;
+            let value = prepare_bounty_post_handoff(&state, &args).await?;
             return Ok(tool_result(
                 value,
-                "Prepared a reviewable wallet handoff, preserving the exact approved AI-generated image when one was supplied. No bounty has been published or created yet.",
+                "Stored the image generated and approved in the poster's ChatGPT account, then prepared a reviewable wallet handoff. No bounty has been published or created yet.",
                 true,
             ));
         }
@@ -2904,7 +1168,14 @@ async fn call_tool(
             }
             Ok(tool_result(value, narration, false))
         }
-        Err(error) => Ok(tool_error(error)),
+        Err(error) => {
+            if name == "list_autonomous_bounties" {
+                return Ok(tool_error(format!(
+                    "canonical inventory unavailable: {error}. Recovery: restore the canonical API/indexer source and retry; do not treat cached or hosted records as claimable."
+                )));
+            }
+            Ok(tool_error(error))
+        }
     }
 }
 
@@ -2929,22 +1200,7 @@ fn env_flag(name: &str) -> bool {
 }
 
 fn chatgpt_tool_names(_sandbox: bool, _public_review: bool) -> &'static [&'static str] {
-    CHATGPT_ADVERTISED_TOOL_NAMES
-}
-
-fn core_mcp_tool_names() -> Vec<&'static str> {
-    CHATGPT_ADVERTISED_TOOL_NAMES
-        .iter()
-        .chain(CHATGPT_COMPATIBILITY_TOOL_NAMES)
-        .chain(CORE_MCP_EXTENSION_TOOL_NAMES)
-        .copied()
-        .collect()
-}
-
-fn chatgpt_tool_is_callable(name: &str) -> bool {
-    CHATGPT_ADVERTISED_TOOL_NAMES.contains(&name)
-        || CHATGPT_COMPATIBILITY_TOOL_NAMES.contains(&name)
-        || CORE_MCP_EXTENSION_TOOL_NAMES.contains(&name)
+    CHATGPT_FULL_TOOL_NAMES
 }
 
 fn validate_public_review_tool_arguments(name: &str, arguments: &Value) -> Result<(), String> {
@@ -3169,15 +1425,14 @@ async fn sandbox_tool_result(name: &str, arguments: &Value) -> Result<Value, Str
             let comment_id = match args.comment_id.as_deref() {
                 Some(value) => Uuid::parse_str(value)
                     .map_err(|_| "comment_id must be a UUID when provided".to_string())?,
-                None => Uuid::parse_str("00000000-0000-4000-8000-00000000c001")
-                    .expect("static sandbox comment UUID must be valid"),
+                None => Uuid::new_v4(),
             };
             let mut comments = sandbox_comments(&bounty_id);
             comments.push(json!({
                 "id": comment_id,
                 "author": author,
                 "body": body,
-                "created_at": "2026-07-25T18:05:00Z",
+                "created_at": chrono::Utc::now().to_rfc3339(),
                 "sandbox": true
             }));
             let comment_count = comments.len();
@@ -3438,7 +1693,7 @@ async fn sandbox_tool_result(name: &str, arguments: &Value) -> Result<Value, Str
                     "sandbox": true,
                     "bounty_id": Uuid::new_v4(),
                     "title": title,
-                    "public_url": "https://agentbounties.app/",
+                    "public_url": "https://agentbounties.app/earn.html",
                     "funding_status": "sandbox_unfunded",
                     "published": false,
                     "payment_promised": false,
@@ -3477,7 +1732,7 @@ async fn sandbox_tool_result(name: &str, arguments: &Value) -> Result<Value, Str
             let args: PrepareBountyPostArgs = serde_json::from_value(arguments.clone())
                 .map_err(|error| format!("invalid prepare_bounty_post arguments: {error}"))?;
             let image = sandbox_bounty_image_reference(&args)?;
-            let mut value = build_bounty_post_handoff(&args, image.as_ref())?;
+            let mut value = build_bounty_post_handoff(&args, &image)?;
             mark_sandbox(
                 &mut value,
                 "The handoff is a sandbox fixture. No bounty was published, created, signed, or funded.",
@@ -3552,7 +1807,10 @@ fn build_moonpay_onramp_handoff(
         query.append_pair("from", "chatgpt-app");
         query.append_pair("bountyContract", &bounty_contract.to_ascii_lowercase());
         query.append_pair("amount", &format_usdc(args.amount_base_units));
-        query.append_pair("return", "https://agentbounties.app/");
+        query.append_pair(
+            "return",
+            "https://agentbounties.app/earn.html#fund-bounty-panel",
+        );
         if let Some(intent_id) = &intent_id {
             query.append_pair("intent", intent_id);
         }
@@ -3661,7 +1919,7 @@ fn sandbox_action_response(
         },
         "confirmed_block": null,
         "paid": false,
-        "expires_at": "2026-07-25T19:00:00Z",
+        "expires_at": (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
         "share_after": true,
         "next_action": if status == "confirmed" {
             "Sandbox UI confirmation complete. Share only as a sandbox test."
@@ -3744,8 +2002,8 @@ fn sandbox_feed_projection() -> Value {
     };
     json!({
         "schema_version": "agent-bounties/opportunity-projection-v1",
-        "generated_at": "2026-07-25T18:00:00Z",
-        "state_token": "00000000-0000-4000-8000-00000000feed",
+        "generated_at": chrono::Utc::now().to_rfc3339(),
+        "state_token": Uuid::new_v4(),
         "network": "base-mainnet",
         "degraded": false,
         "sandbox": true,
@@ -3760,7 +2018,7 @@ fn sandbox_feed_projection() -> Value {
                 "goal": "Make every bounty lifecycle action work through the MCP Apps bridge and preserve canonical evidence boundaries.",
                 "categories": ["engineering", "featured"],
                 "skills": ["Rust", "MCP Apps", "UI"],
-                "public_url": "https://agentbounties.app/",
+                "public_url": "https://agentbounties.app/earn.html",
                 "work_state": "claimable",
                 "payment_state": "escrowed",
                 "payment_committed": true,
@@ -3781,7 +2039,7 @@ fn sandbox_feed_projection() -> Value {
                 "goal": "Exercise the two-step funding interaction without moving USDC or contacting a relay.",
                 "categories": ["documentation"],
                 "skills": ["Technical writing"],
-                "public_url": "https://agentbounties.app/",
+                "public_url": "https://agentbounties.app/earn.html",
                 "work_state": "open",
                 "payment_state": "seeking_funding",
                 "payment_committed": false,
@@ -3802,7 +2060,7 @@ fn sandbox_feed_projection() -> Value {
                 "goal": "Exercise deterministic and signed-quorum verification plans against fixture evidence.",
                 "categories": ["verification"],
                 "skills": ["Accessibility", "Evidence review"],
-                "public_url": "https://agentbounties.app/",
+                "public_url": "https://agentbounties.app/earn.html",
                 "work_state": "submitted",
                 "payment_state": "escrowed",
                 "payment_committed": true,
@@ -3823,7 +2081,7 @@ fn sandbox_feed_projection() -> Value {
                 "goal": "Prepare a public artifact commitment and hash-matched evidence package entirely through the ChatGPT host bridge.",
                 "categories": ["engineering", "completion"],
                 "skills": ["Accessibility", "Evidence"],
-                "public_url": "https://agentbounties.app/",
+                "public_url": "https://agentbounties.app/earn.html",
                 "work_state": "in_progress",
                 "payment_state": "escrowed",
                 "payment_committed": true,
@@ -3844,7 +2102,7 @@ fn sandbox_feed_projection() -> Value {
                 "goal": "Exercise the committed deterministic-module verification branch without signing, broadcasting, or settling anything.",
                 "categories": ["verification", "deterministic"],
                 "skills": ["Proof review", "MCP Apps"],
-                "public_url": "https://agentbounties.app/",
+                "public_url": "https://agentbounties.app/earn.html",
                 "work_state": "submitted",
                 "payment_state": "escrowed",
                 "payment_committed": true,
@@ -4610,13 +2868,6 @@ fn post_handoff_output_schema() -> Value {
         "properties": {
             "schema": {"type": "string"},
             "state": {"type": "string"},
-            "posting_operation_id": {"type": "string", "format": "uuid"},
-            "review_mode": {"type": "string", "enum": ["creator", "automated"]},
-            "delivery_deadline": {"type": ["string", "null"], "format": "date-time"},
-            "meta_child": {"type": ["object", "null"]},
-            "reference_attachment": {"type": ["object", "null"]},
-            "verification_prepared": {"type": "boolean"},
-            "review_disclosure": {"type": ["string", "null"]},
             "title": {"type": "string"},
             "goal": {"type": "string"},
             "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
@@ -4627,25 +2878,18 @@ fn post_handoff_output_schema() -> Value {
             "initial_funding_usdc": {"type": "string"},
             "crowdfund": {"type": "boolean"},
             "source_url": {"type": ["string", "null"]},
-            "benchmark": {"type": ["object", "null"]},
-            "evidence_schema": {"type": ["object", "null"]},
             "image": {
-                "anyOf": [
-                    {
-                        "type": "object",
-                        "properties": {
-                            "source": {"type": "string", "const": "chatgpt_user_generated"},
-                            "prompt": {"type": "string"},
-                            "alt_text": {"type": "string"},
-                            "asset_url": {"type": "string"},
-                            "sha256": {"type": "string"},
-                            "mime_type": {"type": "string"}
-                        },
-                        "required": ["source", "prompt", "alt_text", "asset_url", "sha256", "mime_type"],
-                        "additionalProperties": false
-                    },
-                    {"type": "null"}
-                ]
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "const": "chatgpt_user_generated"},
+                    "prompt": {"type": "string"},
+                    "alt_text": {"type": "string"},
+                    "asset_url": {"type": "string"},
+                    "sha256": {"type": "string"},
+                    "mime_type": {"type": "string"}
+                },
+                "required": ["source", "prompt", "alt_text", "asset_url", "sha256", "mime_type"],
+                "additionalProperties": false
             },
             "post_url": {"type": "string"},
             "bounty_created": {"type": "boolean"},
@@ -4829,30 +3073,6 @@ fn autonomous_bounty_feed_output_schema() -> Value {
             "evidence_boundary": {"type": "string"}
         },
         "required": ["items"],
-        "additionalProperties": true
-    })
-}
-
-fn open_competition_v2_output_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "schema_version": {"type": "string"},
-            "status": {"type": "string"},
-            "state": {"type": "string"},
-            "activation_state": {"type": "string"},
-            "error_code": {"type": "string"},
-            "next_action": {"type": "string"},
-            "evidence_boundary": {"type": "string"},
-            "flows": {"type": "object"},
-            "profile_support": {"type": "object"},
-            "operations": {"type": "array", "items": {"type": "string"}},
-            "execution_policy_hash": {"type": "string", "pattern": "^0x[0-9a-fA-F]{64}$"},
-            "settlement_policy_hash": {"type": "string", "pattern": "^0x[0-9a-fA-F]{64}$"},
-            "creation_nonce": {"type": "string", "pattern": "^0x[0-9a-fA-F]{64}$"},
-            "side_effects": {"type": "object"},
-            "safety": {"type": "array", "items": {"type": "string"}}
-        },
         "additionalProperties": true
     })
 }
@@ -5146,10 +3366,8 @@ fn chatgpt_tool_description(name: &str, fallback: &'static str) -> &'static str 
         "publish_unfunded_bounty" => "Use this when the person explicitly wants to publish a public voluntary request with no wallet and zero committed USDC. It is not canonical, funded, claimable, or guaranteed to pay.",
         "list_unfunded_bounties" => "Use this when the person explicitly asks for voluntary or unpaid Agent Bounties work. Keep these records separate from funded earning opportunities and never promise payment.",
         "submit_unfunded_bounty_solution" => "Use this when a registered agent explicitly wants to publish or replace its public solution to an open unfunded request. This public write creates no payment claim.",
-        "prepare_bounty_post" => "Use this when the person's AI has gathered complete bounty terms and received explicit approval. Reuse posting_operation_id when resuming. For creator review, set review_mode=creator and the exact agreed delivery_deadline with timezone offset, omit automated benchmark/evidence fields, and explain that the creator confirms the verdict. Preserve parent bindings, the approved reference_attachment, and any approved bounty_image with its exact prompt and alt text; omit all three image fields together to use the deterministic review-page visual. This prepares a reviewable handoff; it does not publish, move funds, request a secret, or prove that a bounty exists.",
+        "prepare_bounty_post" => "Use this when ChatGPT has conversationally gathered complete bounty terms, generated a unique image in the poster's own ChatGPT account, shown that exact image to the poster, and received explicit approval of the image and terms. Pass the approved file as bounty_image with its exact generation prompt and alt text. Agent Bounties stores that file and prepares a reviewable wallet handoff; it does not generate an image, move funds, request a secret, or prove that a bounty exists.",
         "list_autonomous_bounties" => "Use this when the person wants funded Agent Bounties work or canonical lifecycle inventory. Set claimable_only=true for work that is currently funded and open to solve.",
-        "inspect_open_competition_v2" => "New users start with operation=guide. Then inspect the V2 Beta3 release, reviewed profiles, inventory, events, or proof-job state in the returned order. Treat only CompetitionSettledV2 as payment evidence.",
-        "prepare_open_competition_v2" => "Use this only after inspect_open_competition_v2(operation=guide). Match arguments to the selected operation's exact schema. Some operations return unsigned plans; quote_proof creates a hosted job, pay_proof may transfer Base USDC after explicit approval, and authorize_relay may submit a proof after explicit approval. Follow next_action and treat only CompetitionSettledV2 as payment evidence.",
         _ => fallback,
     }
 }
@@ -5182,8 +3400,6 @@ fn tool_title(name: &str) -> &'static str {
         "submit_unfunded_bounty_solution" => "Submit unfunded bounty solution",
         "prepare_bounty_post" => "Prepare bounty for wallet review",
         "list_autonomous_bounties" => "List canonical bounties",
-        "inspect_open_competition_v2" => "Inspect V2 competition",
-        "prepare_open_competition_v2" => "Prepare V2 action",
         _ => "Agent Bounties tool",
     }
 }
@@ -5294,18 +3510,10 @@ fn format_usdc(amount: u64) -> String {
 }
 
 fn json_rpc_error(id: Value, code: i64, message: &str) -> Value {
-    json_rpc_error_with_data(id, code, message, None)
-}
-
-fn json_rpc_error_with_data(id: Value, code: i64, message: &str, data: Option<Value>) -> Value {
-    let mut error = json!({"code": code, "message": message});
-    if let Some(data) = data {
-        error["data"] = data;
-    }
     json!({
         "jsonrpc": "2.0",
         "id": id,
-        "error": error
+        "error": {"code": code, "message": message}
     })
 }
 
@@ -5314,10 +3522,7 @@ mod tests {
     use super::*;
     use app::BountyNetwork;
     use chain_base::{AutonomousBountyRecoveryReservations, BaseRpcUrlConfig};
-    use std::{
-        collections::HashMap,
-        sync::{Arc, Mutex},
-    };
+    use std::sync::{Arc, Mutex};
 
     fn valid_args() -> PrepareBountyPostArgs {
         PrepareBountyPostArgs {
@@ -5332,327 +3537,24 @@ mod tests {
             source_url: Some("https://github.com/NSPG13/agent-bounties/issues/386".to_string()),
             crowdfund: false,
             task_window_days: None,
-            review_mode: None,
-            delivery_deadline: None,
-            posting_operation_id: None,
-            meta_child: None,
-            reference_attachment: None,
             discovery_source: Some("ChatGPT user feedback".to_string()),
-            benchmark: Some(json!({
-                "engine": "sandboxed_regression_v1",
-                "source": {
-                    "kind": "github_commit",
-                    "repository": "NSPG13/agent-bounties",
-                    "commit": "fa946859a3379b8c9128183e20dedb3b8319a646",
-                    "subdirectory": "benchmarks/direct-growth-v2/openhands-integration"
-                },
-                "runner_manifest": {
-                    "schema_version": "agent-bounties/regression-sandbox-v1",
-                    "image": "docker.io/library/python@sha256:d657ab0ade19f404a6ccc883ab399540de667aff751748ce23c07330c5a89e64",
-                    "command": ["python", "/benchmark/check.py"],
-                    "workdir": "/workspace",
-                    "benchmark_digest": "sha256:30bb17e3e3916747144c7087f49fb1ce41ddaf1aec4d717f878d2840203895a2",
-                    "timeout_seconds": 120,
-                    "cpu_millis": 1000,
-                    "memory_bytes": 536870912,
-                    "pids_limit": 128,
-                    "max_output_bytes": 1048576,
-                    "tmpfs_bytes": 268435456,
-                    "max_source_bytes": 67108864,
-                    "max_source_files": 1000,
-                    "max_benchmark_bytes": 1048576,
-                    "max_benchmark_files": 100,
-                    "platform": "linux/amd64",
-                    "test_seed": 1
-                }
-            })),
-            evidence_schema: Some(json!({
-                "type": "object",
-                "required": ["source_snapshot_digest"],
-                "properties": {
-                    "source_snapshot_digest": {
-                        "type": "string",
-                        "pattern": "^sha256:[0-9a-f]{64}$"
-                    }
-                },
-                "additionalProperties": false
-            })),
-            image_prompt: Some(
-                "Minimal editorial illustration of a reconciliation test becoming green."
-                    .to_string(),
-            ),
-            image_alt_text: Some(
-                "A clean code diff with a passing reconciliation check.".to_string(),
-            ),
-            bounty_image: Some(super::ChatgptFileInput {
+            image_prompt: "Minimal editorial illustration of a reconciliation test becoming green."
+                .to_string(),
+            image_alt_text: "A clean code diff with a passing reconciliation check.".to_string(),
+            bounty_image: super::ChatgptFileInput {
                 download_url: "https://files.oaiusercontent.com/example".to_string(),
                 file_id: "file-example".to_string(),
                 mime_type: Some("image/webp".to_string()),
                 file_name: Some("reconciliation-bounty.webp".to_string()),
-            }),
+            },
         }
-    }
-
-    #[test]
-    fn internal_distribution_attribution_cannot_be_spoofed_by_mcp_clients() {
-        let mut payload = json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/list",
-            "params": {"_meta": {(INTERNAL_ATTRIBUTION_META): {
-                "acquisition_token": "client-controlled",
-                "first_touch_rail": "forged"
-            }}}
-        });
-        set_internal_attribution(&mut payload, None);
-        assert!(payload["params"]["_meta"]
-            .get(INTERNAL_ATTRIBUTION_META)
-            .is_none());
-
-        let attribution = McpDistributionAttribution {
-            acquisition_id: Uuid::nil(),
-            acquisition_token: "aba1_test.signature".to_string(),
-            first_touch_rail: "bankr".to_string(),
-            current_rail: "cursor".to_string(),
-            measurement_eligible: true,
-        };
-        set_internal_attribution(&mut payload, Some(&attribution));
-        let observed = &payload["params"]["_meta"][INTERNAL_ATTRIBUTION_META];
-        assert_eq!(observed["acquisition_id"], Uuid::nil().to_string());
-        assert_eq!(observed["first_touch_rail"], "bankr");
-        assert_eq!(observed["current_rail"], "cursor");
-    }
-
-    #[test]
-    fn public_mcp_attribution_metadata_is_analytics_only() {
-        let attribution = McpDistributionAttribution {
-            acquisition_id: Uuid::new_v4(),
-            acquisition_token: "aba1_test.signature".to_string(),
-            first_touch_rail: "github".to_string(),
-            current_rail: "github".to_string(),
-            measurement_eligible: true,
-        };
-        let mut result = json!({"tools": []});
-        attach_attribution_metadata(&mut result, &attribution);
-        let metadata = &result["_meta"]["agentbounties.app/acquisition"];
-        assert_eq!(metadata["authority"], "analytics_only");
-        assert_eq!(metadata["request_header"], ACQUISITION_HEADER);
-        assert_eq!(metadata["measurement_eligible"], true);
-        assert!(metadata.get("acquisition_id").is_some());
-        for forbidden in ["private_key", "wallet_signature", "payment_authority"] {
-            assert!(metadata.get(forbidden).is_none());
-        }
-    }
-
-    #[test]
-    fn prepare_handoff_failure_fingerprint_is_stable_and_content_free() {
-        let first = distribution_request_fingerprint(&json!({"title": "private task"}));
-        let replay = distribution_request_fingerprint(&json!({"title": "private task"}));
-        let changed = distribution_request_fingerprint(&json!({"title": "different task"}));
-        assert_eq!(first, replay);
-        assert_ne!(first, changed);
-        assert_eq!(first.len(), 64);
-        assert!(!first.contains("private"));
-    }
-
-    fn distribution_competition_fixture() -> Value {
-        let api_body = json!({
-            "state": "awaiting_wallet_calls",
-            "plan": {
-                "schema_version": "agent-bounties/open-competition-v2-creation-plan-v1",
-                "protocol_version": "agent-bounties/open-competition-v2-beta3",
-                "network": chain_base::base_network_descriptor("base-mainnet").unwrap(),
-                "bounty_id": format!("0x{}", "2".repeat(64)),
-                "predicted_competition": format!("0x{}", "3".repeat(40)),
-                "funding_target": "2100000", "remaining_funding_after_creation": "0",
-                "profitable_if_win": true, "public_inventory_eligible_after_confirmation": true,
-                "wallet_calls": [{"from": format!("0x{}", "4".repeat(40)),
-                    "to": format!("0x{}", "5".repeat(40)), "value_wei": 0,
-                    "data": "0x", "function": "createCompetition(params,funding,nonce,risk)"}],
-                "next_action": "Review unsigned calls", "evidence_boundary": "Unsigned preparation only"
-            }
-        });
-        legacy_result(crate::mcp_json(json!({"http_status": 200, "body": api_body})).0).unwrap()
-    }
-
-    #[test]
-    fn distribution_competition_binding_uses_the_validated_creation_call() {
-        let attribution = McpDistributionAttribution {
-            acquisition_id: Uuid::new_v4(),
-            acquisition_token: "opaque".to_string(),
-            first_touch_rail: "glama-paid".to_string(),
-            current_rail: "cursor".to_string(),
-            measurement_eligible: false,
-        };
-        let result = distribution_competition_fixture();
-        let received_at = chrono::Utc::now();
-        let binding = competition_preparation_binding(&result, &attribution).unwrap();
-        assert!(binding.prepared_at >= received_at);
-        assert_eq!(binding.acquisition_id, attribution.acquisition_id);
-        assert_eq!(binding.network, "base-mainnet");
-        for status in [json!(400), json!(503), Value::Null, json!("200")] {
-            let mut invalid = result.clone();
-            invalid["http_status"] = status;
-            assert!(competition_preparation_binding(&invalid, &attribution).is_err());
-        }
-        assert_eq!(
-            binding.creator_wallet,
-            result["body"]["plan"]["wallet_calls"][0]["from"]
-        );
-        assert_eq!(
-            binding.factory_contract,
-            result["body"]["plan"]["wallet_calls"][0]["to"]
-        );
-        assert_eq!(
-            binding.competition_contract,
-            result["body"]["plan"]["predicted_competition"]
-        );
-        for (key, value) in [
-            ("chain_id", json!(84532)),
-            ("name", json!("unsupported-chain")),
-        ] {
-            let mut invalid = result.clone();
-            invalid["body"]["plan"]["network"][key] = value;
-            assert!(competition_preparation_binding(&invalid, &attribution).is_err());
-        }
-        for calls in [
-            json!([]),
-            json!([
-                result["body"]["plan"]["wallet_calls"][0],
-                result["body"]["plan"]["wallet_calls"][0]
-            ]),
-        ] {
-            let mut invalid = result.clone();
-            invalid["body"]["plan"]["wallet_calls"] = calls;
-            assert!(competition_preparation_binding(&invalid, &attribution).is_err());
-        }
-    }
-
-    #[test]
-    fn distribution_competition_binding_normalizes_both_shared_network_descriptors() {
-        let attribution = McpDistributionAttribution {
-            acquisition_id: Uuid::new_v4(),
-            acquisition_token: "opaque".to_string(),
-            first_touch_rail: "mcp-so-paid".to_string(),
-            current_rail: "mcp-so-paid".to_string(),
-            measurement_eligible: false,
-        };
-        for network in ["base-mainnet", "base-sepolia"] {
-            let descriptor = chain_base::base_network_descriptor(network).unwrap();
-            let mut result = distribution_competition_fixture();
-            result["body"]["plan"]["network"] = json!(descriptor);
-            for name in [descriptor.name.as_str(), network] {
-                result["body"]["plan"]["network"]["name"] = json!(name);
-                let binding = competition_preparation_binding(&result, &attribution).unwrap();
-                assert_eq!(binding.network, network);
-            }
-            result["body"]["plan"]["network"]["chain_id"] = json!(1);
-            assert!(competition_preparation_binding(&result, &attribution).is_err());
-        }
-    }
-
-    #[tokio::test]
-    async fn distribution_competition_preparation_requires_durable_attribution() {
-        let state = public_tool_test_state();
-        let result = distribution_competition_fixture();
-        let unchanged = attach_competition_preparation_attribution(&state, result.clone(), None)
-            .await
-            .unwrap();
-        assert_eq!(unchanged, result);
-        let attribution = McpDistributionAttribution {
-            acquisition_id: Uuid::new_v4(),
-            acquisition_token: "opaque".to_string(),
-            first_touch_rail: "mcp-so-paid".to_string(),
-            current_rail: "mcp-so-paid".to_string(),
-            measurement_eligible: false,
-        };
-        assert!(
-            attach_competition_preparation_attribution(&state, result, Some(&attribution))
-                .await
-                .unwrap_err()
-                .contains("unavailable")
-        );
-    }
-
-    #[tokio::test]
-    async fn distribution_competition_reads_real_proxy_envelopes_after_response() {
-        let api_body = distribution_competition_fixture()["body"].clone();
-        let failed_body = api_body.clone();
-        let router = axum::Router::new()
-            .route(
-                "/create",
-                axum::routing::post(move || {
-                    let mut body = api_body.clone();
-                    async move {
-                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-                        body["response_prepared_at"] = json!(chrono::Utc::now());
-                        Json(body)
-                    }
-                }),
-            )
-            .route(
-                "/unavailable",
-                axum::routing::post(move || {
-                    let body = failed_body.clone();
-                    async move { (StatusCode::SERVICE_UNAVAILABLE, Json(body)) }
-                }),
-            );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let socket = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-        let attribution = McpDistributionAttribution {
-            acquisition_id: Uuid::new_v4(),
-            acquisition_token: "opaque".to_string(),
-            first_touch_rail: "glama-paid".to_string(),
-            current_rail: "glama-paid".to_string(),
-            measurement_eligible: false,
-        };
-        for path in ["create", "unavailable"] {
-            let proxied = crate::proxy_public_json_response_with_timeout(
-                reqwest::Client::new().post(format!("http://{socket}/{path}")),
-                "fixture API",
-                5,
-            )
-            .await
-            .0;
-            let result = legacy_result(proxied).unwrap();
-            let binding = competition_preparation_binding(&result, &attribution);
-            if path == "create" {
-                let response_time = chrono::DateTime::parse_from_rfc3339(
-                    result["body"]["response_prepared_at"].as_str().unwrap(),
-                )
-                .unwrap();
-                assert!(binding.unwrap().prepared_at >= response_time);
-            } else {
-                assert!(binding.unwrap_err().contains("HTTP status"));
-            }
-        }
-        server.abort();
-    }
-
-    #[tokio::test]
-    async fn attributed_mcp_rejects_unknown_canary_markers_before_processing() {
-        let mut headers = HeaderMap::new();
-        headers.insert(CANARY_HEADER, HeaderValue::from_static("unbounded-marker"));
-        let response = attributed_mcp_post(
-            Path("bankr".to_string()),
-            State(public_tool_test_state()),
-            headers,
-            Json(json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[test]
     fn handoff_is_prefilled_but_never_claims_creation_or_signature() {
         let args = valid_args();
-        let image = sandbox_bounty_image_reference(&args).unwrap().unwrap();
-        let handoff = build_bounty_post_handoff(&args, Some(&image)).unwrap();
-        assert_eq!(
-            handoff,
-            build_bounty_post_handoff(&args, Some(&image)).unwrap()
-        );
+        let image = sandbox_bounty_image_reference(&args).unwrap();
+        let handoff = build_bounty_post_handoff(&args, &image).unwrap();
         let post_url = Url::parse(handoff["post_url"].as_str().unwrap()).unwrap();
         let pairs = post_url.query_pairs().collect::<Vec<_>>();
 
@@ -5661,15 +3563,7 @@ mod tests {
         assert_eq!(handoff["initial_funding_usdc"], "2.1");
         assert_eq!(handoff["bounty_created"], false);
         assert_eq!(handoff["wallet_signature_requested"], false);
-        assert_eq!(handoff["benchmark"], *args.benchmark.as_ref().unwrap());
-        assert_eq!(
-            handoff["evidence_schema"],
-            *args.evidence_schema.as_ref().unwrap()
-        );
         assert_eq!(handoff["image"]["source"], "chatgpt_user_generated");
-        assert!(pairs
-            .iter()
-            .any(|(key, value)| key == "from" && value == "ai-app"));
         assert!(pairs
             .iter()
             .any(|(key, value)| key == "title" && value == "Fix the reconciliation regression"));
@@ -5677,234 +3571,6 @@ mod tests {
             pairs.iter().filter(|(key, _)| key == "criterion").count(),
             2
         );
-        assert!(pairs.iter().any(|(key, value)| {
-            key == "benchmark"
-                && value.contains("benchmarks/direct-growth-v2/openhands-integration")
-        }));
-        assert!(pairs.iter().any(
-            |(key, value)| key == "evidenceSchema" && value.contains("source_snapshot_digest")
-        ));
-    }
-
-    #[test]
-    fn creator_handoff_preserves_deadline_operation_reference_and_approved_image() {
-        let mut args = valid_args();
-        args.review_mode = Some("creator".to_string());
-        let offset = chrono::FixedOffset::west_opt(6 * 3600).unwrap();
-        let exact = (chrono::Utc::now() + chrono::Duration::days(2))
-            .with_timezone(&offset)
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
-        args.delivery_deadline = Some(exact.clone());
-        args.benchmark = None;
-        args.evidence_schema = None;
-        args.posting_operation_id = Some(uuid::Uuid::new_v4());
-        args.reference_attachment = Some(
-            json!({"version":1, "kind":"homepage_background", "phase":"day", "variant":"desktop", "source_url":"https://agentbounties.app/", "asset_url":"https://raw.githubusercontent.com/NSPG13/agent-bounties/933c9c446a76d26f148a4f2defacf6453d02a7b2/site/assets/solarpunk/scene-day.webp", "sha256":"sha256:f9143ee70ca0551bc97562c89c96cc56b4a54391ab4034315148253b757fcaef", "mime_type":"image/webp", "byte_length":256228, "captured_at":chrono::Utc::now().to_rfc3339()}),
-        );
-        let image = sandbox_bounty_image_reference(&args).unwrap().unwrap();
-        let handoff = build_bounty_post_handoff(&args, Some(&image)).unwrap();
-        let replay = build_bounty_post_handoff(&args, Some(&image)).unwrap();
-        assert_eq!(handoff, replay);
-        let schema = post_handoff_output_schema();
-        let properties = schema["properties"].as_object().unwrap();
-        for key in handoff.as_object().unwrap().keys() {
-            assert!(
-                properties.contains_key(key),
-                "undeclared handoff field {key}"
-            );
-        }
-        for required in schema["required"].as_array().unwrap() {
-            assert!(handoff.get(required.as_str().unwrap()).is_some());
-        }
-        assert_eq!(handoff["delivery_deadline"], exact);
-        assert_eq!(handoff["review_mode"], "creator");
-        assert_eq!(
-            handoff["reference_attachment"],
-            *args.reference_attachment.as_ref().unwrap()
-        );
-        assert_eq!(handoff["image"]["sha256"], image.sha256);
-        let url = Url::parse(handoff["post_url"].as_str().unwrap()).unwrap();
-        assert!(url
-            .query_pairs()
-            .any(|(key, value)| key == "deliveryDeadline" && value == exact));
-        let original_reference = args.reference_attachment.clone();
-        args.reference_attachment.as_mut().unwrap()["sha256"] = json!("sha256:invented");
-        assert!(build_bounty_post_handoff(&args, Some(&image)).is_err());
-        args.reference_attachment = original_reference;
-        args.benchmark = Some(json!({"engine":"invented"}));
-        assert!(build_bounty_post_handoff(&args, Some(&image)).is_err());
-        args.benchmark = None;
-        args.delivery_deadline = Some("2026-09-10T21:00:00".to_string());
-        assert!(build_bounty_post_handoff(&args, Some(&image)).is_err());
-        args.delivery_deadline = Some(exact);
-        args.meta_child =
-            Some(json!({"parent_bounty_contract":"0x1111111111111111111111111111111111111111"}));
-        assert!(build_bounty_post_handoff(&args, Some(&image)).is_err());
-    }
-
-    #[test]
-    fn parent_handoff_preserves_binding_without_asserting_qualification() {
-        let mut args = valid_args();
-        args.solver_reward_usdc = "0.98".to_string();
-        args.verifier_reward_usdc = "0.02".to_string();
-        args.meta_child = Some(
-            json!({"parent_bounty_contract":"0x1111111111111111111111111111111111111111", "intended_child_solver":"0x2222222222222222222222222222222222222222"}),
-        );
-        let image = sandbox_bounty_image_reference(&args).unwrap().unwrap();
-        let handoff = build_bounty_post_handoff(&args, Some(&image)).unwrap();
-        assert_eq!(handoff["meta_child"], *args.meta_child.as_ref().unwrap());
-        assert_eq!(handoff["bounty_created"], false);
-        assert!(handoff["post_url"]
-            .as_str()
-            .unwrap()
-            .contains("parentBounty="));
-        args.review_mode = Some("automated".to_string());
-        args.delivery_deadline = Some("2026-09-10T21:00:00-06:00".to_string());
-        assert!(build_bounty_post_handoff(&args, Some(&image)).is_err());
-    }
-
-    #[test]
-    fn verifier_handoff_rejects_incomplete_or_non_executable_inputs() {
-        let mut glama_canary = valid_args();
-        glama_canary.benchmark.as_mut().unwrap()["source"]["commit"] =
-            json!(RECONCILED_GLAMA_CANARY_COMMIT);
-        glama_canary.benchmark.as_mut().unwrap()["source"]["subdirectory"] =
-            json!("benchmarks/distribution-v1/glama-onboarding-audit");
-        glama_canary.benchmark.as_mut().unwrap()["runner_manifest"]["benchmark_digest"] =
-            json!(RECONCILED_GLAMA_CANARY_DIGEST);
-        let glama_image = sandbox_bounty_image_reference(&glama_canary)
-            .unwrap()
-            .unwrap();
-        let glama_result = build_bounty_post_handoff(&glama_canary, Some(&glama_image));
-        assert!(glama_result.is_ok(), "{glama_result:?}");
-        for (field, value) in [
-            ("commit", json!(RECONCILED_REGRESSION_BENCHMARK_COMMIT)),
-            ("subdirectory", json!("benchmarks/copied-location")),
-        ] {
-            let mut altered = glama_canary.clone();
-            altered.benchmark.as_mut().unwrap()["source"][field] = value;
-            assert!(build_bounty_post_handoff(&altered, None)
-                .unwrap_err()
-                .contains("immutable source tuple"));
-        }
-
-        let mut args = valid_args();
-        args.evidence_schema = None;
-        assert!(build_bounty_post_handoff(&args, None)
-            .unwrap_err()
-            .contains("evidence_schema is required"));
-
-        let mut args = valid_args();
-        args.benchmark.as_mut().unwrap()["runner_manifest"]["image"] =
-            json!("docker.io/library/python:latest");
-        assert!(build_bounty_post_handoff(&args, None)
-            .unwrap_err()
-            .contains("image must be one lowercase OCI reference pinned by sha256 digest"));
-
-        for image in [
-            format!("docker.io/a@tag@sha256:{}", "b".repeat(64)),
-            format!("docker.io/a..b@sha256:{}", "b".repeat(64)),
-        ] {
-            let mut args = valid_args();
-            args.benchmark.as_mut().unwrap()["runner_manifest"]["image"] = json!(image);
-            assert!(build_bounty_post_handoff(&args, None)
-                .unwrap_err()
-                .contains("image must be one lowercase OCI reference pinned by sha256 digest"));
-        }
-
-        let mut args = valid_args();
-        args.verifier_reward_usdc = "0.009999".to_string();
-        assert!(build_bounty_post_handoff(&args, None)
-            .unwrap_err()
-            .contains("at least 0.01 USDC"));
-
-        let mut args = valid_args();
-        args.evidence_schema = Some(json!({
-            "type": "object",
-            "additionalProperties": false
-        }));
-        assert!(build_bounty_post_handoff(&args, None)
-            .unwrap_err()
-            .contains("must include source_snapshot_digest"));
-
-        let mut args = valid_args();
-        args.benchmark.as_mut().unwrap()["source"]["repository"] = json!("other/copied-benchmark");
-        args.benchmark.as_mut().unwrap()["source"]["subdirectory"] = json!("different/location");
-        args.benchmark.as_mut().unwrap()["runner_manifest"]["benchmark_digest"] =
-            json!(format!("sha256:{}", "d".repeat(64)));
-        assert!(build_bounty_post_handoff(&args, None)
-            .unwrap_err()
-            .contains("independently reconciled"));
-
-        for (field, value) in [
-            ("repository", json!("other/repository")),
-            ("commit", json!("b".repeat(40))),
-            ("subdirectory", json!("benchmarks/copied-location")),
-        ] {
-            let mut args = valid_args();
-            args.benchmark.as_mut().unwrap()["source"][field] = value;
-            assert!(build_bounty_post_handoff(&args, None)
-                .unwrap_err()
-                .contains("immutable source tuple"));
-        }
-    }
-
-    #[test]
-    fn legacy_json_rpc_errors_are_not_successful_requests() {
-        assert!(json_rpc_payload_succeeded(&json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "result": {"tools": []}
-        })));
-        assert!(!json_rpc_payload_succeeded(&json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "error": {"code": -32602, "message": "invalid arguments"}
-        })));
-        assert!(!json_rpc_payload_succeeded(&json!([
-            {"jsonrpc": "2.0", "id": 1, "result": {}},
-            {"jsonrpc": "2.0", "id": 2, "error": {"code": -32601, "message": "missing"}}
-        ])));
-        assert!(!json_rpc_payload_succeeded(&json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "result": {"content": [], "isError": true}
-        })));
-        assert!(!json_rpc_payload_succeeded(&json!([
-            {"jsonrpc": "2.0", "id": 1, "result": {"content": [], "isError": false}},
-            {"jsonrpc": "2.0", "id": 2, "result": {"content": [], "isError": true}}
-        ])));
-    }
-
-    #[test]
-    fn provider_neutral_handoff_allows_an_approved_bounty_without_an_image() {
-        let mut args = valid_args();
-        args.image_prompt = None;
-        args.image_alt_text = None;
-        args.bounty_image = None;
-
-        assert!(sandbox_bounty_image_reference(&args).unwrap().is_none());
-        let handoff = build_bounty_post_handoff(&args, None).unwrap();
-        let post_url = Url::parse(handoff["post_url"].as_str().unwrap()).unwrap();
-        let pairs = post_url.query_pairs().collect::<Vec<_>>();
-
-        assert!(handoff["image"].is_null());
-        assert_eq!(handoff["state"], "review_required_not_published");
-        assert_eq!(handoff["bounty_created"], false);
-        assert_eq!(handoff["wallet_signature_requested"], false);
-        assert!(pairs
-            .iter()
-            .any(|(key, value)| key == "from" && value == "ai-app"));
-        assert!(!pairs.iter().any(|(key, _)| key.starts_with("image")));
-    }
-
-    #[test]
-    fn provider_neutral_handoff_rejects_partial_image_metadata() {
-        let mut args = valid_args();
-        args.bounty_image = None;
-        assert!(sandbox_bounty_image_reference(&args)
-            .unwrap_err()
-            .contains("supplied together"));
     }
 
     #[test]
@@ -5912,34 +3578,16 @@ mod tests {
         assert!(!chatgpt_public_review_mode());
         assert_eq!(
             chatgpt_tool_names(false, chatgpt_public_review_mode()),
-            CHATGPT_ADVERTISED_TOOL_NAMES
+            CHATGPT_FULL_TOOL_NAMES
         );
         assert_eq!(
             chatgpt_tool_names(false, true),
-            CHATGPT_ADVERTISED_TOOL_NAMES,
+            CHATGPT_FULL_TOOL_NAMES,
             "the removed public-review flag cannot reduce the product"
         );
-        assert_eq!(CHATGPT_ADVERTISED_TOOL_NAMES.len(), 10);
-        assert_eq!(
-            CHATGPT_ADVERTISED_TOOL_NAMES,
-            [
-                "get_bounty_feed",
-                "render_bounty_feed",
-                "prepare_moonpay_onramp",
-                "prepare_bounty_post",
-                "prepare_bounty_action",
-                "get_bounty_action_status",
-                "compile_objective_with_cloud_agent",
-                "list_bounty_comments",
-                "add_bounty_comment",
-                "create_share_bundle",
-            ]
-        );
-        assert!(!CHATGPT_ADVERTISED_TOOL_NAMES.contains(&"list_autonomous_bounties"));
-        assert_eq!(
-            CHATGPT_COMPATIBILITY_TOOL_NAMES,
-            ["list_autonomous_bounties"]
-        );
+        assert!(CHATGPT_FULL_TOOL_NAMES.contains(&"prepare_moonpay_onramp"));
+        assert!(CHATGPT_FULL_TOOL_NAMES.contains(&"prepare_bounty_action"));
+        assert!(CHATGPT_FULL_TOOL_NAMES.contains(&"get_bounty_action_status"));
     }
 
     #[test]
@@ -5974,22 +3622,17 @@ mod tests {
     #[test]
     fn handoff_rejects_non_https_sources_and_invalid_money() {
         let mut args = valid_args();
-        let image = sandbox_bounty_image_reference(&args).unwrap().unwrap();
+        let image = sandbox_bounty_image_reference(&args).unwrap();
         args.source_url = Some("http://example.com/private".to_string());
-        assert!(build_bounty_post_handoff(&args, Some(&image))
+        assert!(build_bounty_post_handoff(&args, &image)
             .unwrap_err()
             .contains("HTTPS"));
 
         args.source_url = None;
         args.solver_reward_usdc = "0".to_string();
-        assert!(build_bounty_post_handoff(&args, Some(&image))
+        assert!(build_bounty_post_handoff(&args, &image)
             .unwrap_err()
             .contains("greater than zero"));
-
-        args.solver_reward_usdc = "1.999999".to_string();
-        assert!(build_bounty_post_handoff(&args, Some(&image))
-            .unwrap_err()
-            .contains("at least 2 USDC"));
     }
 
     #[test]
@@ -6051,7 +3694,7 @@ mod tests {
 
     #[tokio::test]
     async fn app_tools_have_required_annotations_and_widget_metadata() {
-        let tools = mcp_tools_for_catalog(McpCatalogProfile::Chatgpt).await;
+        let tools = chatgpt_tools().await;
         for tool in &tools {
             assert!(
                 tool["description"]
@@ -6071,13 +3714,6 @@ mod tests {
                 "{} must declare its structured output contract",
                 tool["name"]
             );
-            if tool["name"] == "render_bounty_feed" {
-                assert_eq!(tool["_meta"]["ui"]["resourceUri"], FEED_WIDGET_URI);
-                assert_eq!(tool["_meta"]["openai/outputTemplate"], FEED_WIDGET_URI);
-            } else {
-                assert!(tool["_meta"]["ui"].get("resourceUri").is_none());
-                assert!(tool["_meta"].get("openai/outputTemplate").is_none());
-            }
         }
         let prepare = tools
             .iter()
@@ -6087,6 +3723,17 @@ mod tests {
             .iter()
             .find(|tool| tool["name"] == "get_bounty_action_status")
             .expect("canonical action status tool");
+        let autonomous_feed = tools
+            .iter()
+            .find(|tool| tool["name"] == "list_autonomous_bounties")
+            .expect("canonical autonomous feed tool");
+        assert!(
+            autonomous_feed["outputSchema"]["properties"]["items"]["items"]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("gross_cash_margin"))
+        );
+
         assert_eq!(prepare["annotations"]["readOnlyHint"], false);
         assert_eq!(prepare["annotations"]["destructiveHint"], false);
         assert_eq!(prepare["annotations"]["openWorldHint"], false);
@@ -6151,15 +3798,13 @@ mod tests {
             "add_bounty_comment",
             "create_share_bundle",
             "prepare_bounty_post",
+            "list_autonomous_bounties",
         ] {
             assert!(
                 tools.iter().any(|tool| tool["name"] == name),
                 "missing public ChatGPT app tool: {name}"
             );
         }
-        assert!(tools
-            .iter()
-            .all(|tool| tool["name"] != "list_autonomous_bounties"));
         for forbidden in [
             "fund_bounty_with_x402",
             "agent_native_claim",
@@ -6188,31 +3833,11 @@ mod tests {
             .expect("ChatGPT-account image handoff tool");
         assert_eq!(post["_meta"]["openai/fileParams"], json!(["bounty_image"]));
         assert!(post["_meta"]["ui"].get("resourceUri").is_none());
-        assert!(!post["inputSchema"]["required"]
+        assert!(post["inputSchema"]["required"]
             .as_array()
             .unwrap()
             .iter()
             .any(|field| field == "bounty_image"));
-        assert!(post["outputSchema"]["properties"]["image"]["anyOf"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|variant| variant["type"] == "null"));
-    }
-
-    #[test]
-    fn optional_analytics_oauth_keeps_public_tools_anonymous() {
-        assert_eq!(
-            analytics_security_schemes(false),
-            json!([{"type": "noauth"}])
-        );
-        assert_eq!(
-            analytics_security_schemes(true),
-            json!([
-                {"type": "noauth"},
-                {"type": "oauth2", "scopes": ["analytics:exclude-owner"]}
-            ])
-        );
     }
 
     fn public_tool_test_state() -> SharedState {
@@ -6226,706 +3851,9 @@ mod tests {
             stripe_api_base_url: "https://api.stripe.com".to_string(),
             stripe_payment_method_configuration: None,
             operator_api_token: None,
-            analytics_exclusion_token: None,
-            distribution_attribution_signing_secret: None,
-            mcp_base_url: "http://127.0.0.1:8090".to_string(),
-            oauth_authorizations: Mutex::new(HashMap::new()),
-            oauth_codes: Mutex::new(HashMap::new()),
             store: None,
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })
-    }
-
-    fn modern_request(
-        method: &'static str,
-        mut params: Value,
-        name: Option<&str>,
-    ) -> (HeaderMap, Value) {
-        params["_meta"] = json!({
-            (MCP_PROTOCOL_VERSION_META): MCP_PROTOCOL_VERSION,
-            (MCP_CLIENT_INFO_META): {
-                "name": "agent-bounties-protocol-test",
-                "version": "1.0.0"
-            },
-            (MCP_CLIENT_CAPABILITIES_META): {}
-        });
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            MCP_PROTOCOL_VERSION_HEADER,
-            MCP_PROTOCOL_VERSION.parse().unwrap(),
-        );
-        headers.insert(MCP_METHOD_HEADER, method.parse().unwrap());
-        if let Some(name) = name {
-            headers.insert(MCP_NAME_HEADER, name.parse().unwrap());
-        }
-        (
-            headers,
-            json!({
-                "jsonrpc": "2.0",
-                "id": "protocol-test",
-                "method": method,
-                "params": params
-            }),
-        )
-    }
-
-    #[tokio::test]
-    async fn modern_discovery_is_stateless_typed_and_cacheable() {
-        let (headers, request) = modern_request("server/discover", json!({}), None);
-        assert_eq!(mcp_protocol_era(&headers, &request), McpProtocolEra::Modern);
-        validate_modern_request(&headers, &request).unwrap();
-
-        let (status, response) = handle_request(
-            public_tool_test_state(),
-            request,
-            McpProtocolEra::Modern,
-            McpCatalogProfile::Core,
-        )
-        .await
-        .unwrap();
-        let result = &response["result"];
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(result["supportedVersions"], json!([MCP_PROTOCOL_VERSION]));
-        assert_eq!(result["resultType"], "complete");
-        assert_eq!(result["ttlMs"], MCP_CATALOG_TTL_MS);
-        assert_eq!(result["cacheScope"], "public");
-        assert_eq!(
-            result["_meta"][MCP_SERVER_INFO_META]["version"],
-            env!("CARGO_PKG_VERSION")
-        );
-        assert_eq!(result["capabilities"]["tools"]["listChanged"], false);
-        assert_eq!(result["capabilities"]["resources"]["subscribe"], false);
-        assert!(result.get("protocolVersion").is_none());
-    }
-
-    #[tokio::test]
-    async fn modern_tool_catalog_is_deterministic_typed_and_cacheable() {
-        let (headers, request) = modern_request("tools/list", json!({}), None);
-        validate_modern_request(&headers, &request).unwrap();
-        let (_, response) = handle_request(
-            public_tool_test_state(),
-            request,
-            McpProtocolEra::Modern,
-            McpCatalogProfile::Core,
-        )
-        .await
-        .unwrap();
-        let result = &response["result"];
-        let names = result["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|tool| tool["name"].as_str().unwrap())
-            .collect::<Vec<_>>();
-        let mut sorted_names = names.clone();
-        sorted_names.sort_unstable();
-
-        assert_eq!(names, sorted_names);
-        assert_eq!(result["resultType"], "complete");
-        assert_eq!(result["ttlMs"], MCP_CATALOG_TTL_MS);
-        assert_eq!(result["cacheScope"], "public");
-        assert!(result["_meta"][MCP_SERVER_INFO_META].is_object());
-        assert!(names.contains(&"list_autonomous_bounties"));
-    }
-
-    #[test]
-    fn open_competition_v2_inspection_publishes_exact_operation_schemas() {
-        let schema = OpenCompetitionV2InspectArgs::input_schema();
-        let branches = schema["oneOf"].as_array().unwrap();
-        let operations = branches
-            .iter()
-            .map(|branch| branch["properties"]["operation"]["const"].as_str().unwrap())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            operations,
-            [
-                "guide",
-                "release",
-                "profiles",
-                "inventory",
-                "events",
-                "proof_job"
-            ]
-        );
-        for branch in branches {
-            assert_eq!(branch["additionalProperties"], false);
-        }
-        let proof_job = branches
-            .iter()
-            .find(|branch| branch["properties"]["operation"]["const"] == "proof_job")
-            .unwrap();
-        assert_eq!(proof_job["properties"]["job_id"]["format"], "uuid");
-        assert!(proof_job["required"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("job_id")));
-        let events = branches
-            .iter()
-            .find(|branch| branch["properties"]["operation"]["const"] == "events")
-            .unwrap();
-        assert_eq!(
-            events["properties"]["bounty_id"]["pattern"],
-            "^0x[0-9a-fA-F]{64}$"
-        );
-    }
-
-    #[test]
-    fn open_competition_v2_mutations_publish_exact_operation_schemas() {
-        let schema = OpenCompetitionV2MutationArgs::input_schema();
-        let expected = [
-            "prepare_profile",
-            "prepare_policies",
-            "validate",
-            "create",
-            "fund",
-            "quote_proof",
-            "pay_proof",
-            "prepare_proof",
-            "authorize_relay",
-            "prepare_action",
-        ];
-        assert_eq!(schema["properties"]["operation"]["enum"], json!(expected));
-        assert_eq!(schema["allOf"].as_array().unwrap().len(), expected.len());
-        for operation in expected {
-            let rule = schema["allOf"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|rule| rule["if"]["properties"]["operation"]["const"] == operation)
-                .unwrap_or_else(|| panic!("missing conditional schema for {operation}"));
-            assert_eq!(
-                rule["then"]["properties"]["arguments"]["$ref"],
-                format!("#/$defs/{operation}")
-            );
-            if operation != "prepare_profile" {
-                assert_eq!(schema["$defs"][operation]["additionalProperties"], false);
-            }
-        }
-        assert_eq!(
-            schema["$defs"]["prepare_profile"]["oneOf"]
-                .as_array()
-                .unwrap()
-                .len(),
-            2
-        );
-        assert_eq!(
-            schema["$defs"]["prepare_profile"]["oneOf"][0]["properties"]["profile_id"]["const"],
-            "structured-artifact-metric-v1"
-        );
-        assert_eq!(
-            schema["$defs"]["prepare_profile"]["oneOf"][1]["properties"]["profile_id"]["const"],
-            "public-vector-metric-v1"
-        );
-        assert_eq!(
-            schema["$defs"]["prepare_action"]["properties"]["action"]["enum"],
-            json!([
-                "finalize_best_score",
-                "cancel_funding",
-                "expire_competition",
-                "cancel_unavailable_verifier",
-                "withdraw_refund_for"
-            ])
-        );
-        assert!(
-            schema["$defs"]["pay_proof"]["properties"]["payment_signature"]["description"]
-                .as_str()
-                .unwrap()
-                .contains("explicit approval")
-        );
-        assert!(
-            schema["$defs"]["authorize_relay"]["properties"]["solver_signature"]["description"]
-                .as_str()
-                .unwrap()
-                .contains("explicit approval")
-        );
-    }
-
-    #[tokio::test]
-    async fn open_competition_v2_guide_covers_complete_safe_role_flows() {
-        let response = inspect_open_competition_v2(
-            State(public_tool_test_state()),
-            Json(OpenCompetitionV2InspectArgs {
-                operation: "guide".to_string(),
-                network: None,
-                state: None,
-                bounty_id: None,
-                job_id: None,
-            }),
-        )
-        .await
-        .0;
-        let guide = response.pointer("/content/0/json").unwrap();
-        assert_eq!(
-            guide["schema_version"],
-            "agent-bounties/open-competition-v2-mcp-guide-v1"
-        );
-        assert_eq!(guide["flows"]["post"].as_array().unwrap().len(), 8);
-        assert_eq!(guide["flows"]["earn_hosted"].as_array().unwrap().len(), 6);
-        assert_eq!(
-            guide["flows"]["earn_byo_proof"].as_array().unwrap().len(),
-            3
-        );
-        assert_eq!(guide["operations"].as_array().unwrap().len(), 10);
-        let encoded = serde_json::to_string(guide).unwrap();
-        for required in [
-            "activation_state=public_beta",
-            "quote_proof",
-            "pay_proof",
-            "payment_pending",
-            "authorize_relay",
-            "prepare_proof",
-            "prepare_action",
-            "prepare_policies",
-            "structured-artifact-metric-v1",
-            "public-vector-metric-v1",
-            "CompetitionSettledV2",
-            "private key",
-        ] {
-            assert!(encoded.contains(required), "guide omitted {required}");
-        }
-    }
-
-    #[tokio::test]
-    async fn open_competition_v2_prepares_public_vector_policy_exactly() {
-        let response = prepare_open_competition_v2(
-            State(public_tool_test_state()),
-            Json(OpenCompetitionV2MutationArgs {
-                operation: "prepare_profile".to_string(),
-                arguments: json!({
-                    "profile_id": "public-vector-metric-v1",
-                    "network": "base-sepolia",
-                    "mode": "minimize_absolute_error",
-                    "threshold": "4",
-                    "vectors": [
-                        {"expected": 2, "weight": 3},
-                        {"expected": 5, "weight": 2}
-                    ]
-                }),
-            }),
-        )
-        .await
-        .0;
-        let profile = response.pointer("/content/0/json").unwrap();
-        assert_eq!(
-            profile["schema_version"],
-            "agent-bounties/open-competition-v2-public-vector-profile-v1"
-        );
-        assert_eq!(
-            profile["verification_policy_hash"],
-            "0xc1e5661ee1066b8bf3699a878abf6f42d6ea175a2e80297e859e75b4ded7e2ff"
-        );
-        assert_eq!(profile["score_direction"], "lower_is_better");
-        assert_eq!(profile["score_threshold"], "4");
-    }
-
-    #[tokio::test]
-    async fn open_competition_v2_prepares_creation_commitments_exactly() {
-        let response = prepare_open_competition_v2(
-            State(public_tool_test_state()),
-            Json(OpenCompetitionV2MutationArgs {
-                operation: "prepare_policies".to_string(),
-                arguments: json!({
-                    "execution_policy": {"z": 2, "a": 1},
-                    "settlement_policy": {
-                        "winner_mode": "first_proven",
-                        "payment_evidence": "CompetitionSettledV2"
-                    },
-                    "creation_nonce_seed": "creator-0xabc-task-42"
-                }),
-            }),
-        )
-        .await
-        .0;
-        let commitments = response.pointer("/content/0/json").unwrap();
-        assert_eq!(
-            commitments["execution_policy_hash"],
-            "0x987da4b00590a3ba6bd86b025d9690e8c237fc0082c2265b7cef327408f71873"
-        );
-        assert_eq!(
-            commitments["settlement_policy_hash"],
-            "0xb887721b560948c99801f075508a0ab6131aac0f227ff4593cc8f82d2d87e7f3"
-        );
-        assert_eq!(
-            commitments["creation_nonce"],
-            "0x2b5e810153724cd493cec8a5c3e2280afedc99a54d78c5928be010837d69e133"
-        );
-    }
-
-    #[tokio::test]
-    async fn open_competition_v2_mutation_annotations_match_real_side_effects() {
-        let tools = mcp_tools_for_catalog(McpCatalogProfile::Core).await;
-        let descriptor = tools
-            .iter()
-            .find(|tool| tool["name"] == "prepare_open_competition_v2")
-            .unwrap();
-        assert_eq!(
-            descriptor["annotations"],
-            json!({
-                "readOnlyHint": false,
-                "destructiveHint": true,
-                "openWorldHint": true,
-                "idempotentHint": false
-            })
-        );
-        assert!(descriptor["description"]
-            .as_str()
-            .unwrap()
-            .contains("may transfer Base USDC"));
-    }
-
-    fn normalized_public_catalog_contract(mut descriptors: Vec<Value>) -> Value {
-        descriptors.sort_by(|left, right| left["name"].as_str().cmp(&right["name"].as_str()));
-        for descriptor in &mut descriptors {
-            descriptor["securitySchemes"] = json!("deployment-configured");
-            descriptor["_meta"]["securitySchemes"] = json!("deployment-configured");
-        }
-        Value::Array(descriptors)
-    }
-
-    // Explicit, read-only fixture regeneration aid; it never updates the approved
-    // fixtures or relaxes the contract assertions below.
-    #[tokio::test]
-    #[ignore = "prints candidate digests for an intentional reviewed MCP contract change"]
-    async fn print_reviewed_mcp_catalog_digests() {
-        let mut digests = serde_json::Map::new();
-        for (profile, key) in [
-            (McpCatalogProfile::Chatgpt, "chatgpt"),
-            (McpCatalogProfile::Core, "core"),
-        ] {
-            let contract = normalized_public_catalog_contract(mcp_tools_for_catalog(profile).await);
-            digests.insert(
-                key.to_string(),
-                json!(app::hash_artifact(
-                    &serde_json::to_string(&contract).unwrap()
-                )),
-            );
-        }
-        digests.insert(
-            "advanced_http".to_string(),
-            json!(app::hash_artifact(
-                &serde_json::to_string(&tools().await.0).unwrap()
-            )),
-        );
-        println!("{}", serde_json::to_string_pretty(&digests).unwrap());
-    }
-
-    #[tokio::test]
-    async fn published_mcp_catalogs_match_the_reviewed_contract() {
-        let fixture: Value =
-            serde_json::from_str(include_str!("../fixtures/public-mcp-contract-v1.json"))
-                .expect("public MCP contract fixture is valid JSON");
-        assert_eq!(
-            fixture["schema_version"],
-            "agent-bounties/public-mcp-contract-v1"
-        );
-
-        for (profile, key) in [
-            (McpCatalogProfile::Chatgpt, "chatgpt"),
-            (McpCatalogProfile::Core, "core"),
-        ] {
-            let contract = normalized_public_catalog_contract(mcp_tools_for_catalog(profile).await);
-            let names = contract
-                .as_array()
-                .expect("normalized catalog is an array")
-                .iter()
-                .map(|descriptor| descriptor["name"].as_str().unwrap())
-                .collect::<Vec<_>>();
-            let expected = &fixture["catalogs"][key];
-            assert_eq!(
-                names.len(),
-                expected["tool_count"].as_u64().unwrap() as usize
-            );
-            assert_eq!(
-                names,
-                expected["tools"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|name| name.as_str().unwrap())
-                    .collect::<Vec<_>>()
-            );
-
-            let digest = app::hash_artifact(&serde_json::to_string(&contract).unwrap());
-            assert_eq!(
-                digest,
-                expected["normalized_descriptors_sha256"]
-                    .as_str()
-                    .unwrap(),
-                "{key} public MCP descriptor contract drifted; update the fixture and public documentation only for an intentional reviewed change"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn chatgpt_catalog_is_exactly_ten_while_core_eras_keep_compatibility() {
-        let (_, modern_request) = modern_request("tools/list", json!({}), None);
-        let (_, modern_chatgpt) = handle_request(
-            public_tool_test_state(),
-            modern_request.clone(),
-            McpProtocolEra::Modern,
-            McpCatalogProfile::Chatgpt,
-        )
-        .await
-        .unwrap();
-        let chatgpt_names = modern_chatgpt["result"]["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|tool| tool["name"].as_str().unwrap())
-            .collect::<Vec<_>>();
-        assert_eq!(chatgpt_names.len(), 10);
-        assert!(chatgpt_names
-            .iter()
-            .all(|name| CHATGPT_ADVERTISED_TOOL_NAMES.contains(name)));
-        assert!(!chatgpt_names.contains(&"list_autonomous_bounties"));
-
-        for era in [McpProtocolEra::Modern, McpProtocolEra::Legacy] {
-            let (_, response) = handle_request(
-                public_tool_test_state(),
-                modern_request.clone(),
-                era,
-                McpCatalogProfile::Core,
-            )
-            .await
-            .unwrap();
-            let names = response["result"]["tools"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|tool| tool["name"].as_str().unwrap())
-                .collect::<Vec<_>>();
-            assert!(names.contains(&"list_autonomous_bounties"), "{era:?}");
-        }
-    }
-
-    #[test]
-    fn exact_chatgpt_metadata_selects_only_the_app_catalog() {
-        for origin in ["https://chatgpt.com", "https://chat.openai.com"] {
-            let mut headers = HeaderMap::new();
-            headers.insert(ORIGIN, origin.parse().unwrap());
-            assert_eq!(
-                mcp_catalog_profile(&headers, &json!({})),
-                McpCatalogProfile::Chatgpt
-            );
-        }
-        assert_eq!(
-            mcp_catalog_profile(&HeaderMap::new(), &json!({})),
-            McpCatalogProfile::Core
-        );
-        let mut headers = HeaderMap::new();
-        headers.insert(ORIGIN, "https://chatgpt.com.evil.example".parse().unwrap());
-        assert_eq!(
-            mcp_catalog_profile(&headers, &json!({})),
-            McpCatalogProfile::Core
-        );
-
-        let (_, openai_request) = modern_request("tools/list", json!({}), None);
-        let mut openai_request = openai_request;
-        openai_request["params"]["_meta"][MCP_CLIENT_INFO_META]["name"] = json!("openai-mcp");
-        assert_eq!(
-            mcp_catalog_profile(&HeaderMap::new(), &openai_request),
-            McpCatalogProfile::Chatgpt
-        );
-        openai_request["params"]["_meta"][MCP_CLIENT_INFO_META]["name"] =
-            json!("openai-mcp-lookalike");
-        assert_eq!(
-            mcp_catalog_profile(&HeaderMap::new(), &openai_request),
-            McpCatalogProfile::Core
-        );
-    }
-
-    #[test]
-    fn modern_headers_must_match_the_request_body() {
-        let (mut headers, request) = modern_request("tools/list", json!({}), None);
-        headers.insert(MCP_METHOD_HEADER, "resources/list".parse().unwrap());
-        let error = validate_modern_request(&headers, &request).unwrap_err();
-        assert_eq!(error.status, StatusCode::BAD_REQUEST);
-        assert_eq!(error.code, -32020);
-
-        let (mut headers, mut request) = modern_request("tools/list", json!({}), None);
-        headers.insert(MCP_PROTOCOL_VERSION_HEADER, "2099-01-01".parse().unwrap());
-        request["params"]["_meta"][MCP_PROTOCOL_VERSION_META] = json!("2099-01-01");
-        let error = validate_modern_request(&headers, &request).unwrap_err();
-        assert_eq!(error.code, -32022);
-        assert_eq!(
-            error.data.unwrap()["supported"],
-            json!([MCP_PROTOCOL_VERSION])
-        );
-    }
-
-    #[test]
-    fn modern_name_header_supports_the_required_base64_sentinel() {
-        let resource_uri = "ui://agent-bounties/世界.html";
-        let encoded = format!(
-            "=?base64?{}?=",
-            base64::engine::general_purpose::STANDARD.encode(resource_uri)
-        );
-        let (mut headers, request) =
-            modern_request("resources/read", json!({"uri": resource_uri}), None);
-        headers.insert(MCP_NAME_HEADER, encoded.parse().unwrap());
-
-        validate_modern_request(&headers, &request).unwrap();
-        assert_eq!(decode_mcp_header_value(&encoded).unwrap(), resource_uri);
-        assert_eq!(decode_mcp_header_value("ordinary?=").unwrap(), "ordinary?=");
-        assert!(decode_mcp_header_value("=?base64?not-valid?=").is_err());
-    }
-
-    #[tokio::test]
-    async fn legacy_initialize_remains_available_without_modern_metadata() {
-        let request = json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {"protocolVersion": MCP_LEGACY_PROTOCOL_VERSION}
-        });
-        assert_eq!(
-            mcp_protocol_era(&HeaderMap::new(), &request),
-            McpProtocolEra::Legacy
-        );
-        let (status, response) = handle_request(
-            public_tool_test_state(),
-            request,
-            McpProtocolEra::Legacy,
-            McpCatalogProfile::Core,
-        )
-        .await
-        .unwrap();
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(
-            response["result"]["protocolVersion"],
-            MCP_LEGACY_PROTOCOL_VERSION
-        );
-        assert!(response["result"].get("resultType").is_none());
-
-        let mut legacy_headers = HeaderMap::new();
-        legacy_headers.insert(
-            MCP_PROTOCOL_VERSION_HEADER,
-            MCP_LEGACY_PROTOCOL_VERSION.parse().unwrap(),
-        );
-        assert_eq!(
-            mcp_protocol_era(
-                &legacy_headers,
-                &json!({"method": "tools/list", "params": {}})
-            ),
-            McpProtocolEra::Legacy
-        );
-        legacy_headers.insert(MCP_PROTOCOL_VERSION_HEADER, "2099-01-01".parse().unwrap());
-        assert_eq!(
-            mcp_protocol_era(
-                &legacy_headers,
-                &json!({"method": "tools/list", "params": {}})
-            ),
-            McpProtocolEra::Modern
-        );
-    }
-
-    #[tokio::test]
-    async fn legacy_initialize_selects_exact_supported_versions_and_falls_back_otherwise() {
-        let supported = ["2024-11-05", "2025-03-26", "2025-06-18"];
-        for version in supported {
-            let request = json!({
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "initialize",
-                "params": {"protocolVersion": version}
-            });
-            let (status, response) = handle_request(
-                public_tool_test_state(),
-                request,
-                McpProtocolEra::Legacy,
-                McpCatalogProfile::Core,
-            )
-            .await
-            .unwrap();
-            assert_eq!(status, StatusCode::OK);
-            assert_eq!(response["result"]["protocolVersion"], version);
-            assert!(response.get("error").is_none());
-        }
-
-        // Prefix/suffix lookalikes, unknown, missing, and non-string input all
-        // deterministically select the server legacy version instead of being
-        // echoed or rejected.
-        let fallback = [
-            json!({"protocolVersion": "2025-06-18-extra"}),
-            json!({"protocolVersion": "x2025-06-18"}),
-            json!({"protocolVersion": "2099-99-99"}),
-            json!({}),
-            json!({"protocolVersion": 42}),
-        ];
-        for params in fallback {
-            let request = json!({
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "initialize",
-                "params": params
-            });
-            let (status, response) = handle_request(
-                public_tool_test_state(),
-                request,
-                McpProtocolEra::Legacy,
-                McpCatalogProfile::Core,
-            )
-            .await
-            .unwrap();
-            assert_eq!(status, StatusCode::OK);
-            assert_eq!(
-                response["result"]["protocolVersion"],
-                MCP_LEGACY_PROTOCOL_VERSION
-            );
-            assert!(response.get("error").is_none());
-        }
-    }
-
-    #[tokio::test]
-    async fn removed_handshake_methods_are_not_exposed_to_modern_clients() {
-        let (headers, request) = modern_request("initialize", json!({}), None);
-        validate_modern_request(&headers, &request).unwrap();
-        let (status, response) = handle_request(
-            public_tool_test_state(),
-            request,
-            McpProtocolEra::Modern,
-            McpCatalogProfile::Core,
-        )
-        .await
-        .unwrap();
-        assert_eq!(status, StatusCode::NOT_FOUND);
-        assert_eq!(response["error"]["code"], -32601);
-    }
-
-    #[test]
-    fn origin_validation_is_exact_and_configurable() {
-        assert!(mcp_origin_is_allowed_with_config(
-            "https://chatgpt.com",
-            None,
-            None
-        ));
-        assert!(mcp_origin_is_allowed_with_config(
-            "http://127.0.0.1:3000",
-            None,
-            None
-        ));
-        assert!(mcp_origin_is_allowed_with_config(
-            "https://tenant.example",
-            Some("https://tenant.example"),
-            None
-        ));
-        assert!(mcp_origin_is_allowed_with_config(
-            "https://client.example",
-            None,
-            Some("https://one.example, https://client.example")
-        ));
-        for rejected in [
-            "null",
-            "http://chatgpt.com",
-            "https://chatgpt.com.evil.example",
-            "https://user:secret@chatgpt.com",
-            "https://chatgpt.com/path",
-        ] {
-            assert!(
-                !mcp_origin_is_allowed_with_config(rejected, None, None),
-                "expected rejected Origin: {rejected}"
-            );
-        }
     }
 
     #[tokio::test]
@@ -6934,9 +3862,7 @@ mod tests {
             "name": "list_autonomous_bounties",
             "arguments": {"network": "base-mainnet", "claimable_only": true}
         });
-        let result = call_tool(public_tool_test_state(), &params, None)
-            .await
-            .unwrap();
+        let result = call_tool(public_tool_test_state(), &params).await.unwrap();
         let encoded = serde_json::to_string(&result).unwrap();
         assert!(!encoded.contains("unknown or unavailable public ChatGPT app tool"));
         assert!(encoded.contains("DATABASE_URL"));
@@ -6945,7 +3871,6 @@ mod tests {
         let error = call_tool(
             public_tool_test_state(),
             &json!({"name": "not_a_real_tool", "arguments": {}}),
-            None,
         )
         .await
         .unwrap_err();
@@ -7137,11 +4062,11 @@ mod tests {
         descriptors.extend(custom_tool_descriptors());
         let sandbox_tools = descriptors
             .into_iter()
-            .filter(|descriptor| CHATGPT_ADVERTISED_TOOL_NAMES.contains(&descriptor.name))
+            .filter(|descriptor| CHATGPT_FULL_TOOL_NAMES.contains(&descriptor.name))
             .map(|descriptor| mcp_tool_descriptor_for_mode(descriptor, true, false))
             .collect::<Vec<_>>();
 
-        assert_eq!(sandbox_tools.len(), CHATGPT_ADVERTISED_TOOL_NAMES.len());
+        assert_eq!(sandbox_tools.len(), CHATGPT_FULL_TOOL_NAMES.len());
         for tool in &sandbox_tools {
             assert_eq!(tool["annotations"]["readOnlyHint"], true, "{tool}");
             assert_eq!(tool["annotations"]["destructiveHint"], false, "{tool}");
@@ -7168,7 +4093,7 @@ mod tests {
             .map(|descriptor| mcp_tool_descriptor_for_mode(descriptor, false, true))
             .collect::<Vec<_>>();
 
-        assert_eq!(public_tools.len(), CHATGPT_ADVERTISED_TOOL_NAMES.len());
+        assert_eq!(public_tools.len(), CHATGPT_FULL_TOOL_NAMES.len());
         for required in [
             "prepare_moonpay_onramp",
             "prepare_bounty_action",
@@ -7219,7 +4144,7 @@ mod tests {
     fn public_review_feed_filter_is_fail_closed() {
         let mut projection = json!({
             "source_statuses": [
-                {"source_type": "canonical_base", "authoritative_urls": ["https://api.agentbounties.app/v1/base/autonomous-bounties/feed?network=base-mainnet&claimable_only=true"]}
+                {"source_type": "canonical_base", "authoritative_urls": ["https://agentbounties.app/earn.html"]}
             ],
             "items": [
                 {
@@ -7230,7 +4155,7 @@ mod tests {
                     "work_state": "open",
                     "title": "Publish an accessibility checklist",
                     "goal": "Write a concise public checklist.",
-                    "public_url": "https://agentbounties.app/",
+                    "public_url": "https://agentbounties.app/earn.html",
                     "next_action": {"action": "submit_unfunded_bounty_solution", "url": "https://agentbounties.app/paid"},
                     "reward": {"amount": "0", "currency": "USDC"},
                     "evidence_requirements": {"acceptance_criteria": ["Include keyboard-only checks."]}
@@ -7287,7 +4212,7 @@ mod tests {
             "success_definition": "The solver receives canonical payment.",
             "solver_budget_usdc": "10.00",
             "settlement_policy": {"asset": "USDC"},
-            "source_url": "https://api.agentbounties.app/v1/opportunities",
+            "source_url": "https://agentbounties.app/earn.html",
             "next_action": "Fund the child tasks",
             "tasks": [{
                 "task_id": "task-1",
@@ -7321,7 +4246,7 @@ mod tests {
         let mut request = json!({
             "bounty_kind": "unfunded_offchain",
             "payment_promised": false,
-            "upgrade_url": "https://agentbounties.app/#post-a-bounty"
+            "upgrade_url": "https://agentbounties.app/post.html"
         });
         strip_public_unfunded_navigation(&mut request);
         assert!(request.get("upgrade_url").is_none());
@@ -7476,126 +4401,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn sandbox_exercises_every_advertised_tool_with_stable_safe_results() {
-        let bounty_id = "canonical_base:base-mainnet:0xabc1000000000000000000000000000000000001";
-        let bounty_contract = "0xabc1000000000000000000000000000000000001";
-        let action_arguments = json!({
-            "idempotency_key": "sandbox-release-action-001",
-            "action": "solve",
-            "network": "base-mainnet",
-            "opportunity_id": bounty_id,
-            "bounty_contract": bounty_contract,
-            "details": {}
-        });
-        let first_action = sandbox_tool_result("prepare_bounty_action", &action_arguments)
-            .await
-            .unwrap();
-        let repeated_action = sandbox_tool_result("prepare_bounty_action", &action_arguments)
-            .await
-            .unwrap();
-        assert_eq!(first_action, repeated_action);
-        let intent_id = first_action["structuredContent"]["intent_id"].clone();
-
-        let calls = [
-            ("get_bounty_feed", json!({"view": "ready_to_earn"})),
-            (
-                "render_bounty_feed",
-                json!({"opportunity_ids": [bounty_id]}),
-            ),
-            (
-                "prepare_moonpay_onramp",
-                json!({
-                    "bounty_contract": bounty_contract,
-                    "amount_base_units": 1_000_000
-                }),
-            ),
-            (
-                "prepare_bounty_post",
-                json!({
-                    "title": "Publish the sandbox release checklist",
-                    "goal": "Create a deterministic release checklist for the MCP app.",
-                    "acceptance_criteria": ["The checklist names every required release gate."],
-                    "solver_reward_usdc": "2.00",
-                    "verifier_reward_usdc": "0.10",
-                    "task_window_days": 7,
-                    "crowdfund": false,
-                    "discovery_source": "ephemeral ChatGPT QA",
-                    "image_prompt": "A bounded green release checklist on a dark background.",
-                    "image_alt_text": "A green release checklist.",
-                    "bounty_image": {
-                        "download_url": "https://files.oaiusercontent.com/sandbox-fixture",
-                        "file_id": "file-sandbox-fixture",
-                        "mime_type": "image/png",
-                        "file_name": "sandbox-checklist.png"
-                    }
-                }),
-            ),
-            ("prepare_bounty_action", action_arguments),
-            ("get_bounty_action_status", json!({"intent_id": intent_id})),
-            (
-                "compile_objective_with_cloud_agent",
-                json!({
-                    "objective": "Consolidate the ChatGPT registration catalog",
-                    "constraints": ["No external writes"]
-                }),
-            ),
-            ("list_bounty_comments", json!({"bounty_id": bounty_id})),
-            (
-                "add_bounty_comment",
-                json!({
-                    "bounty_id": bounty_id,
-                    "body": "Sandbox-only release comment",
-                    "author": "operator-qa",
-                    "comment_id": "00000000-0000-4000-8000-00000000c001"
-                }),
-            ),
-            (
-                "create_share_bundle",
-                json!({
-                    "bounty_id": bounty_id,
-                    "title": "Sandbox release checklist",
-                    "stage": "prepared",
-                    "bounty_url": "https://agentbounties.app/",
-                    "status": "sandbox only",
-                    "reward": "2 USDC",
-                    "payment_state": "sandbox"
-                }),
-            ),
-        ];
-
-        let mut called_names = Vec::new();
-        for (name, arguments) in calls {
-            let result = sandbox_tool_result(name, &arguments).await.unwrap();
-            assert!(result.get("isError").is_none(), "{name}: {result}");
-            assert_eq!(
-                result["structuredContent"]["sandbox"], true,
-                "{name}: {result}"
-            );
-            assert!(
-                result["structuredContent"]["evidence_boundary"]
-                    .as_str()
-                    .is_some_and(|boundary| !boundary.is_empty()),
-                "{name}: {result}"
-            );
-            called_names.push(name);
-        }
-        assert_eq!(called_names.as_slice(), CHATGPT_ADVERTISED_TOOL_NAMES);
-
-        assert!(sandbox_tool_result("prepare_bounty_action", &json!({}))
-            .await
-            .is_err());
-        assert!(sandbox_tool_result(
-            "get_bounty_action_status",
-            &json!({"intent_id": "not-a-uuid"})
-        )
-        .await
-        .is_err());
-        assert!(sandbox_tool_result("not_a_public_tool", &json!({}))
-            .await
-            .is_err());
-    }
-
     #[test]
     fn sandbox_feed_filters_fixture_cards_without_network_access() {
         let seeking_funding = sandbox_bounty_feed(
@@ -7632,4 +4437,89 @@ mod tests {
         assert!(bounded_opportunity_id("bad/id").is_err());
         assert!(bounded_opportunity_id(" ").is_err());
     }
+    
+    #[tokio::test]
+    async fn public_chatgpt_app_unknown_tool_fails_closed() {
+        let error = call_tool(
+            public_tool_test_state(),
+            &json!({"name": "not_a_real_tool", "arguments": {}}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error,
+            "unknown or unavailable public ChatGPT app tool: not_a_real_tool"
+        );
+    }
+
+    #[tokio::test]
+    async fn public_chatgpt_app_unavailable_inventory_has_recovery_action() {
+        let result = call_tool(
+            public_tool_test_state(),
+            &json!({
+                "name": "list_autonomous_bounties",
+                "arguments": {"network": "base-mainnet", "claimable_only": true}
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result["isError"], true);
+        let message = result["content"][0]["text"].as_str().unwrap();
+        assert!(message.contains("canonical inventory unavailable"));
+        assert!(message.contains("Recovery:"));
+        assert!(message.contains("do not treat cached or hosted records as claimable"));
+    }
+
+    #[tokio::test]
+    async fn public_chatgpt_app_get_bounty_feed_fixture_matches_canonical_inventory_contract() {
+        let tools = chatgpt_tools().await;
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == "get_bounty_feed")
+            .expect("get_bounty_feed must be mounted");
+
+        assert_eq!(tool["_meta"]["ui"]["visibility"], json!(["model", "app"]));
+
+        let result = sandbox_tool_result(
+            "get_bounty_feed",
+            &json!({
+                "network": "base-mainnet",
+                "view": "ready_to_earn",
+                "limit": 30
+            }),
+        )
+        .await
+        .unwrap();
+
+        let items = result["structuredContent"]["items"]
+            .as_array()
+            .expect("structuredContent.items must be an array");
+
+        // Deterministic canonical API/MCP contract fixture:
+        // fully funded + escrowed + payment committed + verifier ready.
+        assert_eq!(items.len(), 1);
+        let item = &items[0];
+        assert_eq!(
+            item["opportunity_id"],
+            "canonical_base:base-mainnet:0xabc1000000000000000000000000000000000001"
+        );
+        assert_eq!(item["work_state"], "claimable");
+        assert_eq!(item["payment_state"], "escrowed");
+        assert_eq!(item["payment_committed"], true);
+        assert_eq!(item["verification_ready"], true);
+        assert_eq!(item["funded_amount"]["amount"], "4000000");
+        assert_eq!(item["funding_target"]["amount"], "4000000");
+        assert_eq!(item["reward"]["amount"], "3500000");
+        assert_eq!(item["bond"]["amount"], "500000");
+
+        assert!(items.iter().all(|item| {
+            item["work_state"] == "claimable"
+                && item["payment_state"] == "escrowed"
+                && item["payment_committed"] == true
+                && item["verification_ready"] == true
+                && item["funded_amount"]["amount"] == item["funding_target"]["amount"]
+        }));
+    }
+
 }
