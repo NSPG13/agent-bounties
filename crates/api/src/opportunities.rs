@@ -1169,9 +1169,16 @@ pub fn open_competition_v2_opportunities(
         );
         let goal = known.map(|item| item.summary.clone());
         let source_url = known.map(|item| item.source_url.clone());
-        let is_forward_gmv = profile
-            .is_some_and(|item| item.profile_id == "forward-canonical-gmv-attribution-metric-v2");
+        let is_forward_gmv = profile.is_some_and(|item| {
+            crate::open_competition_v2_api::forward_gmv_verification_held(&item.profile_id)
+        });
         let participation_metadata_ready = !is_forward_gmv || known.is_some();
+        // Registry membership and a constructed snapshot URL do not prove that
+        // the contract-bound snapshot, dual attestation and proof path exist.
+        // Keep canonical funding/history visible, but fail closed until those
+        // readiness facts are joined from verified evidence.
+        let verification_ready =
+            verification_ready && !(is_forward_gmv && source_status == "active");
         let participation_phase = is_forward_gmv
             .then(|| v2_scoring_phase(known, now))
             .flatten();
@@ -1262,26 +1269,12 @@ pub fn open_competition_v2_opportunities(
                 body_template: None,
                 instructions: "Do not generate score or buy a proof quote. The exact scoring window and public participation terms have not joined the canonical contract yet.".to_string(),
             },
-            "active" if participation_phase == Some("upcoming") => OpportunityNextAction {
-                action: "prepare_open_competition_v2_score".to_string(),
+            "active" if is_forward_gmv => OpportunityNextAction {
+                action: "await_open_competition_v2_verification".to_string(),
                 method: "GET".to_string(),
                 url: public_url.clone(),
                 body_template: None,
-                instructions: "Prepare the contract-bound child-bounty brief now. Do not count or fund score before the displayed UTC scoring window starts.".to_string(),
-            },
-            "active" if participation_phase == Some("scoring") => OpportunityNextAction {
-                action: "generate_open_competition_v2_score".to_string(),
-                method: "GET".to_string(),
-                url: public_url.clone(),
-                body_template: None,
-                instructions: "Post and fund useful marketplace demand from the entrant wallet, have a different eligible wallet complete it, and reach canonical child settlement before the scoring window closes. Do not request a proof quote yet.".to_string(),
-            },
-            "active" if participation_phase == Some("proof") => OpportunityNextAction {
-                action: "inspect_open_competition_v2_snapshot".to_string(),
-                method: "GET".to_string(),
-                url: snapshot_url.clone().unwrap_or_else(|| public_url.clone()),
-                body_template: None,
-                instructions: "Scoring is closed. Require the exact frozen snapshot and dual-attester quorum before requesting a solver-bound proof quote; fail closed while that evidence is unavailable.".to_string(),
+                instructions: "Do not fund child demand or pay for a proof. The exact contract-bound snapshot, independent attester quorum and usable proof path have not been verified. HTTP success, registry membership and a token balance alone do not establish readiness. Existing canonical funding and history remain visible.".to_string(),
             },
             "active" => OpportunityNextAction {
                 action: "quote_open_competition_v2_proof".to_string(),
@@ -2287,7 +2280,7 @@ mod tests {
     }
 
     #[test]
-    fn beta3_forward_gmv_next_action_follows_the_scoring_phase() {
+    fn beta3_forward_gmv_without_verified_snapshot_blocks_spend_in_every_phase() {
         let (mut release, record) = beta3_release_and_record();
         release.metric_programs[0].profile_id =
             "forward-canonical-gmv-attribution-metric-v2".to_string();
@@ -2316,43 +2309,37 @@ mod tests {
             .remove(0)
         };
 
-        let upcoming = project("2026-08-23T12:00:00Z");
-        assert_eq!(
-            upcoming.next_action.action,
-            "prepare_open_competition_v2_score"
-        );
-        assert_eq!(
-            upcoming.evidence_requirements["participation_phase"],
-            "upcoming"
-        );
-
-        let scoring = project("2026-08-24T12:00:00Z");
-        assert_eq!(
-            scoring.next_action.action,
-            "generate_open_competition_v2_score"
-        );
-        assert_eq!(scoring.next_action.method, "GET");
-        assert_eq!(scoring.next_action.url, scoring.public_url);
-        assert!(scoring.next_action.body_template.is_none());
-        assert_eq!(
-            scoring.evidence_requirements["participation_phase"],
-            "scoring"
-        );
-        assert!(scoring
-            .next_action
-            .instructions
-            .contains("Do not request a proof quote yet"));
-
-        let proof = project("2026-08-25T00:00:01Z");
-        assert_eq!(
-            proof.next_action.action,
-            "inspect_open_competition_v2_snapshot"
-        );
-        assert_eq!(proof.evidence_requirements["participation_phase"], "proof");
-        assert_eq!(
-            proof.next_action.url,
-            proof.evidence_requirements["snapshot_url"]
-        );
+        for (timestamp, phase) in [
+            ("2026-08-23T12:00:00Z", "upcoming"),
+            ("2026-08-24T12:00:00Z", "scoring"),
+            ("2026-08-25T00:00:01Z", "proof"),
+        ] {
+            let item = project(timestamp);
+            assert_eq!(item.evidence_requirements["participation_phase"], phase);
+            assert!(!item.verification_ready);
+            assert!(item.payment_committed);
+            assert_eq!(item.payment_state, "escrowed");
+            assert_eq!(item.source_status, "active");
+            assert_eq!(
+                item.next_action.action,
+                "await_open_competition_v2_verification"
+            );
+            assert_eq!(item.next_action.method, "GET");
+            assert_eq!(item.next_action.url, item.public_url);
+            assert!(item.next_action.body_template.is_none());
+            assert!(item.next_action.instructions.contains("Do not fund"));
+            // A plausible URL is present but supplies no verified readiness evidence.
+            assert!(item.evidence_requirements["snapshot_url"].is_string());
+            assert!(apply_query(
+                vec![item],
+                &OpportunityQuery::default(),
+                Some(OpportunityView::ReadyToEarn),
+                DateTime::parse_from_rfc3339(timestamp)
+                    .unwrap()
+                    .with_timezone(&Utc)
+            )
+            .is_empty());
+        }
     }
 
     #[test]
@@ -2454,7 +2441,7 @@ mod tests {
     }
 
     #[test]
-    fn beta3_live_registry_projects_sixteen_scanner_ready_opportunities_and_feeds() {
+    fn beta3_registry_retains_history_but_cannot_make_unverified_gmv_ready() {
         let (mut release, template) = beta3_release_and_record();
         release.metric_programs[0].profile_id =
             "forward-canonical-gmv-attribution-metric-v2".to_string();
@@ -2492,6 +2479,11 @@ mod tests {
             now,
         )
         .unwrap();
+        assert_eq!(projected.len(), 16);
+        assert!(projected.iter().all(|item| !item.verification_ready
+            && item.payment_committed
+            && item.payment_state == "escrowed"
+            && item.evidence_requirements["scoring_window"].is_object()));
         let ready = apply_query(
             projected,
             &OpportunityQuery {
@@ -2502,39 +2494,7 @@ mod tests {
             now,
         );
 
-        assert_eq!(ready.len(), 16);
-        assert!(ready.iter().all(|item| {
-            item.verification_ready
-                && item.payment_committed
-                && item.evidence_requirements["scoring_window"].is_object()
-                && item
-                    .public_url
-                    .starts_with("https://site.example/competition.html?bountyContract=")
-        }));
-        assert_eq!(
-            ready
-                .iter()
-                .filter(|item| {
-                    item.evidence_requirements["participation_phase"] == "scoring"
-                        && item.next_action.action == "generate_open_competition_v2_score"
-                        && item.next_action.method == "GET"
-                        && item.next_action.url == item.public_url
-                })
-                .count(),
-            5
-        );
-        assert_eq!(
-            ready
-                .iter()
-                .filter(|item| {
-                    item.evidence_requirements["participation_phase"] == "upcoming"
-                        && item.next_action.action == "prepare_open_competition_v2_score"
-                        && item.next_action.method == "GET"
-                        && item.next_action.url == item.public_url
-                })
-                .count(),
-            11
-        );
+        assert!(ready.is_empty());
         let projection = OpportunityProjectionResponse {
             schema_version: OPPORTUNITY_PROJECTION_SCHEMA.to_string(),
             generated_at: now.to_rfc3339(),
@@ -2553,11 +2513,11 @@ mod tests {
         };
         let feeds = render_opportunity_feeds(&projection, "https://api.example");
         let json: Value = serde_json::from_str(&feeds.json).unwrap();
-        assert_eq!(json["items"].as_array().unwrap().len(), 16);
-        assert!(feeds
+        assert!(json["items"].as_array().unwrap().is_empty());
+        assert!(!feeds
             .rss
             .contains("Highest externally funded canonical GMV"));
-        assert!(feeds
+        assert!(!feeds
             .atom
             .contains("Highest externally funded canonical GMV"));
     }

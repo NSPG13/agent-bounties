@@ -44,6 +44,7 @@ cargo test -p db tests::chatgpt_action_intent_replays_and_confirms_only_observed
 cargo test -p db site_posting_drafts -- --ignored --nocapture
 cargo test -p db tests::social_mention_ingestion_round_trip_executes_against_migrated_postgres -- --ignored --exact --nocapture
 cargo test -p db tests::discovery_webhook_round_trip_executes_against_migrated_postgres -- --ignored --exact --nocapture
+cargo test -p api open_competition_v2_api::tests::postgres_readiness_hold_blocks_new_payments_but_preserves_reconciliation -- --ignored --exact --test-threads=1 --nocapture
 cargo test -p api tests::audience_audit_persists_idempotently_across_processes -- --ignored --exact --nocapture
 cargo test -p api tests::github_issue_api_sync_postgres_rejects_stale_cross_process_activity -- --ignored --exact --nocapture
 cargo test -p api tests::github_issue_api_sync_postgres_serializes_concurrent_initial_sync -- --ignored --exact --nocapture

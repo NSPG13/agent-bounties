@@ -581,6 +581,27 @@ class GitHubDiscoveryReconciliationTests(unittest.TestCase):
         self.assertEqual(beta3[0]["participation_phase"], "upcoming")
         self.assertEqual(beta3[0]["next_action"]["label"], "Prepare scoring work")
 
+        # Containment keeps the escrow facts while removing earning labels.
+        opportunity["verification_ready"] = False
+        opportunity["next_action"]["action"] = "await_open_competition_v2_verification"
+        opportunity["next_action"]["instructions"] = "Do not fund child demand or pay for a proof."
+        contained = augment_projection_with_beta3(
+            request, "https://api.agentbounties.app", NETWORK, REPOSITORY, base,
+        )
+        beta3 = [record for record in contained["items"]
+                 if record["protocol_version"] == BETA3_PROTOCOL]
+        self.assertEqual(len(beta3), 1)
+        self.assertEqual(beta3[0]["lifecycle_state"], "unavailable")
+        self.assertTrue(beta3[0]["funded"])
+        self.assertFalse(beta3[0]["ready_to_earn"])
+        self.assertEqual(beta3[0]["next_action"]["label"], "Wait for verified proof readiness")
+        plan = build_plans(contained, [], policy(), REPOSITORY, landing_entries={})[0]
+        self.assertNotIn("ready-to-earn", plan.desired_managed_labels)
+        self.assertNotIn("claimable-live", plan.desired_managed_labels)
+        self.assertIn("verification-unavailable", plan.desired_managed_labels)
+        self.assertIn("funded-live", plan.desired_managed_labels)
+        self.assertIn("Do not fund child demand", plan.desired_body)
+
     def test_beta3_outage_preserves_other_protocol_reconciliation(self) -> None:
         core = item(42)
         base = projection(core)

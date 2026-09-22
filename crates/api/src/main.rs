@@ -22553,7 +22553,7 @@ mod tests {
         })
     }
 
-    fn test_state_with_operator_token_and_store(
+    pub(crate) fn test_state_with_operator_token_and_store(
         network: BountyNetwork,
         token: &str,
         store: PostgresStore,

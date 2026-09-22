@@ -995,6 +995,8 @@ def _augment_projection_with_beta3(
             "prepare_open_competition_v2_score": "Prepare scoring work",
             "generate_open_competition_v2_score": "Generate a qualifying score",
             "inspect_open_competition_v2_snapshot": "Inspect the scoring snapshot",
+            "await_open_competition_v2_verification": "Wait for verified proof readiness",
+            "await_open_competition_v2_participation_metadata": "Wait for verified participation terms",
             "quote_open_competition_v2_proof": "Enter competition",
             "inspect_open_competition_v2_settlement": "Inspect settlement",
         }.get(next_action_kind, "Enter competition")
@@ -1020,7 +1022,10 @@ def _augment_projection_with_beta3(
                 "source_url": opportunity.get("source_url"),
                 "competition_mode": competition_mode,
                 "lifecycle_state": lifecycle,
-                "funded": lifecycle in {"ready_to_earn", "settled"},
+                "funded": lifecycle == "settled" or (
+                    state == "active" and target > 0
+                    and opportunity_amount(opportunity, "funded_amount") == target
+                ),
                 "verification_ready": verification_ready,
                 "ready_to_earn": lifecycle == "ready_to_earn",
                 "reward_usdc_base_units": str(opportunity_amount(opportunity, "reward")),

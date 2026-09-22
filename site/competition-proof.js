@@ -115,7 +115,9 @@
     function requireOpen() {
       if (projection?.state !== "active" || !Number.isSafeInteger(projection.proof_deadline) || projection.proof_deadline <= now() + 30) throw new Error("This competition no longer has enough time to accept a proof.");
     }
+    const HOLD = "Verification is not ready. Do not fund child work or pay for a proof. Check back for a verified update.";
     function next() {
+      if ((!record.id || (job?.state === "quoted" && !record.paymentEnvelope)) && opportunity?.verification_ready !== true) return { action: "wait_for_verification", message: HOLD };
       if (!record.id && opportunity?.evidence_requirements?.program_profile === "forward-canonical-gmv-attribution-metric-v2" && flow.phase(opportunity) !== "ended") return {
         action: "generate_score", tool: "agent_bounties_get_competition_manifest", message: "Prepare qualifying child work for the displayed scoring window. A proof quote comes after the window closes and the scoring snapshot is published." };
       if (!record.id) return { action: "prepare_quote", tool: "agent_bounties_prepare_proof_quote", message: "Your AI prepares the entry and exact service quote. Connect your wallet once if its address is not already known." };
@@ -150,6 +152,10 @@
       put("[data-proof-entry]", q ? `Entrant ${job?.solver || record.request?.solver}. Mode: ${q.winner_mode}. Quote expires ${job?.quote_expires_at || new Date(q.quote_expiration * 1000).toISOString()}. Service recipient ${record.quote?.payment_required?.accepts?.[0]?.payTo || "shown in the saved payment receipt"}.` : "");
       const setup = find("[data-proof-wallet-setup]");
       if (setup) { const url = new URL("onramp.html", win.location.href); url.searchParams.set("return", win.location.href); url.searchParams.set("purpose", "earn"); if (q) url.searchParams.set("amount", String(Number(q.maximum_charge) / 1e6)); setup.href = url.href; }
+      const held = s.next_action.action === "wait_for_verification";
+      if (setup) setup.hidden = held;
+      for (const selector of ["[data-proof-connect]", "[data-proof-wallet-choices]"]) { const node = find(selector); if (node) node.hidden = held; }
+      put("[data-agent-guidance]", held ? HOLD : "Your AI prepares your entry and tracks the result. Review any service charge in your wallet.");
       put("[data-proof-evidence]", JSON.stringify(s, null, 2));
       put("[data-proof-artifact]", record.request?.metric?.artifact_utf8 || (record.request?.metric ? JSON.stringify(record.request.metric, null, 2) : "Your exact entry appears here when your AI prepares it."));
       const consent = find("[data-proof-workspace] [data-legal-consent]"); if (consent) consent.hidden = !["pay", "relay"].includes(s.next_action.action);
@@ -161,6 +167,7 @@
       if (!record.id) opportunity = await client.opportunity(`open-competition-v2:base-mainnet:${contract}`);
       if (record.id) {
         job = boundJob((await client.request(`${ROOT}/proof-jobs/${record.id}`)).job);
+        if (job.state === "quoted" && !record.paymentEnvelope) opportunity = await client.opportunity(`open-competition-v2:base-mainnet:${contract}`);
         if (job.state === "quoted" && !record.quote && new Date(job.quote_expires_at).getTime() > Date.now() + 30000) {
           // A public job link can restore its exact unsigned review without creating another quote.
           const response = await win.fetch(`${flow.apiBase(win.location)}${paymentPath()}`, { method: "POST", cache: "no-store", credentials: "omit", headers: { Accept: "application/json" } });
@@ -190,6 +197,7 @@
         const solver = lower(input.solver || wallet || record.request?.solver);
         if (!ADDRESS.test(solver)) return { ...render(), next_action: { action: "connect_wallet", message: "Connect your wallet on this page so the quote belongs to you." } };
         const item = opportunity || await client.opportunity(`open-competition-v2:base-mainnet:${contract}`);
+        if (item.verification_ready !== true) throw new Error(HOLD);
         let metric;
         if (item.evidence_requirements?.program_profile === "forward-canonical-gmv-attribution-metric-v2") {
           if (flow.phase(item) !== "ended") throw new Error("The scoring window is still open. Finish qualifying work first; no proof charge is needed yet.");
@@ -265,6 +273,7 @@
       await refresh(); requireOpen();
       if (job?.state !== "quoted" || record.paymentEnvelope) throw new Error("Resume the existing job; a new payment signature is unnecessary.");
       if (!record.quote) throw new Error("Open this quote in the browser where its exact payment review was prepared.");
+      if (opportunity?.verification_ready !== true) throw new Error(HOLD);
       validateQuote(record.quote, record.request, now());
       await signer();
       const balance = await provider.request({ method: "eth_call", params: [{ to: TOKEN, data: `0x70a08231${evm.addressWord(wallet)}` }, "latest"] });
