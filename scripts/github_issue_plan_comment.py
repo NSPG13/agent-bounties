@@ -23,6 +23,17 @@ from _shared.github_actions import (
 
 
 MARKER = "<!-- agent-bounties-plan -->"
+DISCOVERY_MARKERS = (
+    "<!-- agent-bounties/github-discovery-v1:start -->",
+    "<!-- agent-bounties/github-discovery-archive-v1:start -->",
+)
+# These labels are set by repository maintainers/reconciliation, never the
+# ordinary issue form. A public body marker alone is not trusted evidence.
+DISCOVERY_LIFECYCLE_LABELS = frozenset({
+    "funding-needed", "funded-live", "claimed-live", "in-progress",
+    "verification-pending", "verification-unavailable", "refund-available",
+    "cancelled", "expired", "settled-paid",
+})
 
 
 class UserError(RuntimeError):
@@ -37,12 +48,39 @@ def read_json_field(value: object, field: str) -> object:
     return json_field(value, field, UserError, "planner output missing field: {field}")
 
 
-def write_issue_files(env: Mapping[str, str], tmp_dir: pathlib.Path) -> Tuple[Dict[str, object], pathlib.Path]:
+def read_issue_event(env: Mapping[str, str]) -> Dict[str, object]:
     event_path = env.get("GITHUB_EVENT_PATH")
     if not event_path:
         raise UserError("GITHUB_EVENT_PATH is required")
-
     event = json.loads(pathlib.Path(event_path).read_text(encoding="utf-8"))
+    if not isinstance(event, dict) or not isinstance(event.get("issue"), dict):
+        raise UserError("GitHub event must contain an issue object")
+    return event
+
+
+def skip_intake_reason(issue: Mapping[str, object]) -> Optional[str]:
+    if issue.get("state") == "closed":
+        return "closed issue"
+    labels = {
+        label.get("name") for label in issue.get("labels") or []
+        if isinstance(label, dict) and isinstance(label.get("name"), str)
+    }
+    if "funded-live" in labels:
+        return "already funded canonical bounty"
+    if (
+        "payments" in labels
+        and labels & DISCOVERY_LIFECYCLE_LABELS
+        and any(marker in str(issue.get("body") or "") for marker in DISCOVERY_MARKERS)
+    ):
+        return "canonical bounty discovery mirror"
+    return None
+
+
+def write_issue_files(
+    env: Mapping[str, str], tmp_dir: pathlib.Path, event: Optional[Mapping[str, object]] = None
+) -> Tuple[Dict[str, object], pathlib.Path]:
+    if event is None:
+        event = read_issue_event(env)
     issue = event.get("issue") or {}
     repository = event.get("repository") or {}
 
@@ -155,12 +193,17 @@ def publish_comment(env: Mapping[str, str], meta: Mapping[str, object], comment:
 
 
 def run_from_env(env: Mapping[str, str], stdout: TextIO) -> int:
+    event = read_issue_event(env)
+    reason = skip_intake_reason(event["issue"])
+    if reason:
+        stdout.write(f"Skipped paid-bounty form validation: {reason}.\n")
+        return 0
     repo_root = script_repo_root()
     workspace = pathlib.Path(env.get("GITHUB_WORKSPACE") or repo_root).resolve()
     tmp_dir = pathlib.Path(env.get("RUNNER_TEMP") or workspace / "target" / "tmp").resolve()
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
-    meta, body_file = write_issue_files(env, tmp_dir)
+    meta, body_file = write_issue_files(env, tmp_dir, event)
     plan_json = run_github_plan(env, workspace, meta, body_file)
     plan_file = tmp_dir / "paid-bounty-plan.json"
     plan_file.write_text(plan_json, encoding="utf-8")
