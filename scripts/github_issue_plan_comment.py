@@ -27,6 +27,13 @@ DISCOVERY_MARKERS = (
     "<!-- agent-bounties/github-discovery-v1:start -->",
     "<!-- agent-bounties/github-discovery-archive-v1:start -->",
 )
+# These labels are set by repository maintainers/reconciliation, never the
+# ordinary issue form. A public body marker alone is not trusted evidence.
+DISCOVERY_LIFECYCLE_LABELS = frozenset({
+    "funding-needed", "funded-live", "claimed-live", "in-progress",
+    "verification-pending", "verification-unavailable", "refund-available",
+    "cancelled", "expired", "settled-paid",
+})
 
 
 class UserError(RuntimeError):
@@ -54,11 +61,18 @@ def read_issue_event(env: Mapping[str, str]) -> Dict[str, object]:
 def skip_intake_reason(issue: Mapping[str, object]) -> Optional[str]:
     if issue.get("state") == "closed":
         return "closed issue"
-    if any(marker in str(issue.get("body") or "") for marker in DISCOVERY_MARKERS):
-        return "canonical bounty discovery mirror"
-    labels = issue.get("labels") or []
-    if any(isinstance(label, dict) and label.get("name") == "funded-live" for label in labels):
+    labels = {
+        label.get("name") for label in issue.get("labels") or []
+        if isinstance(label, dict) and isinstance(label.get("name"), str)
+    }
+    if "funded-live" in labels:
         return "already funded canonical bounty"
+    if (
+        "payments" in labels
+        and labels & DISCOVERY_LIFECYCLE_LABELS
+        and any(marker in str(issue.get("body") or "") for marker in DISCOVERY_MARKERS)
+    ):
+        return "canonical bounty discovery mirror"
     return None
 
 

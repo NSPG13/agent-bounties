@@ -22,11 +22,11 @@ class PaidBountyIssueWorkflowTests(unittest.TestCase):
         workflow = WORKFLOW.read_text(encoding="utf-8")
 
         self.assertIn(
-            "!contains(toJson(github.event.issue.labels), '\"funded-live\"')",
+            "!contains(github.event.issue.labels.*.name, 'funded-live')",
             workflow,
         )
         self.assertLess(
-            workflow.index("!contains(toJson(github.event.issue.labels)"),
+            workflow.index("!contains(github.event.issue.labels.*.name"),
             workflow.index("startsWith(github.event.issue.title"),
         )
 
@@ -35,7 +35,10 @@ class PaidBountyIssueWorkflowTests(unittest.TestCase):
         job_condition = workflow.split("runs-on:", 1)[0]
         self.assertIn("github.event.issue.state == 'open'", job_condition)
         for marker in planner.DISCOVERY_MARKERS:
-            self.assertIn(f"!contains(github.event.issue.body || '', '{marker}')", job_condition)
+            self.assertIn(f"contains(github.event.issue.body || '', '{marker}')", job_condition)
+        self.assertIn("contains(github.event.issue.labels.*.name, 'payments')", job_condition)
+        for label in planner.DISCOVERY_LIFECYCLE_LABELS:
+            self.assertIn(f"contains(github.event.issue.labels.*.name, '{label}')", job_condition)
 
 
 class PaidBountyIssueExecutionTests(unittest.TestCase):
@@ -66,8 +69,10 @@ class PaidBountyIssueExecutionTests(unittest.TestCase):
             {"labels": [{"name": "bounty"}, {"name": "funded-live"}]},
             # Mirrors remain mirrors after a refund removes funded-live.
             *[{"body": "Maintainer refund update.\n\n" + marker + "\nSaved bounty state.",
-               "labels": [{"name": "bounty"}, {"name": "cancelled"}]}
-              for marker in planner.DISCOVERY_MARKERS],
+               "labels": [{"name": "bounty"}, {"name": "payments"}, {"name": label}],
+               "author_association": "NONE", "user": {"login": "external-contributor"}}
+              for marker in planner.DISCOVERY_MARKERS
+              for label in planner.DISCOVERY_LIFECYCLE_LABELS],
         ]
         for event in cases:
             with self.subTest(event=event), tempfile.TemporaryDirectory() as temp:
@@ -79,6 +84,23 @@ class PaidBountyIssueExecutionTests(unittest.TestCase):
                 publish.assert_not_called()
                 self.assertFalse((directory / "generated").exists())
                 self.assertIn("Skipped paid-bounty form validation", stdout.getvalue())
+
+    def test_pasted_markers_without_managed_labels_still_validate(self) -> None:
+        plan = {"check": {"conclusion": "Failure", "title": "Missing goal", "summary": "Invalid form", "text": "Goal is required"}}
+        cases = [
+            {"body": marker, "labels": [{"name": name} for name in names]}
+            for marker in planner.DISCOVERY_MARKERS
+            for names in ([], ["needs-triage"], ["bounty"], ["payments"], ["cancelled"])
+        ]
+        # Repository labels without a mirror marker do not hide an invalid form.
+        cases.append({"body": "Missing fields", "labels": [{"name": "payments"}, {"name": "cancelled"}]})
+        for event in cases:
+            with self.subTest(event=event), tempfile.TemporaryDirectory() as temp:
+                with mock.patch.object(planner, "run_github_plan", return_value=json.dumps(plan)) as build, mock.patch.object(planner, "publish_comment") as publish:
+                    self.assertEqual(self.run_event(Path(temp), event, io.StringIO()), 0)
+                build.assert_called_once()
+                publish.assert_called_once()
+                self.assertIn("Agent bounty validation: Failure", publish.call_args.args[2])
 
     def test_new_bounty_form_still_builds_and_publishes_validation(self) -> None:
         plan = {"check": {"conclusion": "Success", "title": "Bounty ready", "summary": "Valid form", "text": "Exact form reviewed"}}
