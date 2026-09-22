@@ -2904,7 +2904,14 @@ async fn call_tool(
             }
             Ok(tool_result(value, narration, false))
         }
-        Err(error) => Ok(tool_error(error)),
+        Err(error) => {
+            if name == "list_autonomous_bounties" {
+                return Ok(tool_error(format!(
+                    "canonical inventory unavailable: {error}. Recovery: restore the canonical API/indexer source and retry; do not treat cached or hosted records as claimable."
+                )));
+            }
+            Ok(tool_error(error))
+        }
     }
 }
 
@@ -7632,4 +7639,88 @@ mod tests {
         assert!(bounded_opportunity_id("bad/id").is_err());
         assert!(bounded_opportunity_id(" ").is_err());
     }
+    
+    #[tokio::test]
+    async fn public_chatgpt_app_unknown_tool_fails_closed() {
+        let error = call_tool(
+            public_tool_test_state(),
+            &json!({"name": "not_a_real_tool", "arguments": {}}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error,
+            "unknown or unavailable public ChatGPT app tool: not_a_real_tool"
+        );
+    }
+
+    #[tokio::test]
+    async fn public_chatgpt_app_unavailable_inventory_has_recovery_action() {
+        let result = call_tool(
+            public_tool_test_state(),
+            &json!({
+                "name": "list_autonomous_bounties",
+                "arguments": {"network": "base-mainnet", "claimable_only": true}
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result["isError"], true);
+        let message = result["content"][0]["text"].as_str().unwrap();
+        assert!(message.contains("canonical inventory unavailable"));
+        assert!(message.contains("Recovery:"));
+        assert!(message.contains("do not treat cached or hosted records as claimable"));
+    }
+
+    #[tokio::test]
+    async fn public_chatgpt_app_get_bounty_feed_fixture_matches_canonical_inventory_contract() {
+        let tools = chatgpt_tools().await;
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == "get_bounty_feed")
+            .expect("get_bounty_feed must be mounted");
+
+        assert_eq!(tool["_meta"]["ui"]["visibility"], json!(["model", "app"]));
+
+        let result = sandbox_tool_result(
+            "get_bounty_feed",
+            &json!({
+                "network": "base-mainnet",
+                "view": "ready_to_earn",
+                "limit": 30
+            }),
+        )
+        .await
+        .unwrap();
+
+        let items = result["structuredContent"]["items"]
+            .as_array()
+            .expect("structuredContent.items must be an array");
+
+        // Deterministic canonical API/MCP contract fixture:
+        // fully funded + escrowed + payment committed + verifier ready.
+        assert_eq!(items.len(), 1);
+        let item = &items[0];
+        assert_eq!(
+            item["opportunity_id"],
+            "canonical_base:base-mainnet:0xabc1000000000000000000000000000000000001"
+        );
+        assert_eq!(item["work_state"], "claimable");
+        assert_eq!(item["payment_state"], "escrowed");
+        assert_eq!(item["payment_committed"], true);
+        assert_eq!(item["verification_ready"], true);
+        assert_eq!(item["funded_amount"]["amount"], "4000000");
+        assert_eq!(item["funding_target"]["amount"], "4000000");
+        assert_eq!(item["reward"]["amount"], "3500000");
+        assert_eq!(item["bond"]["amount"], "500000");
+        assert!(items.iter().all(|item| {
+            item["work_state"] == "claimable"
+                && item["payment_state"] == "escrowed"
+                && item["payment_committed"] == true
+                && item["verification_ready"] == true
+                && item["funded_amount"]["amount"] == item["funding_target"]["amount"]
+        }));
+    }
+
 }
