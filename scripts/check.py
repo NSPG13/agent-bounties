@@ -315,7 +315,7 @@ def main() -> int:
         ["scripts/test-canonical-child-verifier-deployment-console.js"], ["--check", "tools/base-sepolia-sponsor-activation.js"],
         ["scripts/test-base-sepolia-sponsor-activation-console.js"],
         ["--test", "scripts/test-metrics-dashboard.js"],
-        ["--test", "scripts/test-gmv-manifest-preflight.mjs", "scripts/test-marketplace-ui.js", "scripts/test-funded.js"],
+        ["--test", "scripts/test-gmv-manifest-preflight.mjs", "scripts/test-marketplace-ui.js", "scripts/test-submissions.js", "scripts/test-funded.js"],
         ["--test", "scripts/test-assistant-referrals.js", "scripts/test-solarpunk-home.js", "scripts/test-ai-bounty-handoff.js"],
         ["--test", "scripts/test-phone-wallet.js", "scripts/test-phone-wallet-network.cjs", "scripts/test-webmcp.js", "scripts/test-meta-child.js", "scripts/test-competition-proof.js"],
         ["--test", "scripts/test-posting-auth.js", "scripts/test-account-navigation.js", "scripts/test-posting-brief.cjs", "scripts/test-posting-reference.js", "scripts/test-posting-session.js", "scripts/test-funding-readiness.js"],

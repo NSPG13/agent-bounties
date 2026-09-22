@@ -1,9 +1,10 @@
 (function (root, factory) {
-  const api = factory(typeof module === "object" && module.exports ? require("./marketplace-workflow.js") : root.AgentBountiesWorkflow);
+  const commonjs = typeof module === "object" && module.exports;
+  const api = factory(commonjs ? require("./marketplace-workflow.js") : root.AgentBountiesWorkflow, commonjs ? require("./submissions.js") : root.AgentBountiesSubmissions);
   if (typeof module === "object" && module.exports) module.exports = api;
   if (root) root.AgentBountiesMarketplace = api;
   if (root && root.document) api.startBoard(root, root.document);
-})(typeof window !== "undefined" ? window : globalThis, function (workflow) {
+})(typeof window !== "undefined" ? window : globalThis, function (workflow, submissions) {
   "use strict";
 
   const NETWORK = "base-mainnet";
@@ -54,6 +55,7 @@
   }
 
   function timingState(item, nowMs = Date.now()) {
+    if (submissions.completed(item)) return { phase: "completed", label: "Completed · paid", detail: `Updated ${new Date(item.updated_at).toLocaleDateString()}` };
     const phase = workflow.phase(item, nowMs);
     if (phase === "unavailable") return { phase, label: "Timing unavailable", detail: "Opening time could not be confirmed. Review the committed terms before continuing." };
     const window = scoringWindow(item);
@@ -112,35 +114,38 @@
 
   function renderOpportunity(item, index, nowMs) {
     const timing = timingState(item, nowMs);
+    const completed = submissions.completed(item);
     const reward = formatUsdc(item.reward);
-    const decision = decisionContext(item);
+    const decision = completed ? null : decisionContext(item);
     const kind = workflow.participationKind(item);
     const kindLabel = kind === "direct" ? "Direct task" : kind === "child_funding" ? "Child-funding task" : kind === "competition" ? "Competition" : "Review participation terms";
-    const costNote = kind === "direct" ? "Review the refundable bond, gas and execution costs before claiming." : "Review required spending and winning conditions before participating.";
-    const entries = Number.isInteger(item.entry_count) ? `${item.entry_count} accepted ${item.entry_count === 1 ? "entry" : "entries"}` : "Open participation";
+    const costNote = completed ? "See the submitted work, success criteria and recorded result." : kind === "direct" ? "Review the refundable bond, gas and execution costs before claiming." : "Review required spending and winning conditions before participating.";
+    const entries = Number.isInteger(item.entry_count) ? `${item.entry_count} accepted ${item.entry_count === 1 ? "entry" : "entries"}` : completed ? "Recorded result" : "Open participation";
     const categories = Array.isArray(item.categories) ? item.categories.slice(0, 3) : [];
     const scene = ["day", "dawn", "dusk", "night"][Array.from(String(item.source_id)).reduce((sum, c) => sum + c.charCodeAt(0), 0) % 4];
-    const url = text(detailUrl(item));
-    const actionLabel = timing.phase === "ended" ? "Continue to proof stage →" : timing.phase === "upcoming" || timing.phase === "unavailable" || timing.phase === "closed" ? "Review opportunity →" : isV2(item) ? "Calculate and participate" : "View bounty →";
+    const submissionsUrl = text(submissions.pageUrl(item));
+    const url = completed ? submissionsUrl : text(detailUrl(item));
+    const actionLabel = completed ? "View Submissions" : timing.phase === "ended" ? "Continue to proof stage →" : timing.phase === "upcoming" || timing.phase === "unavailable" || timing.phase === "closed" ? "Review opportunity →" : isV2(item) ? "Calculate and participate" : "View bounty →";
     return `<article class="opportunity-row" id="bounty-${text(item.source_id)}" data-phase="${timing.phase}" data-kind="${kind}" style="animation-delay:${Math.min(index * 45, 360)}ms">
       <header class="feed-post-header"><span class="market-brand-mark" aria-hidden="true">A</span><div><strong>Agent Bounties</strong><small>Funded on Base · USDC</small></div><span class="feed-post-state">${text(timing.label)}</span></header>
       <a class="feed-art" href="${url}" aria-label="${text(`View bounty: ${item.title}`)}"><img src="assets/solarpunk/scene-${scene}.webp?v=2" alt="" width="1536" height="1024" loading="${index ? "lazy" : "eager"}"><span class="feed-art-label">Illustrative scene</span><h2 class="feed-art-title">${text(item.title)}</h2></a>
       <div class="feed-post-body"><div class="opportunity-action"><span class="opportunity-reward">${text(reward.replace(" USDC", ""))}<small>USDC ${isV2(item) ? "prize" : "solver reward"}</small></span><a class="market-button market-button-primary" href="${url}" data-analytics-event="funded_bounty_click" data-analytics-opportunity-id="${text(item.opportunity_id)}" data-analytics-bounty-contract="${text(item.source_id)}">${actionLabel}</a></div>
       <div class="opportunity-main"><p>${text(item.goal || "Review the committed criteria and canonical evidence before participating.")}</p><div class="opportunity-meta"><span>${text(kindLabel)}</span><span>${text(entries)}</span>${categories.map((category) => `<span>${text(category)}</span>`).join("")}</div></div>
-      <p class="opportunity-cost-note">${text(costNote)}</p><div class="opportunity-timing" data-phase="${timing.phase}"><time>${text(timing.detail)}</time></div>${decision ? `<span class="opportunity-margin"><strong>${text(decision.win)}</strong><br>${text(decision.loss)}</span>` : ""}</div>
+      <p class="opportunity-cost-note">${text(costNote)}</p><div class="opportunity-timing" data-phase="${timing.phase}"><time>${text(timing.detail)}</time></div>${decision ? `<span class="opportunity-margin"><strong>${text(decision.win)}</strong><br>${text(decision.loss)}</span>` : ""}${completed ? "" : `<a class="market-button market-button-secondary" href="${submissionsUrl}">View Submissions</a>`}</div>
     </article>`;
   }
 
   function filterItems(items, search, timing = "now", nowMs = Date.now(), kind = "all") {
     const needle = String(search || "").trim().toLowerCase();
-    return workflow.sortOpportunities(items.filter((item) => {
+    const matching = items.filter((item) => {
       if (kind !== "all" && workflow.participationKind(item) !== kind) return false;
-      const phase = workflow.phase(item, nowMs);
+      const phase = submissions.completed(item) ? "completed" : workflow.phase(item, nowMs);
       if (timing !== "all" && phase !== timing) return false;
       if (!needle) return true;
       return [item.title, item.goal, ...(item.categories || []), ...(item.skills || [])]
         .join(" ").toLowerCase().includes(needle);
-    }), nowMs);
+    });
+    return timing === 'completed' ? matching.sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at)) : workflow.sortOpportunities(matching, nowMs);
   }
 
   function emptyState(kind, timingUnavailable = 0) {
@@ -150,7 +155,7 @@
       : '<div class="market-empty"><h2>No bounties in this view.</h2><p>Try another search or availability filter, or refresh later for new funded work.</p><button class="market-button market-button-secondary" type="button" data-market-clear>Clear filters</button></div>';
   }
 
-  async function loadOpportunities(win) { return workflow.loadFundedInventory(win); }
+  async function loadOpportunities(win, view = "live") { return view === "completed" ? submissions.loadCompleted(win) : workflow.loadFundedInventory(win); }
 
   function startBoard(win, doc) {
     const list = doc.querySelector("[data-opportunity-list]");
@@ -158,6 +163,7 @@
     const summary = doc.querySelector("[data-market-summary]");
     const search = doc.querySelector("[data-market-search]");
     const timing = doc.querySelector("[data-market-timing]");
+    if (timing && new URLSearchParams(win.location.search).get("view") === "completed") timing.value = "completed";
     const kind = doc.querySelector("[data-market-kind]");
     const refresh = doc.querySelector("[data-market-refresh]");
     const notice = doc.querySelector("[data-posted-notice]");
@@ -166,24 +172,28 @@
     let items = [];
     let generatedAt = null;
     let loading = true, failure = null;
+    let requestVersion = 0, loadedView = null;
+    const selectedView = () => timing?.value === "completed" ? "completed" : "live";
 
     const render = () => {
       const nowMs = Date.now();
       if (loading) return;
       if (failure) {
         list.setAttribute("aria-busy", "false");
-        list.innerHTML = '<div class="market-empty"><h2>The board couldn’t refresh.</h2><p>We couldn’t check the latest funded bounties. Use Refresh to try again.</p></div>';
-        if (summary) summary.textContent = "Live inventory unavailable. No stale bounties shown.";
+        list.innerHTML = '<div class="market-empty"><h2>The board couldn’t refresh.</h2><p>We couldn’t load this view. Use Refresh to try again.</p></div>';
+        if (summary) summary.textContent = selectedView() === "completed" ? "Completed bounty history could not load. Try Refresh." : "Live inventory unavailable. No stale bounties shown.";
         if (notice) notice.hidden = true;
         return;
       }
-      const counts = workflow.inventoryCounts(items, nowMs);
+      const counts = workflow.inventoryCounts(selectedView() === "completed" ? [] : items, nowMs);
       const visible = filterItems(items, search?.value, timing?.value || "now", nowMs, kind?.value || "all");
       list.innerHTML = visible.length ? visible.map((item, index) => renderOpportunity(item, index, nowMs)).join("") : emptyState(kind?.value, counts.unavailable);
       list.querySelector?.("[data-market-clear]")?.addEventListener("click", () => { if (search) search.value = ""; if (kind) kind.value = "all"; render(); search?.focus(); });
       list.setAttribute("aria-busy", "false");
       if (summary) summary.textContent = `${counts.now} ${counts.unavailable ? "confirmed " : ""}open now (${counts.direct} direct tasks · ${counts.competition} competitions · ${counts.child_funding} child-funding tasks) · ${counts.ended} scoring closed · ${counts.upcoming} upcoming · ${items.length} funded${counts.unavailable ? ` · Timing unavailable for ${counts.unavailable}; open-now total unconfirmed` : ""}${counts.closed ? ` · ${counts.closed} past deadline` : ""}${generatedAt ? ` · refreshed ${new Date(generatedAt).toLocaleTimeString()}` : ""}`;
-      if (notice && postedContract) {
+      if (summary && selectedView() === "completed") summary.textContent = `${visible.length} completed ${visible.length === 1 ? "bounty" : "bounties"}${items.length === 300 ? " · showing the latest 300" : ""} · Open a submission to see the work and result.`;
+      if (notice && selectedView() === "completed") notice.hidden = true;
+      if (notice && postedContract && selectedView() !== "completed") {
         const match = items.find((item) => item.source_id.toLowerCase() === postedContract);
         notice.hidden = false;
         notice.innerHTML = match ? `On the board: <strong>${text(match.title)}</strong><a href="${text(detailUrl(match))}">View bounty →</a>`
@@ -192,18 +202,23 @@
     };
 
     search?.addEventListener("input", render);
-    timing?.addEventListener("change", render);
+    timing?.addEventListener("change", () => { if (loading || loadedView !== selectedView()) reload(); else render(); });
     kind?.addEventListener("change", render);
     const reload = async () => {
+      const version = ++requestVersion, view = selectedView();
       loading = true; failure = null;
       list.setAttribute("aria-busy", "true");
+      list.innerHTML = '<p>Loading bounties…</p>';
+      if (summary) summary.textContent = view === "completed" ? "Loading completed bounties…" : "Loading open work…";
       if (refresh) refresh.disabled = true;
       try {
-        const { payload, items: ready } = await loadOpportunities(win);
+        const { payload, items: ready } = await loadOpportunities(win, view);
+        if (version !== requestVersion) return;
         items = ready;
+        loadedView = view;
         generatedAt = payload.generated_at;
-      } catch (error) { items = []; failure = error; }
-      finally { loading = false; if (refresh) refresh.disabled = false; render(); }
+      } catch (error) { if (version === requestVersion) { items = []; failure = error; } }
+      finally { if (version === requestVersion) { loading = false; if (refresh) refresh.disabled = false; render(); } }
     };
     refresh?.addEventListener("click", () => { if (!loading) reload(); });
     reload().then(() => win.agentBountiesAnalytics?.track("market_view"));
