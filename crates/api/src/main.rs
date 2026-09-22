@@ -3302,6 +3302,7 @@ async fn analyze_bounty_fit(
         ("source_type" = Option<String>, Query, description = "Filter by unfunded_offchain, legacy_bounty, or canonical_base"),
         ("work_state" = Option<String>, Query, description = "Filter by open, claimable, in_progress, submitted, or completed"),
         ("payment_state" = Option<String>, Query, description = "Filter by none, seeking_funding, escrowed, or paid"),
+        ("opportunity_id" = Option<String>, Query, description = "Exact public opportunity identity; filtered before the result limit"),
         ("limit" = Option<u32>, Query, description = "Maximum combined results; clamped to 1..300")
     ),
     responses(
@@ -3544,6 +3545,7 @@ async fn github_bounty_discovery(
         ("source_type" = Option<String>, Query, description = "Filter by canonical_base for earning inventory"),
         ("work_state" = Option<String>, Query, description = "Optional work-state filter"),
         ("payment_state" = Option<String>, Query, description = "Optional payment-state filter"),
+        ("opportunity_id" = Option<String>, Query, description = "Exact public opportunity identity; filtered before the result limit"),
         ("limit" = Option<u32>, Query, description = "Maximum results; clamped to 1..300")
     ),
     responses(
@@ -6286,7 +6288,8 @@ async fn load_embedded_opportunity(
         state,
         OpportunityQuery {
             network,
-            limit: Some(300),
+            opportunity_id: Some(opportunity_id.to_string()),
+            limit: Some(1),
             ..OpportunityQuery::default()
         },
     )
@@ -21630,7 +21633,7 @@ mod tests {
         let state = test_state(network);
 
         let response = list_opportunities(
-            State(state),
+            State(state.clone()),
             Query(OpportunityQuery {
                 view: Some("ready_to_earn".to_string()),
                 ..OpportunityQuery::default()
@@ -21652,6 +21655,26 @@ mod tests {
             .discovery_factors
             .iter()
             .any(|factor| factor.contains("claimable+escrowed+verification_ready")));
+
+        for (id, expected) in [(claimable.id, 1), (private.id, 0)] {
+            let exact = list_opportunities(
+                State(state.clone()),
+                Query(OpportunityQuery {
+                    view: Some("recent".to_string()),
+                    opportunity_id: Some(format!("legacy:{id}")),
+                    limit: Some(1),
+                    ..Default::default()
+                }),
+            )
+            .await
+            .unwrap()
+            .0;
+            assert_eq!(
+                exact.items.len(),
+                expected,
+                "identity lookup must preserve public privacy filtering"
+            );
+        }
     }
 
     #[tokio::test]

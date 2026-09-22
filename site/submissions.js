@@ -40,13 +40,13 @@
       || payload.items.some(item => !canonical(item) || (paidOnly && !completed(item)))) throw new Error('Public bounty history is unavailable. Try Refresh.');
     return { payload, items: payload.items };
   }
-  const recentPath = '/v1/opportunities?network=base-mainnet&view=recent&source_type=canonical_base&limit=300';
-  async function loadCompleted(win) { return projection(await request(win, `${recentPath}&work_state=completed&payment_state=paid`), true); }
+  const recentPath = '/v1/opportunities?network=base-mainnet&view=recent&source_type=canonical_base';
+  async function loadCompleted(win) { return projection(await request(win, `${recentPath}&limit=300&work_state=completed&payment_state=paid`), true); }
   async function loadOpportunity(win, id) {
     if (!/^(canonical|open-competition|open-competition-v2):base-mainnet:0x[0-9a-f]{40}$/i.test(id || '')) throw new Error('Open View Submissions from a bounty card.');
-    let { items } = projection(await request(win, recentPath));
-    let item = items.find(item => item.opportunity_id === id);
-    if (!item) { ({ items } = await loadCompleted(win)); item = items.find(item => item.opportunity_id === id); }
+    const { items } = projection(await request(win, `${recentPath}&opportunity_id=${encodeURIComponent(id)}&limit=1`));
+    if (items.length > 1 || items.some(item => item.opportunity_id !== id)) throw new Error('Bounty lookup is unavailable. Try Refresh.');
+    const item = items[0];
     if (!item) throw new Error('This bounty is not available in the public history.');
     return item;
   }

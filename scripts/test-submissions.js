@@ -86,3 +86,16 @@ test('invalid old terms do not erase confirmed submissions or present unverified
   assert.match(html, /original criteria could not be verified/);
   assert.doesNotMatch(html, /Do not publish this unverified text|Original test and review rules/);
 });
+test('submission links use exact identity lookup before the API limit', async () => {
+  let responseItems = [item], url;
+  const win = { location: { hostname: 'agentbounties.app' }, fetch: async input => { url = new URL(input); return { ok: true, json: async () => payload(responseItems) }; } };
+  assert.equal((await history.loadOpportunity(win, item.opportunity_id)).opportunity_id, item.opportunity_id);
+  assert.equal(url.searchParams.get('opportunity_id'), item.opportunity_id);
+  assert.equal(url.searchParams.get('limit'), '1');
+  responseItems = [];
+  await assert.rejects(history.loadOpportunity(win, item.opportunity_id), /not available in the public history/);
+  responseItems = [item, item];
+  await assert.rejects(history.loadOpportunity(win, item.opportunity_id), /lookup is unavailable/);
+  responseItems = [{ ...item, source_id: wallet, opportunity_id: `canonical:base-mainnet:${wallet}` }];
+  await assert.rejects(history.loadOpportunity(win, item.opportunity_id), /lookup is unavailable/);
+});

@@ -988,6 +988,7 @@ async fn discover_bounties(state: &SharedState, parameters: &Value) -> Execution
             source_type: Some(source_type.clone()),
             work_state: Some(work_state.clone()),
             payment_state: Some(payment_state.clone()),
+            opportunity_id: None,
             limit: Some(300),
         },
     )

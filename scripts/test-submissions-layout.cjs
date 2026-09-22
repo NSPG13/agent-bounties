@@ -26,6 +26,8 @@ async function journey(browser, origin, width) {
     if (request.method() !== 'GET') mutations.push(request.url());
     if (url.pathname === '/v1/opportunities') {
       const completed = url.searchParams.get('work_state') === 'completed';
+      const identity = url.searchParams.get('opportunity_id');
+      if (identity) return route.fulfill({ json: projection('recent', identity === paid.opportunity_id ? [paid] : []) });
       if (completed && mode === 'held') { heldRoute = route; return; }
       return route.fulfill({ status: completed && mode === 'offline' ? 503 : 200, json: projection(url.searchParams.get('view'), completed || url.searchParams.get('view') === 'recent' ? [paid] : [{ ...fixture.opportunity, competition_mode: 'exclusive_claim', deadline: '2099-01-01T00:00:00Z' }]) });
     }

@@ -35,7 +35,10 @@ visible.
 Completed work uses the public opportunity projection with `view=recent`,
 `work_state=completed` and `payment_state=paid`. Open work keeps its existing
 `ready_to_earn` rules. The current history endpoint returns at most 300 items;
-the board labels that limit when reached. It has no pagination cursor.
+the API sorts by update time before applying that limit. The board labels the
+limit when reached. A submission link uses an exact `opportunity_id` lookup
+before limiting, so it also works for older public bounties outside that window.
+There is no pagination cursor.
 
 The page reads public, permission-filtered endpoints without a session token.
 An identity absent from the public projection cannot be opened through this
