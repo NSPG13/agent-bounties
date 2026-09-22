@@ -1260,12 +1260,34 @@ mod tests {
     }
 
     #[test]
-    fn gemma2_text_model_bringup_7500usd_bounty_756() {
+    fn gemma2_text_model_bringup_7500usd_bounty_756_contract_projection() {
         let mut raw = canonical("claimed", "7500000000", true);
         raw.solver_reward = "7500000000".to_string();
+        raw.target_amount = "7500000000".to_string();
+
         let item = canonical_opportunity(&raw, "base-mainnet", "https://api.example").unwrap();
+        let json = serde_json::to_value(&item).unwrap();
+
+        assert_eq!(item.opportunity_id, "canonical:base-mainnet:0x2222222222222222222222222222222222222222");
+        assert_eq!(item.source_type, "canonical_base");
+        assert_eq!(item.source_status, "claimed");
         assert_eq!(item.work_state, "in_progress");
+        assert_eq!(item.payment_state, "escrowed");
+        assert!(item.payment_committed);
         assert_eq!(item.reward.amount, "7500000000");
+        assert_eq!(item.funded_amount.amount, "7500000000");
+        assert_eq!(item.funding_target.amount, "7500000000");
+        assert_eq!(item.verification_method, "signed_quorum");
+        assert!(item.verification_ready);
+        assert!(item.proof_urls.is_empty());
+        assert!(item.payment_authority.contains("only its confirmed BountySettled event proves payment"));
+        assert!(item.evidence_boundary.contains("only after confirmed BountySettled"));
+        assert_eq!(json["work_state"], "in_progress");
+        assert_eq!(json["payment_state"], "escrowed");
+        assert_eq!(json["payment_committed"], true);
+        assert_eq!(json["verification_ready"], true);
+        assert_ne!(json["payment_state"], "paid");
+        assert_ne!(json["work_state"], "completed");
     }
 }
 
