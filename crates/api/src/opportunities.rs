@@ -1425,6 +1425,9 @@ pub fn open_competition_v2_opportunities(
             ),
             funding_target: OpportunityAmount::usdc_base_units(target.to_string()),
             bond: OpportunityAmount::usdc_base_units("0"),
+            posted_bond: OpportunityAmount::usdc_base_units("0"),
+            external_spend: OpportunityAmount::usdc_base_units(external_spend.to_string()),
+            gross_cash_margin: OpportunityAmount::usdc_base_units(net.to_string()),
             deadline,
             deadline_kind: Some(if source_status == "funding" {
                 "funding_deadline".to_string()
@@ -1682,6 +1685,9 @@ pub fn open_competition_opportunities(
             funded_amount: OpportunityAmount::usdc_base_units(funded_amount.to_string()),
             funding_target: OpportunityAmount::usdc_base_units(target_amount.to_string()),
             bond: OpportunityAmount::usdc_base_units(entry_bond.to_string()),
+            posted_bond: OpportunityAmount::usdc_base_units(entry_bond.to_string()),
+            external_spend: OpportunityAmount::usdc_base_units("0"),
+            gross_cash_margin: OpportunityAmount::usdc_base_units(solver_reward.to_string()),
             deadline,
             deadline_kind: Some(if competition_ends_at.is_some() {
                 "competition_deadline"
