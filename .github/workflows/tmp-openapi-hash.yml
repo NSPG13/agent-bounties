@@ -1,4 +1,4 @@
-name: Temporary OpenAPI Hash
+name: Temporary API Verification
 
 on:
   push:
@@ -8,12 +8,19 @@ permissions:
   contents: read
 
 jobs:
-  hash:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: "1.88.0"
-      - name: Run OpenAPI contract test and expose actual hash
+      - name: Targeted opportunity regressions
+        run: |
+          cargo test -p api opportunities::tests::canonical_projection_rejects_unknown_or_out_of_range_cash_values -- --exact --nocapture
+          cargo test -p api opportunities::tests::canonical_projection_rejects_cash_margin_arithmetic_overflow -- --exact --nocapture
+          cargo test -p api opportunities::tests::standing_meta_and_unprofitable_inventory_filtering -- --exact --nocapture
+      - name: OpenAPI contract
         run: cargo test -p api openapi_json_endpoint_contains_agent_router_path -- --exact --nocapture
+      - name: Docs contract
+        run: cargo run -p cli -- docs-contract-check
