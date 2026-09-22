@@ -704,6 +704,16 @@ pub fn canonical_opportunity(
     if item.status == "cancelled" {
         return None;
     }
+    // A paid projection is valid only when the indexed canonical event graph
+    // contains the settlement event that actually proves solver payment.
+    if item.status == "paid"
+        && !item
+            .events
+            .iter()
+            .any(|event| event.kind == AutonomousBountyEventKind::BountySettled)
+    {
+        return None;
+    }
     let api = api_base_url.trim_end_matches('/');
     let funded = item.funded_amount.parse::<u128>().unwrap_or_default();
     let target = item.target_amount.parse::<u128>().unwrap_or_default();
@@ -1536,6 +1546,36 @@ mod tests {
         assert!(feeds.rss.contains("Gross cash margin (not net profit)"));
         assert!(!feeds.rss.to_ascii_lowercase().contains("guaranteed profit"));
 
+    }
+
+    #[test]
+    fn funded_to_settled_payment_boundary_requires_canonical_bounty_settled() {
+        let mut settled_src = canonical("paid", "2000000", true);
+        let mut settlement = settled_src.events[0].clone();
+        settlement.kind = AutonomousBountyEventKind::BountySettled;
+        settlement.data = json!({
+            "solver": "0x9999999999999999999999999999999999999999",
+            "solver_reward": 900000,
+            "claim_bond_returned": 100000,
+        });
+        settled_src.events.push(settlement);
+
+        let settled = canonical_opportunity(
+            &settled_src,
+            "base-mainnet",
+            "https://api.example",
+        )
+        .expect("canonical BountySettled must produce a paid projection");
+        assert_eq!(settled.work_state, "completed");
+        assert_eq!(settled.payment_state, "paid");
+        assert!(settled.payment_committed);
+        assert_eq!(settled.source_status, "paid");
+
+        let forged_paid = canonical("paid", "2000000", true);
+        assert!(
+            canonical_opportunity(&forged_paid, "base-mainnet", "https://api.example").is_none(),
+            "created/funded/claimed/submitted evidence must never be promoted to paid without BountySettled"
+        );
     }
 
     #[test]
