@@ -58,6 +58,9 @@ try {
             cargo test -p db tests::discoverability_snapshot_idempotency_and_restart_hydration_are_durable -- --ignored --exact --nocapture
         }
         Invoke-Checked {
+            cargo test -p api open_competition_v2_api::tests::postgres_readiness_hold_blocks_new_payments_but_preserves_reconciliation -- --ignored --exact --test-threads=1 --nocapture
+        }
+        Invoke-Checked {
             cargo test -p api tests::audience_audit_persists_idempotently_across_processes -- --ignored --exact --nocapture
         }
         Invoke-Checked {

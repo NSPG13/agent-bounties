@@ -620,9 +620,6 @@ pub(crate) async fn create_proof_quote(
 ) -> ApiResult {
     let network = network_or_default(body.network.clone());
     let release = release_from_environment(&network)?;
-    if release.proof_broker_enabled {
-        current_indexer_agreement(&state, &network, &release).await?;
-    }
     let store = state.store.as_ref().ok_or_else(database_unavailable)?;
     let records = store
         .list_open_competition_v2_projections(&network, &release.factory_contract)
@@ -645,6 +642,7 @@ pub(crate) async fn create_proof_quote(
         ));
     }
     require_reviewed_broker_profile(&release, &record.projection)?;
+    current_indexer_agreement(&state, &network, &release).await?;
     let proof_system = record.projection.proof_system.as_deref().ok_or_else(|| {
         conflict(
             "quote_proof",
@@ -1016,9 +1014,7 @@ pub(crate) async fn pay_proof_job(
     if job.state == OpenCompetitionV2ProofJobState::PaymentPending && job.payment_tx_hash.is_some()
     {
         job = reconcile_proof_job_payment(&state, job).await?;
-        if job.state == OpenCompetitionV2ProofJobState::Paid {
-            return proof_job_payment_response(&job);
-        }
+        return proof_job_payment_response(&job);
     }
     if !matches!(
         job.state,
@@ -1030,13 +1026,44 @@ pub(crate) async fn pay_proof_job(
         return Err(StatusCode::CONFLICT);
     }
     let release = release_from_environment(&job.network).map_err(|(status, _)| status)?;
+    if job.state == OpenCompetitionV2ProofJobState::Quoted {
+        // A saved quote is not permission to accept a new payment after a
+        // readiness hold. Pending authorizations keep their reconciliation path.
+        let records = store
+            .list_open_competition_v2_projections(&job.network, &release.factory_contract)
+            .await
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        let projection = records
+            .iter()
+            .find(|record| {
+                record
+                    .projection
+                    .competition
+                    .eq_ignore_ascii_case(&job.competition_contract)
+            })
+            .map(|record| &record.projection)
+            .ok_or(StatusCode::CONFLICT)?;
+        if projection.state != chain_base::OpenCompetitionV2ProjectedState::Active {
+            return Err(StatusCode::CONFLICT);
+        }
+        if let Err(problem) = require_reviewed_broker_profile(&release, projection) {
+            return Ok(problem.into_response());
+        }
+        current_indexer_agreement(&state, &job.network, &release)
+            .await
+            .map_err(|(status, _)| status)?;
+    }
     let broker = env::var("OPEN_COMPETITION_V2_BROKER_PAYMENT_ADDRESS")
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let challenge = proof_job_payment_challenge(&state, &release, &broker, &job)
         .map_err(|(status, _)| status)?;
     let now =
         u64::try_from(Utc::now().timestamp()).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let authorization = if let Some(header) = headers.get(PAYMENT_SIGNATURE_HEADER) {
+    let authorization = if job.state == OpenCompetitionV2ProofJobState::PaymentPending {
+        // Resume only the authorization already accepted and saved for this
+        // job. A retry must never substitute a fresh payment authorization.
+        stored_payment_authorization(&job, now)?
+    } else if let Some(header) = headers.get(PAYMENT_SIGNATURE_HEADER) {
         let payload = match header
             .to_str()
             .map_err(|_| payments_x402::X402Error::InvalidBase64)
@@ -1049,8 +1076,6 @@ pub(crate) async fn pay_proof_job(
             Ok(authorization) => authorization,
             Err(error) => return x402_payment_required_error(challenge, &error.to_string()),
         }
-    } else if job.state == OpenCompetitionV2ProofJobState::PaymentPending {
-        stored_payment_authorization(&job, now)?
     } else {
         return x402_payment_required_response(challenge);
     };
@@ -2509,6 +2534,10 @@ fn indexer_agreement_is_current(
         && (0..=max_age_seconds).contains(&age_seconds)
 }
 
+pub(crate) fn forward_gmv_verification_held(profile_id: &str) -> bool {
+    profile_id == "forward-canonical-gmv-attribution-metric-v2"
+}
+
 fn require_reviewed_broker_profile(
     release: &OpenCompetitionV2Release,
     projection: &chain_base::OpenCompetitionV2Projection,
@@ -2525,7 +2554,7 @@ fn require_reviewed_broker_profile(
             .as_deref()
             .is_some_and(|value| value.eq_ignore_ascii_case(released))
     };
-    let reviewed = release.metric_programs.iter().any(|profile| {
+    let reviewed = release.metric_programs.iter().find(|profile| {
         profile.classification == OpenCompetitionV2ProgramClassification::Reviewed
             && equals(&projection.program_vkey, &profile.program_vkey)
             && equals(&projection.source_hash, &profile.source_hash)
@@ -2540,11 +2569,18 @@ fn require_reviewed_broker_profile(
             )
             && is_nonzero_bytes32(&profile.review_evidence_hash)
     });
-    if !reviewed {
+    let Some(reviewed) = reviewed else {
         return Err(conflict(
             "quote_proof",
             "metric_program_not_reviewed",
             "Use a release-reviewed metric profile for hosted proving, or submit a BYO proof directly.",
+        ));
+    };
+    if forward_gmv_verification_held(&reviewed.profile_id) {
+        return Err(conflict(
+            "quote_proof",
+            "verification_not_ready",
+            "The snapshot, verifier attestations and proof path are not verified. Do not fund child work or pay for a proof.",
         ));
     }
     Ok(())
@@ -2876,6 +2912,341 @@ mod tests {
         release = release_fixture();
         release.proof_broker_enabled = false;
         assert!(require_reviewed_broker_profile(&release, &projection()).is_err());
+    }
+
+    #[test]
+    fn reviewed_forward_gmv_profile_still_requires_verification_readiness() {
+        let mut release = release_fixture();
+        release.metric_programs[0].profile_id =
+            "forward-canonical-gmv-attribution-metric-v2".to_string();
+        let (status, Json(problem)) =
+            require_reviewed_broker_profile(&release, &projection()).unwrap_err();
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(problem["error_code"], "verification_not_ready");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL; run with --test-threads=1"]
+    async fn postgres_readiness_hold_blocks_new_payments_but_preserves_reconciliation() {
+        use axum::{body::Body, http::Request};
+        use std::sync::{Arc, Mutex};
+        use tower::ServiceExt;
+
+        // This test uses an isolated database and a loopback RPC. It never
+        // enables a relayer, signs a payment, or contacts a public provider.
+        struct TestEnvironment(Vec<(&'static str, Option<std::ffi::OsString>)>);
+        impl TestEnvironment {
+            fn set(&mut self, key: &'static str, value: String) {
+                self.0.push((key, env::var_os(key)));
+                env::set_var(key, value);
+            }
+        }
+        impl Drop for TestEnvironment {
+            fn drop(&mut self) {
+                for (key, previous) in self.0.iter().rev() {
+                    match previous {
+                        Some(value) => env::set_var(key, value),
+                        None => env::remove_var(key),
+                    }
+                }
+            }
+        }
+
+        let store = db::PostgresStore::connect(
+            &env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").expect("isolated test database"),
+        )
+        .await
+        .unwrap();
+        store.migrate().await.unwrap();
+        let mut release = release_fixture();
+        release.metric_programs[0].profile_id =
+            "forward-canonical-gmv-attribution-metric-v2".to_string();
+        let broker = "0x9999999999999999999999999999999999999999";
+        let mut environment = TestEnvironment(Vec::new());
+        environment.set(
+            "BASE_SEPOLIA_OPEN_COMPETITION_V2_BETA3_RELEASE_MANIFEST_JSON",
+            serde_json::to_string(&release).unwrap(),
+        );
+        environment.set(
+            "OPEN_COMPETITION_V2_BROKER_PAYMENT_ADDRESS",
+            broker.to_string(),
+        );
+
+        let id = Uuid::new_v4();
+        let mut projection = projection();
+        projection.competition = format!("0x{}00000000", id.simple());
+        projection.bounty_id = format!("0x{0}{0}", id.simple());
+        store
+            .upsert_open_competition_v2_projection(
+                &release.network,
+                &release.factory_contract,
+                &projection,
+                1,
+                &hash(91),
+            )
+            .await
+            .unwrap();
+        let rpc_requests = Arc::new(Mutex::new(Vec::<String>::new()));
+        let recorded = rpc_requests.clone();
+        let rpc = Router::new().route(
+            "/",
+            post(move |Json(body): Json<Value>| {
+                let recorded = recorded.clone();
+                async move {
+                    recorded
+                        .lock()
+                        .unwrap()
+                        .push(body["method"].as_str().unwrap().to_string());
+                    Json(json!({"jsonrpc":"2.0", "id":body["id"], "result":null}))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let rpc_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, rpc).await.unwrap() });
+        let mut state = crate::tests::test_state_with_operator_token_and_store(
+            crate::BountyNetwork::default(),
+            "test-only",
+            store.clone(),
+        );
+        Arc::get_mut(&mut state).unwrap().base_rpc_urls.base_sepolia = Some(rpc_url);
+        let app = router().with_state(state.clone());
+
+        let input: ForwardCanonicalGmvProgramInput = serde_json::from_str(include_str!(
+            "../../../programs/forward-canonical-gmv-attribution-metric-v2/fixtures/golden-v1.json"
+        ))
+        .unwrap();
+        let (status, Json(problem)) = create_proof_quote(
+            State(state),
+            Json(ProofQuoteBody {
+                network: Some(release.network.clone()),
+                competition_contract: projection.competition.clone(),
+                solver: "0x3333333333333333333333333333333333333333".to_string(),
+                solver_nonce: "7".to_string(),
+                artifact_hash: None,
+                relay: true,
+                metric: ProofMetricBody::ForwardCanonicalGmv(ForwardCanonicalGmvMetricBody {
+                    profile_id: "forward-canonical-gmv-attribution-metric-v2".to_string(),
+                    campaign: input.campaign,
+                    snapshot: input.snapshot,
+                }),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(problem["error_code"], "verification_not_ready");
+
+        // The HTTP guard is bound to the indexed contract, not to a caller's
+        // requested metric type. A different input cannot bypass the hold.
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/base/open-competition-v2-beta3/proof-quotes")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "network":release.network,
+                            "competition_contract":projection.competition,
+                            "solver":"0x3333333333333333333333333333333333333333",
+                            "solver_nonce":"7", "relay":true,
+                            "metric":{
+                                "mode":"all_equal", "threshold":"1",
+                                "vectors":[{"expected":1,"observed":1,"weight":1}]
+                            }
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        assert!(response.headers().get("payment-required").is_none());
+        let raw = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
+        assert_eq!(
+            status,
+            StatusCode::CONFLICT,
+            "{}",
+            String::from_utf8_lossy(&raw)
+        );
+        let body: Value = serde_json::from_slice(&raw).unwrap();
+        assert_eq!(body["error_code"], "verification_not_ready");
+
+        let now = Utc::now();
+        let job: OpenCompetitionV2ProofJob = serde_json::from_value(json!({
+            "id":id, "idempotency_key":id.to_string(), "network":release.network,
+            "competition_contract":projection.competition,
+            "solver":"0x3333333333333333333333333333333333333333",
+            "solver_nonce":"7", "artifact_hash":hash(92),
+            "program_input":{"_profile_id":"forward-canonical-gmv-attribution-metric-v2"},
+            "expected_public_values":"0x", "requested_relay":true, "proof_system":"groth16",
+            "state":"quoted", "gross_prize":"10000000", "proof_fee_quote":"100000",
+            "relay_fee_quote":"0", "net_prize_if_win":"9900000", "maximum_charge":"100000",
+            "winner_mode":"first_proven", "competition_risk":"Another solver may win first.",
+            "quote_expires_at":now + chrono::Duration::minutes(5),
+            "proof_sla_deadline":now + chrono::Duration::minutes(30),
+            "attempt_count":0, "created_at":now, "updated_at":now
+        }))
+        .unwrap();
+        let quoted = store
+            .insert_open_competition_v2_proof_job(&job)
+            .await
+            .unwrap();
+        let path = format!("/v1/base/open-competition-v2-beta3/proof-jobs/{id}/payment");
+        for signature in [None, Some("a-supplied-payment-must-not-bypass-the-hold")] {
+            let mut request = Request::post(&path);
+            if let Some(signature) = signature {
+                request = request.header(PAYMENT_SIGNATURE_HEADER, signature);
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::CONFLICT);
+            assert!(response.headers().get("payment-required").is_none());
+            let body: Value = serde_json::from_slice(
+                &axum::body::to_bytes(response.into_body(), 65536)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(body["error_code"], "verification_not_ready");
+            assert_eq!(
+                store
+                    .get_open_competition_v2_proof_job(id)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                quoted
+            );
+        }
+        assert!(rpc_requests.lock().unwrap().is_empty());
+
+        // A previously accepted authorization resumes unchanged, even if a
+        // caller supplies a replacement header. Hold the lease to avoid relay.
+        let pending = store
+            .transition_open_competition_v2_proof_job(
+                id,
+                OpenCompetitionV2ProofJobState::Quoted,
+                OpenCompetitionV2ProofJobState::PaymentPending,
+                &OpenCompetitionV2ProofJobUpdate {
+                    payer: Some(job.solver.clone()),
+                    payment_authorization_nonce: Some(hash(93)),
+                    payment_authorization: Some(json!({
+                        "payer":job.solver, "recipient":broker, "amount":"100000",
+                        "valid_before":(now + chrono::Duration::minutes(5)).timestamp(),
+                        "nonce":hash(93), "v":27, "r":hash(94), "s":hash(95)
+                    })),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let lease = store
+            .acquire_x402_relayer_lease(&release.network, 60)
+            .await
+            .unwrap()
+            .unwrap();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post(&path)
+                    .header(PAYMENT_SIGNATURE_HEADER, "must-use-stored-authorization")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        store
+            .release_x402_relayer_lease(&release.network, lease)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(
+            store
+                .get_open_competition_v2_proof_job(id)
+                .await
+                .unwrap()
+                .unwrap(),
+            pending
+        );
+        assert!(rpc_requests.lock().unwrap().is_empty());
+
+        // Already broadcast payments are polled, without another challenge.
+        let pending = store
+            .transition_open_competition_v2_proof_job(
+                id,
+                OpenCompetitionV2ProofJobState::PaymentPending,
+                OpenCompetitionV2ProofJobState::PaymentPending,
+                &OpenCompetitionV2ProofJobUpdate {
+                    payment_tx_hash: Some(hash(96)),
+                    payer: Some(job.solver.clone()),
+                    payment_authorization_nonce: Some(hash(93)),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post(&path)
+                    .header(PAYMENT_SIGNATURE_HEADER, "must-not-request-another-payment")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert!(response.headers().get("payment-required").is_none());
+        assert_eq!(
+            store
+                .get_open_competition_v2_proof_job(id)
+                .await
+                .unwrap()
+                .unwrap(),
+            pending
+        );
+        assert_eq!(
+            *rpc_requests.lock().unwrap(),
+            vec!["eth_getTransactionReceipt"]
+        );
+
+        // A stored canonical payment remains retrievable during the hold.
+        let evidence =
+            json!({"fixture":"previously-reconciled-payment", "transaction_hash":hash(96)});
+        store
+            .transition_open_competition_v2_proof_job(
+                id,
+                OpenCompetitionV2ProofJobState::PaymentPending,
+                OpenCompetitionV2ProofJobState::Paid,
+                &OpenCompetitionV2ProofJobUpdate {
+                    payment_tx_hash: Some(hash(96)),
+                    payment_block_number: Some(1),
+                    payment_evidence: Some(evidence.clone()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let response = app
+            .oneshot(Request::post(&path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 65536)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["payment_evidence"], evidence);
+        assert_eq!(rpc_requests.lock().unwrap().len(), 1);
+        server.abort();
     }
 
     #[test]

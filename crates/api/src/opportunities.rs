@@ -1169,8 +1169,9 @@ pub fn open_competition_v2_opportunities(
         );
         let goal = known.map(|item| item.summary.clone());
         let source_url = known.map(|item| item.source_url.clone());
-        let is_forward_gmv = profile
-            .is_some_and(|item| item.profile_id == "forward-canonical-gmv-attribution-metric-v2");
+        let is_forward_gmv = profile.is_some_and(|item| {
+            crate::open_competition_v2_api::forward_gmv_verification_held(&item.profile_id)
+        });
         let participation_metadata_ready = !is_forward_gmv || known.is_some();
         // Registry membership and a constructed snapshot URL do not prove that
         // the contract-bound snapshot, dual attestation and proof path exist.

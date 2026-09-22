@@ -18,10 +18,19 @@ canonical escrow is full, removes earning labels and shows
 `verification-unavailable`. Independently verified contract actions and past
 settlement evidence retain their existing authority.
 
+Direct proof quotes and payments for saved unpaid quotes return HTTP 409 with
+`verification_not_ready` during this hold. They do not issue an x402 challenge
+or accept a fresh payment authorization. Previously accepted authorizations
+resume using their stored signature; broadcast payments keep their receipt
+reconciliation path, and confirmed payment records remain available.
+
 Regression checks:
 
 ```sh
 cargo test -p api opportunities::tests::
+cargo test -p api open_competition_v2_api::tests::
+# With an isolated AGENT_BOUNTIES_TEST_DATABASE_URL:
+cargo test -p api postgres_readiness_hold -- --ignored --test-threads=1
 python scripts/test_reconcile_github_bounty_labels.py
 ```
 
