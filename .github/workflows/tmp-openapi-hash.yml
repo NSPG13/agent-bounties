@@ -1,0 +1,19 @@
+name: Temporary OpenAPI Hash
+
+on:
+  push:
+    branches: [show-solver-cash-margin-bounty-736]
+
+permissions:
+  contents: read
+
+jobs:
+  hash:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: "1.88.0"
+      - name: Run OpenAPI contract test and expose actual hash
+        run: cargo test -p api openapi_json_endpoint_contains_agent_router_path -- --exact --nocapture
