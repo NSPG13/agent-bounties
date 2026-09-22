@@ -6,13 +6,13 @@
 })(typeof window === "object" ? window : globalThis, function createWalletLink(win) {
   const doc = win.document;
   const discovered = new Map();
-  let chooser, list, status, createButton, pending, bundlePromise;
+  let chooser, list, status, createButton, pending, bundlePromise, brand = null, continuation;
   const cancelled = () => Object.assign(new Error("Wallet selection cancelled."), { code: 4001 });
 
   function remember(detail) {
     if (!detail?.provider || typeof detail.provider.request !== "function") return;
     const name = String(detail.info?.name || "Browser wallet").trim().slice(0, 64);
-    discovered.set(detail.provider, { provider: detail.provider, label: name || "Browser wallet", kind: "browser" });
+    discovered.set(detail.provider, { provider: detail.provider, label: name || "Browser wallet", kind: "browser", rdns: String(detail.info?.rdns || "") });
     if (chooser?.open) render();
   }
   win.addEventListener("eip6963:announceProvider", (event) => remember(event.detail));
@@ -26,7 +26,7 @@
       ? win.ethereum.providers : [win.ethereum];
     for (const provider of injected) {
       if (!provider || provider === phone?.provider || provider === embedded || typeof provider.request !== "function" || result.some((item) => item.provider === provider)) continue;
-      result.push({ provider, kind: "browser", label: provider.isMetaMask ? "MetaMask" : provider.isCoinbaseWallet ? "Base App / Coinbase Wallet" : "Browser wallet" });
+      result.push({ provider, kind: "browser", label: provider.isCoinbaseWallet ? "Base App / Coinbase Wallet" : provider.isMetaMask ? "MetaMask" : "Browser wallet" });
     }
     if (phone?.state().available) result.push({ provider: phone.provider, kind: "phone", label: "Use a phone wallet" });
     return result;
@@ -93,16 +93,79 @@
     return button;
   }
 
+  function brandOf(choice) {
+    // Coinbase may also expose isMetaMask for compatibility. Prefer its own identity.
+    if (choice.rdns === "com.coinbase.wallet" || choice.provider.isCoinbaseWallet) return "coinbase";
+    if (choice.rdns === "io.metamask") return "metamask";
+    if (choice.rdns || choice.provider.isBraveWallet || choice.provider.isTrust || choice.provider.isTrustWallet) return "other";
+    if (choice.provider.isMetaMask) return "metamask";
+    return "other";
+  }
+  function chooseBrand(value) {
+    brand = value; status.textContent = ""; render();
+    chooser.querySelector("#wallet-link-title").focus();
+  }
+  function note(message) {
+    const p = doc.createElement("p"); p.textContent = message; list.append(p);
+  }
+  async function copyContinuation() {
+    const request = pending;
+    status.textContent = "Saving your place…";
+    try {
+      if (!continuation) throw new Error("Open agentbounties.app in your wallet app. Sign in with the same account.");
+      const url = await continuation();
+      if (pending !== request) return;
+      await win.navigator.clipboard.writeText(url);
+      if (pending === request) status.textContent = "Link copied. Paste it in your wallet app’s browser. Sign in with the same account.";
+    } catch (error) { if (pending === request) status.textContent = error.message; }
+  }
   function render() {
     if (!list) return;
     list.replaceChildren();
-    for (const choice of choices()) {
-      list.append(option(choice.label, choice.kind === "phone" ? "Scan a code with your phone, or open your wallet app." : "Choose an address in this wallet.", () => finish(choice)));
+    const names = { coinbase: "Coinbase", metamask: "MetaMask", moonpay: "MoonPay", other: "Other wallets" };
+    chooser.querySelector("#wallet-link-title").textContent = brand ? names[brand] : "Choose your wallet";
+    chooser.querySelector("[data-wallet-intro]").textContent = brand ? "" : "Use one wallet to add money and approve your bounty.";
+    chooser.querySelector("[data-wallet-back]").hidden = !brand;
+    chooser.querySelector("[data-wallet-create]").hidden = brand !== "coinbase";
+    if (!brand) {
+      for (const [id, title, description] of [
+        ["coinbase", "Coinbase", "Use your Base app or Coinbase account wallet."],
+        ["metamask", "MetaMask", "Use your phone app or browser extension."],
+        ["moonpay", "MoonPay", "Full bounty payments are not available here yet."],
+      ]) list.append(option(title, description, () => chooseBrand(id)));
+      const more = doc.createElement("details"), summary = doc.createElement("summary");
+      summary.textContent = "Other wallets";
+      const extra = doc.createElement("div");
+      for (const choice of choices().filter(item => item.kind === "phone" || brandOf(item) === "other"))
+        extra.append(option(choice.label, choice.kind === "phone" ? "Pair a supported phone wallet." : "Connect this wallet.", () => finish(choice)));
+      more.append(summary, extra); list.append(more);
+      return;
     }
-    if (!list.childElementCount) {
-      const empty = doc.createElement("p");
-      empty.textContent = "No browser wallet detected. Use or recover a Coinbase embedded wallet above.";
-      list.append(empty);
+    if (brand === "moonpay") {
+      note("MoonPay can hold, buy and send USDC. Approving a bounty from its wallet is not supported here yet.");
+      note("Do not buy more for this bounty in MoonPay. Your existing money stays in your MoonPay wallet.");
+      const help = doc.createElement("a"); help.href = "https://support.moonpay.com/en/articles/383215-managing-your-wallets";
+      help.target = "_blank"; help.rel = "noopener noreferrer"; help.textContent = "MoonPay wallet help"; list.append(help);
+      return;
+    }
+    const matches = choices().filter(item => item.kind !== "phone" && brandOf(item) === brand);
+    for (const choice of matches) list.append(option("Connect " + names[brand], "Approve the connection in this wallet.", () => finish(choice)));
+    if (brand === "coinbase") {
+      if (!matches.length) {
+        note("Open this bounty in the Base app’s browser. Coinbase Wallet is now the Base app.");
+        list.append(option("Copy bounty link", "Paste it in the Base app’s browser.", copyContinuation));
+      }
+      note("Keep the same address when buying USDC on Base. Return here to approve your bounty.");
+      // Email-created wallets are distinct from an existing Base app wallet.
+      createButton.disabled = !embeddedConfigured();
+      if (!embeddedConfigured()) status.textContent = "Email wallet sign-in is unavailable here.";
+    } else if (brand === "metamask") {
+      if (!matches.length) {
+        const phone = choices().find(item => item.kind === "phone");
+        if (phone) list.append(option("Connect MetaMask on my phone", "Open MetaMask on this phone, or scan from another device.", () => finish(phone)));
+        else note("Open this bounty in MetaMask’s browser.");
+      }
+      note("Buy USDC on Base in MetaMask. Return here to approve your bounty with the same wallet.");
     }
   }
 
@@ -111,7 +174,7 @@
     chooser = doc.createElement("dialog");
     chooser.className = "wallet-link-dialog";
     chooser.setAttribute("aria-labelledby", "wallet-link-title");
-    chooser.innerHTML = '<header><div><p class="wallet-link-eyebrow">Wallet connection</p><h2 id="wallet-link-title">Choose a wallet</h2></div><button type="button" class="wallet-link-close" aria-label="Close wallet chooser">×</button></header><p>Connect the wallet you already use, or create one.</p><div data-wallet-create></div><h3>Browser or phone wallet</h3><div data-wallet-choices></div><p class="wallet-link-status" role="status" aria-live="polite"></p><p class="wallet-link-note">Connecting does not spend money.</p>';
+    chooser.innerHTML = '<header><h2 id="wallet-link-title" tabindex="-1">Choose your wallet</h2><button type="button" class="wallet-link-close" aria-label="Close wallet chooser">×</button></header><p data-wallet-intro></p><div data-wallet-choices></div><details data-wallet-create><summary>Use an email wallet instead</summary><p>This may be a different wallet from your Base app. Use your usual email or social sign-in to recover it.</p><div data-wallet-create-button></div></details><p class="wallet-link-status" role="status" aria-live="polite"></p><button type="button" class="wallet-choice" data-wallet-back hidden>Back to wallet choices</button><p class="wallet-link-note">You approve every payment in your wallet.</p>';
     list = chooser.querySelector("[data-wallet-choices]");
     status = chooser.querySelector("[role=status]");
     createButton = option("Use Coinbase with email", "Sign in with your usual email or social account. This can recover your wallet.", async () => {
@@ -128,24 +191,26 @@
       }
     });
     createButton.classList.add("wallet-choice-create");
-    chooser.querySelector("[data-wallet-create]").append(createButton);
+    chooser.querySelector("[data-wallet-create-button]").append(createButton);
+    chooser.querySelector("[data-wallet-back]").addEventListener("click", () => chooseBrand(null));
     chooser.querySelector(".wallet-link-close").addEventListener("click", () => finish());
     chooser.addEventListener("cancel", (event) => { event.preventDefault(); finish(); });
     chooser.addEventListener("close", () => { if (pending) finish(); });
     doc.body.append(chooser);
   }
 
-  function select() {
+  function select(options = {}) {
     if (pending) return pending.promise;
     mount();
-    status.textContent = embeddedConfigured() ? "" : "Coinbase embedded wallet is not configured on this site yet.";
+    brand = null; continuation = options.prepareContinuation;
+    status.textContent = "";
     createButton.disabled = !embeddedConfigured();
     render();
     const request = {};
     request.promise = new Promise((resolve, reject) => { request.resolve = resolve; request.reject = reject; });
     pending = request;
     chooser.showModal();
-    createButton.focus();
+    chooser.querySelector("#wallet-link-title").focus();
     win.dispatchEvent(new win.Event("eip6963:requestProvider"));
     return request.promise;
   }

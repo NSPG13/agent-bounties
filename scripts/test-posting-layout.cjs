@@ -192,6 +192,7 @@ async function recoveryRegressions(browser, origin) {
     await page.getByRole("button", { name: "Change wallet", exact: true }).click();
     await page.getByRole("button", { name: /Test wallet .*Saved to your account/ }).click();
     await page.getByRole("button", { name: "Use this wallet", exact: true }).click();
+    await page.locator(".wallet-link-dialog details > summary").filter({ hasText: "Other wallets" }).click();
     await page.getByRole("button", { name: /^Use a phone wallet / }).click();
     await page.getByRole("button", { name: "Connect again with a new QR code", exact: true }).click();
     await page.locator(".ab-phone-qr").waitFor({ state: "visible" });
@@ -345,7 +346,15 @@ async function guidedTopupRegressions(browser, origin) {
       assert.equal(await page.locator("[data-topup-needed]").textContent(), "2.01 USDC still needed");
       if (process.env.POSTING_LAYOUT_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.POSTING_LAYOUT_SCREENSHOTS, `topup-guide-${width}.png`) });
       await page.getByRole("button", { name: "Use my wallet app", exact: true }).click();
-      assert.equal(await page.locator("#onramp-title").textContent(), "Open your wallet app");
+      assert.equal(await page.locator("#onramp-title").textContent(), "Choose your wallet app");
+      for (const [brand, heading] of [["coinbase", "Open your Base app"], ["metamask", "Open MetaMask"], ["moonpay", "MoonPay is not ready here"]]) {
+        await page.locator(`[data-topup-brand=${brand}]`).click();
+        await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+        assert.equal(await page.locator("#onramp-title").textContent(), heading);
+        assert.equal(await page.locator("[data-topup-wallet-brands]").isVisible(), false);
+        assert.equal(await page.locator("[data-topup-address]").textContent(), wallet.address);
+        await page.getByRole("button", { name: "Back", exact: true }).click();
+      }
       assert.match(await page.locator("[data-topup-panel=wallet-buy]").textContent(), /MetaMask/);
       assert.equal(await page.getByRole("button", { name: "Next", exact: true }).count(), 0);
       await page.getByRole("button", { name: "Back", exact: true }).click();
@@ -354,26 +363,45 @@ async function guidedTopupRegressions(browser, origin) {
       assert.equal(await page.locator("[data-fiat-amount]").isVisible(), false, "No duplicate amount before MoonPay");
       assert.equal(await page.getByRole("link", { name: "Open MetaMask", exact: true }).isVisible(), true);
       assert.match(await page.locator("[data-topup-panel=card]").textContent(), /Sign up or sign in/);
-      assert.equal(await page.locator("[data-direct-moonpay]").getAttribute("aria-disabled"), "false");
-      if (process.env.POSTING_LAYOUT_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.POSTING_LAYOUT_SCREENSHOTS, `topup-card-${width}.png`) });
-      await page.evaluate(() => { window.open = () => null; });
-      await page.getByRole("link", { name: "Open MoonPay", exact: true }).click();
-      await page.waitForFunction(() => document.querySelector("[data-topup-feedback]").textContent.includes("Allow the checkout tab"));
-      assert.equal(await page.evaluate(() => window.AgentBountiesOnramp.hasPendingPurchase()), false);
+      assert.equal(await page.locator("[data-direct-moonpay]").isDisabled(), true);
+      assert.equal(await page.locator("[data-direct-moonpay]").getAttribute("href"), null);
+      assert.match(await page.locator("[data-topup-panel=card]").textContent(), /cannot pass your wallet/);
       await page.evaluate(() => { window.open = () => ({ location: { replace(url) { window.__openedPurchases.push(url); } }, close() {}, focus() {} }); });
-      // A stale earlier amount must not enter the provider URL or readiness target.
-      await page.evaluate(() => { document.querySelector("[data-fiat-amount]").value = "25"; });
-      await page.getByRole("link", { name: "Open MoonPay", exact: true }).click();
-      await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "pending");
-      assert.deepEqual(await page.evaluate(() => window.__openedPurchases), ["https://www.moonpay.com/buy/usdc"]);
+      assert.match(await page.evaluate(() => {
+        try { window.AgentBountiesOnramp.openDirectCheckout("moonpay"); return "opened"; }
+        catch (e) { return e.message; }
+      }), /cannot use your chosen wallet/);
+      assert.deepEqual(await page.evaluate(() => window.__openedPurchases), []);
+      assert.equal(await page.evaluate(() => window.AgentBountiesOnramp.hasPendingPurchase()), false);
+      await page.getByRole("button", { name: "Use money in MoonPay", exact: true }).filter({ visible: true }).click();
+      assert.equal(await page.locator("[data-topup-panel]:visible").count(), 1);
+      assert.equal(await page.locator("[data-topup-transfer-amount]").textContent(), "Send 2.01 USDC on Base");
+      assert.match(await page.locator("[data-topup-panel=moonpay]").textContent(), /ETH on Base/);
+      assert.equal(await page.locator("[data-topup-address]").textContent(), wallet.address);
+      if (process.env.POSTING_LAYOUT_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.POSTING_LAYOUT_SCREENSHOTS, `topup-moonpay-${width}.png`) });
+      // An order opened by the old site survives the release. Recovery may
+      // explain sending delivered money without clearing or repeating the order.
+      await page.evaluate(address => {
+        localStorage.setItem("agent-bounties:onramp-attempts:v1", JSON.stringify({ [address + ":usdc"]: {
+          status: "opened", provider: "moonpay", baselineUsdc: "0", operation: "guide-fixture", startedAt: new Date().toISOString(), reference: "original-order"
+        } }));
+      }, wallet.address);
       await page.reload();
       await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "pending");
-      assert.equal(await page.getByRole("link", { name: "Open MoonPay", exact: true }).isVisible(), false);
+      const savedOrder = await page.evaluate(() => localStorage.getItem("agent-bounties:onramp-attempts:v1"));
+      await page.getByRole("button", { name: "Money went to my MoonPay wallet", exact: true }).click();
+      assert.equal(await page.locator(".topup-guide").getAttribute("data-view"), "moonpay");
+      assert.equal(await page.evaluate(() => localStorage.getItem("agent-bounties:onramp-attempts:v1")), savedOrder);
+      assert.equal(await page.evaluate(() => window.AgentBountiesOnramp.hasPendingPurchase()), true);
+      await page.getByRole("button", { name: "Back", exact: true }).click();
+      assert.equal(await page.locator(".topup-guide").getAttribute("data-view"), "pending");
       // Partial delivery stays pending without offering a duplicate purchase.
       mock.usdcBalance = "0xf4240";
       await page.evaluate(() => window.dispatchEvent(new Event("focus")));
       await page.waitForFunction(() => document.querySelector("[data-usdc-balance]").textContent === "1 USDC");
       assert.equal(await page.locator(".topup-guide").getAttribute("data-view"), "pending");
+      await page.getByRole("button", { name: "Money went to my MoonPay wallet", exact: true }).click();
+      assert.equal(await page.locator("[data-topup-transfer-amount]").textContent(), "Send 1.01 USDC on Base");
       // No click, focus, or simulated provider callback: periodic balance polling
       // must notice 20 USDC, enough for 2.01, despite the old 25 starting value.
       mock.usdcBalance = "0x1312d00";
@@ -414,6 +442,9 @@ async function guidedTopupRegressions(browser, origin) {
       await page.getByRole("button", { name: "Check after purchase", exact: true }).click();
       await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "method");
       assert.equal(await page.locator("[data-topup-needed]").textContent(), "ETH needed for the network fee");
+      await page.getByRole("button", { name: "Use money in MoonPay", exact: true }).filter({ visible: true }).click();
+      assert.match(await page.locator("[data-topup-transfer-amount]").textContent(), /Enough USDC/);
+      await page.getByRole("button", { name: "Back", exact: true }).click();
       await page.getByRole("button", { name: "Buy with a card", exact: true }).click();
       assert.equal(await page.locator("[data-onramp-asset]").inputValue(), "eth");
       assert.equal(await page.locator("[data-topup-card-asset]").textContent(), "ETH on Base");
@@ -423,7 +454,7 @@ async function guidedTopupRegressions(browser, origin) {
       assert.equal(await page.evaluate(() => window.AgentBountiesOnramp.hasPendingPurchase()), true);
       await page.reload();
       await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "pending");
-      assert.equal(await page.getByRole("link", { name: "Open MoonPay", exact: true }).isVisible(), false, "An ETH order survives a reload without asset=eth");
+      assert.equal(await page.locator("[data-direct-moonpay]").isVisible(), false, "An ETH order survives a reload without asset=eth");
       mock.ethBalance = "0x2386f26fc10000";
       await page.reload();
       await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "ready");
@@ -435,7 +466,7 @@ async function guidedTopupRegressions(browser, origin) {
       assert.deepEqual(await page.evaluate(() => window.__walletWrites), []);
       assert.equal(await page.evaluate(() => window.__walletRequests.includes("eth_requestAccounts")), false);
       assert.deepEqual(errors, []);
-      console.log("PASS simple top-up, live connection, amount-free providers, automatic partial/full deposits, preserved orders, stale reads, WebMCP and gas at " + width);
+      console.log("PASS wallet choice preserved, MoonPay transfer recovery, automatic partial/full deposits, original order guard, stale reads, WebMCP and gas at " + width);
     } finally { await context.close(); }
   }
 }
@@ -460,6 +491,98 @@ async function topupPhoneConnectionRegression(browser, origin) {
   } finally { await context.close(); }
 }
 
+async function signedMoonpayDestinationRegressions(browser, origin) {
+  const context = await browser.newContext();
+  const mock = await fixtures(context, origin); mock.usdcBalance = "0x0";
+  const bounty = "0x2222222222222222222222222222222222222222";
+  const valid = {
+    schema_version: "agent-bounties/moonpay-onramp-checkout-v1", provider: "moonpay", environment: "live",
+    destination_network: "base-mainnet", destination_wallet: wallet.address, asset: "usdc", bounty_contract: bounty,
+    bounty_funded: false, canonical_funding_event: null, external_transaction_id: "test-order",
+    checkout_url: "https://buy.moonpay.com/?apiKey=pk_live_fixture&walletAddress=" + wallet.address + "&currencyCode=usdc_base&signature=fixture"
+  };
+  let plan = valid, checkoutNavigations = 0;
+  await context.route("**/v1/onramps/moonpay/checkout", route => route.fulfill({ json: plan }));
+  await context.route("https://buy.moonpay.com/**", route => { checkoutNavigations++; return route.fulfill({ body: "Fixture checkout" }); });
+  const cases = [
+    ["sandbox", { ...valid, environment: "sandbox", checkout_url: valid.checkout_url.replace("buy.moonpay.com", "buy-sandbox.moonpay.com") }],
+    ["wrong network", { ...valid, destination_network: "ethereum-mainnet" }],
+    ["wrong asset", { ...valid, asset: "eth" }],
+    ["wrong address", { ...valid, destination_wallet: bounty }],
+    ["wrong URL address", { ...valid, checkout_url: valid.checkout_url.replace(wallet.address, bounty) }],
+    ["wrong URL network", { ...valid, checkout_url: valid.checkout_url.replace("usdc_base", "usdc") }],
+    ["duplicate destination", { ...valid, checkout_url: valid.checkout_url + "&walletAddress=" + bounty }],
+    ["alternate destinations", { ...valid, checkout_url: valid.checkout_url + "&walletAddresses=other" }],
+    ["mismatched partner currency", { ...valid, destination_currency_code: "usdc_base_partner" }],
+    ["invalid partner currency", { ...valid, destination_currency_code: {} }],
+    ["unsigned", { ...valid, checkout_url: valid.checkout_url.replace("&signature=fixture", "") }],
+    ["unapproved host", { ...valid, checkout_url: valid.checkout_url.replace("buy.moonpay.com", "example.test") }],
+  ];
+  const page = await context.newPage();
+  try {
+    for (const [name, response] of cases) {
+      plan = response;
+      await page.goto(origin + "/onramp.html?amount=2.01&wallet=" + wallet.address + "&bountyContract=" + bounty);
+      await page.waitForFunction(() => window.AgentBountiesOnramp?.canOpenPurchase());
+      // Exercise the retained legacy partner control against an isolated mock.
+      await page.locator(".topup-details > summary").click();
+      await page.locator("[data-partner-options]").evaluate(el => { el.hidden = false; el.open = true; });
+      await page.locator("[data-fiat-amount]").fill("25");
+      await page.locator("[data-onramp-ack]").check();
+      await page.locator("[data-start-moonpay]").click();
+      await page.waitForFunction(() => document.querySelector("[data-topup-feedback]").dataset.tone === "error");
+      assert.equal(checkoutNavigations, 0, name + " must never open a checkout");
+      assert.equal(await page.evaluate(() => window.AgentBountiesOnramp.hasPendingPurchase()), false, name + " known pre-navigation refusal must not leave an uncertain purchase");
+    }
+    assert.deepEqual(await page.evaluate(() => window.__walletWrites), []);
+    plan = { ...valid, destination_currency_code: "usdc_base_partner", checkout_url: valid.checkout_url.replace("usdc_base", "usdc_base_partner") };
+    await page.goto(origin + "/onramp.html?amount=2.01&wallet=" + wallet.address + "&bountyContract=" + bounty);
+    await page.waitForFunction(() => window.AgentBountiesOnramp?.canOpenPurchase());
+    await page.locator(".topup-details > summary").click();
+    await page.locator("[data-partner-options]").evaluate(el => { el.hidden = false; el.open = true; });
+    await page.locator("[data-fiat-amount]").fill("25");
+    await page.locator("[data-onramp-ack]").check();
+    await page.locator("[data-start-moonpay]").click();
+    await page.waitForURL(url => url.hostname === "buy.moonpay.com");
+    assert.equal(checkoutNavigations, 1, "A valid live signed plan preserves the approved destination");
+    console.log("PASS signed MoonPay rejects sandbox, wrong wallet/network/asset, duplicate destinations, unsigned and unapproved URLs");
+  } finally { await context.close(); }
+}
+
+async function walletBrandRegressions(browser, origin) {
+  for (const width of [390, 532, 1280]) {
+    const context = await browser.newContext({ viewport: {width, height:844} });
+    await fixtures(context, origin);
+    const page = await context.newPage(), errors = [];
+    page.on("pageerror", error => errors.push(error.message));
+    try {
+      await page.goto(origin + "/post.html"); await awaitPosting(page);
+      await page.evaluate(() => { window.AgentBountiesWalletLink.select().then(choice => window.__selectedBrandProvider = choice.label).catch(() => {}); });
+      const dialog = page.locator(".wallet-link-dialog");
+      for (const name of ["Coinbase", "MetaMask", "MoonPay"]) assert.equal(await dialog.getByRole("button", {name, exact:false}).isVisible(), true);
+      await dialog.getByRole("button", {name:/^Coinbase /}).click();
+      assert.equal(await dialog.getByRole("button", {name:/^Copy bounty link/}).isVisible(), true);
+      assert.equal(await dialog.getByText("Use an email wallet instead").isVisible(), true);
+      assert.match(await dialog.innerText(), /Base app/);
+      await dialog.getByRole("button", {name:"Back to wallet choices"}).click();
+      await dialog.getByRole("button", {name:/^MoonPay /}).click();
+      assert.match(await dialog.innerText(), /not supported here/);
+      assert.equal(await page.evaluate(() => window.__selectedBrandProvider), undefined);
+      assert.deepEqual(await page.evaluate(() => window.__walletRequests), []);
+      const box = await dialog.boundingBox();
+      assert.ok(box.x >= 0 && box.x + box.width <= width + 1);
+      await dialog.getByRole("button", {name:"Back to wallet choices"}).click();
+      if (process.env.POSTING_LAYOUT_SCREENSHOTS) await page.screenshot({path:path.join(process.env.POSTING_LAYOUT_SCREENSHOTS, `wallet-choices-${width}.png`)});
+      await dialog.getByRole("button", {name:/^MetaMask /}).click();
+      await dialog.getByRole("button", {name:/^Connect MetaMask /}).click();
+      assert.equal(await page.evaluate(() => window.__selectedBrandProvider), "MetaMask");
+      assert.deepEqual(await page.evaluate(() => window.__walletRequests), []);
+      assert.deepEqual(errors, []);
+      console.log("PASS three wallet choices preserve explicit provider selection and show limits at " + width);
+    } finally { await context.close(); }
+  }
+}
+
 async function main() {
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   const origin = "http://127.0.0.1:" + server.address().port;
@@ -475,7 +598,7 @@ async function main() {
     { width: 480, height: 360, zoomReflow: true }
   ];
   try {
-    if (process.env.POSTING_LAYOUT_GUIDE_ONLY) { await guidedTopupRegressions(browser, origin);
+    if (process.env.POSTING_LAYOUT_GUIDE_ONLY) { await walletBrandRegressions(browser, origin); await signedMoonpayDestinationRegressions(browser, origin); await guidedTopupRegressions(browser, origin);
     await topupPhoneConnectionRegression(browser, origin); return; }
     for (const size of sizes) {
       const context = await browser.newContext({ viewport: { width: size.width, height: size.height }, reducedMotion: "reduce" });
@@ -565,6 +688,7 @@ async function main() {
       await page.locator("[data-open-funding]").click();
       await page.getByRole("button", { name: "Change wallet", exact: true }).click();
       await page.getByRole("button", { name: "Choose or recover another wallet", exact: true }).click();
+      await page.locator(".wallet-link-dialog details > summary").filter({ hasText: "Other wallets" }).click();
       await page.getByRole("button", { name: "Use a phone wallet", exact: false }).click();
       await page.locator(".ab-phone-qr").waitFor({ state: "visible" });
       await modalBounds(page, ".ab-phone-dialog");
@@ -616,6 +740,7 @@ async function main() {
     await recoveryRegressions(browser, origin);
     await guidedTopupRegressions(browser, origin);
     await topupPhoneConnectionRegression(browser, origin);
+    await walletBrandRegressions(browser, origin); await signedMoonpayDestinationRegressions(browser, origin);
   } finally { await browser.close(); }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => server.close());

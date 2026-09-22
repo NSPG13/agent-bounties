@@ -631,7 +631,7 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
             "data-card-verifier",
             "function renderVerifierTerms",
             "if (!ui.verifierSummary || !ui.verifier) return;",
-            'bounty-composer-v2.js?v=24',
+            'bounty-composer-v2.js?v=25',
             "function verificationReadiness",
             "verificationReadiness(benchmark, state.draft?.evidence_schema)",
             'sourceSnapshotDigest.pattern === "^sha256:[0-9a-f]{64}$"',
@@ -669,7 +669,7 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
             'data-post-auth-start',
             'posting-auth.js?v=3',
             'solarpunk-home.js?v=27',
-            'bounty-composer-v2.js?v=24',
+            'bounty-composer-v2.js?v=25',
             'label: "LOG IN TO POST"',
             'credentials: "include"',
             'account_status === "ready" && payload.account_complete === true',
@@ -1043,7 +1043,9 @@ def check_transactional_handoffs(site_dir: Path) -> None:
         onramp_js,
         [
             "New-bounty creation cannot proceed",
-            'asset === "eth" ? "https://www.moonpay.com/buy/eth"',
+            'if (provider === "moonpay") throw new Error',
+            'body.environment !== "live"',
+            'body.destination_network !== "base-mainnet"',
             'if (provider === "moonpay") track("onramp_moonpay_started")',
         ],
     )
