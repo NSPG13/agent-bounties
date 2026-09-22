@@ -125,12 +125,19 @@
       },
       claude: {
         label: "Claude",
+        // claude:// is the Claude Desktop chat app's scheme; it opens a new chat with the
+        // message pre-filled and unsent. Claude Code users pick the separate entry below.
+        desktopUrl: `claude://claude.ai/new?q=${encoded}`,
+        webUrl: `https://claude.ai/new?q=${encoded}`,
+        webPrefillsPrompt: true,
+      },
+      "claude-code": {
+        label: "Claude",
         desktopLabel: "Claude Code",
         terminalCommand: "claude",
         // claude-cli:// opens a terminal session with the message pre-filled and unsent.
-        // claude:// would instead need the Claude Desktop chat app, which a Claude Code
-        // user need not have. Over the documented q limit the web handoff carries the
-        // whole message rather than a truncated session.
+        // Over the documented q limit the web handoff carries the whole message rather
+        // than a truncated session.
         desktopUrl: encoded.length <= CLAUDE_CODE_PROMPT_LIMIT ? `claude-cli://open?q=${encoded}` : null,
         webUrl: `https://claude.ai/new?q=${encoded}`,
         webPrefillsPrompt: true,

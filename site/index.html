@@ -292,7 +292,12 @@
         </button>
         <button type="button" data-bounty-assistant="claude">
           <span class="assistant-mark assistant-mark--claude" aria-hidden="true"><img src="assets/solarpunk/provider-claude.svg" alt=""></span>
-          <span><strong>Claude</strong><small>Open Claude Code</small></span>
+          <span><strong>Claude</strong><small>Open the Claude app</small></span>
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 4 6 6-6 6"></path></svg>
+        </button>
+        <button type="button" data-bounty-assistant="claude-code">
+          <span class="assistant-mark assistant-mark--claude" aria-hidden="true"><img src="assets/solarpunk/provider-claude.svg" alt=""></span>
+          <span><strong>Claude Code</strong><small>Open in a terminal</small></span>
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 4 6 6-6 6"></path></svg>
         </button>
         <button type="button" data-bounty-assistant="cursor">
@@ -315,7 +320,7 @@
 
       <details class="bounty-connection-help"><summary>Connection help</summary>
       <p class="bounty-launch-note">ChatGPT site tools work in the desktop app's built-in browser with Work or Codex, when available. Web chat can use a connected MCP integration or help draft. <a href="https://learn.chatgpt.com/docs/webmcp" target="_blank" rel="noopener noreferrer">Check availability</a>.</p>
-      <p class="bounty-launch-note">Claude opens Claude Code in a terminal. Claude Code registers that link handler the first time you send a prompt in an interactive session, so until then your system reports that no application can open the link — run <code>claude</code> and paste the copied message, or use the web link.</p>
+      <p class="bounty-launch-note">Claude opens a new chat in the Claude desktop app; without it installed, use the web link. Claude Code opens in a terminal. Claude Code registers that link handler the first time you send a prompt in an interactive session, so until then your system reports that no application can open the link — run <code>claude</code> and paste the copied message, or use the web link.</p>
       <p class="bounty-launch-note">The prompt is never submitted automatically. The selected provider uses the account already active in its app or browser; if none is active, sign in before continuing.</p>
       </details>
     </dialog>
@@ -331,7 +336,7 @@
     <script src="analytics-config.js?v=9"></script>
     <script src="analytics.js?v=5"></script>
     <script src="posting-prompt.js?v=6"></script>
-    <script src="solarpunk-home.js?v=27"></script>
+    <script src="solarpunk-home.js?v=28"></script>
     <script src="forest-home.js?v=4"></script>
     <script src="forest-hall.js?v=4"></script>
   <!-- shared-footer:start -->

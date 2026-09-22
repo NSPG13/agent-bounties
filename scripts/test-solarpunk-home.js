@@ -77,6 +77,7 @@ test("bounty assistant handoffs carry one bounded initialization message", () =>
 
   const gpt = home.bountyAssistantLinks("GPT");
   const claude = home.bountyAssistantLinks("claude");
+  const claudeCode = home.bountyAssistantLinks("claude-code");
   const cursor = home.bountyAssistantLinks("cursor");
   const custom = home.bountyAssistantLinks("custom");
   const desktop = new URL(gpt.desktopUrl);
@@ -92,12 +93,18 @@ test("bounty assistant handoffs carry one bounded initialization message", () =>
   assert.equal(desktop.searchParams.get("prompt"), gptPrompt);
   assert.equal(desktop.searchParams.has("submit"), false);
   assert.equal(gpt.webPrefillsPrompt, true);
-  // Claude Code's own scheme, not the Claude Desktop chat scheme.
-  assert.equal(claude.desktopUrl, `claude-cli://open?q=${encodeURIComponent(prompt)}`);
-  assert.equal(new URL(claude.desktopUrl).protocol, "claude-cli:");
-  assert.equal(claude.desktopLabel, "Claude Code");
+  // "Claude" opens the Claude Desktop chat app; Claude Code has its own entry and scheme.
+  assert.equal(claude.desktopUrl, `claude://claude.ai/new?q=${encodeURIComponent(prompt)}`);
+  assert.equal(new URL(claude.desktopUrl).protocol, "claude:");
+  assert.equal(new URL(claude.desktopUrl).searchParams.get("q"), prompt);
+  assert.equal(claude.desktopLabel, undefined);
+  assert.equal(claude.terminalCommand, undefined);
   assert.equal(new URL(claude.webUrl).origin, "https://claude.ai");
   assert.equal(new URL(claude.webUrl).searchParams.get("q"), prompt);
+  assert.equal(claudeCode.desktopUrl, `claude-cli://open?q=${encodeURIComponent(prompt)}`);
+  assert.equal(new URL(claudeCode.desktopUrl).protocol, "claude-cli:");
+  assert.equal(claudeCode.desktopLabel, "Claude Code");
+  assert.equal(claudeCode.webUrl, claude.webUrl);
   assert.equal(cursor.desktopUrl, `cursor://anysphere.cursor-deeplink/prompt?text=${encodeURIComponent(prompt)}`);
   assert.equal(new URL(cursor.webUrl).origin, "https://cursor.com");
   assert.equal(new URL(cursor.webUrl).pathname, "/link/prompt");
@@ -109,25 +116,27 @@ test("bounty assistant handoffs carry one bounded initialization message", () =>
 
 test("a prompt beyond the documented Claude Code limit takes the web handoff", () => {
   const long = "x".repeat(5001);
-  const links = home.bountyAssistantLinks("claude", long);
+  const links = home.bountyAssistantLinks("claude-code", long);
   assert.equal(links.desktopUrl, null);
   assert.equal(new URL(links.webUrl).searchParams.get("q"), long);
+  // The Claude Desktop scheme has no documented limit and keeps the whole message.
+  assert.equal(new URL(home.bountyAssistantLinks("claude", long).desktopUrl).searchParams.get("q"), long);
 
   // A message that still encodes within the limit keeps the terminal handoff.
   const fits = "y".repeat(4000);
   assert.equal(encodeURIComponent(fits).length <= 5000, true);
-  assert.equal(home.bountyAssistantLinks("claude", fits).desktopUrl, `claude-cli://open?q=${fits}`);
+  assert.equal(home.bountyAssistantLinks("claude-code", fits).desktopUrl, `claude-cli://open?q=${fits}`);
 
   // Percent-encoding counts: 2,000 spaces encode to 6,000 characters.
   const encodesOver = " ".repeat(2000);
-  assert.equal(home.bountyAssistantLinks("claude", encodesOver).desktopUrl, null);
+  assert.equal(home.bountyAssistantLinks("claude-code", encodesOver).desktopUrl, null);
 
   // The shipped posting message, with room for a typed task, stays under the limit.
   assert.equal(encodeURIComponent(home.BOUNTY_POSTING_PROMPT).length < 5000, true);
 });
 
 test("the desktop status names the recovery for an unclaimed scheme", () => {
-  const claude = home.bountyAssistantLinks("claude");
+  const claude = home.bountyAssistantLinks("claude-code");
   assert.equal(claude.terminalCommand, "claude");
 
   // Every state says what an unclaimed link means and never guesses the clipboard result.
@@ -143,7 +152,7 @@ test("the desktop status names the recovery for an unclaimed scheme", () => {
   assert.equal(home.desktopHandoffStatus(claude), home.desktopHandoffStatus(claude, null));
 
   // A provider with no terminal command keeps the original wording.
-  for (const provider of ["gpt", "cursor"]) {
+  for (const provider of ["gpt", "claude", "cursor"]) {
     const links = home.bountyAssistantLinks(provider);
     assert.equal(links.terminalCommand, undefined);
     const status = home.desktopHandoffStatus(links, true);
@@ -171,7 +180,7 @@ test("desktop schemes are only fired where a desktop app can register one", () =
   assert.equal(home.desktopPlatform({}), "unknown");
   assert.equal(home.desktopPlatform({ userAgentData: { platform: "Windows" } }), "windows");
 
-  // Claude Code, Codex and Cursor all register their schemes on every desktop platform.
+  // Every desktop platform may run an app that registers these schemes.
   for (const platform of [mac, windows, linux, chromeOS, {}]) {
     assert.equal(home.supportsDesktopHandoff(platform), true);
   }
