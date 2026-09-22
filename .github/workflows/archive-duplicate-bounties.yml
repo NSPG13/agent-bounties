@@ -1,0 +1,64 @@
+name: Archive Duplicate Bounties
+
+description: >
+  Detects and archives duplicate bounty issues that reference a canonical
+  thread. Runs on a schedule and on demand via workflow_dispatch.
+
+on:
+  schedule:
+    # Run daily at 06:00 UTC
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run in dry-run mode (no changes)"
+        type: boolean
+        default: true
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  archive-duplicates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run archive script
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DRY_RUN_FLAG=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            DRY_RUN_FLAG="--dry-run"
+          fi
+
+          # Find open issues with the "bounty" label that contain
+          # "Archived duplicate" in the body but don't yet have
+          # the "archived-duplicate" label.
+          #
+          # This is a heuristic: the maintainer has already marked the
+          # issue body as an archived duplicate, and we just need to
+          # apply the label, add the cross-reference, and close it.
+          #
+          # For full automation, the canonical issue number is parsed
+          # from the issue body's markdown link.
+
+          node scripts/find-duplicate-bounties.mjs \
+            --owner "${{ github.repository_owner }}" \
+            --repo "${{ github.event.repository.name }}" \
+            $DRY_RUN_FLAG
