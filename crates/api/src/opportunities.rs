@@ -1,5 +1,5 @@
 use app::BountyStatusResponse;
-use chain_base::{standing_meta_v2_parent_context, AutonomousBountyFeedItem};
+use chain_base::{standing_meta_v2_parent_context, AutonomousBountyEventKind, AutonomousBountyFeedItem};
 use chrono::{DateTime, Utc};
 use db::{TrialBounty, UnfundedBountySolution};
 use domain::{BountyStatus, DiscoveryOpportunitySnapshot, DiscoveryRewardFilter, PrivacyLevel};
