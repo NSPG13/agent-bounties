@@ -2585,10 +2585,12 @@ fn require_reviewed_broker_profile(
         ));
     };
     if forward_gmv_verification_held(&reviewed.profile_id) {
-        return Err(conflict(
+        return Err(problem(
+            StatusCode::CONFLICT,
             "quote_proof",
             "verification_not_ready",
-            "The snapshot, verifier attestations and proof path are not verified. Do not fund child work or pay for a proof.",
+            false,
+            "The snapshot, verifier attestations and proof path are not verified. Do not fund child work or pay for a proof. Wait for a reviewed release before trying again.",
         ));
     }
     Ok(())
@@ -2931,6 +2933,7 @@ mod tests {
             require_reviewed_broker_profile(&release, &projection()).unwrap_err();
         assert_eq!(status, StatusCode::CONFLICT);
         assert_eq!(problem["error_code"], "verification_not_ready");
+        assert_eq!(problem["retryable"], false);
     }
 
     #[tokio::test]
@@ -3040,6 +3043,7 @@ mod tests {
             held["hosted_proof_block"]["error_code"],
             "verification_not_ready"
         );
+        assert_eq!(held["hosted_proof_block"]["retryable"], false);
         assert!(held["earning_estimate"]["hosted_proof_fee_quote"].is_null());
         assert!(held["earning_estimate"]["hosted_net_prize_if_win"].is_null());
         assert!(held["earning_estimate"]["warning"]
@@ -3071,6 +3075,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(status, StatusCode::CONFLICT);
         assert_eq!(problem["error_code"], "verification_not_ready");
+        assert_eq!(problem["retryable"], false);
 
         // The HTTP guard is bound to the indexed contract, not to a caller's
         // requested metric type. A different input cannot bypass the hold.
@@ -3109,6 +3114,7 @@ mod tests {
         );
         let body: Value = serde_json::from_slice(&raw).unwrap();
         assert_eq!(body["error_code"], "verification_not_ready");
+        assert_eq!(body["retryable"], false);
 
         let now = Utc::now();
         let job: OpenCompetitionV2ProofJob = serde_json::from_value(json!({
@@ -3150,6 +3156,7 @@ mod tests {
             )
             .unwrap();
             assert_eq!(body["error_code"], "verification_not_ready");
+            assert_eq!(body["retryable"], false);
             assert_eq!(
                 store
                     .get_open_competition_v2_proof_job(id)

@@ -6113,7 +6113,7 @@ fn open_competition_v2_mcp_guide() -> Value {
                 {"step": 5, "tool": "prepare_open_competition_v2", "operation": "validate", "purpose": "Validate the complete creation body before any signature."},
                 {"step": 6, "tool": "prepare_open_competition_v2", "operation": "create", "purpose": "Receive exact unsigned wallet calls; execute them only after explicit approval."},
                 {"step": 7, "tool": "prepare_open_competition_v2", "operation": "fund", "purpose": "Prepare any remaining pooled funding; wait for canonical activation."},
-                {"step": 8, "tool": "inspect_open_competition_v2", "operation": "inventory", "purpose": "Advertise as ready to earn only when the shared opportunity feed confirms verification_ready=true; active escrow alone is not readiness."}
+                {"step": 8, "tool": "get_bounty_feed", "arguments": {"network": "base-mainnet", "source_type": "canonical_base", "limit": 300}, "purpose": "Match the returned item's network and source_id to the exact competition contract. Advertise it as ready to earn only when that item has verification_ready=true. If the item is missing or false, wait; active escrow alone is not readiness. Use the chosen network if different from base-mainnet."}
             ],
             "earn_hosted": [
                 {"step": 1, "tool": "inspect_open_competition_v2", "operation": "inventory", "arguments": {"state": "active"}, "purpose": "Check hosted_proof_block first. If it is non-null, stop this hosted flow and follow its message; do not fund child work, request a quote, or sign a new payment. Otherwise select by immutable criteria, deadline, winner mode, and net prize if won."},
