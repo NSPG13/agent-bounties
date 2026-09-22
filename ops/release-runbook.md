@@ -8,11 +8,13 @@ is currently deployed.
 
 ## Precedence
 
-The expected revision is resolved in this order:
+The expected revision is resolved in this order (most specific first):
 
-1. `vars.PRODUCTION_EXPECTED_REVISION` (repository variable — persistent pin)
-2. `inputs.expected_revision` (workflow dispatch input — manual override)
-3. `github.sha` (the commit the workflow is running on — default)
+1. `inputs.expected_revision` (workflow dispatch input — manual override when explicitly provided)
+2. `vars.PRODUCTION_EXPECTED_REVISION` (repository variable — persistent pin set by the promotion workflow)
+3. `github.sha` (the commit the workflow is running on — default when no pin or override is set)
+
+A manual dispatch input beats the persistent pin when it is explicitly provided. The promotion workflow sets the persistent pin; smoke and control-loop workflows read it. The pin is not an override of an explicit manual dispatch.
 
 ## When to update
 

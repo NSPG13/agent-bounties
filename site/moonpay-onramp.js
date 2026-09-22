@@ -412,7 +412,10 @@
     state.operationId = params.get("operation_id") || params.get("operation") || params.get("posting_operation_id") || params.get("journey") || params.get("intent") || "";
     if (state.operationId && !/^[a-zA-Z0-9_-]{1,128}$/.test(state.operationId)) throw new Error("The posting operation is invalid.");
     select("[data-fiat-amount]").value = "";
-    select("[data-partner-options]").hidden = !bountyContract;
+    // Always show partner checkout options — new bounties need a usable amount
+    // control too (the direct MoonPay fallback and the Continue to MoonPay button
+    // both require the user to enter a USD amount).
+    select("[data-partner-options]").hidden = false;
     for (const link of selectAll("[data-return-link]")) link.href = safeReturnUrl().href;
     renderReturnStatus();
     track("onramp_viewed");
@@ -592,6 +595,13 @@
       renderPurchaseRecovery();
       track("onramp_moonpay_started");
       saveAttempt({ status: "requesting" });
+      // Reserve the popup tab before the network request so a slow response cannot
+      // lose browser permission to open it. The tab starts blank and is navigated on
+      // success; on failure it is closed below.
+      const tab = window.open("about:blank", TOPUP_WINDOW);
+      if (!tab) throw new Error("Allow the checkout tab, then try again. No purchase was opened.");
+      tab.opener = null;
+      state.providerTab = tab;
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 15000);
       try {
@@ -604,7 +614,7 @@
             base_currency_code: "usd",
             asset: asset,
             return_url: checkoutReturnUrl().href,
-            bounty_contract: state.bountyContract || null,
+            ...(state.bountyContract ? { bounty_contract: state.bountyContract } : {}),
           }),
           cache: "no-store",
           credentials: "omit",
@@ -617,10 +627,6 @@
         }
         validateCheckoutPlan(body, state.bountyContract);
         saveAttempt({ status: "opened", reference: body.external_transaction_id });
-        const tab = window.open("about:blank", TOPUP_WINDOW);
-        if (!tab) throw new Error("Allow the checkout tab, then try again. No purchase was opened.");
-        tab.opener = null;
-        state.providerTab = tab;
         tab.location.replace(body.checkout_url);
       } catch (error) { clearAttempt(); throw error; } finally { clearTimeout(timer); state.checkoutBusy = false; renderPurchaseRecovery(); }
       return;
