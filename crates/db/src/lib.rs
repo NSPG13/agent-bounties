@@ -8344,6 +8344,39 @@ impl PostgresStore {
             .collect()
     }
 
+    pub async fn list_open_competition_v2_projections_for_contract(
+        &self,
+        network: &str,
+        factory_contract: &str,
+        competition_contract: &str,
+    ) -> DbResult<Vec<OpenCompetitionV2StoredProjection>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT network, factory_contract, bounty_id, competition_contract,
+                   creator, creation_nonce, beta_risk_hash, state, solver_reward,
+                   keeper_reward, funding_deadline, proof_window_seconds, winner_mode,
+                   score_direction, score_threshold, proof_system, verifier_adapter,
+                   program_vkey, source_hash, elf_hash, journal_schema_hash,
+                   metric_program_hash, execution_policy_hash,
+                   verification_policy_hash, settlement_policy_hash, funded_amount,
+                   proof_deadline, accepted_entries, leader, winner,
+                   refund_pool_remaining, last_block, last_log_index,
+                   safe_block_number, safe_block_hash
+            FROM open_competition_v2_projections
+            WHERE network = $1 AND factory_contract = $2 AND competition_contract = $3
+            ORDER BY last_block DESC, last_log_index DESC
+            "#,
+        )
+        .bind(network)
+        .bind(normalize_key_address(factory_contract))
+        .bind(normalize_key_address(competition_contract))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(open_competition_v2_projection_from_row)
+            .collect()
+    }
+
     pub async fn insert_open_competition_v2_proof_job(
         &self,
         job: &OpenCompetitionV2ProofJob,
@@ -11899,6 +11932,38 @@ mod tests {
                 .await
                 .unwrap();
         }
+        for i in 0..101 {
+            let projection = chain_base::OpenCompetitionV2Projection {
+                bounty_id: format!("0x{i:064x}"),
+                competition: if i == 0 {
+                    contract.clone()
+                } else {
+                    format!("0x{:040x}", i + 1000)
+                },
+                creator: other.clone(),
+                ..Default::default()
+            };
+            store
+                .upsert_open_competition_v2_projection(&network, &factory, &projection, 0, "0xabc")
+                .await
+                .unwrap();
+        }
+        let records = store
+            .list_open_competition_v2_projections_for_contract(&network, &factory, &contract)
+            .await
+            .unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].projection.competition, contract);
+        assert!(store
+            .list_open_competition_v2_projections_for_contract(&network, &factory, &other)
+            .await
+            .unwrap()
+            .is_empty());
+        sqlx::query("DELETE FROM open_competition_v2_projections WHERE network = $1")
+            .bind(&network)
+            .execute(&store.pool)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

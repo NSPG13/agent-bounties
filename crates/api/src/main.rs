@@ -4607,6 +4607,25 @@ async fn load_unfunded_opportunity_trials(
     }
 }
 
+fn exact_canonical_identity<'a>(
+    id: Option<&'a str>,
+    network: &str,
+) -> Result<Option<(&'a str, String)>, StatusCode> {
+    let Some(id) = id else {
+        return Ok(None);
+    };
+    let mut parts = id.splitn(3, ':');
+    let protocol = parts.next().unwrap_or_default();
+    if !["canonical", "open-competition", "open-competition-v2"].contains(&protocol) {
+        return Ok(None);
+    }
+    if parts.next() != Some(network) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let contract = normalize_fixed_hex(parts.next().ok_or(StatusCode::BAD_REQUEST)?, 20)?;
+    Ok(Some((protocol, contract)))
+}
+
 async fn build_opportunity_projection(
     state: &SharedState,
     query: OpportunityQuery,
@@ -4630,6 +4649,46 @@ async fn build_opportunity_projection(
 
     let api = state.public_base_url.trim_end_matches('/');
     let now = Utc::now();
+    if let Some((protocol, contract)) =
+        exact_canonical_identity(query.opportunity_id.as_deref(), network)?
+    {
+        let items = match protocol {
+            "canonical" => load_scoped_autonomous_bounty_feed(state, network, &contract, false)
+                .await?
+                .iter()
+                .filter_map(|item| canonical_opportunity(item, network, api))
+                .collect(),
+            "open-competition" => {
+                load_public_open_competition_opportunities_scoped(
+                    state,
+                    network,
+                    api,
+                    now,
+                    Some(&contract),
+                )
+                .await?
+            }
+            "open-competition-v2" => {
+                load_public_open_competition_v2_opportunities_scoped(
+                    state,
+                    network,
+                    api,
+                    now,
+                    Some(&contract),
+                )
+                .await?
+            }
+            _ => unreachable!(),
+        };
+        let items = apply_opportunity_query(items, &query, view, now);
+        return Ok(OpportunityProjectionResponse {
+            schema_version: OPPORTUNITY_PROJECTION_SCHEMA.to_string(), generated_at: now.to_rfc3339(),
+            network: network.to_string(), applied_view: view.map(|view| view.as_str().to_string()), degraded: false,
+            source_statuses: vec![OpportunitySourceStatus { source_type: "canonical_base".to_string(), available: true,
+                authoritative_urls: vec![format!("{api}/v1/opportunities")], item_count: items.len(), error: None }],
+            items, evidence_boundary: "Read-only canonical projection. Only confirmed settlement proves payment; qualification and hosted rows do not.".to_string(),
+        });
+    }
     let mut items = Vec::<OpportunityItem>::new();
     let mut source_statuses = Vec::<OpportunitySourceStatus>::new();
 
@@ -4774,6 +4833,17 @@ async fn load_public_open_competition_v2_opportunities(
     api_base_url: &str,
     now: DateTime<Utc>,
 ) -> Result<Vec<OpportunityItem>, StatusCode> {
+    load_public_open_competition_v2_opportunities_scoped(state, network, api_base_url, now, None)
+        .await
+}
+
+async fn load_public_open_competition_v2_opportunities_scoped(
+    state: &SharedState,
+    network: &str,
+    api_base_url: &str,
+    now: DateTime<Utc>,
+    contract: Option<&str>,
+) -> Result<Vec<OpportunityItem>, StatusCode> {
     let release = match open_competition_v2_api::release_from_environment(network) {
         Ok(release) => release,
         Err(_) => return Ok(Vec::new()),
@@ -4788,15 +4858,35 @@ async fn load_public_open_competition_v2_opportunities(
         .store
         .as_ref()
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-    let mut records = store
-        .list_open_competition_v2_projections(network, &release.factory_contract)
-        .await
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let mut records = if let Some(contract) = contract {
+        store
+            .list_open_competition_v2_projections_for_contract(
+                network,
+                &release.factory_contract,
+                contract,
+            )
+            .await
+    } else {
+        store
+            .list_open_competition_v2_projections(network, &release.factory_contract)
+            .await
+    }
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     records.retain(|record| record.projection.last_block <= agreement.common_safe_block);
-    let mut events = store
-        .list_open_competition_v2_events(network, &release.factory_contract)
-        .await
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let mut events = if let Some(contract) = contract {
+        store
+            .list_open_competition_v2_history_for_contract(
+                network,
+                &release.factory_contract,
+                contract,
+            )
+            .await
+    } else {
+        store
+            .list_open_competition_v2_events(network, &release.factory_contract)
+            .await
+    }
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     events.retain(|event| event.block_number <= agreement.common_safe_block);
     let proof_fee_name = |proof_system: &str| {
         format!(
@@ -4841,6 +4931,16 @@ async fn load_public_open_competition_opportunities(
     network: &str,
     api_base_url: &str,
     now: DateTime<Utc>,
+) -> Result<Vec<OpportunityItem>, StatusCode> {
+    load_public_open_competition_opportunities_scoped(state, network, api_base_url, now, None).await
+}
+
+async fn load_public_open_competition_opportunities_scoped(
+    state: &SharedState,
+    network: &str,
+    api_base_url: &str,
+    now: DateTime<Utc>,
+    contract: Option<&str>,
 ) -> Result<Vec<OpportunityItem>, StatusCode> {
     let release = match open_competition_release_from_environment(network) {
         Ok(release) => release,
@@ -4912,10 +5012,20 @@ async fn load_public_open_competition_opportunities(
     if !open_competition_monitoring_is_fresh(&heartbeat, safe_block.number, now) {
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
-    let events: Vec<OpenCompetitionEvent> = store
-        .list_open_competition_events(network, &release.factory_contract)
-        .await
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let events: Vec<OpenCompetitionEvent> = if let Some(contract) = contract {
+        store
+            .list_open_competition_history_for_contract(
+                network,
+                &release.factory_contract,
+                contract,
+            )
+            .await
+    } else {
+        store
+            .list_open_competition_events(network, &release.factory_contract)
+            .await
+    }
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let website_base_url =
         legal_website_base_url(env::var("WEBSITE_BASE_URL").ok(), &state.public_base_url);
     open_competition_opportunities(
@@ -14323,7 +14433,13 @@ async fn get_autonomous_submission_evidence(
     Query(query): Query<AutonomousSubmissionEvidenceQuery>,
 ) -> Result<Json<AutonomousSubmissionEvidenceRecord>, StatusCode> {
     let network = query.network.as_deref().unwrap_or("base-mainnet");
-    indexed_autonomous_bounty(&state, network, &bounty_contract).await?;
+    let contract = normalize_fixed_hex(&bounty_contract, 20)?;
+    if load_scoped_autonomous_bounty_feed(&state, network, &contract, false)
+        .await?
+        .is_empty()
+    {
+        return Err(StatusCode::NOT_FOUND);
+    }
     state
         .store
         .as_ref()
@@ -14367,51 +14483,56 @@ async fn autonomous_bounty_feed(
     let network = query.network.as_deref().unwrap_or("base-mainnet");
     let claimable_only = query.claimable_only.unwrap_or(false);
     let feed = if let Some(contract) = contract {
-        let store = state
-            .store
-            .as_ref()
-            .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-        let planner = configured_autonomous_planner(network)?;
-        let events = store
-            .list_autonomous_bounty_history_for_contract(
-                network,
-                &planner.factory_contract,
-                &contract,
-            )
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        let hashes: std::collections::BTreeSet<String> = events
-            .iter()
-            .filter(|event| {
-                event.kind == chain_base::AutonomousBountyEventKind::CanonicalBountyTermsCommitted
-            })
-            .filter_map(|event| {
-                event
-                    .data
-                    .get("terms_hash")
-                    .and_then(serde_json::Value::as_str)
-            })
-            .map(str::to_ascii_lowercase)
-            .collect();
-        let mut terms = Vec::new();
-        for hash in hashes {
-            if let Some(record) = store
-                .get_autonomous_bounty_terms(&hash)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            {
-                terms.push(record);
-            }
-        }
-        let mut feed = build_autonomous_bounty_feed(events, terms, false)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        feed.retain(|item| item.bounty_contract.eq_ignore_ascii_case(&contract));
-        state.recovery_reservations.apply(&mut feed, claimable_only);
-        feed
+        load_scoped_autonomous_bounty_feed(&state, network, &contract, claimable_only).await?
     } else {
         load_autonomous_bounty_feed(&state, network, claimable_only).await?
     };
     Ok(Json(feed))
+}
+
+async fn load_scoped_autonomous_bounty_feed(
+    state: &SharedState,
+    network: &str,
+    contract: &str,
+    claimable_only: bool,
+) -> Result<Vec<AutonomousBountyFeedItem>, StatusCode> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let planner = configured_autonomous_planner(network)?;
+    let events = store
+        .list_autonomous_bounty_history_for_contract(network, &planner.factory_contract, contract)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let hashes: std::collections::BTreeSet<String> = events
+        .iter()
+        .filter(|event| {
+            event.kind == chain_base::AutonomousBountyEventKind::CanonicalBountyTermsCommitted
+        })
+        .filter_map(|event| {
+            event
+                .data
+                .get("terms_hash")
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let mut terms = Vec::new();
+    for hash in hashes {
+        if let Some(record) = store
+            .get_autonomous_bounty_terms(&hash)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        {
+            terms.push(record);
+        }
+    }
+    let mut feed = build_autonomous_bounty_feed(events, terms, false)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    feed.retain(|item| item.bounty_contract.eq_ignore_ascii_case(contract));
+    state.recovery_reservations.apply(&mut feed, claimable_only);
+    Ok(feed)
 }
 
 async fn load_autonomous_bounty_feed(
@@ -21881,6 +22002,39 @@ mod tests {
     }
 
     #[test]
+    fn exact_canonical_identity_rejects_cross_network_or_malformed_contracts() {
+        let contract = format!("0x{}", "ab".repeat(20));
+        for protocol in ["canonical", "open-competition", "open-competition-v2"] {
+            let id = format!("{protocol}:base-mainnet:{contract}");
+            assert_eq!(
+                exact_canonical_identity(Some(&id), "base-mainnet").unwrap(),
+                Some((protocol, contract.clone()))
+            );
+            assert!(exact_canonical_identity(Some(&id), "base-sepolia").is_err());
+            for suffix in [
+                "0x123",
+                "",
+                "https://example.test",
+                "0xzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+            ] {
+                assert!(exact_canonical_identity(
+                    Some(&format!("{protocol}:base-mainnet:{suffix}")),
+                    "base-mainnet"
+                )
+                .is_err());
+            }
+        }
+        assert_eq!(
+            exact_canonical_identity(None, "base-mainnet").unwrap(),
+            None
+        );
+        assert_eq!(
+            exact_canonical_identity(Some("unfunded:123"), "base-mainnet").unwrap(),
+            None
+        );
+    }
+
+    #[test]
     fn competition_history_preserves_factory_setup_and_excludes_other_bounties() {
         let factory = format!("0x{}", "11".repeat(20));
         let contract = format!("0x{}", "22".repeat(20));
@@ -21972,6 +22126,18 @@ mod tests {
             "https://example.test",
             "0xzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
         ] {
+            assert_eq!(
+                get_autonomous_submission_evidence(
+                    State(state.clone()),
+                    Path((value.to_string(), 1)),
+                    Query(AutonomousSubmissionEvidenceQuery {
+                        network: Some("base-mainnet".to_string())
+                    })
+                )
+                .await
+                .unwrap_err(),
+                StatusCode::BAD_REQUEST
+            );
             let fields = serde_json::json!({"network": "base-mainnet", "bounty_contract": value});
             assert_eq!(
                 autonomous_bounty_feed(
