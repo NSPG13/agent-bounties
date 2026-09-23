@@ -14490,6 +14490,24 @@ async fn autonomous_bounty_feed(
     Ok(Json(feed))
 }
 
+fn scoped_autonomous_terms_hashes(
+    events: &[AutonomousBountyEvent],
+) -> std::collections::BTreeSet<String> {
+    // CanonicalBountyCreated holds terms_hash. TermsCommitted holds the hashes
+    // of the criteria, benchmark and evidence schema, not the terms document.
+    events
+        .iter()
+        .filter(|event| event.kind == chain_base::AutonomousBountyEventKind::CanonicalBountyCreated)
+        .filter_map(|event| {
+            event
+                .data
+                .get("terms_hash")
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(str::to_ascii_lowercase)
+        .collect()
+}
+
 async fn load_scoped_autonomous_bounty_feed(
     state: &SharedState,
     network: &str,
@@ -14505,19 +14523,7 @@ async fn load_scoped_autonomous_bounty_feed(
         .list_autonomous_bounty_history_for_contract(network, &planner.factory_contract, contract)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let hashes: std::collections::BTreeSet<String> = events
-        .iter()
-        .filter(|event| {
-            event.kind == chain_base::AutonomousBountyEventKind::CanonicalBountyTermsCommitted
-        })
-        .filter_map(|event| {
-            event
-                .data
-                .get("terms_hash")
-                .and_then(serde_json::Value::as_str)
-        })
-        .map(str::to_ascii_lowercase)
-        .collect();
+    let hashes = scoped_autonomous_terms_hashes(&events);
     let mut terms = Vec::new();
     for hash in hashes {
         if let Some(record) = store
@@ -21999,6 +22005,33 @@ mod tests {
                 "unexpected visibility: {key}"
             );
         }
+    }
+
+    #[test]
+    fn scoped_terms_use_the_creation_commitment_not_component_hashes() {
+        let terms_hash = format!("0x{}", "ab".repeat(32));
+        let created = AutonomousBountyEvent {
+            id: Uuid::new_v4(),
+            log_key: "created".to_string(),
+            tx_hash: format!("0x{}", "11".repeat(32)),
+            block_number: 1,
+            log_index: 0,
+            contract_address: format!("0x{}", "22".repeat(20)),
+            bounty_id: format!("0x{}", "33".repeat(32)),
+            kind: chain_base::AutonomousBountyEventKind::CanonicalBountyCreated,
+            data: serde_json::json!({ "terms_hash": terms_hash }),
+            occurred_at: Utc::now(),
+        };
+        let components = AutonomousBountyEvent {
+            kind: chain_base::AutonomousBountyEventKind::CanonicalBountyTermsCommitted,
+            data: serde_json::json!({ "acceptance_criteria_hash": format!("0x{}", "44".repeat(32)), "benchmark_hash": format!("0x{}", "55".repeat(32)), "evidence_schema_hash": format!("0x{}", "66".repeat(32)) }),
+            ..created.clone()
+        };
+        assert_eq!(
+            scoped_autonomous_terms_hashes(&[created, components.clone()]),
+            [terms_hash].into_iter().collect()
+        );
+        assert!(scoped_autonomous_terms_hashes(&[components]).is_empty());
     }
 
     #[test]
