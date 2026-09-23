@@ -17,6 +17,8 @@ on:
       - "scripts/test-site-navigation.cjs"
       - "scripts/assert-heading-layout.cjs"
       - "scripts/test-marketplace-layout.cjs"
+      - "scripts/test-submissions-layout.cjs"
+      - "scripts/test-submissions.js"
       - "scripts/test-solarpunk-home.js"
       - "scripts/test-ai-bounty-handoff.js"
       - "scripts/test-metrics-dashboard.js"
@@ -62,6 +64,8 @@ on:
       - "scripts/test-site-navigation.cjs"
       - "scripts/assert-heading-layout.cjs"
       - "scripts/test-marketplace-layout.cjs"
+      - "scripts/test-submissions-layout.cjs"
+      - "scripts/test-submissions.js"
       - "scripts/test-solarpunk-home.js"
       - "scripts/test-ai-bounty-handoff.js"
       - "scripts/test-metrics-dashboard.js"
@@ -150,6 +154,7 @@ jobs:
           node --check site/competition.js
           node --check site/competition-proof.js
           node --check site/marketplace-workflow.js
+          node --check site/submissions.js
           node --check site/webmcp.js
           node --check site/participate.js
           node --check site/phone-wallet.js
@@ -169,7 +174,7 @@ jobs:
       - name: Test the retained Metrics evidence engine
         run: node --test scripts/test-metrics-dashboard.js
       - name: Test unified marketplace readiness, timing, and economics
-        run: node --test scripts/test-marketplace-ui.js scripts/test-funded.js scripts/test-webmcp.js scripts/test-meta-child.js scripts/test-competition-proof.js scripts/test-phone-wallet.js scripts/test-phone-wallet-network.cjs
+        run: node --test scripts/test-marketplace-ui.js scripts/test-submissions.js scripts/test-funded.js scripts/test-webmcp.js scripts/test-meta-child.js scripts/test-competition-proof.js scripts/test-phone-wallet.js scripts/test-phone-wallet-network.cjs
       - name: Test posting and wallet actions in real browser viewports
         working-directory: tools/browser-layout
         run: |

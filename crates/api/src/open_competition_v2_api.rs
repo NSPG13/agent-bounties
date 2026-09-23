@@ -152,6 +152,7 @@ pub(crate) struct InventoryQuery {
 pub(crate) struct EventQuery {
     network: Option<String>,
     bounty_id: Option<String>,
+    bounty_contract: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -595,20 +596,77 @@ pub(crate) async fn inventory(
     })))
 }
 
-#[utoipa::path(get, path = "/v1/base/open-competition-v2-beta3/events", responses((status = 200, description = "Replay-safe canonical V2 event history")))]
+pub(crate) fn scope_competition_v2_history(
+    events: &mut Vec<OpenCompetitionV2Event>,
+    factory: &str,
+    contract: &str,
+) {
+    // Factory logs carry the child address only on creation. Bind that address to
+    // one bounty ID, then preserve the factory configuration and child history.
+    let identities: std::collections::BTreeSet<String> = events
+        .iter()
+        .filter(|event| {
+            event.kind == OpenCompetitionV2EventKind::CanonicalCompetitionCreated
+                && event.contract_address.eq_ignore_ascii_case(factory)
+                && event
+                    .data
+                    .get("competition")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|value| value.eq_ignore_ascii_case(contract))
+        })
+        .map(|event| event.bounty_id.to_ascii_lowercase())
+        .collect();
+    if identities.len() != 1 {
+        events.clear();
+        return;
+    }
+    let bounty_id = identities.iter().next().unwrap();
+    events.retain(|event| {
+        event.bounty_id.eq_ignore_ascii_case(bounty_id)
+            && (event.contract_address.eq_ignore_ascii_case(factory)
+                || event.contract_address.eq_ignore_ascii_case(contract))
+    });
+}
+
+#[utoipa::path(get, path = "/v1/base/open-competition-v2-beta3/events", params(("bounty_contract" = Option<String>, Query, description = "optional exact competition contract address")), responses((status = 200, description = "Replay-safe canonical V2 event history")))]
 pub(crate) async fn events(
     State(state): State<SharedState>,
     Query(query): Query<EventQuery>,
 ) -> ApiResult {
     let network = network_or_default(query.network);
+    let contract = query
+        .bounty_contract
+        .as_deref()
+        .map(normalize_evm_address)
+        .transpose()
+        .map_err(|_| {
+            bad_request(
+                "load_events",
+                "invalid_bounty_contract",
+                "Use a valid EVM contract address.",
+            )
+        })?;
     let release = release_from_environment(&network)?;
     let store = state.store.as_ref().ok_or_else(database_unavailable)?;
-    let mut events = store
-        .list_open_competition_v2_events(&network, &release.factory_contract)
-        .await
-        .map_err(|error| service_error("load_events", "database_read_failed", error.to_string()))?;
+    let mut events = if let Some(contract) = contract.as_deref() {
+        store
+            .list_open_competition_v2_history_for_contract(
+                &network,
+                &release.factory_contract,
+                contract,
+            )
+            .await
+    } else {
+        store
+            .list_open_competition_v2_events(&network, &release.factory_contract)
+            .await
+    }
+    .map_err(|error| service_error("load_events", "database_read_failed", error.to_string()))?;
     if let Some(bounty_id) = query.bounty_id {
         events.retain(|event| event.bounty_id.eq_ignore_ascii_case(&bounty_id));
+    }
+    if let Some(contract) = contract {
+        scope_competition_v2_history(&mut events, &release.factory_contract, &contract);
     }
     Ok(Json(json!({
         "schema_version": "agent-bounties/open-competition-v2-events-v1",

@@ -52,6 +52,7 @@ pub struct OpportunityQuery {
     pub network: Option<String>,
     pub view: Option<String>,
     pub source_type: Option<String>,
+    pub opportunity_id: Option<String>,
     pub work_state: Option<String>,
     pub payment_state: Option<String>,
     pub limit: Option<u32>,
@@ -1729,9 +1730,13 @@ pub fn apply_query(
 ) -> Vec<OpportunityItem> {
     items.retain(|item| {
         query
-            .source_type
+            .opportunity_id
             .as_deref()
-            .is_none_or(|value| item.source_type == value)
+            .is_none_or(|value| item.opportunity_id == value)
+            && query
+                .source_type
+                .as_deref()
+                .is_none_or(|value| item.source_type == value)
             && query
                 .work_state
                 .as_deref()
@@ -1746,7 +1751,16 @@ pub fn apply_query(
         items.retain_mut(|item| apply_view(item, view, now));
     }
 
-    items.sort_by(|left, right| opportunity_order(left, right, now));
+    if view == Some(OpportunityView::Recent) {
+        items.sort_by(|left, right| {
+            DateTime::parse_from_rfc3339(&right.updated_at)
+                .ok()
+                .cmp(&DateTime::parse_from_rfc3339(&left.updated_at).ok())
+                .then_with(|| left.opportunity_id.cmp(&right.opportunity_id))
+        });
+    } else {
+        items.sort_by(|left, right| opportunity_order(left, right, now));
+    }
     items.truncate(query.limit.unwrap_or(100).clamp(1, 300) as usize);
     items
 }
@@ -3001,6 +3015,73 @@ mod tests {
         assert_eq!(item.payment_state, "seeking_funding");
         assert!(!item.payment_committed);
         assert!(item.next_action.url.ends_with("amount=750000"));
+    }
+
+    #[test]
+    fn recent_history_sorts_before_limiting_and_identity_lookup_precedes_the_limit() {
+        let template = canonical_opportunity(
+            &canonical("paid", "1000000", true),
+            "base-mainnet",
+            "https://api.example",
+        )
+        .unwrap();
+        let now = DateTime::<Utc>::from_timestamp(1_800_000_100, 0).unwrap();
+        let mut items: Vec<_> = (0..350)
+            .map(|index| {
+                let mut item = template.clone();
+                item.opportunity_id = format!("record-{index:03}");
+                item.updated_at = (now + chrono::Duration::seconds(index)).to_rfc3339();
+                // Older work has earlier deadlines and must not displace recent history.
+                item.deadline = Some((now + chrono::Duration::days(index)).to_rfc3339());
+                item
+            })
+            .collect();
+        let query = OpportunityQuery {
+            limit: Some(300),
+            ..Default::default()
+        };
+        let recent = apply_query(items.clone(), &query, Some(OpportunityView::Recent), now);
+        assert_eq!(recent.len(), 300);
+        assert_eq!(recent.first().unwrap().opportunity_id, "record-349");
+        assert_eq!(recent.last().unwrap().opportunity_id, "record-050");
+        // Existing inventory ordering is deliberately unchanged outside the recent view.
+        let ordinary = apply_query(items.clone(), &query, None, now);
+        assert_eq!(ordinary.first().unwrap().opportunity_id, "record-000");
+        let exact = OpportunityQuery {
+            opportunity_id: Some("record-000".to_string()),
+            limit: Some(1),
+            ..Default::default()
+        };
+        let found = apply_query(items.clone(), &exact, Some(OpportunityView::Recent), now);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].opportunity_id, "record-000");
+        let missing = OpportunityQuery {
+            opportunity_id: Some("not-public".to_string()),
+            ..Default::default()
+        };
+        assert!(
+            apply_query(items.clone(), &missing, Some(OpportunityView::Recent), now).is_empty()
+        );
+        let wrong_state = OpportunityQuery {
+            payment_state: Some("escrowed".to_string()),
+            ..exact
+        };
+        assert!(apply_query(
+            items.clone(),
+            &wrong_state,
+            Some(OpportunityView::Recent),
+            now
+        )
+        .is_empty());
+        // Equal instants in different offsets sort by identity, not timestamp text.
+        items.truncate(2);
+        items[0].updated_at = "2026-09-22T18:00:00-06:00".to_string();
+        items[1].updated_at = "2026-09-23T00:00:00Z".to_string();
+        let tied = apply_query(items.clone(), &query, Some(OpportunityView::Recent), now);
+        assert_eq!(tied[0].opportunity_id, "record-000");
+        items[1].updated_at = "2026-09-22T19:00:00-06:00".to_string();
+        let ordered = apply_query(items, &query, Some(OpportunityView::Recent), now);
+        assert_eq!(ordered[0].opportunity_id, "record-001");
     }
 
     #[test]

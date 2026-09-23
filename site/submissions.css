@@ -1,0 +1,19 @@
+.submissions-shell { max-width: 920px; margin: 0 auto; padding: 2rem 1.25rem 5rem; }
+.submissions-toolbar { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; margin-bottom: 2rem; }
+.submissions-toolbar button { margin-left: auto; }
+[data-submissions-status] { display: block; margin: 1rem 0; }
+.submission-overview, .submission-criteria, .submission-card { padding: clamp(1.25rem, 4vw, 2rem); margin: 1.25rem 0; border: 1px solid color-mix(in srgb, currentColor 22%, transparent); border-radius: 1.25rem; overflow-wrap: anywhere; }
+.submission-overview h1 { font-size: clamp(1.8rem, 5vw, 2.8rem); line-height: 1.15; margin: 0 0 1rem; }
+.submission-overview > a { margin: .5rem 1rem .5rem 0; }
+.submission-criteria li { padding: .4rem 0; line-height: 1.6; }
+.submission-card { scroll-margin-top: 6rem; }
+.submission-card header { display: flex; flex-wrap: wrap; gap: .75rem; justify-content: space-between; align-items: center; }
+.submission-card h2 { margin: 0; }
+.submission-wallet { font-family: monospace; font-size: .9rem; }
+.submission-winner { border: 2px solid #6c9f62; }
+.submission-result { border-top: 1px solid color-mix(in srgb, currentColor 22%, transparent); margin-top: 1.5rem; padding-top: 1rem; }
+[data-submissions-page] p { line-height: 1.65; }
+[data-submissions-page] details { margin-top: 1.25rem; }
+[data-submissions-page] summary { cursor: pointer; padding: .5rem 0; font-weight: 600; }
+[data-submissions-page] pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 1rem; border-radius: .6rem; background: color-mix(in srgb, currentColor 6%, transparent); font-size: .85rem; }
+[data-submissions-page] dd { margin: .3rem 0 1rem; font-family: monospace; font-size: .85rem; }
