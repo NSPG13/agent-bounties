@@ -152,6 +152,7 @@ pub(crate) struct InventoryQuery {
 pub(crate) struct EventQuery {
     network: Option<String>,
     bounty_id: Option<String>,
+    bounty_contract: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -595,12 +596,24 @@ pub(crate) async fn inventory(
     })))
 }
 
-#[utoipa::path(get, path = "/v1/base/open-competition-v2-beta3/events", responses((status = 200, description = "Replay-safe canonical V2 event history")))]
+#[utoipa::path(get, path = "/v1/base/open-competition-v2-beta3/events", params(("bounty_contract" = Option<String>, Query, description = "optional exact competition contract address")), responses((status = 200, description = "Replay-safe canonical V2 event history")))]
 pub(crate) async fn events(
     State(state): State<SharedState>,
     Query(query): Query<EventQuery>,
 ) -> ApiResult {
     let network = network_or_default(query.network);
+    let contract = query
+        .bounty_contract
+        .as_deref()
+        .map(normalize_evm_address)
+        .transpose()
+        .map_err(|_| {
+            bad_request(
+                "load_events",
+                "invalid_bounty_contract",
+                "Use a valid EVM contract address.",
+            )
+        })?;
     let release = release_from_environment(&network)?;
     let store = state.store.as_ref().ok_or_else(database_unavailable)?;
     let mut events = store
@@ -609,6 +622,9 @@ pub(crate) async fn events(
         .map_err(|error| service_error("load_events", "database_read_failed", error.to_string()))?;
     if let Some(bounty_id) = query.bounty_id {
         events.retain(|event| event.bounty_id.eq_ignore_ascii_case(&bounty_id));
+    }
+    if let Some(contract) = contract {
+        events.retain(|event| event.contract_address.eq_ignore_ascii_case(&contract));
     }
     Ok(Json(json!({
         "schema_version": "agent-bounties/open-competition-v2-events-v1",

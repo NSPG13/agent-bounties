@@ -38,7 +38,8 @@ Completed work uses the public opportunity projection with `view=recent`,
 the API sorts by update time before applying that limit. The board labels the
 limit when reached. A submission link uses an exact `opportunity_id` lookup
 before limiting, so it also works for older public bounties outside that window.
-There is no pagination cursor.
+There is no pagination cursor. Submission detail requests are scoped to the
+selected contract; opening one bounty does not download every bounty’s history.
 
 The page reads public, permission-filtered endpoints without a session token.
 An identity absent from the public projection cannot be opened through this

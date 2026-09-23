@@ -99,3 +99,19 @@ test('submission links use exact identity lookup before the API limit', async ()
   responseItems = [{ ...item, source_id: wallet, opportunity_id: `canonical:base-mainnet:${wallet}` }];
   await assert.rejects(history.loadOpportunity(win, item.opportunity_id), /lookup is unavailable/);
 });
+
+test('detail requests are contract-scoped and reject a server that ignores the filter', async () => {
+  for (const prefix of ['canonical', 'open-competition', 'open-competition-v2']) {
+    const selected = { ...item, opportunity_id: `${prefix}:base-mainnet:${item.source_id}` };
+    const requests = [];
+    const win = { location: { hostname: 'agentbounties.app' }, fetch: async input => {
+      const url = new URL(input); requests.push(url);
+      assert.equal(url.searchParams.get('bounty_contract'), item.source_id);
+      const foreign = event('submission_added', { contract_address: wallet });
+      return { ok: true, json: async () => prefix === 'canonical'
+        ? [{ bounty_contract: wallet }] : { network: 'base-mainnet', events: [foreign] } };
+    } };
+    await assert.rejects(history.loadHistory(win, selected), /lookup is unavailable|could not be verified/);
+    assert.equal(requests.length, 1);
+  }
+});

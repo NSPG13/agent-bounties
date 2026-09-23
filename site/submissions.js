@@ -97,16 +97,17 @@
   async function loadHistory(win, item) {
     let terms = null, termsUnavailable = false, sourceEvents, bountyId;
     if (protocol(item) === 'canonical') {
-      const feed = await request(win, '/v1/base/autonomous-bounties/feed?network=base-mainnet&claimable_only=false');
-      const bounty = Array.isArray(feed) && feed.find(row => lower(row.bounty_contract) === lower(item.source_id));
+      const feed = await request(win, `/v1/base/autonomous-bounties/feed?network=base-mainnet&claimable_only=false&bounty_contract=${item.source_id}`);
+      if (!Array.isArray(feed) || feed.length > 1 || feed.some(row => lower(row.bounty_contract) !== lower(item.source_id))) throw new Error('Bounty history lookup is unavailable. Try Refresh.');
+      const bounty = feed[0];
       if (!bounty) throw new Error('This bounty is not available in the public history.');
       termsUnavailable = bounty.terms_valid !== true || Boolean(bounty.validation_errors?.length) || !HASH.test(item.terms_hash) || bounty.terms_hash !== item.terms_hash || !bounty.terms?.document;
       if (!termsUnavailable) terms = bounty.terms.document;
       sourceEvents = bounty.events; bountyId = bounty.bounty_id;
     } else {
       const path = protocol(item) === 'open-competition' ? 'open-competition-v1' : 'open-competition-v2-beta3';
-      const payload = await request(win, `/v1/base/${path}/events?network=base-mainnet`);
-      if (payload.network !== flow.NETWORK || !Array.isArray(payload.events)) throw new Error('Competition records could not be verified.');
+      const payload = await request(win, `/v1/base/${path}/events?network=base-mainnet&bounty_contract=${item.source_id}`);
+      if (payload.network !== flow.NETWORK || !Array.isArray(payload.events) || payload.events.some(event => lower(event.contract_address) !== lower(item.source_id))) throw new Error('Competition records could not be verified.');
       sourceEvents = payload.events;
       const identities = new Set(sourceEvents.filter(event => confirmed(event) && lower(event.contract_address) === lower(item.source_id)).map(event => event.bounty_id));
       if (identities.size !== 1) throw new Error('Competition identity could not be verified.');

@@ -1361,6 +1361,7 @@ struct OpenCompetitionVerifierQuery {
 struct OpenCompetitionEventsQuery {
     network: Option<String>,
     bounty_id: Option<String>,
+    bounty_contract: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
@@ -2029,6 +2030,7 @@ struct AutonomousSubmissionEvidenceQuery {
 struct AutonomousBountyFeedQuery {
     network: Option<String>,
     claimable_only: Option<bool>,
+    bounty_contract: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -7338,7 +7340,8 @@ async fn list_open_competition_verifiers(
     path = "/v1/base/open-competition-v1/events",
     params(
         ("network" = Option<String>, Query, description = "base-mainnet or base-sepolia; defaults to base-mainnet"),
-        ("bounty_id" = Option<String>, Query, description = "optional canonical bytes32 competition id")
+        ("bounty_id" = Option<String>, Query, description = "optional canonical bytes32 competition id"),
+        ("bounty_contract" = Option<String>, Query, description = "optional exact competition contract address")
     ),
     responses(
         (status = 200, description = "Version-specific canonical Open Competition events indexed from the frozen factory deployment block"),
@@ -7351,6 +7354,11 @@ async fn list_open_competition_events(
     Query(query): Query<OpenCompetitionEventsQuery>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let network = query.network.as_deref().unwrap_or("base-mainnet");
+    let contract = query
+        .bounty_contract
+        .as_deref()
+        .map(|v| normalize_fixed_hex(v, 20))
+        .transpose()?;
     let release = open_competition_release_from_environment(network)?;
     let bounty_id = query
         .bounty_id
@@ -7367,6 +7375,9 @@ async fn list_open_competition_events(
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     if let Some(bounty_id) = bounty_id.as_deref() {
         events.retain(|event| event.bounty_id.eq_ignore_ascii_case(bounty_id));
+    }
+    if let Some(contract) = contract {
+        events.retain(|event| event.contract_address.eq_ignore_ascii_case(&contract));
     }
     Ok(Json(serde_json::json!({
         "schema_version": "agent-bounties/open-competition-v1-events-v1",
@@ -14301,18 +14312,26 @@ fn autonomous_submission_evidence_record(
     .map_err(|_| StatusCode::CONFLICT)
 }
 
-#[utoipa::path(get, path = "/v1/base/autonomous-bounties/feed", responses((status = 200, description = "Canonical on-chain bounties joined to content-addressed public terms")))]
+#[utoipa::path(get, path = "/v1/base/autonomous-bounties/feed", params(("bounty_contract" = Option<String>, Query, description = "optional exact canonical bounty contract address")), responses((status = 200, description = "Canonical on-chain bounties joined to content-addressed public terms")))]
 async fn autonomous_bounty_feed(
     State(state): State<SharedState>,
     Query(query): Query<AutonomousBountyFeedQuery>,
 ) -> Result<Json<Vec<AutonomousBountyFeedItem>>, StatusCode> {
-    load_autonomous_bounty_feed(
+    let contract = query
+        .bounty_contract
+        .as_deref()
+        .map(|v| normalize_fixed_hex(v, 20))
+        .transpose()?;
+    let mut feed = load_autonomous_bounty_feed(
         &state,
         query.network.as_deref().unwrap_or("base-mainnet"),
         query.claimable_only.unwrap_or(false),
     )
-    .await
-    .map(Json)
+    .await?;
+    if let Some(contract) = contract {
+        feed.retain(|item| item.bounty_contract.eq_ignore_ascii_case(&contract));
+    }
+    Ok(Json(feed))
 }
 
 async fn load_autonomous_bounty_feed(
@@ -21777,6 +21796,47 @@ mod tests {
                 .unwrap()
                 .is_empty(),
                 "unexpected visibility: {key}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn submission_history_rejects_malformed_contracts_before_reading_sources() {
+        let state = test_state(BountyNetwork::default());
+        for value in [
+            "",
+            "0x123",
+            "https://example.test",
+            "0xzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+        ] {
+            let fields = serde_json::json!({"network": "base-mainnet", "bounty_contract": value});
+            assert_eq!(
+                autonomous_bounty_feed(
+                    State(state.clone()),
+                    Query(serde_json::from_value(fields.clone()).unwrap())
+                )
+                .await
+                .unwrap_err(),
+                StatusCode::BAD_REQUEST
+            );
+            assert_eq!(
+                list_open_competition_events(
+                    State(state.clone()),
+                    Query(serde_json::from_value(fields.clone()).unwrap())
+                )
+                .await
+                .unwrap_err(),
+                StatusCode::BAD_REQUEST
+            );
+            assert_eq!(
+                open_competition_v2_api::events(
+                    State(state.clone()),
+                    Query(serde_json::from_value(fields).unwrap())
+                )
+                .await
+                .unwrap_err()
+                .0,
+                StatusCode::BAD_REQUEST
             );
         }
     }

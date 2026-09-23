@@ -33,6 +33,7 @@ async function journey(browser, origin, width) {
     }
     if (url.pathname === '/v1/base/autonomous-bounties/feed') {
       feedReads++;
+      assert.equal(url.searchParams.get('bounty_contract'), paid.source_id, 'history must be scoped to the selected bounty');
       return route.fulfill({ json: [{ ...fixture.item, events: [event('submission_added', 1), event('bounty_settled', 2)] }] });
     }
     if (url.pathname.startsWith('/v1/base/autonomous-bounties/submission-evidence/')) return route.fulfill({ status: mode === 'evidenceOffline' ? 503 : 200, json: evidence });
