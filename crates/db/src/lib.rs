@@ -7865,6 +7865,38 @@ impl PostgresStore {
         Ok(())
     }
 
+    pub async fn list_open_competition_history_for_contract(
+        &self,
+        network: &str,
+        factory_contract: &str,
+        bounty_contract: &str,
+    ) -> DbResult<Vec<OpenCompetitionEvent>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, protocol_version, log_key, tx_hash, block_number, log_index,
+                   contract_address, bounty_id, kind, data, occurred_at
+            FROM open_competition_events
+            WHERE network = $1 AND factory_contract = $2
+              AND contract_address IN ($2, $3)
+              AND bounty_id IN (
+                SELECT bounty_id FROM open_competition_events
+                WHERE network = $1 AND factory_contract = $2
+                  AND contract_address = $2 AND kind = 'canonical_competition_created'
+                  AND lower(data->>'bounty_contract') = $3
+              )
+            ORDER BY block_number, log_index
+        "#,
+        )
+        .bind(network)
+        .bind(normalize_key_address(factory_contract))
+        .bind(normalize_key_address(bounty_contract))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(open_competition_event_from_row)
+            .collect()
+    }
+
     pub async fn list_open_competition_events(
         &self,
         network: &str,
@@ -8010,6 +8042,38 @@ impl PostgresStore {
             return Err(DbError::OpenCompetitionV2Conflict(event.log_key.clone()));
         }
         Ok(())
+    }
+
+    pub async fn list_open_competition_v2_history_for_contract(
+        &self,
+        network: &str,
+        factory_contract: &str,
+        bounty_contract: &str,
+    ) -> DbResult<Vec<OpenCompetitionV2Event>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, protocol_version, log_key, tx_hash, block_number, log_index,
+                   contract_address, bounty_id, kind, data, occurred_at
+            FROM open_competition_v2_events
+            WHERE network = $1 AND factory_contract = $2
+              AND contract_address IN ($2, $3)
+              AND bounty_id IN (
+                SELECT bounty_id FROM open_competition_v2_events
+                WHERE network = $1 AND factory_contract = $2
+                  AND contract_address = $2 AND kind = 'canonical_competition_created'
+                  AND lower(data->>'competition') = $3
+              )
+            ORDER BY block_number, log_index
+        "#,
+        )
+        .bind(network)
+        .bind(normalize_key_address(factory_contract))
+        .bind(normalize_key_address(bounty_contract))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(open_competition_v2_event_from_row)
+            .collect()
     }
 
     pub async fn list_open_competition_v2_events(
@@ -8614,6 +8678,36 @@ impl PostgresStore {
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected())
+    }
+
+    pub async fn list_autonomous_bounty_history_for_contract(
+        &self,
+        network: &str,
+        factory_contract: &str,
+        bounty_contract: &str,
+    ) -> DbResult<Vec<AutonomousBountyEvent>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, log_key, tx_hash, block_number, log_index,
+                   contract_address, bounty_id, kind, data, occurred_at
+            FROM autonomous_bounty_events
+            WHERE network = $1
+              AND contract_address IN ($2, $3)
+              AND bounty_id IN (
+                SELECT bounty_id FROM autonomous_bounty_events
+                WHERE network = $1
+                  AND contract_address = $2 AND kind = 'canonical_bounty_created'
+                  AND lower(data->>'bounty_contract') = $3
+              )
+            ORDER BY block_number, log_index
+        "#,
+        )
+        .bind(network)
+        .bind(normalize_key_address(factory_contract))
+        .bind(normalize_key_address(bounty_contract))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(autonomous_event_from_row).collect()
     }
 
     pub async fn list_autonomous_bounty_events(
@@ -11676,6 +11770,135 @@ mod tests {
             normalize_distribution_exclusion_class("related"),
             Some("related_party")
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn scoped_submission_history_reads_only_selected_bounty_postgres() {
+        let store =
+            PostgresStore::connect(&std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap())
+                .await
+                .unwrap();
+        store.migrate().await.unwrap();
+        let network = format!("history-{}", Uuid::new_v4());
+        let factory = format!("0x{}", "11".repeat(20));
+        let contract = format!("0x{}", "22".repeat(20));
+        let other = format!("0x{}", "33".repeat(20));
+        for table in [
+            "autonomous_bounty_events",
+            "open_competition_events",
+            "open_competition_v2_events",
+        ] {
+            let competition = table != "autonomous_bounty_events";
+            let v2 = table == "open_competition_v2_events";
+            let extra_columns = if v2 {
+                ", factory_contract, protocol_version, block_hash, safe_block_number, safe_block_hash"
+            } else if competition {
+                ", factory_contract, protocol_version"
+            } else {
+                ""
+            };
+            let extra_values = if v2 {
+                ", $4, 'agent-bounties/open-competition-v2-beta3', '0xabc', 1, '0xabc'"
+            } else if competition {
+                ", $4, 'agent-bounties/open-competition-v1'"
+            } else {
+                ""
+            };
+            let statement = format!("INSERT INTO {table} (id, log_key, network, tx_hash, block_number, log_index, contract_address, bounty_id, kind, data, occurred_at{extra_columns}) VALUES ($1, $2, $3, $8, 1, 0, $4, $5, $6, $7, now(){extra_values})");
+            for i in 0..103 {
+                let selected = i < 3;
+                let address = if i == 2 { &contract } else { &factory };
+                let kind = if i == 0 {
+                    if competition {
+                        "canonical_competition_created"
+                    } else {
+                        "canonical_bounty_created"
+                    }
+                } else if i == 1 {
+                    if v2 {
+                        "canonical_competition_economics"
+                    } else if competition {
+                        "canonical_competition_terms_committed"
+                    } else {
+                        "canonical_bounty_terms_committed"
+                    }
+                } else if i == 2 || v2 {
+                    "funding_added"
+                } else {
+                    "unparseable_unrelated_event"
+                };
+                let data = if v2 {
+                    serde_json::json!({"competition": contract})
+                } else {
+                    serde_json::json!({"bounty_contract": contract})
+                };
+                sqlx::query(&statement)
+                    .bind(Uuid::new_v4())
+                    .bind(format!("{network}:{table}:{i}"))
+                    .bind(&network)
+                    .bind(address)
+                    .bind(if selected { "selected" } else { "unrelated" })
+                    .bind(kind)
+                    .bind(data)
+                    .bind(format!("0x{i:064x}"))
+                    .execute(&store.pool)
+                    .await
+                    .unwrap();
+            }
+            // Child records retain the factory identity independently of emitter.
+            if competition {
+                sqlx::query(&format!(
+                    "UPDATE {table} SET factory_contract = $1 WHERE network = $2"
+                ))
+                .bind(&factory)
+                .bind(&network)
+                .execute(&store.pool)
+                .await
+                .unwrap();
+            }
+            let count = match table {
+                "autonomous_bounty_events" => store
+                    .list_autonomous_bounty_history_for_contract(&network, &factory, &contract)
+                    .await
+                    .unwrap()
+                    .len(),
+                "open_competition_events" => store
+                    .list_open_competition_history_for_contract(&network, &factory, &contract)
+                    .await
+                    .unwrap()
+                    .len(),
+                _ => store
+                    .list_open_competition_v2_history_for_contract(&network, &factory, &contract)
+                    .await
+                    .unwrap()
+                    .len(),
+            };
+            assert_eq!(count, 3, "factory setup or child event lost in {table}");
+            let missing = match table {
+                "autonomous_bounty_events" => store
+                    .list_autonomous_bounty_history_for_contract(&network, &factory, &other)
+                    .await
+                    .unwrap()
+                    .len(),
+                "open_competition_events" => store
+                    .list_open_competition_history_for_contract(&network, &factory, &other)
+                    .await
+                    .unwrap()
+                    .len(),
+                _ => store
+                    .list_open_competition_v2_history_for_contract(&network, &factory, &other)
+                    .await
+                    .unwrap()
+                    .len(),
+            };
+            assert_eq!(missing, 0);
+            sqlx::query(&format!("DELETE FROM {table} WHERE network = $1"))
+                .bind(&network)
+                .execute(&store.pool)
+                .await
+                .unwrap();
+        }
     }
 
     #[tokio::test]

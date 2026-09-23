@@ -7335,6 +7335,38 @@ async fn list_open_competition_verifiers(
     open_competition_verifier_catalog_from_environment(network).map(Json)
 }
 
+pub(crate) fn scope_competition_history(
+    events: &mut Vec<OpenCompetitionEvent>,
+    factory: &str,
+    contract: &str,
+) {
+    // Factory logs carry the child address only on creation. Bind that address to
+    // one bounty ID, then preserve the factory configuration and child history.
+    let identities: std::collections::BTreeSet<String> = events
+        .iter()
+        .filter(|event| {
+            event.kind == chain_base::OpenCompetitionEventKind::CanonicalCompetitionCreated
+                && event.contract_address.eq_ignore_ascii_case(factory)
+                && event
+                    .data
+                    .get("bounty_contract")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|value| value.eq_ignore_ascii_case(contract))
+        })
+        .map(|event| event.bounty_id.to_ascii_lowercase())
+        .collect();
+    if identities.len() != 1 {
+        events.clear();
+        return;
+    }
+    let bounty_id = identities.iter().next().unwrap();
+    events.retain(|event| {
+        event.bounty_id.eq_ignore_ascii_case(bounty_id)
+            && (event.contract_address.eq_ignore_ascii_case(factory)
+                || event.contract_address.eq_ignore_ascii_case(contract))
+    });
+}
+
 #[utoipa::path(
     get,
     path = "/v1/base/open-competition-v1/events",
@@ -7369,15 +7401,25 @@ async fn list_open_competition_events(
         .store
         .as_ref()
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-    let mut events = store
-        .list_open_competition_events(network, &release.factory_contract)
-        .await
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let mut events = if let Some(contract) = contract.as_deref() {
+        store
+            .list_open_competition_history_for_contract(
+                network,
+                &release.factory_contract,
+                contract,
+            )
+            .await
+    } else {
+        store
+            .list_open_competition_events(network, &release.factory_contract)
+            .await
+    }
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     if let Some(bounty_id) = bounty_id.as_deref() {
         events.retain(|event| event.bounty_id.eq_ignore_ascii_case(bounty_id));
     }
     if let Some(contract) = contract {
-        events.retain(|event| event.contract_address.eq_ignore_ascii_case(&contract));
+        scope_competition_history(&mut events, &release.factory_contract, &contract);
     }
     Ok(Json(serde_json::json!({
         "schema_version": "agent-bounties/open-competition-v1-events-v1",
@@ -14322,15 +14364,53 @@ async fn autonomous_bounty_feed(
         .as_deref()
         .map(|v| normalize_fixed_hex(v, 20))
         .transpose()?;
-    let mut feed = load_autonomous_bounty_feed(
-        &state,
-        query.network.as_deref().unwrap_or("base-mainnet"),
-        query.claimable_only.unwrap_or(false),
-    )
-    .await?;
-    if let Some(contract) = contract {
+    let network = query.network.as_deref().unwrap_or("base-mainnet");
+    let claimable_only = query.claimable_only.unwrap_or(false);
+    let feed = if let Some(contract) = contract {
+        let store = state
+            .store
+            .as_ref()
+            .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+        let planner = configured_autonomous_planner(network)?;
+        let events = store
+            .list_autonomous_bounty_history_for_contract(
+                network,
+                &planner.factory_contract,
+                &contract,
+            )
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let hashes: std::collections::BTreeSet<String> = events
+            .iter()
+            .filter(|event| {
+                event.kind == chain_base::AutonomousBountyEventKind::CanonicalBountyTermsCommitted
+            })
+            .filter_map(|event| {
+                event
+                    .data
+                    .get("terms_hash")
+                    .and_then(serde_json::Value::as_str)
+            })
+            .map(str::to_ascii_lowercase)
+            .collect();
+        let mut terms = Vec::new();
+        for hash in hashes {
+            if let Some(record) = store
+                .get_autonomous_bounty_terms(&hash)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            {
+                terms.push(record);
+            }
+        }
+        let mut feed = build_autonomous_bounty_feed(events, terms, false)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         feed.retain(|item| item.bounty_contract.eq_ignore_ascii_case(&contract));
-    }
+        state.recovery_reservations.apply(&mut feed, claimable_only);
+        feed
+    } else {
+        load_autonomous_bounty_feed(&state, network, claimable_only).await?
+    };
     Ok(Json(feed))
 }
 
@@ -21797,6 +21877,89 @@ mod tests {
                 .is_empty(),
                 "unexpected visibility: {key}"
             );
+        }
+    }
+
+    #[test]
+    fn competition_history_preserves_factory_setup_and_excludes_other_bounties() {
+        let factory = format!("0x{}", "11".repeat(20));
+        let contract = format!("0x{}", "22".repeat(20));
+        let other = format!("0x{}", "33".repeat(20));
+        for v2 in [false, true] {
+            let make = |kind: &str, address: &str, id: &str, data: serde_json::Value| {
+                serde_json::json!({
+                    "id": Uuid::new_v4(), "protocol_version": "test", "log_key": kind,
+                    "tx_hash": format!("0x{}", "aa".repeat(32)), "block_number": 10, "log_index": 0,
+                    "contract_address": address, "bounty_id": id, "kind": kind, "data": data, "occurred_at": Utc::now()
+                })
+            };
+            let setup = make(
+                "canonical_competition_created",
+                &factory,
+                "selected",
+                if v2 {
+                    serde_json::json!({"competition": contract})
+                } else {
+                    serde_json::json!({"bounty_contract": contract})
+                },
+            );
+            let config = make(
+                if v2 {
+                    "canonical_competition_economics"
+                } else {
+                    "canonical_competition_terms_committed"
+                },
+                &factory,
+                "selected",
+                serde_json::json!({}),
+            );
+            let funding = make(
+                "funding_added",
+                &contract,
+                "selected",
+                serde_json::json!({}),
+            );
+            let foreign = make("funding_added", &other, "foreign", serde_json::json!({}));
+            let foreign_emitter = make("funding_added", &other, "selected", serde_json::json!({}));
+            for source in [
+                vec![setup.clone(), config.clone()],
+                vec![
+                    setup.clone(),
+                    config.clone(),
+                    funding.clone(),
+                    foreign,
+                    foreign_emitter,
+                ],
+            ] {
+                let expected = if source.len() == 2 { 2 } else { 3 };
+                if v2 {
+                    let mut events = source
+                        .into_iter()
+                        .map(|value| serde_json::from_value(value).unwrap())
+                        .collect();
+                    open_competition_v2_api::scope_competition_v2_history(
+                        &mut events,
+                        &factory,
+                        &contract,
+                    );
+                    assert_eq!(events.len(), expected);
+                    open_competition_v2_api::scope_competition_v2_history(
+                        &mut events,
+                        &factory,
+                        &other,
+                    );
+                    assert!(events.is_empty());
+                } else {
+                    let mut events = source
+                        .into_iter()
+                        .map(|value| serde_json::from_value(value).unwrap())
+                        .collect();
+                    scope_competition_history(&mut events, &factory, &contract);
+                    assert_eq!(events.len(), expected);
+                    scope_competition_history(&mut events, &factory, &other);
+                    assert!(events.is_empty());
+                }
+            }
         }
     }
 

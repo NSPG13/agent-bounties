@@ -115,3 +115,20 @@ test('detail requests are contract-scoped and reject a server that ignores the f
     assert.equal(requests.length, 1);
   }
 });
+
+test('new competitions retain their factory history before any child submissions', async () => {
+  for (const [prefix, version, key] of [['open-competition', 'open-competition-v1', 'bounty_contract'], ['open-competition-v2', 'open-competition-v2-beta3', 'competition']]) {
+    const selected = { ...item, opportunity_id: `${prefix}:base-mainnet:${item.source_id}` };
+    const factory = '0x' + 'f'.repeat(40);
+    const creation = event('canonical_competition_created', { protocol_version: `agent-bounties/${version}`, contract_address: factory, data: { [key]: item.source_id } });
+    const payload = { network: 'base-mainnet', factory_contract: factory, events: [creation] };
+    const win = { location: { hostname: 'agentbounties.app' }, fetch: async () => ({ ok: true, json: async () => payload }) };
+    const result = await history.loadHistory(win, selected);
+    assert.equal(result.entries.length, 0);
+    assert.match(history.renderHistory(result), /No confirmed submissions yet/);
+    payload.events.push({ ...creation, bounty_id: hash('f') });
+    await assert.rejects(history.loadHistory(win, selected), /identity could not be verified/);
+    payload.events = [creation, event('funding_added', { protocol_version: creation.protocol_version, contract_address: wallet })];
+    await assert.rejects(history.loadHistory(win, selected), /records could not be verified/);
+  }
+});

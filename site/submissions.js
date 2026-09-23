@@ -107,11 +107,17 @@
     } else {
       const path = protocol(item) === 'open-competition' ? 'open-competition-v1' : 'open-competition-v2-beta3';
       const payload = await request(win, `/v1/base/${path}/events?network=base-mainnet&bounty_contract=${item.source_id}`);
-      if (payload.network !== flow.NETWORK || !Array.isArray(payload.events) || payload.events.some(event => lower(event.contract_address) !== lower(item.source_id))) throw new Error('Competition records could not be verified.');
-      sourceEvents = payload.events;
-      const identities = new Set(sourceEvents.filter(event => confirmed(event) && lower(event.contract_address) === lower(item.source_id)).map(event => event.bounty_id));
+      const version = `agent-bounties/${path}`;
+      if (payload.network !== flow.NETWORK || !flow.ADDRESS.test(payload.factory_contract) || !Array.isArray(payload.events)) throw new Error('Competition records could not be verified.');
+      const creations = payload.events.filter(event => confirmed(event) && event.protocol_version === version
+        && event.kind === 'canonical_competition_created' && lower(event.contract_address) === lower(payload.factory_contract)
+        && lower(event.data?.[protocol(item) === 'open-competition' ? 'bounty_contract' : 'competition']) === lower(item.source_id));
+      const identities = new Set(creations.map(event => event.bounty_id));
       if (identities.size !== 1) throw new Error('Competition identity could not be verified.');
       bountyId = [...identities][0];
+      if (payload.events.some(event => event.bounty_id !== bountyId || event.protocol_version !== version
+        || ![lower(item.source_id), lower(payload.factory_contract)].includes(lower(event.contract_address)))) throw new Error('Competition records could not be verified.');
+      sourceEvents = payload.events;
     }
     const history = buildHistory(item, sourceEvents, bountyId);
     if (protocol(item) === 'canonical') {
