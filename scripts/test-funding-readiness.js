@@ -353,7 +353,16 @@ test("changed EIP3009 identity, economics, expiry or exact types cannot request 
   assert.throws(() => api.validateFundingAuthorization(zero), /authorization does not match/);
 });
 
-async function onrampContext({ saved = new Map(), balance = "0x1e8480", contract = "", checkoutError = false } = {}) {
+async function waitForPurchaseReady(window, timeoutMs = 500) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (window.AgentBountiesOnramp?.canOpenPurchase()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("Timed out waiting for purchase readiness");
+}
+
+async function onrampContext({ saved = new Map(), balance = "0x1e8480", contract = "", checkoutError = false, checkoutResponse = null, slowCheckout = false } = {}) {
   const elements = new Map();
   const opened = [];
   const requests = [];
@@ -387,6 +396,8 @@ async function onrampContext({ saved = new Map(), balance = "0x1e8480", contract
       if (url === "protocol.json") return { ok: true, json: async () => ({ status: "active", network: "base-mainnet", chain_id: 8453, native_usdc: usdc, mcp_base_url: "https://mcp.agentbounties.app" }) };
       if (String(url).includes("/checkout")) {
         if (checkoutError) throw new Error("connection lost");
+        if (slowCheckout) await new Promise((resolve) => setTimeout(resolve, 50));
+        if (checkoutResponse) return checkoutResponse;
         return { ok: false, status: 503, json: async () => ({ message: "Partner unavailable" }) };
       }
       const { method } = JSON.parse(options.body);
@@ -395,7 +406,7 @@ async function onrampContext({ saved = new Map(), balance = "0x1e8480", contract
   });
   runScript(context, "funding-readiness.js");
   runScript(context, "moonpay-onramp.js");
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, 50));
   return { context, element, opened, requests, saved };
 }
 
@@ -408,20 +419,40 @@ test("handoff reads destination balance and shows the exact shortfall without a 
 });
 
 test("an open purchase is reused and blocks duplicates across reloads until explicitly resolved", async () => {
-  const first = await onrampContext();
+  const bounty = `0x${"b".repeat(40)}`;
+  const signedUrl = `https://buy.moonpay.com?walletAddress=${wallet}&signature=test123&currencyCode=usdc&baseCurrencyCode=usd`;
+  const response = {
+    ok: true,
+    status: 200,
+    json: async () => ({
+      schema_version: "agent-bounties/moonpay-onramp-checkout-v1",
+      provider: "moonpay",
+      destination_wallet: wallet,
+      bounty_contract: bounty,
+      bounty_funded: false,
+      canonical_funding_event: null,
+      checkout_url: signedUrl,
+      external_transaction_id: "tx-reuse-test",
+      environment: "sandbox",
+      evidence_boundary: "reuse test boundary",
+    }),
+  };
+  const first = await onrampContext({ balance: "0x1e8480", contract: bounty, checkoutResponse: response });
+  await waitForPurchaseReady(first.context.window);
   first.element("[data-onramp-ack]").checked = true;
-  first.context.window.AgentBountiesOnramp.openDirectCheckout();
+  first.element("[data-fiat-amount]").value = "5.00";
+  await first.context.window.AgentBountiesOnramp.openDirectCheckout();
   assert.equal(first.opened.length, 1);
   assert.equal(first.opened[0].target, "agent-bounties-wallet-topup");
   assert.equal(first.opened[0].opener, null);
-  assert.equal(first.opened[0].url, "https://www.moonpay.com/buy/usdc");
-  assert.throws(() => first.context.window.AgentBountiesOnramp.openDirectCheckout(), /existing purchase/);
+  assert.match(first.opened[0].url, /^https:\/\/buy\.moonpay\.com\?walletAddress=/);
+  await assert.rejects(() => first.context.window.AgentBountiesOnramp.openDirectCheckout(), /existing purchase|Resume or resolve/);
   const metadata = [...first.saved.values()].join("");
   assert.match(metadata, /posting-123/);
   assert.equal(metadata.includes("https:"), false);
   const second = await onrampContext({ saved: first.saved });
   second.element("[data-onramp-ack]").checked = true;
-  assert.throws(() => second.context.window.AgentBountiesOnramp.openDirectCheckout(), /existing purchase/);
+  await assert.rejects(() => second.context.window.AgentBountiesOnramp.openDirectCheckout(), /existing purchase|Resume or resolve/);
   assert.equal(second.opened.length, 0);
   second.element("[data-purchase-resolved]").checked = true;
   second.element("[data-clear-purchase]").handlers.click();
@@ -441,4 +472,142 @@ test("an uncertain checkout response cannot trigger a repeated request", async (
   assert.equal(app.context.window.AgentBountiesOnramp.hasPendingPurchase(), true);
   assert.equal(app.element("[data-purchase-recovery]").hidden, false);
   assert.match(app.element("[data-purchase-recovery-copy]").textContent, /status is unverified/);
+});
+
+test("new-bounty checkout omits bounty_contract and opens signed MoonPay URL from mocked response", async () => {
+  const bounty = `0x${"b".repeat(40)}`;
+  const signedUrl = `https://buy.moonpay.com?walletAddress=${wallet}&signature=abc123&currencyCode=usdc&baseCurrencyCode=usd`;
+  const response = {
+    ok: true,
+    status: 200,
+    json: async () => ({
+      schema_version: "agent-bounties/moonpay-onramp-checkout-v1",
+      provider: "moonpay",
+      destination_wallet: wallet,
+      bounty_contract: bounty,
+      bounty_funded: false,
+      canonical_funding_event: null,
+      checkout_url: signedUrl,
+      external_transaction_id: "tx-123",
+      environment: "sandbox",
+      evidence_boundary: "test boundary",
+    }),
+  };
+  const app = await onrampContext({ contract: bounty, checkoutResponse: response });
+  app.element("[data-fiat-amount]").value = "5.00";
+  app.element("[data-onramp-ack]").checked = true;
+  app.element("[data-start-moonpay]").handlers.click();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const checkoutRequests = app.requests.filter(({ url }) => String(url).includes("/checkout"));
+  assert.equal(checkoutRequests.length, 1);
+  const body = JSON.parse(checkoutRequests[0].options.body);
+  assert.equal(body.bounty_contract, bounty);
+  assert.equal(body.wallet_address, wallet);
+  assert.equal(body.base_currency_amount, "5.00");
+  assert.equal(body.base_currency_code, "usd");
+  assert.equal(app.context.window.AgentBountiesOnramp.hasPendingPurchase(), true);
+});
+
+test("existing-bounty checkout preserves wallet and bounty boundary from mocked response", async () => {
+  const bounty = `0x${"c".repeat(40)}`;
+  const signedUrl = `https://buy.moonpay.com?walletAddress=${wallet}&signature=def456&currencyCode=usdc&baseCurrencyCode=usd`;
+  const response = {
+    ok: true,
+    status: 200,
+    json: async () => ({
+      schema_version: "agent-bounties/moonpay-onramp-checkout-v1",
+      provider: "moonpay",
+      destination_wallet: wallet,
+      bounty_contract: bounty,
+      bounty_funded: false,
+      canonical_funding_event: null,
+      checkout_url: signedUrl,
+      external_transaction_id: "tx-456",
+      environment: "production",
+      evidence_boundary: "prod boundary",
+    }),
+  };
+  const app = await onrampContext({ contract: bounty, checkoutResponse: response });
+  app.element("[data-fiat-amount]").value = "10.00";
+  app.element("[data-onramp-ack]").checked = true;
+  app.element("[data-start-moonpay]").handlers.click();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const checkoutRequests = app.requests.filter(({ url }) => String(url).includes("/checkout"));
+  assert.equal(checkoutRequests.length, 1);
+  const body = JSON.parse(checkoutRequests[0].options.body);
+  assert.equal(body.bounty_contract, bounty);
+  assert.equal(body.wallet_address, wallet);
+  assert.equal(body.base_currency_amount, "10.00");
+  assert.equal(app.context.window.AgentBountiesOnramp.hasPendingPurchase(), true);
+});
+
+test("slow checkout response still opens tab and does not lose popup permission", async () => {
+  const bounty = `0x${"d".repeat(40)}`;
+  const signedUrl = `https://buy.moonpay.com?walletAddress=${wallet}&signature=ghi789&currencyCode=usdc&baseCurrencyCode=usd`;
+  const response = {
+    ok: true,
+    status: 200,
+    json: async () => ({
+      schema_version: "agent-bounties/moonpay-onramp-checkout-v1",
+      provider: "moonpay",
+      destination_wallet: wallet,
+      bounty_contract: bounty,
+      bounty_funded: false,
+      canonical_funding_event: null,
+      checkout_url: signedUrl,
+      external_transaction_id: "tx-789",
+      environment: "sandbox",
+      evidence_boundary: "slow boundary",
+    }),
+  };
+  const app = await onrampContext({ contract: bounty, checkoutResponse: response, slowCheckout: true });
+  app.element("[data-fiat-amount]").value = "5.00";
+  app.element("[data-onramp-ack]").checked = true;
+  app.element("[data-start-moonpay]").handlers.click();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(app.requests.filter(({ url }) => String(url).includes("/checkout")).length, 1);
+  assert.equal(app.context.window.AgentBountiesOnramp.hasPendingPurchase(), true);
+});
+
+test("pending purchase blocks new checkout attempts until resolved", async () => {
+  const bounty = `0x${"e".repeat(40)}`;
+  const signedUrl = `https://buy.moonpay.com?walletAddress=${wallet}&signature=jkl012&currencyCode=usdc&baseCurrencyCode=usd`;
+  const response = {
+    ok: true,
+    status: 200,
+    json: async () => ({
+      schema_version: "agent-bounties/moonpay-onramp-checkout-v1",
+      provider: "moonpay",
+      destination_wallet: wallet,
+      bounty_contract: bounty,
+      bounty_funded: false,
+      canonical_funding_event: null,
+      checkout_url: signedUrl,
+      external_transaction_id: "tx-012",
+      environment: "sandbox",
+      evidence_boundary: "pending boundary",
+    }),
+  };
+  const first = await onrampContext({ contract: bounty, checkoutResponse: response });
+  first.element("[data-fiat-amount]").value = "5.00";
+  first.element("[data-onramp-ack]").checked = true;
+  first.element("[data-start-moonpay]").handlers.click();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(first.context.window.AgentBountiesOnramp.hasPendingPurchase(), true);
+  assert.equal(first.element("[data-purchase-recovery]").hidden, false);
+  assert.match(first.element("[data-purchase-recovery-copy]").textContent, /status is unverified/);
+
+  const second = await onrampContext({ saved: first.saved });
+  second.element("[data-fiat-amount]").value = "10.00";
+  second.element("[data-onramp-ack]").checked = true;
+  second.element("[data-start-moonpay]").handlers.click();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(second.context.window.AgentBountiesOnramp.hasPendingPurchase(), true);
+  assert.equal(second.element("[data-purchase-recovery]").hidden, false);
+
+  second.element("[data-purchase-resolved]").checked = true;
+  second.element("[data-clear-purchase]").handlers.click();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(second.context.window.AgentBountiesOnramp.hasPendingPurchase(), false);
+  assert.equal(second.element("[data-onramp-ack]").checked, false);
 });
