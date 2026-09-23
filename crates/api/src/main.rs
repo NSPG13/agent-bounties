@@ -4590,9 +4590,13 @@ async fn load_unfunded_opportunity_trials(
 ) -> Result<Vec<db::TrialBounty>, db::DbError> {
     match opportunity_id {
         None => store.list_trial_bounties(100).await,
-        Some(value) => match value.strip_prefix("unfunded:").and_then(|id| Uuid::parse_str(id).ok()) {
+        Some(value) => match value
+            .strip_prefix("unfunded:")
+            .and_then(|id| Uuid::parse_str(id).ok())
+        {
             Some(id) => store.get_trial_bounty(id).await.map(|trial| {
-                trial.into_iter()
+                trial
+                    .into_iter()
                     .filter(|trial| trial.status == "open" && trial.expires_at > now)
                     .collect()
             }),
@@ -4628,29 +4632,33 @@ async fn build_opportunity_projection(
     let mut source_statuses = Vec::<OpportunitySourceStatus>::new();
 
     let (unfunded_items, unfunded_error) = match state.store.as_ref() {
-        Some(store) => match load_unfunded_opportunity_trials(store, query.opportunity_id.as_deref(), now).await {
-            Ok(trials) => {
-                let mut projected = Vec::with_capacity(trials.len());
-                let mut error = None;
-                for trial in trials {
-                    match store.list_unfunded_bounty_solutions(trial.id).await {
-                        Ok(solutions) => {
-                            projected.push(unfunded_opportunity(&trial, &solutions, api));
-                        }
-                        Err(_) => {
-                            error = Some("unfunded_solution_store_unavailable".to_string());
-                            projected.clear();
-                            break;
+        Some(store) => {
+            match load_unfunded_opportunity_trials(store, query.opportunity_id.as_deref(), now)
+                .await
+            {
+                Ok(trials) => {
+                    let mut projected = Vec::with_capacity(trials.len());
+                    let mut error = None;
+                    for trial in trials {
+                        match store.list_unfunded_bounty_solutions(trial.id).await {
+                            Ok(solutions) => {
+                                projected.push(unfunded_opportunity(&trial, &solutions, api));
+                            }
+                            Err(_) => {
+                                error = Some("unfunded_solution_store_unavailable".to_string());
+                                projected.clear();
+                                break;
+                            }
                         }
                     }
+                    (projected, error)
                 }
-                (projected, error)
+                Err(_) => (
+                    Vec::new(),
+                    Some("unfunded_bounty_store_unavailable".to_string()),
+                ),
             }
-            Err(_) => (
-                Vec::new(),
-                Some("unfunded_bounty_store_unavailable".to_string()),
-            ),
-        },
+        }
         None => (Vec::new(), Some("durable_store_not_configured".to_string())),
     };
     let unfunded_available = unfunded_error.is_none();
@@ -21698,46 +21706,78 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
     async fn opportunity_exact_unfunded_lookup_crosses_list_window_postgres() {
-        let store = PostgresStore::connect(&postgres_test_database_url()).await.unwrap();
+        let store = PostgresStore::connect(&postgres_test_database_url())
+            .await
+            .unwrap();
         store.migrate().await.unwrap();
         let now = Utc::now();
         let mut ids = Vec::new();
         for index in 0..103 {
             let id = Uuid::new_v4();
-            store.create_or_get_trial_bounty(&NewTrialBounty {
-                id,
-                idempotency_key: format!("exact-history-{id}"),
-                request_fingerprint: id.to_string(),
-                title: "Exact history test".to_string(),
-                goal: "Keep older public work addressable".to_string(),
-                acceptance_criteria: vec!["Read the exact record".to_string()],
-                source_url: None,
-                discovery_source: "test".to_string(),
-                status: if index == 102 { "closed" } else { "open" }.to_string(),
-                demo_agent_solution: serde_json::json!({}),
-                expires_at: if index == 101 { now + chrono::Duration::days(1) }
-                    else { now + chrono::Duration::days(3) },
-            }).await.unwrap();
+            store
+                .create_or_get_trial_bounty(&NewTrialBounty {
+                    id,
+                    idempotency_key: format!("exact-history-{id}"),
+                    request_fingerprint: id.to_string(),
+                    title: "Exact history test".to_string(),
+                    goal: "Keep older public work addressable".to_string(),
+                    acceptance_criteria: vec!["Read the exact record".to_string()],
+                    source_url: None,
+                    discovery_source: "test".to_string(),
+                    status: if index == 102 { "closed" } else { "open" }.to_string(),
+                    demo_agent_solution: serde_json::json!({}),
+                    expires_at: if index == 101 {
+                        now + chrono::Duration::days(1)
+                    } else {
+                        now + chrono::Duration::days(3)
+                    },
+                })
+                .await
+                .unwrap();
             ids.push(id);
         }
-        let listed = load_unfunded_opportunity_trials(&store, None, now).await.unwrap();
+        let listed = load_unfunded_opportunity_trials(&store, None, now)
+            .await
+            .unwrap();
         assert_eq!(listed.len(), 100);
         assert!(listed.iter().all(|trial| trial.id != ids[0]));
         let state = test_state_with_operator_token_and_store(
-            BountyNetwork::default(), "secret-token", store.clone(),
+            BountyNetwork::default(),
+            "secret-token",
+            store.clone(),
         );
         let key = format!("unfunded:{}", ids[0]);
-        let projection = build_opportunity_projection(&state, OpportunityQuery {
-            view: Some("recent".to_string()), opportunity_id: Some(key.clone()),
-            limit: Some(1), ..Default::default()
-        }).await.unwrap();
+        let projection = build_opportunity_projection(
+            &state,
+            OpportunityQuery {
+                view: Some("recent".to_string()),
+                opportunity_id: Some(key.clone()),
+                limit: Some(1),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(projection.items.len(), 1);
         assert_eq!(projection.items[0].opportunity_id, key);
-        for key in [format!("unfunded:{}", ids[101]), format!("unfunded:{}", ids[102]),
-            format!("unfunded:{}", Uuid::new_v4()), "unfunded:invalid".to_string(),
-            format!("legacy:{}", ids[0])] {
-            assert!(load_unfunded_opportunity_trials(&store, Some(&key), now + chrono::Duration::days(2))
-                .await.unwrap().is_empty(), "unexpected visibility: {key}");
+        for key in [
+            format!("unfunded:{}", ids[101]),
+            format!("unfunded:{}", ids[102]),
+            format!("unfunded:{}", Uuid::new_v4()),
+            "unfunded:invalid".to_string(),
+            format!("legacy:{}", ids[0]),
+        ] {
+            assert!(
+                load_unfunded_opportunity_trials(
+                    &store,
+                    Some(&key),
+                    now + chrono::Duration::days(2)
+                )
+                .await
+                .unwrap()
+                .is_empty(),
+                "unexpected visibility: {key}"
+            );
         }
     }
 
