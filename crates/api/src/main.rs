@@ -21284,6 +21284,11 @@ mod tests {
             card.headers().get(header::CONTENT_TYPE).unwrap(),
             "application/json"
         );
+        assert!(card.headers().contains_key(header::ETAG));
+        assert_eq!(
+            card.headers().get("cache-control").unwrap(),
+            "public, max-age=300, must-revalidate"
+        );
 
         let request_body = serde_json::json!({
             "message": {
