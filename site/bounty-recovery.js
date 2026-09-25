@@ -57,7 +57,9 @@
         try {
           response = await fetcher(endpoints[index], { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id, method, params }), cache: "no-store", credentials: "omit", signal: AbortSignal.timeout(12000) });
         } catch (_) { continue; }
-        if (response.status === 429 || response.status >= 500) continue;
+        // A public endpoint may gate receipt/history reads behind a token.
+        // Try the other pinned reader; this transport cannot send transactions.
+        if ([401, 403, 429].includes(response.status) || response.status >= 500) continue;
         if (!response.ok) throw new Error("Base could not verify this request. Check status before trying again.");
         const result = await response.json();
         if (result.error?.code === -32005) continue;

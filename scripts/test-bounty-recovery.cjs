@@ -151,6 +151,25 @@ test("RPC never retries a simulation revert or invalid response", async () => {
     await assert.rejects(rpc("eth_estimateGas", []), /could not verify/); assert.equal(calls, 1);
   }
 });
+test("RPC falls back when a public endpoint requires a token for a receipt", async () => {
+  for (const status of [401, 403]) {
+    const calls = [], receipt = { transactionHash: TX, status: "0x1", logs: [] };
+    const rpc = core.createRpc(async (url, init) => {
+      const body = JSON.parse(init.body); calls.push({ url, body });
+      return url.includes("publicnode") ? { status, ok: false, json: async () => ({ jsonrpc: "2.0", id: body.id, error: { code: -32602, message: "Archive requests require a personal token." } }) }
+        : { status: 200, ok: true, json: async () => ({ jsonrpc: "2.0", id: body.id, result: receipt }) };
+    });
+    assert.equal(await rpc("eth_getTransactionReceipt", [TX]), receipt);
+    assert.deepEqual(calls.map(call => call.url), ["https://base-rpc.publicnode.com", "https://mainnet.base.org"]);
+    assert.deepEqual(calls[0].body, calls[1].body);
+    await assert.rejects(rpc("eth_sendTransaction", []), /only supports reads/);
+    assert.equal(calls.length, 2);
+  }
+  let calls = 0;
+  const blocked = core.createRpc(async () => { calls++; return { status: 403, ok: false }; });
+  await assert.rejects(blocked("eth_getTransactionReceipt", [TX]), /busy or unavailable/);
+  assert.equal(calls, 2);
+});
 test("RPC unavailability is bounded and snapshot rejects a changed block", async () => {
   let calls = 0;
   const rpc = core.createRpc(async () => { calls++; throw new Error("offline"); });
@@ -357,6 +376,9 @@ if (process.env.RECOVERY_BROWSER_TEST === "1") test("real browser: expiry-only r
         const url = new URL(route.request().url());
         if (["https://mainnet.base.org", "https://base-rpc.publicnode.com"].includes(url.origin)) {
           const body = route.request().postDataJSON();
+          if (url.origin === "https://base-rpc.publicnode.com" && body.method === "eth_getTransactionReceipt") {
+            return route.fulfill({ status: 403, json: { jsonrpc: "2.0", id: body.id, error: { code: -32602, message: "Archive requests require a personal token." } } });
+          }
           return route.fulfill({ json: { jsonrpc: "2.0", id: body.id, result: await f.rpc(body.method, body.params) } });
         }
         if (url.origin === "https://api.agentbounties.app") {
