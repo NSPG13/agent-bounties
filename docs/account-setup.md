@@ -27,6 +27,28 @@ this user-selected hint, `wallet_type`, `chain_ids`, and `last_verified_at`.
 Legacy links remain provider-unknown. This metadata cannot establish a live
 signing session, ownership of another address, or funding readiness.
 
+## Continue your work
+
+The account panel lists saved drafts before wallet setup. It groups confirmed
+activity by next action, recovery, working, awaiting review, paid and past
+activity. A deadline is a reminder; only confirmed terminal events establish
+payment, refund, rejection or expiry. Rounds remain separate after reopening.
+
+`GET /v1/site-auth/account` includes `saved_drafts`, `activity_inbox` and
+`generated_at`. Each source reports availability independently. Drafts remain
+accessible when no wallet is linked or chain evidence is unavailable.
+`GET /v1/site-auth/posting-drafts?offset=...` lists only the signed-in account's
+saved-operation summaries, 50 per page. Follow `next_offset`; the listing
+excludes raw draft contents, approvals and recovery payloads. Both reads use
+the existing browser session, no-store responses and the existing draft
+rollout gate. A continuation URL is not authorization.
+
+A pending posting checkpoint moves to past activity only when canonical
+activity matches its bounty contract and ID, proves funding, and identifies
+the account as poster. It remains a posting record, not a solver payment.
+Older draft pages may still ask to check posting status; resume the same
+operation to reconcile them before retrying.
+
 ## Saved posting journeys
 
 `GET` and `POST /v1/site-auth/posting-drafts/{operation_id}` use the existing

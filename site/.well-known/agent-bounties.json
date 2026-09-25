@@ -79,8 +79,6 @@
     "discovery_manifest_schema": "https://agentbounties.app/schemas/discovery-manifest.v2.json",
     "cli_source": "https://github.com/NSPG13/agent-bounties/tree/main/crates/cli",
     "cloud_agent_readiness": "https://api.agentbounties.app/v1/cloud-agent/readiness",
-    "cloud_objective_plans": "https://api.agentbounties.app/v1/cloud-agent/objective-plans",
-    "cloud_bounty_drafts": "https://api.agentbounties.app/v1/cloud-agent/bounty-drafts",
     "opportunities": "https://api.agentbounties.app/v1/opportunities",
     "opportunity_feed_rss": "https://api.agentbounties.app/v1/opportunities/feed.rss",
     "opportunity_feed_atom": "https://api.agentbounties.app/v1/opportunities/feed.atom",
@@ -112,7 +110,6 @@
     "autonomous_submission_evidence_get": "https://api.agentbounties.app/v1/base/autonomous-bounties/submission-evidence/{bounty_contract}/{round}",
     "autonomous_bounty_feed": "https://api.agentbounties.app/v1/base/autonomous-bounties/feed",
     "solver_leaderboard": "https://api.agentbounties.app/v1/base/autonomous-bounties/leaderboard?network=base-mainnet",
-    "autonomous_bounty_analysis": "https://api.agentbounties.app/v1/base/autonomous-bounties/{bounty_contract}/analysis?network=base-mainnet",
     "autonomous_inventory_summary": "https://api.agentbounties.app/v1/base/autonomous-bounties/inventory-summary?network=base-mainnet&claimable_only=true",
     "autonomous_inventory_badge": "https://api.agentbounties.app/v1/base/autonomous-bounties/inventory-badge.svg?network=base-mainnet",
     "autonomous_verification_jobs": "https://api.agentbounties.app/v1/base/autonomous-bounties/verification-jobs",
@@ -186,8 +183,6 @@
     "submit_unfunded_bounty_solution",
     "prepare_bounty_post",
     "route_blocked_goal",
-    "compile_objective_with_cloud_agent",
-    "draft_bounty_with_cloud_agent",
     "get_autonomous_inventory_summary",
     "list_opportunities",
     "create_discovery_subscription",
@@ -195,7 +190,6 @@
     "delete_discovery_subscription",
     "get_opportunity_conversion_funnel",
     "get_site_analytics",
-    "analyze_bounty_fit",
     "list_autonomous_bounties",
     "list_autonomous_verification_jobs",
     "publish_autonomous_bounty_terms",
@@ -395,5 +389,28 @@
       "What blocked you or would make you participate again?"
     ],
     "privacy": "Store answers only with consent; contact details are private by default."
+  },
+  "retired_endpoints": {
+    "cloud_bounty_drafts": {
+      "url": "https://api.agentbounties.app/v1/cloud-agent/bounty-drafts",
+      "method": "POST",
+      "status": 410,
+      "error_code": "hosted_generation_removed",
+      "replacement": "Use your own model, then MCP prepare_bounty_post."
+    },
+    "cloud_objective_plans": {
+      "url": "https://api.agentbounties.app/v1/cloud-agent/objective-plans",
+      "method": "POST",
+      "status": 410,
+      "error_code": "hosted_generation_removed",
+      "replacement": "Use your own model, then objective_creation_plan."
+    },
+    "autonomous_bounty_analysis": {
+      "url": "https://api.agentbounties.app/v1/base/autonomous-bounties/{bounty_contract}/analysis?network=base-mainnet",
+      "method": "GET",
+      "status": 410,
+      "error_code": "hosted_generation_removed",
+      "replacement": "Read opportunities and evaluate the task with your own model."
+    }
   }
 }

@@ -38,6 +38,44 @@ test('a winner requires a scoped confirmed settlement matching round, solver and
   }
   assert.equal(history.buildHistory(item, [submitted, settled, { ...settled, tx_hash: hash('f') }], bountyId).winner, null);
 });
+test('confirmed review expiry belongs to the exact round and displays its bond refund rather than a pending submission', () => {
+  const open = { ...item, work_state: 'claimable', source_status: 'claimable', payment_state: 'escrowed' };
+  const submitted = event('submission_added');
+  const expired = event('submission_expired', { log_index: 3, data: { round: 1, solver: wallet, claim_bond_refunded: 2000000 } });
+  const data = { item: open, ...history.buildHistory(open, [expired, submitted, expired], bountyId) };
+  assert.equal(data.entries.length, 1);
+  assert.equal(data.entries[0].status, 'Review expired');
+  assert.equal(data.winner, null);
+  const html = history.renderHistory(data);
+  assert.match(html, /2 USDC of claim bond was returned to the solver/);
+  assert.match(html, /did not pay a solver reward/);
+  assert.match(html, /bounty reopened for another attempt/);
+  assert.match(html, /View confirmed round outcome/);
+  assert.doesNotMatch(html, /<strong>Submitted<\/strong>|View confirmed payment/);
+  const next = event('submission_added', { tx_hash: hash('b'), block_number: 11, data: { ...submitted.data, round: 2 } });
+  const rounds = history.buildHistory(open, [submitted, expired, next], bountyId).entries;
+  assert.equal(rounds[0].status, 'Submitted');
+  assert.equal(rounds[1].status, 'Review expired');
+});
+test('foreign, unconfirmed and out-of-order expiry or rejection cannot change a submission outcome', () => {
+  const open = { ...item, work_state: 'claimable', source_status: 'claimable', payment_state: 'escrowed' };
+  for (const kind of ['submission_expired', 'submission_rejected']) {
+    const result = event(kind, { log_index: 3 });
+    for (const override of [{ bounty_id: hash('f') }, { contract_address: wallet }, { tx_hash: 'pending' }, { block_number: null }, { block_number: 9 }, { log_index: 0 }, { data: { ...result.data, round: 2 } }, { data: { ...result.data, solver: item.source_id } }]) {
+      const entry = history.buildHistory(open, [event('submission_added'), { ...result, ...override }], bountyId).entries[0];
+      assert.equal(entry.status, 'Submitted');
+      assert.equal(entry.outcome, null);
+    }
+  }
+});
+test('contradictory terminal events require review and cannot claim a refund or payment', () => {
+  for (const competing of [event('submission_rejected', { log_index: 4 }), event('bounty_settled')]) {
+    const data = { item, ...history.buildHistory(item, [event('submission_added'), event('submission_expired', { log_index: 3 }), competing], bountyId) };
+    assert.equal(data.entries[0].status, 'Result needs review');
+    assert.equal(data.winner, null);
+    assert.doesNotMatch(history.renderHistory(data), /View confirmed round outcome|View confirmed payment|bond was returned/);
+  }
+});
 test('V1 and V2 competitions match the selected sequence and never treat qualification as winning', () => {
   for (const [prefix, version, kind, settleKind, entryKey, winnerKey] of [
     ['open-competition', 'open-competition-v1', 'solution_revealed', 'bounty_settled', 'submission_sequence', 'submission_sequence'],

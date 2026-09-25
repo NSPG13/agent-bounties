@@ -280,15 +280,26 @@
       return { ...intent, authorization_url: `${detailUrl(item)}&intent=${encodeURIComponent(intent.intent_id)}`,
         user_confirmation_required: intent.status === "review_required", next_action: intent.status === "pending_confirmation" ? "Check status with the same intent; do not sign again." : "Open the first-party review. The person confirms the exact commitment there, with no extra chat approval.", guidance: GUIDANCE.consent };
     }
+    function currentReview(intent) {
+      const page = new URL(win.location.href);
+      return ["/participate.html", "/competition.html"].includes(page.pathname)
+        && page.searchParams.get("intent") === intent.intent_id
+        && String(page.searchParams.get("bountyContract") || "").toLowerCase() === String(intent.bounty_contract || "").toLowerCase()
+        && page.searchParams.get("network") === intent.network;
+    }
     async function progress(intentId) {
       if (!UUID.test(intentId || "")) throw new Error("A valid review identifier is required.");
       const intent = await request(`/v1/chatgpt/action-intents/${intentId}`);
       const paid = intent.status === "confirmed" && intent.canonical_event_id && intent.confirmed_block != null
         && ["bounty_settled", "competition_settled_v2"].includes(intent.canonical_event_kind) && intent.paid === true;
+      const onReview = currentReview(intent);
+      const next = paid ? "Payment confirmed. Show the evidence and offer another suitable task."
+        : intent.status === "confirmed" ? "This step is confirmed. Inspect the bounty and continue to the next step."
+        : intent.status === "pending_confirmation" ? "Wait and check again; keep the same request and do not ask for another signature."
+        : intent.status === "review_required" && onReview ? "The exact review is already open on this page. Explain the commitment and costs, then let the person choose their wallet and confirm here. Do not create another intent or repeat the interview."
+        : intent.next_action;
       return { ...intent, paid: Boolean(paid), user_confirmation_required: false, poll_after_seconds: 15,
-        next_step: paid ? "Payment confirmed. Show the evidence and offer another suitable task."
-          : intent.status === "confirmed" ? "This step is confirmed. Inspect the bounty and continue to the next step."
-          : intent.status === "pending_confirmation" ? "Wait and check again; keep the same request and do not ask for another signature." : intent.next_action };
+        review_page_open: onReview, next_action: next, next_step: next };
     }
     return { request, inventory, opportunity, inspect, prepareAction, progress, load, save, start };
   }

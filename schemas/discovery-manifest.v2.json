@@ -116,6 +116,7 @@
       },
       "additionalProperties": true
     },
+    "retired_endpoints": { "type": "object", "description": "Unavailable compatibility routes and their supported alternatives." },
     "endpoints": {
       "type": "object",
       "required": [
@@ -124,8 +125,6 @@
         "mcp_streamable_http",
         "llms_txt",
         "cloud_agent_readiness",
-        "cloud_objective_plans",
-        "cloud_bounty_drafts",
         "opportunities",
         "opportunity_feed_rss",
         "opportunity_feed_atom",
@@ -155,7 +154,6 @@
         "autonomous_submission_evidence_get",
         "autonomous_bounty_feed",
         "solver_leaderboard",
-        "autonomous_bounty_analysis",
         "autonomous_inventory_summary",
         "autonomous_inventory_badge",
         "autonomous_verification_jobs",

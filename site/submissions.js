@@ -62,6 +62,18 @@
       && ['submission_hash', 'evidence_hash'].every(key => HASH.test(a.data?.[key]) && lower(a.data[key]) === lower(b.data?.[key]))
       && a.bounty_id === b.bounty_id && lower(a.contract_address) === lower(b.contract_address);
   }
+  function after(a, b) { return a.block_number > b.block_number || (a.block_number === b.block_number && a.log_index > b.log_index); }
+  function roundResult(submission, events) {
+    const results = events.filter(result => ['submission_expired', 'submission_rejected'].includes(result.kind)
+      && sequence(result) === sequence(submission) && lower(result.data?.solver) === lower(submission.data.solver)
+      && after(result, submission));
+    return { result: results.length === 1 ? results[0] : null, conflict: results.length > 1 };
+  }
+  function usdcAmount(value) {
+    if (!(typeof value === 'string' && /^\d+$/.test(value)) && !(Number.isSafeInteger(value) && value >= 0)) return null;
+    const amount = BigInt(value), fraction = (amount % 1000000n).toString().padStart(6, '0').replace(/0+$/, '');
+    return `${amount / 1000000n}${fraction ? `.${fraction}` : ''} USDC`;
+  }
   function buildHistory(item, sourceEvents, bountyId) {
     if (!canonical(item) || !HASH.test(bountyId) || !Array.isArray(sourceEvents)) throw new Error('Bounty evidence is incomplete.');
     const version = protocol(item);
@@ -75,13 +87,16 @@
     const entries = unique.filter(event => event.kind === submissionKind && Number.isSafeInteger(sequence(event)) && sequence(event) > 0
       && flow.ADDRESS.test(event.data?.solver) && HASH.test(event.data?.submission_hash) && HASH.test(event.data?.evidence_hash))
       .sort((a, b) => sequence(b) - sequence(a)).map(event => {
-        const rejected = event.data.passed === false || unique.some(result => result.kind === 'submission_rejected'
-          && sequence(result) === sequence(event) && lower(result.data?.solver) === lower(event.data.solver));
-        const winning = Boolean(!rejected && (version !== 'open-competition' || event.data.passed === true)
+        const outcome = version === 'canonical' ? roundResult(event, unique) : { result: null, conflict: false };
+        const expired = outcome.result?.kind === 'submission_expired';
+        const rejected = event.data.passed === false || outcome.result?.kind === 'submission_rejected';
+        const winning = Boolean(!expired && !rejected && !outcome.conflict && (version !== 'open-competition' || event.data.passed === true)
           && settlement && sameSubmission(event, settlement)
-          && (settlement.block_number > event.block_number || (settlement.block_number === event.block_number && settlement.log_index > event.log_index)));
+          && after(settlement, event));
+        const conflictingSettlement = Boolean(outcome.result && settlement && sameSubmission(event, settlement));
         return { event, number: sequence(event), winning, settlement: winning ? settlement : null,
-          status: winning ? 'Winning submission' : rejected ? 'Did not pass' : completed(item) ? 'Not selected' : 'Submitted', evidence: null, evidenceState: 'missing' };
+          outcome: conflictingSettlement ? null : outcome.result,
+          status: outcome.conflict || conflictingSettlement ? 'Result needs review' : winning ? 'Winning submission' : expired ? 'Review expired' : rejected ? 'Did not pass' : completed(item) ? 'Not selected' : 'Submitted', evidence: null, evidenceState: 'missing' };
       });
     // Conflicting submission records cannot produce multiple winning badges.
     if (entries.filter(entry => entry.winning).length > 1) entries.forEach(entry => { entry.winning = false; entry.settlement = null; entry.status = 'Result needs review'; });
@@ -139,7 +154,12 @@
     const unavailable = entry.evidenceState === 'unavailable' ? 'The work details could not load. Use Refresh to try again.'
       : entry.evidenceState === 'mismatch' ? 'The stored work details do not match this submission. They are hidden until checked.'
         : 'The original work link was not published in the available record. The submission hashes and transaction are shown below.';
-    const reason = entry.winning ? `<section class="submission-result"><h3>Why this won</h3><p>${escape(protocol(item) === 'open-competition' ? 'This was the first confirmed passing reveal under the published competition rules.' : protocol(item) === 'open-competition-v2' ? 'The contract selected this qualified entry under its published winner rule.' : 'The bounty’s recorded review accepted this submission and released the reward.')}</p><p>See the original success criteria and review method above. A written review for each criterion is not available in this public record.</p>${link(txUrl(entry.settlement), 'View confirmed payment')}</section>` : '';
+    const refund = usdcAmount(entry.outcome?.data?.claim_bond_refunded);
+    const outcomeReason = entry.outcome?.kind === 'submission_expired'
+      ? `The review deadline expired. ${refund === null ? 'The refund amount is unavailable in this record.' : `${refund} of claim bond was returned to the solver.`} This round did not pay a solver reward. The bounty reopened for another attempt.`
+      : entry.outcome?.kind === 'submission_rejected' ? 'This submission did not pass review. The solver bond paid the review cost, and the bounty reopened fully funded for another attempt.' : '';
+    const reason = entry.winning ? `<section class="submission-result"><h3>Why this won</h3><p>${escape(protocol(item) === 'open-competition' ? 'This was the first confirmed passing reveal under the published competition rules.' : protocol(item) === 'open-competition-v2' ? 'The contract selected this qualified entry under its published winner rule.' : 'The bounty’s recorded review accepted this submission and released the reward.')}</p><p>See the original success criteria and review method above. A written review for each criterion is not available in this public record.</p>${link(txUrl(entry.settlement), 'View confirmed payment')}</section>`
+      : outcomeReason ? `<section class="submission-result"><h3>Round outcome</h3><p>${escape(outcomeReason)}</p><p>Confirmed ${escape(new Date(entry.outcome.occurred_at).toLocaleString())}</p>${link(txUrl(entry.outcome), 'View confirmed round outcome')}</section>` : '';
     return `<article class="submission-card${entry.winning ? ' submission-winner' : ''}" id="submission-${entry.number}"><header><h2>Submission ${entry.number}</h2><strong>${escape(entry.status)}</strong></header><p>Recorded ${escape(new Date(entry.event.occurred_at).toLocaleString())}</p><p class="submission-wallet">By ${escape(entry.event.data.solver)}</p>${entry.event.data.score !== undefined ? `<p>Recorded score: <strong>${escape(entry.event.data.score)}</strong></p>` : ''}${artifact ? link(artifact, 'Open submitted work', 'market-button market-button-primary') : `<p>${escape(unavailable)}</p>`}${record && !artifact ? `<p>Work reference: <code>${escape(record.artifact_reference)}</code></p>` : ''}${reason}<details><summary>Submission evidence</summary>${record ? `<p>Evidence supplied by the solver. This is not a written verdict from the reviewer.</p><pre>${escape(JSON.stringify(record.evidence, null, 2))}</pre>` : ''}<dl><dt>Submission hash</dt><dd>${escape(entry.event.data.submission_hash)}</dd><dt>Evidence hash</dt><dd>${escape(entry.event.data.evidence_hash)}</dd></dl>${link(txUrl(entry.event), 'View submission transaction')}</details></article>`;
   }
   function reviewMethod(item) {
