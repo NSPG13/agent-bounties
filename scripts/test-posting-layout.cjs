@@ -43,14 +43,19 @@ async function fixtures(context, origin, options = {}) {
   await context.route("**/*", async route => {
     const request = route.request(), url = new URL(request.url());
     const session = { authenticated: mock.authenticated, account_status: mock.authenticated ? "ready" : "signed_out", account_complete: mock.authenticated, providers: { github: true }, user: mock.authenticated ? { id: "layout-qa", name: "Posting QA", email: "posting-qa@example.test" } : null };
-    if (["/auth/session", "/v1/site-auth/session"].includes(url.pathname)) return route.fulfill({ json: session });
+    if (["/auth/session", "/v1/site-auth/session"].includes(url.pathname)) return route.fulfill(mock.sessionReadFailure
+      ? { status: 503, json: { message: "Synthetic temporary session outage" } } : { json: session });
     if (["/auth/account", "/v1/site-auth/account"].includes(url.pathname)) return route.fulfill({ json: { ...session, wallets: mock.wallets, data_status: "unavailable", reason: "marketplace_evidence_unavailable" } });
     const operation = /^\/v1\/site-auth\/posting-drafts\/([0-9a-f-]{36})$/i.exec(url.pathname)?.[1];
     if (operation) {
       mock.draftRequests.push({ method: request.method(), operation });
       if (!mock.authenticated) return route.fulfill({ status: 401, json: { message: "Sign in to access this draft." } });
       const existing = mock.drafts.get(operation);
-      if (request.method() === "GET") return route.fulfill(existing ? { json: existing } : { status: 404, json: { message: "Draft not found." } });
+      if (request.method() === "GET") {
+        await options.beforeDraftRead?.();
+        if (mock.draftReadFailure) return route.fulfill({ status: 503, json: { message: "Synthetic temporary draft outage" } });
+        return route.fulfill(existing ? { json: existing } : { status: 404, json: { message: "Draft not found." } });
+      }
       assert.equal(request.method(), "POST");
       const body = request.postDataJSON();
       if (body.expected_revision !== (existing?.revision || 0)) return route.fulfill({ status: 409, json: { message: "Draft changed on another device." } });
@@ -229,17 +234,62 @@ async function recoveryRegressions(browser, origin) {
     // storage copying or injected approval is involved.
     const second = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
     try {
-      await fixtures(second, origin, { wallets: [wallet], drafts: mock.drafts });
+      let releaseRead, readStarted;
+      const delayedRead = new Promise(resolve => { releaseRead = resolve; });
+      const readRequested = new Promise(resolve => { readStarted = resolve; });
+      const resumedMock = await fixtures(second, origin, { wallets: [wallet], drafts: mock.drafts,
+        beforeDraftRead: () => { readStarted(); return delayedRead; } });
+      await second.addInitScript(() => {
+        window.__restoreTools = new Map();
+        Object.defineProperty(document, "modelContext", { configurable: true,
+          value: { registerTool(tool) { window.__restoreTools.set(tool.name, tool); } } });
+      });
       const resumedPage = await second.newPage();
       resumedPage.on("pageerror", error => errors.push(error.message));
       await resumedPage.goto(approved.continuation);
       await awaitPosting(resumedPage);
-      await resumedPage.waitForFunction(() => window.AgentBountiesComposer.review().explicitly_approved);
+      await readRequested;
+      await resumedPage.waitForFunction(() => window.__restoreTools.has("agent_bounties_get_bounty_review"));
+      await resumedPage.evaluate(() => {
+        window.__restoreResults = {};
+        for (const name of ["agent_bounties_get_bounty_review", "agent_bounties_get_journey"]) {
+          Promise.resolve(window.__restoreTools.get(name).execute()).then(value => { window.__restoreResults[name] = value; });
+        }
+      });
+      // A separate event-loop turn exposes an early answer while the account
+      // response is still held; no fixed network delay or approval injection.
+      const earlyResults = await resumedPage.evaluate(() => window.__restoreResults);
+      releaseRead();
+      assert.deepEqual(earlyResults, {}, "Agents must not mistake a restoring draft for missing work or revoked approval");
+      await resumedPage.waitForFunction(() => Object.keys(window.__restoreResults).length === 2);
+      const restoredTools = await resumedPage.evaluate(() => window.__restoreResults);
+      const review = restoredTools.agent_bounties_get_bounty_review;
+      assert.equal(review.explicitly_approved, true);
+      assert.equal(review.saved_operation.operation_id, approved.journey.id);
+      assert.equal(review.saved_operation.status, "saved");
+      assert.equal(restoredTools.agent_bounties_get_journey.journey.id, approved.journey.id);
+      assert.equal(restoredTools.agent_bounties_get_journey.next_action.tool, "agent_bounties_get_bounty_review");
       const remote = await resumedPage.evaluate(() => window.AgentBountiesWorkflow.createClient(window).load());
       assert.deepEqual(remote.draft.reference_attachment, reference);
       assert.deepEqual(remote.draft.evidence_schema["x-agent-bounties-reference-attachment"], reference);
       assert.equal(remote.id, approved.journey.id);
       assert.deepEqual(await resumedPage.evaluate(() => window.__walletRequests), [], "Continuing an approved draft must not reconnect or sign automatically");
+      for (const outage of ["sessionReadFailure", "draftReadFailure"]) {
+        resumedMock[outage] = true;
+        await resumedPage.reload();
+        await resumedPage.waitForFunction(() => window.__restoreTools.has("agent_bounties_get_bounty_review"));
+        const failed = await resumedPage.evaluate(async () => {
+          try { await window.__restoreTools.get("agent_bounties_get_bounty_review").execute(); return null; }
+          catch (error) { return error.message; }
+        });
+        assert.match(failed, /restoration is unavailable/, outage);
+        resumedMock[outage] = false;
+        const retried = await resumedPage.evaluate(() => window.__restoreTools.get("agent_bounties_get_bounty_review").execute());
+        assert.equal(retried.explicitly_approved, true, "A same-tool retry recovers without reload or focus");
+        assert.equal(retried.saved_operation.operation_id, approved.journey.id);
+        assert.equal(retried.saved_operation.status, "saved");
+        assert.deepEqual(await resumedPage.evaluate(() => window.__walletRequests), []);
+      }
     } finally { await second.close(); }
 
     // A transaction hash alone must never mark creation/funding/claimability
@@ -598,6 +648,7 @@ async function main() {
     { width: 480, height: 360, zoomReflow: true }
   ];
   try {
+    if (process.env.POSTING_LAYOUT_RESTORE_ONLY) { await recoveryRegressions(browser, origin); return; }
     if (process.env.POSTING_LAYOUT_GUIDE_ONLY) { await walletBrandRegressions(browser, origin); await signedMoonpayDestinationRegressions(browser, origin); await guidedTopupRegressions(browser, origin);
     await topupPhoneConnectionRegression(browser, origin); return; }
     for (const size of sizes) {
