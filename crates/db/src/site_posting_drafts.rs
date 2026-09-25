@@ -18,6 +18,18 @@ pub struct SitePostingDraft {
     pub expires_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct SitePostingDraftSummary {
+    pub operation_id: Uuid,
+    pub title: String,
+    pub updated_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub revision: i64,
+    pub needs_reconciliation: bool,
+    pub bounty_contract: Option<String>,
+    pub bounty_id: Option<String>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum PostingDraftError {
     #[error("posting draft storage unavailable")]
@@ -79,6 +91,32 @@ fn from_row(row: PgRow) -> Result<SitePostingDraft, sqlx::Error> {
 }
 
 impl PostgresStore {
+    /// Account-scoped metadata only. Pending operations survive draft expiry so
+    /// a missing conversation cannot cause someone to repeat a funding request.
+    pub async fn list_site_posting_drafts(
+        &self,
+        account_id: &str,
+        offset: u32,
+    ) -> Result<Vec<SitePostingDraftSummary>, PostingDraftError> {
+        let rows = sqlx::query("SELECT operation_id, left(COALESCE(NULLIF(draft->'draft'->>'title', ''), NULLIF(draft->>'goal', ''), 'Untitled bounty'), 160) AS title, updated_at, expires_at, revision, recovery_state ? 'bounty_id' AS needs_reconciliation, recovery_state->>'bounty_contract' AS bounty_contract, recovery_state->>'bounty_id' AS bounty_id FROM site_posting_drafts WHERE account_id = $1 AND (expires_at > now() OR recovery_state ? 'bounty_id') ORDER BY updated_at DESC, operation_id DESC LIMIT 51 OFFSET $2")
+            .bind(account_id).bind(i64::from(offset)).fetch_all(&self.pool).await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(SitePostingDraftSummary {
+                    operation_id: row.try_get("operation_id")?,
+                    title: row.try_get("title")?,
+                    updated_at: row.try_get("updated_at")?,
+                    expires_at: row.try_get("expires_at")?,
+                    revision: row.try_get("revision")?,
+                    needs_reconciliation: row.try_get("needs_reconciliation")?,
+                    bounty_contract: row.try_get("bounty_contract")?,
+                    bounty_id: row.try_get("bounty_id")?,
+                })
+            })
+            .collect::<Result<Vec<_>, sqlx::Error>>()
+            .map_err(Into::into)
+    }
+
     pub async fn get_site_posting_draft(
         &self,
         account_id: &str,
@@ -244,6 +282,67 @@ mod tests {
                 Err(PostingDraftError::NonCanonicalJson)
             ));
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn draft_listing_is_private_paginated_and_keeps_pending_recovery() {
+        let store =
+            PostgresStore::connect(&std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap())
+                .await
+                .unwrap();
+        store.migrate().await.unwrap();
+        let owner = Uuid::new_v4().to_string();
+        let other = Uuid::new_v4().to_string();
+        let pending = Uuid::new_v4();
+        let draft = json!({"goal":"Saved without a wallet", "draft":{"title":"Private draft title", "secret_note":"never list the full draft"}});
+        store
+            .save_site_posting_draft(
+                &owner,
+                pending,
+                &draft,
+                0,
+                None,
+                &json!({"bounty_id":format!("0x{}", "aa".repeat(32))}),
+            )
+            .await
+            .unwrap();
+        sqlx::query("UPDATE site_posting_drafts SET expires_at = now() - interval '1 second' WHERE account_id = $1 AND operation_id = $2").bind(&owner).bind(pending).execute(&store.pool).await.unwrap();
+        for _ in 0..50 {
+            store
+                .save_site_posting_draft(&owner, Uuid::new_v4(), &draft, 0, None, &json!({}))
+                .await
+                .unwrap();
+        }
+        assert!(store
+            .list_site_posting_drafts(&other, 0)
+            .await
+            .unwrap()
+            .is_empty());
+        let first = store.list_site_posting_drafts(&owner, 0).await.unwrap();
+        assert_eq!(first.len(), 51); // fifty visible entries and a next-page sentinel
+        let last = store.list_site_posting_drafts(&owner, 50).await.unwrap();
+        assert_eq!(last.len(), 1);
+        assert_eq!(last[0].operation_id, pending);
+        assert!(last[0].needs_reconciliation);
+        assert_eq!(last[0].title, "Private draft title");
+        let encoded = serde_json::to_string(&first).unwrap();
+        assert!(!encoded.contains("secret_note"));
+        assert!(!encoded.contains("recovery_state"));
+        sqlx::query("UPDATE site_posting_drafts SET expires_at = now() - interval '1 second' WHERE account_id = $1").bind(&owner).execute(&store.pool).await.unwrap();
+        assert_eq!(
+            store
+                .list_site_posting_drafts(&owner, 0)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(store
+            .list_site_posting_drafts(&owner, 999)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]

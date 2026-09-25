@@ -28,7 +28,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 mod site_posting_drafts;
-pub use site_posting_drafts::{PostingDraftError, SitePostingDraft};
+pub use site_posting_drafts::{PostingDraftError, SitePostingDraft, SitePostingDraftSummary};
 
 pub const CORE_MIGRATION: &str = include_str!("../../../migrations/0001_core.sql");
 pub const AUTONOMOUS_PROTOCOL_MIGRATION: &str =

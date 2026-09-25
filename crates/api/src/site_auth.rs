@@ -7,7 +7,10 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use db::{DbError, PostgresStore, PostingDraftError, SiteAuthWallet, SitePostingDraft};
+use db::{
+    DbError, PostgresStore, PostingDraftError, SiteAuthWallet, SitePostingDraft,
+    SitePostingDraftSummary,
+};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -259,6 +262,7 @@ pub fn router(service: SiteAuthService) -> Router {
         .route("/v1/site-auth/healthz", get(healthz))
         .route("/v1/site-auth/session", get(session))
         .route("/v1/site-auth/account", get(account))
+        .route("/v1/site-auth/posting-drafts", get(list_posting_drafts))
         .route(
             "/v1/site-auth/posting-drafts/:operation_id",
             get(get_posting_draft).post(save_posting_draft),
@@ -630,37 +634,140 @@ async fn account(Extension(service): Extension<SiteAuthService>, headers: Header
             unavailable_account_dashboard("account_service_unavailable", Vec::new()),
         );
     };
-    let Some(store) = service.inner.store.as_ref() else {
-        return no_store_json(
-            StatusCode::OK,
-            unavailable_account_dashboard("wallet_link_store_unavailable", Vec::new()),
-        );
+    // Draft access depends on the account, not wallet linkage or chain availability.
+    let mut drafts = account_drafts(&service, &account_id, 0).await;
+    let mut dashboard = match service.inner.store.as_ref() {
+        None => unavailable_account_dashboard("wallet_link_store_unavailable", Vec::new()),
+        Some(store) => match store.list_site_auth_wallets(&account_id).await {
+            Err(_) => unavailable_account_dashboard("wallet_link_store_unavailable", Vec::new()),
+            Ok(wallets) => {
+                let wallets = wallets.into_iter().map(browser_wallet).collect::<Vec<_>>();
+                if wallets.is_empty() {
+                    unavailable_account_dashboard("marketplace_identity_unlinked", wallets)
+                } else {
+                    match load_account_evidence(&service).await.and_then(|evidence| {
+                        build_linked_account_dashboard(wallets.clone(), &evidence)
+                    }) {
+                        Ok(dashboard) => dashboard,
+                        Err(_) => unavailable_account_dashboard(
+                            "marketplace_evidence_unavailable",
+                            wallets,
+                        ),
+                    }
+                }
+            }
+        },
     };
-    let wallets = match store.list_site_auth_wallets(&account_id).await {
-        Ok(wallets) => wallets.into_iter().map(browser_wallet).collect::<Vec<_>>(),
-        Err(_) => {
-            return no_store_json(
-                StatusCode::OK,
-                unavailable_account_dashboard("wallet_link_store_unavailable", Vec::new()),
-            )
+    reconcile_draft_summaries(&mut drafts, &dashboard["activity_inbox"]);
+    dashboard["saved_drafts"] = drafts;
+    dashboard["generated_at"] = json!(Utc::now());
+    no_store_json(StatusCode::OK, dashboard)
+}
+
+fn reconcile_draft_summaries(drafts: &mut Value, activity: &Value) {
+    if activity["status"] != "available" {
+        return;
+    }
+    let Some(evidence) = activity["items"].as_array() else {
+        return;
+    };
+    let Some(items) = drafts["items"].as_array_mut() else {
+        return;
+    };
+    for item in items {
+        if item["group"] != "needs_action" {
+            continue;
         }
+        let (Some(contract), Some(bounty)) =
+            (item["bounty_contract"].as_str(), item["bounty_id"].as_str())
+        else {
+            continue;
+        };
+        if evidence.iter().any(|record| {
+            record["account_role"] == "poster"
+                && record["funding_confirmed"] == true
+                && record["network"] == "base-mainnet"
+                && record["bounty_contract"]
+                    .as_str()
+                    .is_some_and(|value| value.eq_ignore_ascii_case(contract))
+                && record["bounty_id"]
+                    .as_str()
+                    .is_some_and(|value| value.eq_ignore_ascii_case(bounty))
+        }) {
+            item["group"] = json!("completed");
+            item["status"] = json!("Posting confirmed");
+            item["next_action"] = json!("View this original posting operation and its canonical activity. Do not create or fund it again.");
+            // Canonical funding completes posting, not the solver's work or payment.
+            item["payment_state"] = json!("unverified");
+        }
+    }
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DraftListQuery {
+    #[serde(default)]
+    offset: u32,
+}
+
+async fn list_posting_drafts(
+    Extension(service): Extension<SiteAuthService>,
+    headers: HeaderMap,
+    Query(query): Query<DraftListQuery>,
+) -> Response {
+    let Some(account_id) = service
+        .current_user(&headers)
+        .and_then(|user| service.account_id(&user))
+    else {
+        return error_json(StatusCode::UNAUTHORIZED, "authentication_required");
     };
-    if wallets.is_empty() {
-        return no_store_json(
-            StatusCode::OK,
-            unavailable_account_dashboard("marketplace_identity_unlinked", wallets),
-        );
+    let payload = account_drafts(&service, &account_id, query.offset).await;
+    let status = if payload["status"] == "available" {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    no_store_json(status, payload)
+}
+
+async fn account_drafts(service: &SiteAuthService, account_id: &str, offset: u32) -> Value {
+    if !service.posting_drafts_enabled_for(account_id) {
+        return json!({"status":"unavailable", "reason":"posting_drafts_not_enabled", "items":[]});
     }
-    match load_account_evidence(&service)
-        .await
-        .and_then(|evidence| build_linked_account_dashboard(wallets.clone(), &evidence))
-    {
-        Ok(dashboard) => no_store_json(StatusCode::OK, dashboard),
-        Err(_) => no_store_json(
-            StatusCode::OK,
-            unavailable_account_dashboard("marketplace_evidence_unavailable", wallets),
-        ),
+    let Some(store) = service.inner.store.as_ref() else {
+        return json!({"status":"unavailable", "reason":"draft_storage_unavailable", "items":[]});
+    };
+    match store.list_site_posting_drafts(account_id, offset).await {
+        Ok(drafts) => draft_list_payload(&service.inner.web_origin, drafts, offset),
+        Err(_) => json!({"status":"unavailable", "reason":"draft_storage_unavailable", "items":[]}),
     }
+}
+
+fn draft_list_payload(
+    web_origin: &str,
+    drafts: Vec<SitePostingDraftSummary>,
+    offset: u32,
+) -> Value {
+    let next_offset = (drafts.len() > 50).then(|| offset.saturating_add(50));
+    let items = drafts.into_iter().take(50).map(|draft| json!({
+        "id": format!("draft:{}", draft.operation_id),
+        "operation_id": draft.operation_id,
+        "title": draft.title,
+        "group": if draft.needs_reconciliation { "needs_action" } else { "drafts" },
+        "status": if draft.needs_reconciliation { "Check posting status" } else { "Saved draft" },
+        "next_action": if draft.needs_reconciliation { "Resume this operation and check its canonical status before retrying funding." } else { "Continue reviewing this saved draft." },
+        "next_actor": "you",
+        "continuation_url": format!("{web_origin}/post.html?operation_id={}#bounty-preview", draft.operation_id),
+        "updated_at": draft.updated_at,
+        "expires_at": draft.expires_at,
+        "revision": draft.revision,
+        "payment_state": "unverified",
+        "bounty_contract": draft.bounty_contract,
+        "bounty_id": draft.bounty_id,
+    })).collect::<Vec<_>>();
+    json!({"schema_version":"agent-bounties/account-drafts-v1", "status":"available", "items":items,
+        "next_offset":next_offset, "generated_at":Utc::now(),
+        "evidence_boundary":"Saved drafts and pending posting operations are private coordination records. They do not prove funding or payment. Resume the same operation to check canonical evidence before retrying."})
 }
 
 async fn begin_oauth(
@@ -1581,6 +1688,7 @@ fn build_linked_account_dashboard(
             "spent_usdc": usdc_from_base_units(spent),
             "leaderboard_rank": rank,
         },
+        "activity_inbox": crate::account_activity::inbox(evidence, &addresses, Utc::now()),
         "activities": {
             "participating": participating_items,
             "completed_posts": completed_items,
@@ -1990,6 +2098,7 @@ mod tests {
     use super::*;
     use alloy::signers::{local::PrivateKeySigner, SignerSync};
     use chrono::TimeZone;
+    use tower::ServiceExt;
 
     #[test]
     fn saved_posting_payload_preserves_public_bindings_and_rejects_credentials() {
@@ -2120,6 +2229,16 @@ mod tests {
         inner.posting_drafts_canary_account_id = Some(canary.clone());
         assert!(service.posting_drafts_enabled_for(&canary));
         assert!(!service.posting_drafts_enabled_for("a-different-account"));
+        assert_eq!(
+            list_posting_drafts(
+                Extension(service.clone()),
+                HeaderMap::new(),
+                Query(DraftListQuery::default())
+            )
+            .await
+            .status(),
+            StatusCode::UNAUTHORIZED
+        );
         let operation_id = Uuid::new_v4();
         assert_eq!(
             get_posting_draft(
@@ -2196,6 +2315,150 @@ mod tests {
                 .status(),
             StatusCode::FORBIDDEN
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn signed_in_account_resumes_drafts_without_a_wallet_and_cannot_read_another_account() {
+        let store =
+            PostgresStore::connect(&std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap())
+                .await
+                .unwrap();
+        store.migrate().await.unwrap();
+        let mut service = SiteAuthService {
+            inner: Arc::new(SiteAuthInner {
+                session_secret: Some(vec![7; 32]),
+                wallet_secret: Some(vec![8; 32]),
+                web_origin: "https://agentbounties.app".to_string(),
+                api_origin: "https://api.agentbounties.app".to_string(),
+                allowed_origins: vec![HeaderValue::from_static("https://agentbounties.app")],
+                providers: BTreeMap::new(),
+                store: Some(store.clone()),
+                client: reqwest::Client::new(),
+                wallet_challenges: Mutex::new(HashMap::new()),
+                posting_drafts_enabled: true,
+                posting_drafts_canary_account_id: None,
+            }),
+        };
+        Arc::get_mut(&mut service.inner)
+            .unwrap()
+            .posting_drafts_enabled = true;
+        let mut user = test_user();
+        user.sub = Uuid::new_v4().to_string();
+        let account_id = service.account_id(&user).unwrap();
+        let operation = Uuid::new_v4();
+        store
+            .save_site_posting_draft(
+                &account_id,
+                operation,
+                &json!({"goal":"Resume this test draft"}),
+                0,
+                None,
+                &json!({}),
+            )
+            .await
+            .unwrap();
+        for (path, own, expected_items) in [
+            ("/v1/site-auth/account", true, 1),
+            ("/v1/site-auth/posting-drafts", true, 1),
+            ("/v1/site-auth/posting-drafts", false, 0),
+        ] {
+            let mut identity = user.clone();
+            if !own {
+                identity.sub = Uuid::new_v4().to_string();
+            }
+            let response = router(service.clone())
+                .oneshot(
+                    axum::http::Request::builder()
+                        .uri(path)
+                        .header(
+                            header::COOKIE,
+                            format!(
+                                "{SESSION_COOKIE}={}",
+                                sign_session(identity, &[7; 32], Utc::now())
+                            ),
+                        )
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert!(response.headers()[header::CACHE_CONTROL]
+                .to_str()
+                .unwrap()
+                .contains("no-store"));
+            let payload: Value = serde_json::from_slice(
+                &axum::body::to_bytes(response.into_body(), 100_000)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
+            let drafts = if path.ends_with("/account") {
+                assert_eq!(payload["account_status"], "wallet_required");
+                assert_eq!(payload["stats"]["earned_usdc"], Value::Null);
+                &payload["saved_drafts"]
+            } else {
+                &payload
+            };
+            assert_eq!(drafts["items"].as_array().unwrap().len(), expected_items);
+            if own {
+                assert_eq!(drafts["items"][0]["operation_id"], operation.to_string());
+            }
+        }
+    }
+
+    #[test]
+    fn confirmed_posting_checkpoint_is_not_an_action_alert_or_payment_claim() {
+        let contract = format!("0x{}", "11".repeat(20));
+        let bounty = format!("0x{}", "22".repeat(32));
+        let mut drafts = json!({"items":[{"group":"needs_action","bounty_contract":contract,"bounty_id":bounty,"continuation_url":"/post.html?operation_id=original","payment_state":"unverified"}]});
+        let mut activity = json!({"status":"available","items":[{"account_role":"poster","network":"base-mainnet","funding_confirmed":true,"bounty_contract":contract,"bounty_id":"foreign"}]});
+        reconcile_draft_summaries(&mut drafts, &activity);
+        assert_eq!(drafts["items"][0]["group"], "needs_action");
+        activity["items"][0]["bounty_id"] = json!(bounty);
+        activity["items"][0]["funding_confirmed"] = json!(false);
+        reconcile_draft_summaries(&mut drafts, &activity);
+        assert_eq!(drafts["items"][0]["group"], "needs_action");
+        activity["items"][0]["funding_confirmed"] = json!(true);
+        reconcile_draft_summaries(&mut drafts, &activity);
+        assert_eq!(drafts["items"][0]["group"], "completed");
+        assert_eq!(drafts["items"][0]["payment_state"], "unverified");
+        assert_eq!(
+            drafts["items"][0]["continuation_url"],
+            "/post.html?operation_id=original"
+        );
+    }
+
+    #[test]
+    fn account_draft_summaries_resume_exact_operations_without_claiming_payment() {
+        let operation_id = Uuid::new_v4();
+        let draft = SitePostingDraftSummary {
+            operation_id,
+            title: "Exact saved draft".into(),
+            updated_at: Utc::now(),
+            expires_at: Utc::now(),
+            revision: 4,
+            needs_reconciliation: false,
+            bounty_contract: None,
+            bounty_id: None,
+        };
+        let payload = draft_list_payload("https://agentbounties.app", vec![draft.clone()], 0);
+        assert_eq!(payload["items"][0]["group"], "drafts");
+        assert_eq!(payload["items"][0]["payment_state"], "unverified");
+        assert!(payload["items"][0]["continuation_url"]
+            .as_str()
+            .unwrap()
+            .contains(&operation_id.to_string()));
+        let pending = SitePostingDraftSummary {
+            needs_reconciliation: true,
+            ..draft
+        };
+        let payload = draft_list_payload("https://agentbounties.app", vec![pending; 51], 50);
+        assert_eq!(payload["items"].as_array().unwrap().len(), 50);
+        assert_eq!(payload["next_offset"], 100);
+        assert_eq!(payload["items"][0]["group"], "needs_action");
+        assert_eq!(payload["items"][0]["payment_state"], "unverified");
     }
 
     #[test]

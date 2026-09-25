@@ -45,7 +45,7 @@ jobs:
       - run: |
           python scripts/test_regression_verifier_pipeline.py -v
           python scripts/test_regression_verifier_source_guard.py -v
-          python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 ae141a33cd1baa8db0b0f86acdcb57112aa1822ffc7638d329d02867d3a0f50b
+          python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 1af20915224f21ebf59d83522fca96a847bc2f8f4ffa78395fd9d9e7286d3d74
           python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 6b0c5073097e9612f94e35089285729d0c0f5db580f75b351d19a97f8bffd2f1
           python -m py_compile scripts/regression_verifier_pipeline.py
           cargo test -p verifier-sdk -p worker
@@ -71,14 +71,14 @@ jobs:
         run: >-
           python scripts/regression_verifier_source_guard.py
           --scope worker-build
-          --expected-sha256 ae141a33cd1baa8db0b0f86acdcb57112aa1822ffc7638d329d02867d3a0f50b
+          --expected-sha256 1af20915224f21ebf59d83522fca96a847bc2f8f4ffa78395fd9d9e7286d3d74
 
       - name: Build isolated regression worker
         run: cargo build --release -p worker
 
       - name: Revalidate reviewed runtime after build
         run: |
-          python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 ae141a33cd1baa8db0b0f86acdcb57112aa1822ffc7638d329d02867d3a0f50b
+          python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 1af20915224f21ebf59d83522fca96a847bc2f8f4ffa78395fd9d9e7286d3d74
           python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 6b0c5073097e9612f94e35089285729d0c0f5db580f75b351d19a97f8bffd2f1
 
       - name: Run canonical jobs without signing secrets

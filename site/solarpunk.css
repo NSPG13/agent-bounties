@@ -2467,3 +2467,14 @@ html[data-scene-ready="false"] .scene-plate {
     display: none;
   }
 }
+
+/* Account continuations stay usable before a wallet is linked. */
+.account-inbox { margin: 20px 0; min-width: 0; }
+.account-inbox h3, .account-inbox h4, .account-inbox summary { color: var(--ab-ink, #e9eee3); margin: 14px 0 8px; }
+.account-inbox ul { list-style: none; margin: 0; padding: 0; }
+.account-inbox li { display: grid; gap: 6px; padding: 14px 0; border-bottom: 1px solid var(--ab-line, rgba(196, 221, 176, .16)); overflow-wrap: anywhere; }
+.account-inbox a { color: var(--ab-ink, #dceebf); text-decoration: underline; font-weight: 650; }
+.account-inbox strong { color: var(--ab-ink, #e9eee3); font-size: .85rem; }
+.account-inbox p, .account-inbox small { margin: 0; color: var(--ab-muted, #b8c6b4); line-height: 1.5; }
+.account-inbox button { margin-top: 12px; padding: 10px 14px; }
+

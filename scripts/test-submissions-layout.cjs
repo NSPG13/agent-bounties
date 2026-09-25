@@ -27,14 +27,15 @@ async function journey(browser, origin, width) {
     if (url.pathname === '/v1/opportunities') {
       const completed = url.searchParams.get('work_state') === 'completed';
       const identity = url.searchParams.get('opportunity_id');
-      if (identity) return route.fulfill({ json: projection('recent', identity === paid.opportunity_id ? [paid] : []) });
+      if (identity) return route.fulfill({ json: projection('recent', identity === paid.opportunity_id ? [mode === 'expired' ? { ...paid, work_state: 'claimable', source_status: 'claimable', payment_state: 'escrowed' } : paid] : []) });
       if (completed && mode === 'held') { heldRoute = route; return; }
       return route.fulfill({ status: completed && mode === 'offline' ? 503 : 200, json: projection(url.searchParams.get('view'), completed || url.searchParams.get('view') === 'recent' ? [paid] : [{ ...fixture.opportunity, competition_mode: 'exclusive_claim', deadline: '2099-01-01T00:00:00Z' }]) });
     }
     if (url.pathname === '/v1/base/autonomous-bounties/feed') {
       feedReads++;
       assert.equal(url.searchParams.get('bounty_contract'), paid.source_id, 'history must be scoped to the selected bounty');
-      return route.fulfill({ json: [{ ...fixture.item, events: [event('submission_added', 1), event('bounty_settled', 2)] }] });
+      const result = mode === 'expired' ? { ...event('submission_expired', 2), data: { round: 1, solver: wallet, claim_bond_refunded: 2000000 } } : event('bounty_settled', 2);
+      return route.fulfill({ json: [{ ...fixture.item, events: [event('submission_added', 1), result] }] });
     }
     if (url.pathname.startsWith('/v1/base/autonomous-bounties/submission-evidence/')) return route.fulfill({ status: mode === 'evidenceOffline' ? 503 : 200, json: evidence });
     if (url.origin !== origin) { unexpected.push(request.url()); return route.abort(); }
@@ -74,6 +75,16 @@ async function journey(browser, origin, width) {
   mode = 'ready';
   await page.getByRole('button', { name: 'Refresh', exact: true }).click();
   await page.getByRole('link', { name: 'Open submitted work' }).waitFor();
+  mode = 'expired';
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await page.getByText('Review expired', { exact: true }).waitFor();
+  assert.match(await page.locator('.submission-result').innerText(), /2 USDC of claim bond was returned/);
+  assert.equal(await page.getByRole('link', { name: 'View confirmed payment' }).count(), 0);
+  assert.equal(await page.getByRole('link', { name: 'View confirmed round outcome' }).count(), 1);
+  await page.reload();
+  await page.getByText('Review expired', { exact: true }).waitFor();
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'expired history fits the screen');
+  mode = 'ready';
   const before = feedReads;
   await page.goto(`${origin}/submissions.html?opportunity=canonical:base-mainnet:0x${'f'.repeat(40)}`);
   await page.getByText('This bounty is not available in the public history.').waitFor();

@@ -622,3 +622,33 @@ test("reordering identical evidence fields reuses the existing submission review
   await client.prepareAction({ ...input, evidence: { result: "ok", checks: { failed: 0, passed: 1 } } });
   assert.equal(env.requests.filter((r) => r.method === "POST").length, 1);
 });
+
+test("an agent resumes the exact saved operation without conversation, credentials, or wallet actions", async () => {
+  const env = environment(); let request;
+  env.window.fetch = async (url, options) => { request = { url, ...options }; return { ok: true, json: async () => ({ generated_at:"2026-09-25T12:00:00Z", wallets:[{address:wallet}], user:{email:"private@example.com"}, token:"secret", saved_drafts:{status:"available",next_offset:50,items:[{id:"draft:a",operation_id:intentId,title:"Saved work",group:"drafts",status:"Saved draft",continuation_url:`https://agentbounties.app/post.html?operation_id=${intentId}`,payment_state:"unverified",token:"secret"}]}, activity_inbox:{status:"unavailable",items:[]} }) }; };
+  env.register(); const tool = env.tools.get("agent_bounties_get_account_activity");
+  const result = await tool.execute();
+  assert.equal(result.items[0].operation_id, intentId);
+  assert.equal(result.next_draft_offset, 50);
+  assert.equal(request.credentials, "include"); assert.equal(request.method, undefined);
+  assert.equal(request.redirect, "error");
+  assert.equal(tool.annotations.readOnlyHint, true); assert.equal(tool.annotations.untrustedContentHint, true);
+  assert.equal(JSON.stringify(result).includes("secret"), false); assert.equal(JSON.stringify(result).includes("private@example.com"), false);
+  assert.equal(env.navigations.length, 0);
+  await tool.execute({draft_offset:50}); assert.match(request.url,/posting-drafts\?offset=50/);
+  env.window.fetch = async () => ({status:401,ok:false});
+  assert.equal((await tool.execute()).authenticated, false);
+});
+
+test("progress recognizes the exact review already open without redirecting or granting wallet authority", async () => {
+  const env = environment(`/participate.html?bountyContract=${contract}&network=base-mainnet&intent=${intentId}`);
+  env.register();
+  const status = await env.tools.get("agent_bounties_check_progress").execute({intent_id:intentId});
+  assert.equal(status.review_page_open, true);
+  assert.match(status.next_action,/already open/);
+  assert.match(status.next_action,/person.*confirm/);
+  assert.equal(status.paid, false);
+  assert.equal(env.navigations.length, 0);
+  env.window.location.search = `?bountyContract=${contract}&network=base-mainnet&intent=10000000-0000-4000-8000-000000000002`;
+  assert.equal((await env.tools.get("agent_bounties_check_progress").execute({intent_id:intentId})).review_page_open, false);
+});

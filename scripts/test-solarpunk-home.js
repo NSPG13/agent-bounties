@@ -359,3 +359,15 @@ test("partial, delayed, malformed, and non-ready evidence fail closed", () => {
   assert.throws(() => home.marketSnapshot(platform({ marketplace_payout_volume: {} }), evidence()));
   assert.throws(() => home.marketSnapshot(null, null));
 });
+
+test("saved work stays resumable without wallet statistics and rejects unsafe links or draft payment claims", () => {
+  const saved = { id: "draft:a", title: "My saved draft", status: "Saved draft", group: "drafts", continuation_url: "https://agentbounties.app/post.html?operation_id=a", payment_state: "unverified", next_actor: "you", next_action: "Continue review", updated_at: "2026-09-25T10:00:00Z" };
+  const view = home.accountInboxView({ data_status: "unavailable", reason: "marketplace_identity_unlinked", saved_drafts: {status: "available", items: [saved, {...saved,id:"unsafe",continuation_url:"https://attacker.example/post.html"}, {...saved,id:"fakepaid",group:"paid",payment_state:"paid"}]} });
+  assert.equal(view.draftsAvailable, true);
+  assert.equal(view.activityAvailable, false);
+  assert.equal(view.groups.flatMap(group => group.items).length, 1);
+  assert.equal(view.groups.find(group => group.id === "drafts").items[0].href, saved.continuation_url);
+  const activity = home.accountInboxView({ saved_drafts: {status:"available",items:[]}, activity_inbox: {status:"available",items:[{...saved,id:"round1",group:"completed",status:"Review expired · bond returned",payment_state:"unpaid",continuation_url:"/participate.html?bountyContract=0x11",deadline:9007199254740991}]} });
+  assert.equal(activity.groups.find(group => group.id === "completed").items[0].deadline, null);
+  assert.equal(activity.groups.find(group => group.id === "paid").items.length, 0);
+});

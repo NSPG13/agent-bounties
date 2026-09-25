@@ -9,6 +9,14 @@ that matches the confirmed payment. It shows the review method, winner rule,
 and payment record. GitHub proposals and comments are linked separately; a
 proposal is not automatically a formal submission or a winner.
 
+Each autonomous submission retains its own round outcome. A confirmed review
+expiry shows **Review expired**, the recorded bond refund, confirmation time and
+transaction receipt. It does not report a solver reward. A confirmed rejection
+shows **Did not pass**. Both reopen the bounty, but neither outcome changes a
+later round's submission. An elapsed deadline without its canonical expiry
+event is not proof of a refund. Conflicting terminal evidence is labeled
+**Result needs review** instead of claiming payment or returned funds.
+
 ## Where the work is stored
 
 | Record | Storage |

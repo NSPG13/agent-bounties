@@ -674,7 +674,7 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
         [
             'data-post-auth-start',
             'posting-auth.js?v=3',
-            'solarpunk-home.js?v=27',
+            'solarpunk-home.js?v=28',
             'bounty-composer-v2.js?v=25',
             'label: "LOG IN TO POST"',
             'credentials: "include"',

@@ -320,6 +320,44 @@ ${competitionChildBrief(item)}`;
     return "unavailable";
   }
 
+  function accountInboxView(payload, origin = "https://agentbounties.app") {
+    const labels = { needs_action: "Needs action", recover_funds: "Recover funds", drafts: "Saved drafts", working: "Working", awaiting_review: "Awaiting review", paid: "Paid", completed: "Past activity" };
+    const groups = Object.entries(labels).map(([id, label]) => ({ id, label, items: [] }));
+    const drafts = payload?.saved_drafts, activity = payload?.activity_inbox;
+    const knownOrigin = new URL(origin).origin;
+    const allowed = (value) => {
+      try {
+        const url = new URL(String(value), knownOrigin);
+        return [knownOrigin, "https://agentbounties.app"].includes(url.origin)
+          && ["/post.html", "/participate.html", "/competition.html"].includes(url.pathname)
+          && !url.username && !url.password ? url.href : null;
+      } catch (_) { return null; }
+    };
+    const seen = new Set();
+    for (const source of [drafts, activity]) {
+      if (source?.status !== "available" || !Array.isArray(source.items)) continue;
+      for (const item of source.items.slice(0, 300)) {
+        const group = groups.find(group => group.id === item?.group), href = allowed(item?.continuation_url);
+        if (!group || !href || typeof item.id !== "string" || seen.has(item.id)) continue;
+        const title = String(item.title || "").trim().slice(0, 160), status = String(item.status || "").slice(0, 100);
+        if (!title || !status || (item.group === "paid" && (source !== activity || item.payment_state !== "paid"))) continue;
+        seen.add(item.id);
+        group.items.push({ id: item.id, title, status, href,
+          nextAction: String(item.next_action || "Review the current state.").slice(0, 500),
+          nextActor: String(item.next_actor || "you").slice(0, 40),
+          updatedAt: Number.isFinite(Date.parse(item.updated_at)) ? new Date(item.updated_at).toISOString() : null,
+          deadline: Number.isSafeInteger(item.deadline) && item.deadline > 0 && item.deadline <= 8640000000000 ? new Date(item.deadline * 1000).toISOString() : null,
+        });
+      }
+    }
+    return { groups, draftsAvailable: drafts?.status === "available", activityAvailable: activity?.status === "available",
+      nextDraftOffset: Number.isSafeInteger(drafts?.next_offset) ? drafts.next_offset : null,
+      message: drafts?.status !== "available" ? "Saved drafts are temporarily unavailable. Your saved work has not been removed."
+        : activity?.status !== "available" ? "Saved drafts are available. Link a wallet or refresh to check canonical task activity."
+          : "Saved drafts and confirmed task activity. A passed deadline does not prove a refund or payment.",
+    };
+  }
+
   function accountDashboardView(payload) {
     const normalizeWallets = (items) => {
       if (!Array.isArray(items)) return [];
@@ -746,6 +784,7 @@ ${competitionChildBrief(item)}`;
       const closeButton = dialog.querySelector("[data-auth-close]");
       const form = dialog.querySelector("[data-auth-form]");
       const accountDashboard = dialog.querySelector("[data-account-dashboard]");
+      const accountInbox = dialog.querySelector("[data-account-inbox]");
       const sessionAvatar = dialog.querySelector("[data-auth-avatar]");
       const sessionAvatarFallback = dialog.querySelector("[data-auth-avatar-fallback]");
       const sessionName = dialog.querySelector("[data-auth-name]");
@@ -945,7 +984,48 @@ ${competitionChildBrief(item)}`;
         if (walletLinkButton) walletLinkButton.textContent = wallets.length || unverifiedEmbedded ? "Link another" : "Link wallet";
       };
 
+      const renderAccountInbox = (payload) => {
+        if (!accountInbox) return;
+        const view = accountInboxView(payload, win.location.origin);
+        accountInbox.replaceChildren();
+        const heading = doc.createElement("h3"); heading.textContent = "Continue your work";
+        const note = doc.createElement("p"); note.className = "account-evidence"; note.textContent = view.message;
+        accountInbox.append(heading, note);
+        for (const group of view.groups) {
+          if (!group.items.length) continue;
+          const past = ["paid", "completed"].includes(group.id);
+          const section = doc.createElement(past ? "details" : "section"), title = doc.createElement(past ? "summary" : "h4"), list = doc.createElement("ul");
+          title.textContent = `${group.label} (${group.items.length})`; section.append(title, list);
+          for (const item of group.items) {
+            const row = doc.createElement("li"), link = doc.createElement("a"), status = doc.createElement("strong"), action = doc.createElement("p"), timing = doc.createElement("small");
+            link.href = item.href; link.textContent = item.title; status.textContent = item.status;
+            action.textContent = item.nextAction;
+            timing.textContent = `Next: ${item.nextActor}${item.deadline ? ` · Deadline ${new Date(item.deadline).toLocaleString()}` : ""}${item.updatedAt ? ` · Updated ${new Date(item.updatedAt).toLocaleString()}` : ""}`;
+            row.append(link, status, action, timing); list.append(row);
+          }
+          accountInbox.append(section);
+        }
+        if (!view.groups.some(group => group.items.length) && view.draftsAvailable) {
+          const empty = doc.createElement("p"); empty.textContent = view.activityAvailable ? "No saved drafts or task activity to show." : "No saved drafts to show. Canonical activity is not available yet."; accountInbox.append(empty);
+        }
+        if (view.nextDraftOffset !== null) {
+          const more = doc.createElement("button"); more.type = "button"; more.textContent = "Load older drafts";
+          more.addEventListener("click", async () => {
+            const requestId = accountLoadId; more.disabled = true;
+            try {
+              const response = await win.fetch(authApiPath(`/posting-drafts?offset=${view.nextDraftOffset}`, win.location), { credentials: "include", cache: "no-store", headers: { Accept: "application/json" } });
+              if (!response.ok) throw new Error("unavailable");
+              const next = await response.json();
+              if (requestId !== accountLoadId || !currentUser) return;
+              renderAccountInbox({ ...payload, saved_drafts: { ...next, items: [...(payload.saved_drafts?.items || []), ...(next.items || [])] } });
+            } catch (_) { if (requestId === accountLoadId) { more.textContent = "Couldn’t load older drafts. Retry"; more.disabled = false; } }
+          });
+          accountInbox.append(more);
+        }
+      };
+
       const renderAccountDashboard = (payload) => {
+        renderAccountInbox(payload);
         const view = accountDashboardView(payload);
         renderWallets(view.wallets);
         renderSetup(accountSetupStatus(payload, view.wallets));
@@ -975,6 +1055,7 @@ ${competitionChildBrief(item)}`;
       };
 
       const renderAccountLoading = () => {
+        if (accountInbox) { accountInbox.replaceChildren(); accountInbox.textContent = "Loading your saved work…"; }
         if (accountStats) accountStats.setAttribute("aria-busy", "true");
         [accountParticipating, accountCompletedPosts, accountEarned, accountSpent, accountRank]
           .forEach((node) => { if (node) node.textContent = "—"; });
@@ -1019,6 +1100,7 @@ ${competitionChildBrief(item)}`;
         renderSetup("checking");
         openButton.title = user?.name ? `Signed in as ${user.name}` : "Create an account";
         if (!user) {
+          accountInbox?.replaceChildren();
           accountLoadId += 1;
           embeddedAddress = null;
           renderWallets([]);
@@ -1582,6 +1664,7 @@ ${competitionChildBrief(item)}`;
   return {
     BOUNTY_POSTING_PROMPT,
     accountDashboardView,
+    accountInboxView,
     accountSetupStatus,
     authApiPath,
     authProviderPath,

@@ -91,6 +91,7 @@ def compile_python(platform: str) -> None:
         "scripts/test_activate_direct_growth_v2.py",
         "scripts/test_activate_direct_inventory_v1.py",
         "scripts/test_direct_flagship_verifier_watchdog.py",
+        "scripts/rehearse_immutable_watchdog.py",
         "scripts/regression_verifier_source_guard.py",
         "scripts/test_regression_verifier_source_guard.py",
         "benchmarks/direct-flagship-v1/verifier-settlement-watchdog/check.py",
@@ -277,7 +278,7 @@ def main() -> int:
         "scripts.test_regression_verifier_source_guard",
         "-v",
     )
-    py("benchmarks/direct-flagship-v1/verifier-settlement-watchdog/rehearse.py")
+    py("scripts/rehearse_immutable_watchdog.py")
     py("-m", "pip", "install", "-r", "scripts/requirements-wallet.txt")
     for name in ("local_delegate_wallet", "self_heal", "leaderboard_reward_pipeline"):
         py(f"scripts/test_{name}.py", "-v")
