@@ -43,7 +43,8 @@ async function fixtures(context, origin, options = {}) {
   await context.route("**/*", async route => {
     const request = route.request(), url = new URL(request.url());
     const session = { authenticated: mock.authenticated, account_status: mock.authenticated ? "ready" : "signed_out", account_complete: mock.authenticated, providers: { github: true }, user: mock.authenticated ? { id: "layout-qa", name: "Posting QA", email: "posting-qa@example.test" } : null };
-    if (["/auth/session", "/v1/site-auth/session"].includes(url.pathname)) return route.fulfill({ json: session });
+    if (["/auth/session", "/v1/site-auth/session"].includes(url.pathname)) return route.fulfill(mock.sessionReadFailure
+      ? { status: 503, json: { message: "Synthetic temporary session outage" } } : { json: session });
     if (["/auth/account", "/v1/site-auth/account"].includes(url.pathname)) return route.fulfill({ json: { ...session, wallets: mock.wallets, data_status: "unavailable", reason: "marketplace_evidence_unavailable" } });
     const operation = /^\/v1\/site-auth\/posting-drafts\/([0-9a-f-]{36})$/i.exec(url.pathname)?.[1];
     if (operation) {
@@ -52,6 +53,7 @@ async function fixtures(context, origin, options = {}) {
       const existing = mock.drafts.get(operation);
       if (request.method() === "GET") {
         await options.beforeDraftRead?.();
+        if (mock.draftReadFailure) return route.fulfill({ status: 503, json: { message: "Synthetic temporary draft outage" } });
         return route.fulfill(existing ? { json: existing } : { status: 404, json: { message: "Draft not found." } });
       }
       assert.equal(request.method(), "POST");
@@ -235,7 +237,7 @@ async function recoveryRegressions(browser, origin) {
       let releaseRead, readStarted;
       const delayedRead = new Promise(resolve => { releaseRead = resolve; });
       const readRequested = new Promise(resolve => { readStarted = resolve; });
-      await fixtures(second, origin, { wallets: [wallet], drafts: mock.drafts,
+      const resumedMock = await fixtures(second, origin, { wallets: [wallet], drafts: mock.drafts,
         beforeDraftRead: () => { readStarted(); return delayedRead; } });
       await second.addInitScript(() => {
         window.__restoreTools = new Map();
@@ -272,6 +274,22 @@ async function recoveryRegressions(browser, origin) {
       assert.deepEqual(remote.draft.evidence_schema["x-agent-bounties-reference-attachment"], reference);
       assert.equal(remote.id, approved.journey.id);
       assert.deepEqual(await resumedPage.evaluate(() => window.__walletRequests), [], "Continuing an approved draft must not reconnect or sign automatically");
+      for (const outage of ["sessionReadFailure", "draftReadFailure"]) {
+        resumedMock[outage] = true;
+        await resumedPage.reload();
+        await resumedPage.waitForFunction(() => window.__restoreTools.has("agent_bounties_get_bounty_review"));
+        const failed = await resumedPage.evaluate(async () => {
+          try { await window.__restoreTools.get("agent_bounties_get_bounty_review").execute(); return null; }
+          catch (error) { return error.message; }
+        });
+        assert.match(failed, /restoration is unavailable/, outage);
+        resumedMock[outage] = false;
+        const retried = await resumedPage.evaluate(() => window.__restoreTools.get("agent_bounties_get_bounty_review").execute());
+        assert.equal(retried.explicitly_approved, true, "A same-tool retry recovers without reload or focus");
+        assert.equal(retried.saved_operation.operation_id, approved.journey.id);
+        assert.equal(retried.saved_operation.status, "saved");
+        assert.deepEqual(await resumedPage.evaluate(() => window.__walletRequests), []);
+      }
     } finally { await second.close(); }
 
     // A transaction hash alone must never mark creation/funding/claimability

@@ -2419,7 +2419,7 @@
 
   // No approval or signing methods are exposed to the agent registry.
   let staging = Promise.resolve();
-  let initialization = Promise.resolve(), restoration = Promise.resolve();
+  let initialization = Promise.resolve(), restoration = Promise.resolve(), retryingRestoration = null;
   let stagedFingerprint = null;
   window.AgentBountiesComposer = Object.freeze({
     prepareMetaParent,
@@ -2428,7 +2428,20 @@
       await initialization;
       await restoration;
       await staging;
-      const saved = postingSession.snapshot();
+      let saved = postingSession.snapshot();
+      if (retryingRestoration || (saved.status !== "conflict" && (state.postingAccountStatus === "unavailable" || saved.status === "unavailable"))) {
+        // Share one retry across concurrent agent reads; conflicts never
+        // enter this path and must keep their explicit recovery choice.
+        if (!retryingRestoration) retryingRestoration = (async () => {
+          await loadPostingAccount();
+          if (state.postingAccountStatus !== "unavailable") {
+            await postingSession.hydrate(state.accountSession);
+            await restoration;
+          }
+        })().finally(() => { retryingRestoration = null; });
+        await retryingRestoration;
+        saved = postingSession.snapshot();
+      }
       if (state.postingAccountStatus === "unavailable" || saved.conflict || saved.status === "unavailable") {
         throw new Error("Account draft restoration is unavailable. Keep the same operation and retry; do not request approval again.");
       }
