@@ -1,4 +1,5 @@
 mod a2a;
+mod account_activity;
 mod discoverability;
 mod distribution;
 mod github_discovery;
