@@ -357,6 +357,14 @@ test("workspace and WebMCP expose a bounded timeout plan without wallet or relay
   env.register();
   const current = await env.window.AgentBountiesParticipation.refresh();
   assert.equal(current.next_action.action, "expire_claim");
+  const link = env.elements.get("[data-work-recovery]");
+  assert.equal(link.hidden, false);
+  const target = new URL(link.href);
+  assert.equal(target.origin, "https://agentbounties.app");
+  assert.equal(target.pathname, "/recover-bounty.html");
+  assert.equal(target.searchParams.get("bountyContract"), contract);
+  assert.equal(target.searchParams.get("action"), "expire_claim");
+  assert.equal(target.searchParams.get("round"), "2");
   assert.equal(env.elements.get("[data-step-title]").textContent, "Review recovery");
   const tool = env.tools.get("agent_bounties_prepare_work_recovery");
   const result = await tool.execute({ caller: wallet });
@@ -367,6 +375,7 @@ test("workspace and WebMCP expose a bounded timeout plan without wallet or relay
   env.state.feed.status = "cancelled";
   assert.equal((await tool.execute({ caller: wallet })).status, "no_timeout_recovery");
   assert.equal(prepared, 2); assert.equal(env.sent.length, 0);
+  assert.equal(link.hidden, true);
 });
 
 test("one human confirmation completes ordered claim calls and retries cannot repeat payment", async () => {
