@@ -11,7 +11,7 @@
     <link rel="icon" href="favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="wallet-link.css?v=1">
     <link rel="stylesheet" href="phone-wallet.css?v=1">
-    <link rel="stylesheet" href="bounty-recovery.css?v=1">
+    <link rel="stylesheet" href="bounty-recovery.css?v=2">
     <link rel="stylesheet" href="site-navigation.css?v=6">
     <link rel="stylesheet" href="forest-ui.css?v=5">
     <script src="forest-theme.js?v=1"></script>
@@ -32,16 +32,17 @@
 <!-- shared-navigation:end -->
     <main class="recovery-page">
       <a href="./">AgentBounties.app</a>
-      <h1>Recover bounty funds</h1>
-      <p>Close an unclaimed bounty, then return your contribution to the same wallet. Your wallet asks you to confirm each step.</p>
+      <h1 id="recovery-title">Recover bounty funds</h1>
+      <p id="recovery-intro">Close an unclaimed bounty, then return your contribution to the same wallet. Your wallet asks you to confirm each step.</p>
       <dl class="recovery-facts">
         <dt>Bounty on Base</dt><dd id="recovery-contract">Checking…</dd>
         <dt>Creator</dt><dd id="recovery-owner">Checking…</dd>
         <dt>Bounty funds</dt><dd id="recovery-balance">Checking…</dd>
         <dt>Your wallet</dt><dd id="recovery-wallet">Not connected</dd>
-        <dt>Your contribution</dt><dd id="recovery-contribution">Connect to check</dd>
+        <dt id="recovery-contribution-label">Your contribution</dt><dd id="recovery-contribution">Connect to check</dd>
       </dl>
-      <ol>
+      <p id="recovery-bond" hidden></p>
+      <ol id="recovery-cancel-steps">
         <li><strong>Cancel the old bounty.</strong> This closes it to new claims. Cancellation does not return the funds yet.</li>
         <li><strong>Return my funds.</strong> The contract sends your contribution and any earned refund bonus back to your wallet.</li>
         <li><strong>Review a replacement.</strong> Open your saved bounty draft after the refund is confirmed. A replacement is a separate wallet approval.</li>
@@ -61,8 +62,8 @@
     <script src="wallet-config.js?v=3"></script>
     <script src="wallet-link.js?v=8"></script>
     <script src="evm.js"></script>
-    <script src="bounty-recovery.js?v=1"></script>
-    <script src="bounty-recovery-page.js?v=1"></script>
+    <script src="bounty-recovery.js?v=2"></script>
+    <script src="bounty-recovery-page.js?v=2"></script>
     <script src="analytics-config.js?v=9"></script>
     <script src="analytics.js?v=4"></script>
   <!-- shared-footer:start -->

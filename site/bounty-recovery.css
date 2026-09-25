@@ -10,3 +10,5 @@
 #recovery-send:not(:disabled) { background: #8ee46b; color: #10251a; }
 #recovery-status { white-space: pre-line; overflow-wrap: anywhere; }
 @media (max-width: 540px) { .recovery-page { margin: 1rem auto; padding: 1rem; } .recovery-facts { grid-template-columns: 1fr; gap: .1rem; } .recovery-facts dd { margin-bottom: .7rem; } .recovery-actions button { width: 100%; } }
+
+#recovery-bond { overflow-wrap: anywhere; }

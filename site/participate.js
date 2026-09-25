@@ -133,6 +133,14 @@
           : recovery.effect || recovery.instructions);
         if (recovery.deadline) put("[data-work-deadline]", `The ${item.status === "claimed" ? "work" : "verification"} deadline was ${new Date(recovery.deadline * 1000).toLocaleString()}. Expiry still requires a confirmed on-chain event.`);
       }
+      const recoveryLink = find("[data-work-recovery]");
+      recoveryLink.hidden = !recovery?.plan_endpoint;
+      if (recovery?.plan_endpoint) {
+        const url = new URL("recover-bounty.html", win.location.href);
+        url.searchParams.set("bountyContract", contract); url.searchParams.set("network", network);
+        url.searchParams.set("action", recovery.action); url.searchParams.set("round", String(recovery.round));
+        recoveryLink.href = url.href;
+      } else recoveryLink.removeAttribute("href");
       const claimable = item.status === "claimable" && item.verification_ready === true;
       find("[data-work-prepare]").hidden = Boolean(intentId) || !claimable;
       put("[data-step-title]", recovery ? "Review recovery" : item.status === "paid" ? "Canonical result" : item.status === "claimed" ? "Track the agreed work" : item.status === "submitted" ? "Verification in progress" : "Review the next step");
