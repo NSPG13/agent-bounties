@@ -1,69 +1,33 @@
 name: Public Site Canary
-
 on:
-  workflow_run:
-    workflows: ["Pages"]
-    types: [completed]
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
   verify:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v7.0.0
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-      - name: Verify the retained site and agent entrypoints
+          node-version: '22'
+      - name: Prepare pinned browser
+        working-directory: tools/browser-layout
         run: |
-          set -euo pipefail
-          success=false
-          for attempt in $(seq 1 30); do
-            nonce="${GITHUB_SHA}-${GITHUB_RUN_ATTEMPT}-${attempt}-$(date +%s)"
-            args=(--fail --silent --show-error --location --connect-timeout 10 --max-time 30 --retry 2 --retry-delay 1 --header "Cache-Control: no-cache")
-            if python scripts/check-public-site-canary.py --base-url https://agentbounties.app --nonce "${nonce}" \
-              && curl "${args[@]}" "https://agentbounties.app/llms.txt?verify=${nonce}" -o /tmp/llms.txt \
-              && curl "${args[@]}" "https://agentbounties.app/.well-known/agent-bounties.json?verify=${nonce}" -o /tmp/discovery.json \
-              && curl "${args[@]}" "https://agentbounties.app/schemas/discovery-manifest.v2.json?verify=${nonce}" -o /tmp/schema.json \
-              && curl "${args[@]}" "https://agentbounties.app/protocol.json?verify=${nonce}" -o /tmp/protocol.json \
-              && grep -q 'server/discover' /tmp/llms.txt \
-              && grep -q 'earn.html' /tmp/llms.txt \
-              && python - <<'PY'
-          import json
-          discovery = json.load(open('/tmp/discovery.json', encoding='utf-8'))
-          schema = json.load(open('/tmp/schema.json', encoding='utf-8'))
-          protocol = json.load(open('/tmp/protocol.json', encoding='utf-8'))
-          expected = 'https://agentbounties.app/schemas/discovery-manifest.v2.json'
-          assert discovery['schema'] == expected
-          assert schema['$id'] == expected
-          assert discovery['default_cta']['href'] == 'https://agentbounties.app/#post-a-bounty'
-          assert protocol['status'] == 'active'
-          assert protocol['chain_id'] == 8453
-          PY
-            then
-              if ! python scripts/check-public-handoffs.py --base-url https://agentbounties.app; then
-                sleep 5
-                continue
-              fi
-              removed_ok=true
-              for route in objective.html funding.html; do
-                status="$(curl --silent --connect-timeout 10 --max-time 30 --output /dev/null --write-out '%{http_code}' "https://agentbounties.app/${route}?verify=${nonce}")"
-                if [[ "$status" != "404" ]]; then
-                  removed_ok=false
-                  break
-                fi
-              done
-              if [[ "$removed_ok" == "true" ]]; then
-                success=true
-                break
-              fi
-            fi
-            sleep 5
-          done
-          [[ "$success" == "true" ]]
+          npm ci --ignore-scripts --no-fund
+          npx playwright install --with-deps chromium
+      - name: Verify production revisions, discovery, input contracts and assets
+        run: |
+          mkdir -p proof
+          python3 scripts/verify-ux-production-contracts.py --expected-runtime-revision bf9d09fe738c89e5c0354c4a435c81f36c298d43 --website-source . --output proof/contracts.json
+          cat proof/contracts.json
+      - name: Verify the original production round in real browsers
+        run: node scripts/verify-ux-production-browser.cjs
+      - name: Preserve public verification evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: ux-production-proof
+          path: proof
+          retention-days: 7
