@@ -45,6 +45,12 @@
     return window.AgentBountiesProofWorkspace;
   }
   let pendingStaging = Promise.resolve();
+  async function waitForPostingRestoration() {
+    if (!isPost) return;
+    const composer = await waitFor(() => window.AgentBountiesComposer, 8000);
+    if (!composer) throw new Error("The saved draft is still loading. Retry this same tool; do not restart the task or request approval again.");
+    await composer.ready?.();
+  }
 
   function register(tool) {
     if (["agent_bounties_get_bounty_review", "agent_bounties_open_funding_review"].includes(tool.name) && !isPost) return;
@@ -486,6 +492,7 @@
     async execute() {
       if (!/\/post\.html$/.test(window.location.pathname)) throw new Error("This tool is available on /post.html.");
       await pendingStaging;
+      await waitForPostingRestoration();
       const preview = document.getElementById("bounty-preview");
       if (!preview || preview.hidden) return { status: "no_staged_bounty", ...window.AgentBountiesComposer?.review?.() };
       return {
@@ -510,6 +517,8 @@
     annotations: { readOnlyHint: false, untrustedContentHint: false },
     async execute() {
       if (!/\/post\.html$/.test(window.location.pathname)) throw new Error("This tool is available on /post.html.");
+      await pendingStaging;
+      await waitForPostingRestoration();
       const approve = document.querySelector("[data-approve-card]");
       const open = document.querySelector("[data-open-funding]");
       if (!approve || approve.dataset.approved !== "true") throw new Error("The user must explicitly approve the staged bounty card first.");
@@ -615,7 +624,7 @@
     return { journey, next_action: next, guidance: flow.GUIDANCE, user_confirmation_required: false, storage: window.AgentBountiesPostingSession?.create(window).snapshot() || "this browser session; no wallet authority" };
   }
   register({ name: "agent_bounties_get_journey", title: "Continue my marketplace task", description: "Resume the current posting or earning journey. Returns the saved outcome and one next action; do not restart the interview or repeat earlier approvals.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, untrustedContentHint: true }, execute() { return journeyResult(client.load()); } });
+    inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, untrustedContentHint: true }, async execute() { await waitForPostingRestoration(); return journeyResult(client.load()); } });
   if (isPost) register({ name: "agent_bounties_capture_homepage_reference", title: "Freeze a homepage background reference",
     description: "Read and hash the selected actual homepage background image, attach its immutable copy and timestamp to this draft, and invalidate changed terms approval. This captures the background asset, not the page text or animated effects. No publication or wallet request.",
     inputSchema: { type: "object", properties: { phase: { type: "string", enum: ["dawn", "day", "dusk", "night"] }, variant: { type: "string", enum: ["desktop", "mobile"] } }, required: ["phase", "variant"], additionalProperties: false },

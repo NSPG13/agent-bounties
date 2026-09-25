@@ -2419,10 +2419,20 @@
 
   // No approval or signing methods are exposed to the agent registry.
   let staging = Promise.resolve();
+  let initialization = Promise.resolve(), restoration = Promise.resolve();
   let stagedFingerprint = null;
   window.AgentBountiesComposer = Object.freeze({
     prepareMetaParent,
     recoverRejectedBatch,
+    async ready() {
+      await initialization;
+      await restoration;
+      await staging;
+      const saved = postingSession.snapshot();
+      if (state.postingAccountStatus === "unavailable" || saved.conflict || saved.status === "unavailable") {
+        throw new Error("Account draft restoration is unavailable. Keep the same operation and retry; do not request approval again.");
+      }
+    },
     invalidate() {
       if (!state.draft || postingBusy || postingJournal.load()) return;
       state.reviewStale = true; state.approved = false; stagedFingerprint = null;
@@ -2498,7 +2508,11 @@
     } catch (error) { setStatus(error.message, "error"); }
     finally { restoringPosting = false; }
   }
-  window.addEventListener("agent-bounties:posting-restored", (event) => { void restorePosting(event.detail); });
+  function queueRestoration(journey) {
+    restoration = restoration.then(() => restorePosting(journey));
+    return restoration;
+  }
+  window.addEventListener("agent-bounties:posting-restored", (event) => { void queueRestoration(event.detail); });
   window.addEventListener("agent-bounties:posting-state", (event) => {
     const reload = document.querySelector("[data-reload-saved-draft]"); if (reload) reload.hidden = !event.detail.conflict;
     if (event.detail.conflict) { ui.fundNow.disabled = true; ui.fund.disabled = true; }
@@ -2525,7 +2539,15 @@
     } catch (error) { if (postingJournal.load()) setPaymentStatus(`${error.message} The same operation remains saved; no transaction was repeated.`, "pending"); }
     finally { pollingPosting = false; }
   }
-  window.addEventListener("focus", () => { void loadPostingAccount().then(() => postingSession.hydrate(state.accountSession)).then(resumePosting); });
+  window.addEventListener("focus", () => {
+    initialization = initialization.catch(() => {}).then(async () => {
+      await loadPostingAccount();
+      await postingSession.hydrate(state.accountSession);
+      await restoration;
+      await resumePosting();
+    });
+    void initialization.catch((error) => setStatus(error.message || String(error), "error"));
+  });
   document.addEventListener("visibilitychange", () => { if (!document.hidden) void resumePosting(); });
   window.setInterval(() => { void resumePosting(); }, 15000);
   configureSpeech();
@@ -2544,13 +2566,15 @@
       receipt.hidden = false;
     }
   }
-  void (async () => {
+  initialization = (async () => {
     await prefillFromQuery();
-    if (!state.draft) await restorePosting(window.AgentBountiesWorkflow.createClient(window).load());
+    if (!state.draft) await queueRestoration(window.AgentBountiesWorkflow.createClient(window).load());
     await loadPostingAccount();
     await postingSession.hydrate(state.accountSession);
+    await restoration;
     state.approved = await postingSession.approved(); syncPrimaryAction(); updatePostingTracker();
     await resumePosting();
     if (new URLSearchParams(window.location.search).get("funding_review") === "1" && state.approved) await openFunding();
-  })().catch((error) => setStatus(error.message || String(error), "error"));
+  })();
+  void initialization.catch((error) => setStatus(error.message || String(error), "error"));
 })();

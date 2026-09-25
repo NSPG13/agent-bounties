@@ -50,7 +50,10 @@ async function fixtures(context, origin, options = {}) {
       mock.draftRequests.push({ method: request.method(), operation });
       if (!mock.authenticated) return route.fulfill({ status: 401, json: { message: "Sign in to access this draft." } });
       const existing = mock.drafts.get(operation);
-      if (request.method() === "GET") return route.fulfill(existing ? { json: existing } : { status: 404, json: { message: "Draft not found." } });
+      if (request.method() === "GET") {
+        await options.beforeDraftRead?.();
+        return route.fulfill(existing ? { json: existing } : { status: 404, json: { message: "Draft not found." } });
+      }
       assert.equal(request.method(), "POST");
       const body = request.postDataJSON();
       if (body.expected_revision !== (existing?.revision || 0)) return route.fulfill({ status: 409, json: { message: "Draft changed on another device." } });
@@ -229,12 +232,41 @@ async function recoveryRegressions(browser, origin) {
     // storage copying or injected approval is involved.
     const second = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
     try {
-      await fixtures(second, origin, { wallets: [wallet], drafts: mock.drafts });
+      let releaseRead, readStarted;
+      const delayedRead = new Promise(resolve => { releaseRead = resolve; });
+      const readRequested = new Promise(resolve => { readStarted = resolve; });
+      await fixtures(second, origin, { wallets: [wallet], drafts: mock.drafts,
+        beforeDraftRead: () => { readStarted(); return delayedRead; } });
+      await second.addInitScript(() => {
+        window.__restoreTools = new Map();
+        Object.defineProperty(document, "modelContext", { configurable: true,
+          value: { registerTool(tool) { window.__restoreTools.set(tool.name, tool); } } });
+      });
       const resumedPage = await second.newPage();
       resumedPage.on("pageerror", error => errors.push(error.message));
       await resumedPage.goto(approved.continuation);
       await awaitPosting(resumedPage);
-      await resumedPage.waitForFunction(() => window.AgentBountiesComposer.review().explicitly_approved);
+      await readRequested;
+      await resumedPage.waitForFunction(() => window.__restoreTools.has("agent_bounties_get_bounty_review"));
+      await resumedPage.evaluate(() => {
+        window.__restoreResults = {};
+        for (const name of ["agent_bounties_get_bounty_review", "agent_bounties_get_journey"]) {
+          Promise.resolve(window.__restoreTools.get(name).execute()).then(value => { window.__restoreResults[name] = value; });
+        }
+      });
+      // A separate event-loop turn exposes an early answer while the account
+      // response is still held; no fixed network delay or approval injection.
+      const earlyResults = await resumedPage.evaluate(() => window.__restoreResults);
+      releaseRead();
+      assert.deepEqual(earlyResults, {}, "Agents must not mistake a restoring draft for missing work or revoked approval");
+      await resumedPage.waitForFunction(() => Object.keys(window.__restoreResults).length === 2);
+      const restoredTools = await resumedPage.evaluate(() => window.__restoreResults);
+      const review = restoredTools.agent_bounties_get_bounty_review;
+      assert.equal(review.explicitly_approved, true);
+      assert.equal(review.saved_operation.operation_id, approved.journey.id);
+      assert.equal(review.saved_operation.status, "saved");
+      assert.equal(restoredTools.agent_bounties_get_journey.journey.id, approved.journey.id);
+      assert.equal(restoredTools.agent_bounties_get_journey.next_action.tool, "agent_bounties_get_bounty_review");
       const remote = await resumedPage.evaluate(() => window.AgentBountiesWorkflow.createClient(window).load());
       assert.deepEqual(remote.draft.reference_attachment, reference);
       assert.deepEqual(remote.draft.evidence_schema["x-agent-bounties-reference-attachment"], reference);
@@ -598,6 +630,7 @@ async function main() {
     { width: 480, height: 360, zoomReflow: true }
   ];
   try {
+    if (process.env.POSTING_LAYOUT_RESTORE_ONLY) { await recoveryRegressions(browser, origin); return; }
     if (process.env.POSTING_LAYOUT_GUIDE_ONLY) { await walletBrandRegressions(browser, origin); await signedMoonpayDestinationRegressions(browser, origin); await guidedTopupRegressions(browser, origin);
     await topupPhoneConnectionRegression(browser, origin); return; }
     for (const size of sizes) {

@@ -20,7 +20,7 @@ function environment(path = "/", entries = [item()]) {
   const document = { title: "Test", readyState: "complete", hidden: false,
     modelContext: { registerTool(tool) { tools.set(tool.name, tool); } }, querySelector(s) { return elements.get(s) || null; }, getElementById(id) { return elements.get(`#${id}`); }, querySelectorAll() { return []; }, addEventListener() {}, createElement: el };
   const location = new URL(`https://agentbounties.app${path}`); location.assign = (url) => navigations.push(url);
-  const window = { document, location, crypto: webcrypto, console, AgentBountiesWorkflow: flow,
+  const window = { document, location, crypto: webcrypto, console, AgentBountiesWorkflow: flow, AgentBountiesComposer: { ready: async () => {} },
     sessionStorage: { getItem: (key) => storage.get(key) || null, setItem: (key, value) => storage.set(key, value), removeItem: (key) => storage.delete(key) },
     localStorage: { getItem: () => null }, addEventListener(name, fn) { listeners.set(name, fn); }, dispatchEvent() {},
     CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options?.detail; } }, Event: class {},
@@ -457,9 +457,28 @@ test("reading a staged journey returns review instead of resetting consent by re
   const env = environment("/post.html"), client = flow.createClient(env.window);
   client.save({ ...client.start({ role: "post", goal: "Draft a task" }), draft: { title: "Preserve me" } });
   client.start({ role: "post", preferences: "Keep it small" }); env.register();
-  const result = env.tools.get("agent_bounties_get_journey").execute();
+  const result = await env.tools.get("agent_bounties_get_journey").execute();
   assert.equal(result.journey.draft.title, "Preserve me");
   assert.equal(result.next_action.tool, "agent_bounties_get_bounty_review");
+});
+test("review tools wait for restoration and never reinterpret an unavailable account as missing consent", async () => {
+  for (const name of ["agent_bounties_get_bounty_review", "agent_bounties_get_journey", "agent_bounties_open_funding_review"]) {
+    const env = environment("/post.html");
+    let release;
+    env.window.AgentBountiesComposer.ready = () => new Promise(resolve => { release = resolve; });
+    env.register();
+    let settled = false;
+    const pending = env.tools.get(name).execute().then(value => { settled = true; return value; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(settled, false, name);
+    env.elements.set("[data-approve-card]", { dataset: { approved: "true" } });
+    env.elements.set("#funding-dialog", { open: true });
+    release();
+    await pending;
+    env.window.AgentBountiesComposer.ready = async () => { throw new Error("Account draft restoration is unavailable. Retry the same operation."); };
+    await assert.rejects(env.tools.get(name).execute(), /restoration is unavailable/);
+    assert.equal(env.requests.some(request => request.method === "POST"), false);
+  }
 });
 test("an already open funding review is idempotent", async () => {
   const env = environment("/post.html"); env.register();
