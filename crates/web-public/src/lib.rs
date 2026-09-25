@@ -359,6 +359,101 @@ pub struct CanonicalOpportunityState {
     pub deadline_kind: Option<String>,
 }
 
+/// Canonical machine-discovery document served by the public site.
+pub const WELL_KNOWN_AGENT_CARD_PATH: &str = "/.well-known/agent-card.json";
+
+/// Absolute URL of the canonical A2A Agent Card.
+pub const AGENT_CARD_URL: &str = "https://agentbounties.app/.well-known/agent-card.json";
+
+/// Strong validator for the Agent Card; changes whenever the card changes.
+pub fn agent_card_etag(card: &str) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in card.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("\"{:016x}\"", h)
+}
+
+/// Discovery route table used by the public site and the API.
+pub fn agent_card_route() -> (&'static str, &'static str) {
+    (WELL_KNOWN_AGENT_CARD_PATH, AGENT_CARD_URL)
+}
+
+/// Canonical JSON body for the A2A 1.0 Agent Card served by the website.
+pub fn agent_card_json() -> &'static str {
+    include_str!("../../../fixtures/a2a-agent-card.json")
+}
+
+/// Headers a public host must send with the Agent Card response so that
+/// discovery clients revalidate instead of trusting a stale card.
+pub fn agent_card_headers() -> Vec<(&'static str, String)> {
+    vec![
+        ("content-type", "application/json".to_string()),
+        ("cache-control", "public, max-age=300, must-revalidate".to_string()),
+        ("etag", agent_card_etag(agent_card_json())),
+    ]
+}
+
+/// Render the Agent Card response (status, headers, body) for the website host.
+pub fn agent_card_response() -> (u16, Vec<(&'static str, String)>, &'static str) {
+    (200, agent_card_headers(), agent_card_json())
+}
+
+/// Conditional GET: return 304 when the client ETag still matches the canonical card.
+pub fn agent_card_conditional_response(if_none_match: Option<&str>) -> (u16, Vec<(&'static str, String)>) {
+    let etag = agent_card_etag(agent_card_json());
+    if if_none_match.map(|v| v.trim() == etag).unwrap_or(false) {
+        (304, agent_card_headers())
+    } else {
+        (200, agent_card_headers())
+    }
+}
+
+#[cfg(test)]
+mod agent_card_tests {
+    use super::*;
+
+    #[test]
+    fn card_is_valid_a2a_1_0() {
+        let card = agent_card_json();
+        for field in ["\"name\"", "\"version\"", "\"supportedInterfaces\"", "\"skills\""] {
+            assert!(card.contains(field), "Agent Card missing {field}");
+        }
+        assert!(card.contains("\"protocolVersion\": \"1.0\""));
+    }
+
+    #[test]
+    fn card_declares_custom_binding_not_http_json() {
+        let card = agent_card_json();
+        assert!(card.contains("a2a-direct-api-binding-v1"));
+    }
+
+    #[test]
+    fn response_has_explicit_caching() {
+        let (_status, headers, _body) = agent_card_response();
+        let names: Vec<&str> = headers.iter().map(|(k, _)| *k).collect();
+        assert!(names.contains(&"etag"));
+        assert!(names.contains(&"cache-control"));
+    }
+
+    #[test]
+    fn conditional_get_returns_not_modified_on_match() {
+        let etag = agent_card_etag(agent_card_json());
+        let (status, _) = agent_card_conditional_response(Some(&etag));
+        assert_eq!(status, 304);
+        let (status_miss, _) = agent_card_conditional_response(Some("\"stale\""));
+        assert_eq!(status_miss, 200);
+    }
+
+    #[test]
+    fn well_known_route_matches_discovery_path() {
+        let (path, url) = agent_card_route();
+        assert_eq!(path, WELL_KNOWN_AGENT_CARD_PATH);
+        assert!(url.ends_with(WELL_KNOWN_AGENT_CARD_PATH));
+    }
+}
+
 pub fn canonical_opportunity_state(item: &AutonomousBountyFeedItem) -> CanonicalOpportunityState {
     let funded = item.funded_amount.parse::<u128>().unwrap_or_default();
     let target = item.target_amount.parse::<u128>().unwrap_or_default();
