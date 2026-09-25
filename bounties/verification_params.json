@@ -1,0 +1,21 @@
+{
+  "bounty_id": "0xe11965e2c68f6f4da4b97c8e62fda5015ae0137b",
+  "project": "flower-shaped-tinaco-rainwater-collector",
+  "verification_requirements": [
+    {
+      "type": "parametric_cad_validation",
+      "description": "Design supports 3 to 12 petals with diameter range 300mm to 600mm",
+      "test_command": "openscad --hardwarnings -Dpetals=3 -Ddiameter=300 -o /tmp/collector_3p.stl cad/flower_tinaco_collector.scad && openscad --hardwarnings -Dpetals=12 -Ddiameter=600 -o /tmp/collector_12p.stl cad/flower_tinaco_collector.scad",
+      "pass_criteria": "Compiles without syntax errors or hard warnings to valid manifold 3D mesh"
+    },
+    {
+      "type": "bore_continuity_and_fit",
+      "description": "Continuous open drainage bore from petals through funnel down to tinaco adapter outlet",
+      "pass_criteria": "No solid obstructions in downspout, adapter presets for 90mm and 110mm standard tinaco inlets"
+    }
+  ],
+  "verification_environment": {
+    "openscad": ">=2021.01",
+    "python": ">=3.9"
+  }
+}
