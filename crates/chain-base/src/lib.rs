@@ -9612,8 +9612,76 @@ mod tests {
     }
 
     #[test]
+    fn autonomous_bounty_deadline_exclusion() {
+        let now = Utc::now().timestamp();
+        let mut item = AutonomousBountyFeedItem {
+            bounty_id: "0x1".to_string(),
+            bounty_contract: "0x2".to_string(),
+            creator: "0x3".to_string(),
+            status: "claimable".to_string(),
+            solver_reward: "100".to_string(),
+            verifier_reward: "10".to_string(),
+            claim_bond: "10".to_string(),
+            timeout_bond_pool: "0".to_string(),
+            target_amount: "110".to_string(),
+            funded_amount: "110".to_string(),
+            required_external_spend: "0".to_string(),
+            gross_cash_margin: "100".to_string(),
+            terms_hash: "0x4".to_string(),
+            terms: Some(AutonomousBountyTermsRecord {
+                terms_hash: "0x4".to_string(),
+                policy_hash: "0x5".to_string(),
+                acceptance_criteria_hash: "0x6".to_string(),
+                benchmark_hash: "0x7".to_string(),
+                evidence_schema_hash: "0x8".to_string(),
+                creator_wallet: "0x3".to_string(),
+                document: serde_json::from_value(json!({
+                    "schema_version": "agent-bounties/terms-v1",
+                    "title": "Test",
+                    "goal": "Test",
+                    "acceptance_criteria": ["Test"],
+                    "contract_terms": {},
+                    "verification_policy": {},
+                    "evidence_schema": {},
+                    "benchmark": {
+                        "engine": creator_review::ENGINE,
+                        "delivery_deadline": now - 100
+                    }
+                })).unwrap(),
+                created_at: Utc::now(),
+            }),
+            terms_valid: true,
+            verification_mode: "signed_quorum".to_string(),
+            verifier_module: None,
+            verifier_set_hash: None,
+            verifier_threshold: Some(1),
+            runner_identifier: None,
+            verification_ready: true,
+            verification_readiness_reason: "ready".to_string(),
+            validation_errors: vec![],
+            events: vec![],
+        };
+
+        // Past deadline must be excluded
+        assert!(!autonomous_bounty_is_earning_ready(&item));
+
+        // Future deadline must be allowed
+        if let Some(ref mut terms) = item.terms {
+            terms.document.benchmark["delivery_deadline"] = json!(now + 1000);
+        }
+        assert!(autonomous_bounty_is_earning_ready(&item));
+
+        // Non-creator_review engine must be allowed regardless of deadline
+        if let Some(ref mut terms) = item.terms {
+            terms.document.benchmark["delivery_deadline"] = json!(now - 100);
+            terms.document.benchmark["engine"] = json!("other_engine");
+        }
+        assert!(autonomous_bounty_is_earning_ready(&item));
+    }
+
+    #[test]
     fn submission_evidence_preimages_must_match_indexed_hashes() {
-        let artifact = "https://github.com/owner/repo/commit/abc";
+        let artifact = "https://example.com/artifact";
         let evidence = json!({"z": 2, "a": {"commit_sha": "abc"}});
         let bounty_id = format!("0x{}", "ab".repeat(32));
         let bounty_contract = "0x2222222222222222222222222222222222222222";
