@@ -24,18 +24,18 @@ $fn = 60;
 module petal(r, width, wall) {
     rotate([20, 0, 0])
     difference() {
-        // Outer curved petal shell
-        scale([width / r, 1.0, 0.4])
+        // Outer curved petal shell (semi-width = width / 2)
+        scale([(width / 2) / r, 1.0, 0.4])
         cylinder(r = r, h = wall * 3, center = false);
         
         // Scoop hollow to form water drainage trough
         translate([0, 0, wall])
-        scale([(width - 2 * wall) / r, 0.96, 0.4])
+        scale([((width - 2 * wall) / 2) / r, 0.96, 0.4])
         cylinder(r = r, h = wall * 4, center = false);
         
         // Trim outer boundary
         translate([0, -r, -1])
-        cube([r * 2, r * 2, r], center = true);
+        cube([r * 3, r * 2, r * 2], center = true);
     }
 }
 
@@ -50,10 +50,10 @@ module flower_collector(
     adapt_out_d = adapter_outer_d
 ) {
     p_radius = p_diam / 2;
-    p_width = (3.14159 * p_diam) / p_count * 0.7;
+    funnel_top_d = p_radius * 0.9;
+    p_width = (3.14159 * funnel_top_d) / p_count * 0.85;
     t_in_d = t_out_d - 2 * wall;
     adapt_in_d = adapt_out_d - 2 * wall;
-    funnel_top_d = p_radius * 0.9;
 
     difference() {
         union() {
@@ -64,7 +64,7 @@ module flower_collector(
             // 2. Petals radiating outward from top rim of funnel
             for (i = [0 : p_count - 1]) {
                 rotate([0, 0, i * (360 / p_count)])
-                translate([0, funnel_top_d / 2 - 5, t_h + f_h - 10])
+                translate([0, (funnel_top_d - wall) / 2, t_h + f_h - 1])
                 petal(r = p_radius * 0.65, width = p_width, wall = wall);
             }
 
@@ -76,11 +76,11 @@ module flower_collector(
             translate([0, 0, 0])
             cylinder(h = 60, d1 = adapt_out_d, d2 = t_out_d, center = false);
 
-            // 5. Four Tinaco Rim Mounting Brackets
+            // 5. Four Tinaco Rim Mounting Brackets (embedded into collar wall)
             for (j = [0 : 3]) {
                 rotate([0, 0, j * 90])
-                translate([adapt_out_d / 2, -10, 10])
-                cube([25, 20, 8]);
+                translate([adapt_out_d / 2 - 8, -10, 10])
+                cube([33, 20, 8]);
             }
         }
 
@@ -100,11 +100,11 @@ module flower_collector(
         translate([0, 0, -2])
         cylinder(h = 64, d1 = adapt_in_d, d2 = t_in_d, center = false);
 
-        // Mounting bolt holes (8mm) in the 4 mounting brackets
+        // Mounting bolt holes (8mm) through both pad faces (z: -1 to 29mm, pad is z: 10 to 18mm)
         for (j = [0 : 3]) {
             rotate([0, 0, j * 90])
-            translate([adapt_out_d / 2 + 15, 0, 5])
-            cylinder(h = 20, d = 8, center = true);
+            translate([adapt_out_d / 2 + 15, 0, 14])
+            cylinder(h = 30, d = 8, center = true);
         }
 
         // Optional cutaway cross-section for inspection

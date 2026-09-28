@@ -2,16 +2,16 @@
 
 ## Engineering & Assembly Guide
 
-This document describes the design, pre-fabrication measurements, and assembly procedure for the parametric flower-shaped rainwater collector retrofitted onto standard Mexican tinacos (e.g. Rotoplas, Citijal, 450L–1100L tanks).
+This document specifies the technical geometry, dimensional construction envelopes, mechanical interfaces, and assembly procedures for the parametric flower-shaped rainwater collector retrofitted onto standard Mexican tinacos (e.g., Rotoplas, Citijal, Eureka 450L–1100L tanks).
 
 ---
 
-### 1. Dimensioned Design & Internal Flow Path
+### 1. Dimensioned Geometry & Continuous Flow Interfaces
 
-The collector features an angled flower-petal catchment funnel feeding directly into a central downspout with a **continuous, unobstructed internal bore** down to an adjustable tinaco mounting collar.
+The collector integrates an angled catchment petal array feeding into a central conical funnel and downspout with a **continuous, unobstructed internal bore** down to an adjustable tinaco mounting collar.
 
 ```
-       \  Petal R=162mm (concave catchment trough)  /
+       \  Petal R=162.5mm (concave catchment trough) /
         \________________                         /
                          \                       /
                           \  Catchment Funnel   /
@@ -20,83 +20,153 @@ The collector features an angled flower-petal catchment funnel feeding directly 
                             |                 |
                             |  Downspout Tube |
                             |  Outer:  80 mm  |
-                            |  Inner:  74 mm  |  <--- Continuous Open Bore
+                            |  Inner:  74 mm  |  <--- Continuous Open Bore (3mm wall)
                             |  t_h = 200 mm   |
                             |                 |
                          ___|                 |___
-                        [___   Mounting Ring   ___] (4x M8 bolt points)
+                        [___   Mounting Ring   ___] (4x M8 bolt pads, embedded 8mm)
                             |  Tinaco Adapter |
-                            |  90mm or 110mm  |  <--- Reaches into tank inlet
+                            |  90mm or 110mm  |  <--- Engages into tank access port
                             |_________________|
 ```
 
-#### Pre-Fabrication Measurement Matrix
+#### 1.1 Petal-to-Funnel Rim Junction Detail
 
-| Parameter | Default (Standard) | Minimum Range | Maximum Range | Notes |
-| :--- | :---: | :---: | :---: | :--- |
-| **Petal Count (`petals`)** | 6 | 3 | 12 | Parametric loop in OpenSCAD |
-| **Collector Diameter (`diameter`)** | 500 mm | 300 mm | 600 mm | Full catchment span |
-| **Funnel Height (`funnel_height`)** | 120 mm | 80 mm | 160 mm | Guides water to throat |
-| **Downspout Height (`tube_height`)** | 200 mm | 100 mm | 300 mm | Vertical clearance |
-| **Downspout Outer Diameter** | 80 mm | 75 mm | 90 mm | Matches standard 3" PVC |
-| **Downspout Inner Bore** | 74 mm | 69 mm | 84 mm | 3mm wall thickness, hollow |
-| **Adapter Collar Option 1** | 90 mm | — | — | Standard 3" tank inlet |
-| **Adapter Collar Option 2** | 110 mm | — | — | Standard 4" tank inlet |
-| **Mounting Fasteners** | 4× M8 holes | — | — | 8mm clearance at 90° intervals |
+Water collected along each petal is guided inward by gravity along a 20° downward incline. To eliminate any retention lip, stagnation pool, or perimeter damming:
 
----
-
-### 2. Standard Tinaco Adapter Sizing
-
-Mexican tinacos typically utilize standard nominal pipe and lid access diameters:
-1. **Size 1 (90 mm Collar)**: Direct slip fit into nominal 3-inch female tank inlets and standard tank access ports.
-2. **Size 2 (110 mm Collar)**: Direct slip fit into nominal 4-inch female tank inlets or bulkhead overflow adapters.
-
-Switching between adapter sizes in OpenSCAD:
-```bash
-# Export with 90mm adapter
-openscad -Dadapter_type=1 -o cad/flower_tinaco_collector_90mm.stl cad/flower_tinaco_collector.scad
-
-# Export with 110mm adapter
-openscad -Dadapter_type=2 -o cad/flower_tinaco_collector_110mm.stl cad/flower_tinaco_collector.scad
+```
+          Petal Trough Floor (z = 322 mm) \
+                                           \  Slope = 20° downward
+   Outer Funnel Wall (z = 320 mm) --------->\ 
+                                             \
+  [==== Funnel Rim Wall ====]                 \ ===> Direct Gravity Drop
+         (z = 320 mm)                          |     into Open Bore (d = 219 mm)
+                                               |
+  Petal Base Embedded 1mm (z = 319 mm) --------+
+                                               |
+                                        Inner Funnel Bore
 ```
 
-Pre-rendered STL exports are included in the repository under `cad/`:
-- `cad/flower_tinaco_collector_default.stl`
-- `cad/flower_tinaco_collector_90mm.stl`
-- `cad/flower_tinaco_collector_110mm.stl`
+- **Funnel Top Rim Elevation**: `z = t_h + f_h = 320.0 mm`
+- **Petal Base Translation**: `z = t_h + f_h - 1 = 319.0 mm` (1.0 mm overlap for seamless 2-manifold solid boolean union)
+- **Petal Trough Inflow Lip**: Floor sits at `z = 322.0 mm` (2.0 mm above the outer funnel rim), discharging directly into the `219.0 mm` diameter open inner funnel throat.
+- **Top Bore Clearance**: Inner bore cutter extends continuously through `z = 321.0 mm`, ensuring complete elimination of any internal obstruction or retaining wall.
+
+#### 1.2 Adapter Collar & Mounting Bracket Pad Engagement
+
+The bottom adapter transitions from the standard tinaco tank inlet opening to the central downspout:
+
+```
+        Collar Wall at z = 10 mm (r = 44.17 mm)
+                       |
+                       v
+         +-------------+-------------------------+  z = 18 mm (Pad Top)
+         |             |      Mounting Pad       |
+         |  COLLAR     |      (20mm wide)        |
+         |  WALL       |                         |
+         | (Embedded)  |       [ M8 Hole ]       |
+         |             |       (d = 8.0mm)       |
+         |             |                         |
+         +-------------+-------------------------+  z = 10 mm (Pad Bottom)
+         <-- 7.17mm -->|<-------- 25.83mm ------->
+         r = 37.0 mm   r = 44.17 mm              r = 70.0 mm
+```
+
+- **Collar Taper**: Linearly tapers from `adapt_out_d` (90 mm or 110 mm) at `z = 0` to `80.0 mm` at `z = 60.0 mm`.
+- **Collar Wall Radius at Bracket Plane (`z = 10 mm`)**:
+  - Size 1 (90mm collar): `r = 45.0 - (10/60) * 5.0 = 44.17 mm`
+  - Size 2 (110mm collar): `r = 55.0 - (10/60) * 15.0 = 52.50 mm`
+- **Pad Inset & Embedding**: Mounting pads originate at `r = adapt_out_d / 2 - 8.0 mm` (`37.0 mm` for 90mm collar; `47.0 mm` for 110mm collar). This embeds each bracket pad `7.17 mm` into the solid collar wall, completely eliminating floating gaps and stress-concentration seams.
+- **Pad Dimensions**: Length = 33.0 mm (radial span from r=37mm to r=70mm for 90mm preset), Width = 20.0 mm, Height = 8.0 mm (spanning `z = 10.0 mm` to `z = 18.0 mm`).
+
+#### 1.3 Bolt Pattern & Fastener Clearance
+
+- **Fastener Configuration**: 4 radial bracket pads positioned symmetrically at 90° intervals (0°, 90°, 180°, 270°).
+- **Bolt Hole Diameter**: 8.0 mm through-holes sized for M8 stainless steel hardware.
+- **Bolt Circle Diameter (BCD)**:
+  - Size 1 (90mm preset): Center radius `r = 45.0 + 15.0 = 60.0 mm` -> **BCD = 120.0 mm**
+  - Size 2 (110mm preset): Center radius `r = 55.0 + 15.0 = 70.0 mm` -> **BCD = 140.0 mm**
+- **Cutter Penetration**: Bolt hole cutters are centered at `z = 14.0 mm` with height `h = 30.0 mm` (cutting from `z = -1.0 mm` to `z = +29.0 mm`), guaranteeing complete, clean penetration through both upper (`z = 18 mm`) and lower (`z = 10 mm`) pad faces.
 
 ---
 
-### 3. Bill of Materials (BOM)
+### 2. Geometric Construction Envelopes & Footprint
 
-- **Main Collector Body**: 3D printed PETG / UV-resistant ASA or molded recycled HDPE / 1.5mm galvanized steel sheets.
-- **Fasteners**: 4× M8 × 35mm stainless steel 304 bolts, washers, and nylon locking nuts.
-- **Pre-Filtration**: 100mm circular stainless steel or nylon mesh (1.5mm aperture) positioned in the collection throat to prevent leaf debris from entering the tinaco.
-- **Gasket / Sealant**: EPDM rubber gasket or neutral-cure exterior silicone sealant around the tinaco rim interface.
+The dimensions below define the **maximum bounding construction envelopes** used for installation clearance checks (e.g., clearance against adjacent roof coping, access ladders, or overflow plumbing) rather than rigid aerodynamic boundaries:
 
----
-
-### 4. Step-by-Step Assembly Procedure
-
-1. **Pre-Fit Verification**:
-   - Measure the tinaco inlet opening diameter (verify whether 90mm or 110mm adapter is required).
-   - Ensure a clean, horizontal landing rim for the 4 mounting bracket pads.
-2. **Mesh Filter Placement**:
-   - Insert the stainless steel debris screen into the upper throat of the 80mm central downspout.
-3. **Mounting Collar Attachment**:
-   - Lower the collector adapter into the tinaco inlet.
-   - Align the 4 mounting brackets with the tank rim.
-   - Mark and drill four 8.5mm holes for the M8 mounting bolts.
-4. **Fastening & Sealing**:
-   - Place EPDM rubber washers between brackets and tank body to prevent vibration.
-   - Fasten with M8 stainless bolts and nylon locking nuts.
-   - Apply a continuous bead of silicone around the adapter seam to prevent dust ingress.
+| Geometric Envelope Dimension | Nominal Value | Envelope Description |
+| :--- | :---: | :--- |
+| **Opposite-Petal Y-Span** | **520.4 mm – 527.4 mm** | Maximum projected horizontal envelope across opposing petal tips |
+| **3-Petal Chord / X-Span** | **439.8 mm – 461.4 mm** | Transverse horizontal envelope across adjacent lateral petal lobes |
+| **Total Assembly Z-Height** | **378.0 mm** | Overall vertical construction height from adapter base to petal tip |
+| **Downspout Tube Section** | 200.0 mm | Height of vertical transition section (`z = 0` to `z = 200 mm`) |
+| **Conical Funnel Section** | 120.0 mm | Height of expanding collection funnel (`z = 200` to `z = 320 mm`) |
+| **Petal Vertical Rise** | 58.0 mm | Angular vertical rise of angled catchment leaves (`z = 320` to `z = 378 mm`) |
+| **Effective Catchment Diameter** | 500.0 mm | Nominal projected circular collection envelope (`~0.20 m²`) |
 
 ---
 
-### 5. Design Assumptions & Engineering Notes
+### 3. Deliverables & Presets
 
-- **Rainfall Inflow Assumption**: Estimated nominal collection area of ~0.20 m² (at 500mm diameter). Theoretical inflow rate scales directly with local rainfall intensity.
-- **Wind & Environmental Resistance**: Designed with symmetrical curved petal profiles to minimize aerodynamic drag during gusting winds. The 3mm nominal wall thickness provides adequate rigidity for rooftop residential installations.
-- **Maintenance**: The open flower geometry allows visual inspection from ground level; the removable mesh filter should be flushed before and after each wet season.
+The repository includes complete source code and pre-compiled, verified solid models under `cad/`:
+
+1. **Parametric Source (`cad/flower_tinaco_collector.scad`)**: Full OpenSCAD source with parametric overrides for petal count, diameter, heights, and adapter sizing.
+2. **Standard 90mm STL (`cad/flower_tinaco_collector_90mm.stl` & `cad/flower_tinaco_collector_default.stl`)**:
+   - Manifold Status: **100% 2-manifold solid** (`hasNonManifolds=False`, `isSolid=True`, 0 non-manifold edges)
+   - Facet Count: 3,968 facets | Vertices: 1,976
+3. **Large 110mm STL (`cad/flower_tinaco_collector_110mm.stl`)**:
+   - Manifold Status: **100% 2-manifold solid** (`hasNonManifolds=False`, `isSolid=True`, 0 non-manifold edges)
+   - Facet Count: 3,904 facets | Vertices: 1,944
+4. **Standard STEP Solid Model (`cad/flower_tinaco_collector.step`)**:
+   - Export standard: STEP AP214 automotive/mechanical solid protocol
+   - Entity Count: 77,382 entities (Single closed topological solid, valid volume)
+   - Fully compatible with FreeCAD, SolidWorks, Autodesk Fusion, and commercial CAM software.
+
+---
+
+### 4. Bill of Materials (BOM)
+
+| Item | Specification | Quantity | Purpose |
+| :--- | :--- | :---: | :--- |
+| **Collector Body** | PETG / UV-stabilized ASA (3D printed, 4 perimeters, 25% gyroid) OR roto-molded HDPE | 1 | Main rainwater catchment assembly |
+| **Mounting Fasteners** | M8 × 35 mm Stainless Steel 304 Hex Head Bolts | 4 | Secures pads to tinaco lid rim |
+| **Fastener Washers** | M8 × 24 mm Stainless Steel Flat Washers | 8 | Load distribution across polymer pads |
+| **Vibration Dampeners**| M8 EPDM Rubber Washers (2 mm thick) | 8 | Prevents mechanical abrasion on tank wall |
+| **Locking Nuts** | M8 Stainless Steel 304 Nylon-Insert Locknuts (Nyloc) | 4 | Resists loosening from thermal cycling |
+| **Debris Screen** | 100 mm Stainless Steel 304 Mesh (1.5 mm aperture) | 1 | Pre-filtration of leaves and coarse debris |
+| **Sanitary Sealant** | Food-grade or neutral-cure exterior silicone (RTV) | 1 cartridge | Seals collar joint against insect/dust entry |
+
+---
+
+### 5. Step-by-Step Installation Procedure
+
+1. **Pre-Installation Sizing Verification**:
+   - Inspect the existing tinaco inspection port or inlet bulkhead.
+   - Verify nominal inner diameter: select the **90 mm collar** preset for standard 3" tank openings, or the **110 mm collar** preset for 4" openings.
+   - Ensure the rim landing surface has at least 15 mm of flat engagement around the perimeter.
+
+2. **Debris Filter Installation**:
+   - Seat the circular 100 mm stainless steel debris filter into the throat of the central downspout at the funnel transition (`z = 200 mm`).
+   - Verify seating by pressing gently around the perimeter.
+
+3. **Adapter Engagement & Hole Marking**:
+   - Lower the collector adapter collar squarely into the tank opening until the 4 bracket pads rest flush on the tank rim.
+   - Using an automatic center punch or marker through the 8 mm bolt clearance holes, mark the 4 hole locations on the tank rim.
+   - Lift the collector and drill four 8.5 mm holes through the tank rim using a sharp high-speed steel (HSS) bit at moderate RPM to prevent polymer melting.
+
+4. **Fastening & Weatherproofing**:
+   - Apply a continuous 5 mm bead of neutral-cure silicone around the adapter shoulder where it contacts the tank inlet.
+   - Place an EPDM washer between each bracket pad and the tank surface.
+   - Insert M8 bolts with stainless and EPDM washers from the top.
+   - From underneath the tank rim, install stainless flat washers and tighten M8 Nyloc nuts to finger-tight, then torque evenly in a cross pattern to `6 N·m` (do not over-tighten on plastic tanks).
+   - Clean any excess silicone bead.
+
+---
+
+### 6. Engineering Scope & Mechanical Validation Protocol
+
+- **Scope of Representation**: The calculations and CAD geometries provided represent nominal kinematic and geometric construction envelopes for pre-fabrication and mechanical interfacing.
+- **Empirical Testing Required**:
+  - *No untested aerodynamic drag, wind load survival, snow load capacity, or CFD fluid velocity claims are asserted.*
+  - Local wind loading depends heavily on building elevation, parapet geometry, and roof exposure. Installers must perform site-specific anchoring evaluations.
+  - Periodic inspection of the mesh filter and bolt torque is recommended prior to each rainy season.
