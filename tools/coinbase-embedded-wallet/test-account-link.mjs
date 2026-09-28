@@ -82,7 +82,7 @@ async function connectMetaMask(page) {
   const before = await page.evaluate(() => window.walletTestCalls.length);
   await page.getByRole("button", { name: /^MetaMask Use your phone app/ }).click();
   assert.equal(await page.evaluate(() => window.walletTestCalls.length), before);
-  await page.getByRole("button", { name: /^Connect MetaMask Approve the connection/ }).click();
+  await page.getByRole("button", { name: /^MetaMask in this browser Open the extension/ }).click();
 }
 
 async function phoneWalletOption(page) {

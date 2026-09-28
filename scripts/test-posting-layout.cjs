@@ -624,7 +624,7 @@ async function walletBrandRegressions(browser, origin) {
       await dialog.getByRole("button", {name:"Back to wallet choices"}).click();
       if (process.env.POSTING_LAYOUT_SCREENSHOTS) await page.screenshot({path:path.join(process.env.POSTING_LAYOUT_SCREENSHOTS, `wallet-choices-${width}.png`)});
       await dialog.getByRole("button", {name:/^MetaMask /}).click();
-      await dialog.getByRole("button", {name:/^Connect MetaMask /}).click();
+      await dialog.getByRole("button", {name:/^MetaMask in this browser /}).click();
       assert.equal(await page.evaluate(() => window.__selectedBrandProvider), "MetaMask");
       assert.deepEqual(await page.evaluate(() => window.__walletRequests), []);
       assert.deepEqual(errors, []);

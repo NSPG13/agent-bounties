@@ -54,6 +54,53 @@ function fixture() {
   };
   return f;
 }
+test("an already connected wallet does not receive another connection prompt", async () => {
+  const calls = [], provider = { request: async ({ method }) => { calls.push(method); return [OWNER]; } };
+  assert.equal(await core.connectWallet(provider), OWNER);
+  assert.deepEqual(calls, ["eth_accounts"]);
+});
+test("a stalled wallet read times out before any prompt, plan or send", async () => {
+  const f = fixture(); f.walletReadTimeoutMs = 5;
+  f.provider.request = () => new Promise(() => {});
+  await assert.rejects(f.request(), /wallet did not answer/);
+  assert.equal(f.planned, undefined); assert.equal(f.sends.length, 0); assert.equal(f.stored.size, 0);
+  assert.throws(() => core.walletRead(f.provider, "eth_sendTransaction"), /Only wallet connection reads/);
+});
+test("connection timeout and concurrent retry never duplicate the wallet prompt", async () => {
+  let resolve, prompts = 0, connected = false;
+  const provider = { request: ({ method }) => {
+    if (method === "eth_accounts") return Promise.resolve(connected ? [OWNER] : []);
+    assert.equal(method, "eth_requestAccounts"); prompts++;
+    return new Promise(done => { resolve = done; });
+  } };
+  await assert.rejects(core.connectWallet(provider, 5), /finish its connection request/);
+  const next = core.connectWallet(provider, 100), concurrent = core.connectWallet(provider, 100);
+  await new Promise(done => setImmediate(done)); connected = true; resolve([OWNER]);
+  assert.deepEqual(await Promise.all([next, concurrent]), [OWNER, OWNER]); assert.equal(prompts, 1);
+  assert.equal(await core.connectWallet(provider), OWNER); assert.equal(prompts, 1);
+});
+test("rejected and malformed account connections cannot become a connected wallet", async () => {
+  for (const accounts of [null, {}, [], ["invalid"]]) {
+    const provider = { request: async ({ method }) => method === "eth_accounts" ? [] : accounts };
+    await assert.rejects(core.connectWallet(provider));
+  }
+  let reject = true, prompts = 0;
+  const provider = { request: async ({ method }) => {
+    if (method === "eth_accounts") return [];
+    prompts++; if (reject) throw Object.assign(new Error("rejected"), { code: 4001 }); return [OWNER];
+  } };
+  await assert.rejects(core.connectWallet(provider), { code: 4001 }); reject = false;
+  assert.equal(await core.connectWallet(provider), OWNER); assert.equal(prompts, 2);
+});
+test("a stalled network switch times out and reuses the same prompt on retry", async () => {
+  let finish, calls = 0;
+  const provider = { request: ({ method, params }) => {
+    calls++; assert.equal(method, "wallet_switchEthereumChain"); assert.deepEqual(params, [{ chainId: core.CHAIN }]);
+    return new Promise(resolve => { finish = resolve; });
+  } };
+  await assert.rejects(core.switchToBase(provider, 5), /switching to Base/);
+  const retry = core.switchToBase(provider, 100); finish(null); await retry; assert.equal(calls, 1);
+});
 test("read-only preparation never requests a signature", async () => {
   const f = fixture(), view = await f.engine().snapshot(BOUNTY, OWNER);
   assert.equal(view.funded, "17068098"); assert.equal(f.sends.length, 0);
@@ -158,6 +205,115 @@ test("RPC unavailability is bounded and snapshot rejects a changed block", async
   f.rpc = async (method, params) => method === "eth_getBlockByNumber" && params[0] === "0x64" ? { number: "0x64", hash: ID } : read(method, params);
   await assert.rejects(f.engine().snapshot(BOUNTY, OWNER), /block changed/);
 });
+test("restricted receipt history falls back without repeating a wallet request", async () => {
+  for (const status of [401, 403]) {
+    const calls = [];
+    const rpc = core.createRpc(async (url, init) => {
+      const body = JSON.parse(init.body); calls.push([url, body.method]);
+      return url.includes("publicnode") ? { status } : { status: 200, ok: true, json: async () => ({ jsonrpc: "2.0", id: body.id, result: { status: "0x1" } }) };
+    });
+    assert.deepEqual(await rpc("eth_getTransactionReceipt", [TX]), { status: "0x1" });
+    assert.equal(calls.length, 2); assert.ok(calls.every(x => x[1] === "eth_getTransactionReceipt"));
+  }
+});
+test("an old receipt cannot erase a newer pending wallet request", async () => {
+  const f = fixture(), e = f.engine(); await f.request(e); f.confirm();
+  const key = [...f.stored.keys()][0], read = f.rpc;
+  let newer;
+  f.rpc = async (method, params) => {
+    if (method === "eth_getTransactionByHash") {
+      newer = JSON.stringify({ ...JSON.parse(f.stored.get(key)), action: "refund", txHash: null });
+      f.stored.set(key, newer);
+    }
+    return read(method, params);
+  };
+  await f.engine().reconcile(BOUNTY, OWNER);
+  assert.equal(f.stored.get(key), newer);
+});
+test("wallet approval progress begins only after the exact request is saved", async () => {
+  const f = fixture(), stages = [];
+  await f.engine().request({ contract: BOUNTY, account: OWNER, action: "cancel", provider: f.provider, onProgress: stage => {
+    stages.push(stage);
+    if (stage === "wallet_approval") assert.ok([...f.stored.values()].some(x => JSON.parse(x).txHash === null));
+  } });
+  assert.deepEqual(stages, ["wallet_check", "bounty_check", "wallet_approval"]); assert.equal(f.sends.length, 1);
+});
+
+async function pageFixture(change = () => {}) {
+  const f = fixture(), nodes = new Map(), events = new Map();
+  const node = id => {
+    if (!nodes.has(id)) nodes.set(id, { textContent: "", hidden: false, disabled: false, addEventListener: (type, fn) => events.set(`${id}:${type}`, fn) });
+    return nodes.get(id);
+  };
+  change(f);
+  const pageCore = { ...core, create: () => f.engine(), connectWallet: provider => core.connectWallet(provider, 10, 5), walletRead: (provider, method) => core.walletRead(provider, method, 5) };
+  const timers = [];
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../site/bounty-recovery-page.js"), "utf8"), {
+    window: { AgentBountiesRecovery: pageCore, AgentBountiesWalletLink: { select: async options => { assert.equal(options.purpose, "recovery"); return { label: "MetaMask", kind: "browser", provider: f.provider }; } } },
+    document: { getElementById: node }, localStorage: f.storage, navigator: { locks: f.locks },
+    location: { search: `?bountyContract=${BOUNTY}` }, URLSearchParams, AbortSignal,
+    fetch: () => { throw new Error("No network in page fixture"); },
+    setTimeout: (fn, ms) => { const t = setTimeout(fn, ms); t.unref(); timers.push(t); return t; }, clearTimeout,
+  });
+  await new Promise(done => setImmediate(done));
+  return { f, node, click: id => events.get(`recovery-${id}:click`)({ isTrusted: true }), close: () => timers.forEach(clearTimeout) };
+}
+test("recovery page connects the already-authorized extension and shows its balance", async () => {
+  const p = await pageFixture(); await p.click("connect");
+  assert.equal(p.node("recovery-wallet").textContent, OWNER);
+  assert.equal(p.node("recovery-send").disabled, false); assert.equal(p.f.sends.length, 0);
+  p.close();
+});
+test("stalled connection unlocks the UI and gives an actionable error", async () => {
+  const p = await pageFixture(f => { f.provider.request = () => new Promise(() => {}); });
+  await p.click("connect");
+  assert.match(p.node("recovery-status").textContent, /Open and unlock/);
+  assert.equal(p.node("recovery-connect").disabled, false);
+  assert.equal(p.node("recovery-refresh").disabled, false);
+  assert.equal(p.node("recovery-send").disabled, true); assert.equal(p.f.sends.length, 0); p.close();
+});
+test("an existing MetaMask connection prompt explains where to finish it", async () => {
+  const p = await pageFixture(f => { f.provider.request = async ({ method }) => {
+    if (method === "eth_accounts") return [];
+    throw Object.assign(new Error("Already pending"), { code: -32002 });
+  }; });
+  await p.click("connect"); assert.match(p.node("recovery-status").textContent, /already open in your wallet/);
+  assert.equal(p.node("recovery-connect").disabled, false); assert.equal(p.node("recovery-send").disabled, true); p.close();
+});
+test("check status stays available during wallet approval without another send", async () => {
+  let finish;
+  const p = await pageFixture(f => { f.waitSend = new Promise(resolve => { finish = resolve; }); });
+  await p.click("connect"); const sending = p.click("send"); await new Promise(done => setImmediate(done));
+  assert.match(p.node("recovery-status").textContent, /Open your wallet to confirm/);
+  assert.equal(p.node("recovery-refresh").disabled, false); assert.equal(p.node("recovery-send").disabled, true);
+  await p.click("refresh"); assert.match(p.node("recovery-status").textContent, /Do not send it again/);
+  assert.equal(p.f.sends.length, 1); finish(); await sending; p.close();
+});
+for (const failRead of [false, true]) test(`a stale status ${failRead ? "error" : "result"} cannot overwrite an explicit wallet rejection`, async () => {
+  let rejectSend, finishRead;
+  const waitRead = new Promise(resolve => { finishRead = resolve; });
+  const p = await pageFixture(f => {
+    f.waitSend = new Promise((_, reject) => { rejectSend = reject; });
+    const rpc = f.rpc;
+    f.rpc = async (method, params) => {
+      if (f.pauseRead && method === "eth_chainId") {
+        await waitRead;
+        if (failRead) throw new Error("Stale RPC failure");
+      }
+      return rpc(method, params);
+    };
+  });
+  await p.click("connect");
+  const sending = p.click("send"); await new Promise(done => setImmediate(done));
+  p.f.pauseRead = true;
+  const checking = p.click("refresh"); await new Promise(done => setImmediate(done));
+  rejectSend(Object.assign(new Error("User rejected"), { code: 4001 })); await sending;
+  assert.match(p.node("recovery-status").textContent, /You declined/);
+  finishRead(); await checking;
+  assert.match(p.node("recovery-status").textContent, /You declined/);
+  assert.equal(p.node("recovery-send").disabled, false);
+  assert.equal(p.f.stored.size, 0); assert.equal(p.f.sends.length, 1); p.close();
+});
 
 if (process.env.RECOVERY_BROWSER_TEST === "1") test("real browser: review, reload pending cancellation, refund, mobile layout", async () => {
   const http = require("node:http");
@@ -200,10 +356,22 @@ if (process.env.RECOVERY_BROWSER_TEST === "1") test("real browser: review, reloa
       });
       await context.addInitScript(() => {
         window.ethereum = { isMetaMask: true, on: () => {}, request: args => window.recoveryWalletFixture(args) };
+        const provider = { isMetaMask: true, on: () => {}, request: args => window.recoveryWalletFixture(args) };
+        const brave = { isBraveWallet: true, isMetaMask: true, request: () => { throw new Error("Wrong wallet selected"); } };
+        window.addEventListener("eip6963:requestProvider", () => {
+          for (const detail of [
+            { provider, info: { name: "MetaMask", rdns: "io.metamask", uuid: "11111111-1111-4111-8111-111111111111" } },
+            { provider: brave, info: { name: "Brave Wallet", rdns: "com.brave.wallet", uuid: "22222222-2222-4222-8222-222222222222" } },
+          ]) window.dispatchEvent(new CustomEvent("eip6963:announceProvider", { detail }));
+        });
       });
       const page = await context.newPage(); page.on("pageerror", e => errors.push(e.message));
       await page.goto(`${origin}/recover-bounty.html?bountyContract=${BOUNTY}&analytics=off`);
       await page.getByRole("button", { name: "Connect my wallet", exact: true }).click();
+      assert.equal(await page.getByRole("button", { name: /MetaMask in this browser/ }).count(), 1);
+      assert.equal(await page.getByRole("button", { name: /Brave Wallet in this browser/ }).count(), 1);
+      assert.equal(await page.getByRole("dialog").getByText(/Buy USDC/).count(), 0);
+      if (process.env.RECOVERY_SCREENSHOT_DIR) await page.screenshot({ path: path.join(process.env.RECOVERY_SCREENSHOT_DIR, `wallet-picker-${width}.png`) });
       await page.getByRole("button", { name: /MetaMask/ }).click();
       await page.getByText("Ready to cancel.", { exact: false }).waitFor();
       assert.equal(f.sends.length, 0);

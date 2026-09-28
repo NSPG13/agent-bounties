@@ -33,6 +33,47 @@
     const n = BigInt(value);
     return `${n / 1000000n}.${(n % 1000000n).toString().padStart(6, "0")}`;
   };
+  const connectionRequests = new WeakMap();
+  async function waitForWallet(promise, timeoutMs, message) {
+    let timer;
+    try {
+      return await Promise.race([promise, new Promise((_, reject) => {
+        timer = setTimeout(() => reject(Object.assign(new Error(message), { code: "wallet_timeout" })), timeoutMs);
+      })]);
+    } finally { clearTimeout(timer); }
+  }
+  function walletRead(provider, method, timeoutMs = 10000) {
+    if (!["eth_accounts", "eth_chainId"].includes(method)) throw new Error("Only wallet connection reads are allowed here.");
+    return waitForWallet(Promise.resolve().then(() => provider.request({ method })), timeoutMs,
+      "Your wallet did not answer. Open and unlock it, then connect again. No transaction was requested.");
+  }
+  async function connectionRequest(provider, method, params, timeoutMs, message) {
+    let requests = connectionRequests.get(provider);
+    if (!requests) { requests = new Map(); connectionRequests.set(provider, requests); }
+    let request = requests.get(method);
+    if (!request) {
+      request = Promise.resolve().then(() => provider.request({ method, ...(params ? { params } : {}) }));
+      requests.set(method, request);
+      const clear = () => { if (requests.get(method) === request) requests.delete(method); };
+      request.then(clear, clear);
+    }
+    return waitForWallet(request, timeoutMs, message);
+  }
+  async function connectWallet(provider, timeoutMs = 60000, readTimeoutMs = 10000) {
+    let accounts;
+    try { accounts = await walletRead(provider, "eth_accounts", readTimeoutMs); }
+    catch (error) { if (error.code !== 4100) throw error; accounts = []; }
+    if (Array.isArray(accounts) && accounts.length) return address(accounts[0]);
+    if (!Array.isArray(accounts)) throw new Error("Your wallet returned an invalid account list. Reconnect it.");
+    accounts = await connectionRequest(provider, "eth_requestAccounts", null, timeoutMs,
+      "Open your wallet and finish its connection request, then choose Connect my wallet again. No payment was requested.");
+    if (!Array.isArray(accounts) || !accounts.length) throw new Error("No wallet account was selected. Unlock your wallet and connect again.");
+    return address(accounts[0]);
+  }
+  function switchToBase(provider, timeoutMs = 60000) {
+    return connectionRequest(provider, "wallet_switchEthereumChain", [{ chainId: CHAIN }], timeoutMs,
+      "Finish switching to Base in your wallet, then choose Connect my wallet again. No payment was requested.");
+  }
   // This transport can only read or simulate. Wallet writes never use retries.
   function createRpc(fetcher = fetch) {
     const endpoints = ["https://base-rpc.publicnode.com", "https://mainnet.base.org"];
@@ -47,7 +88,9 @@
         try {
           response = await fetcher(endpoints[index], { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id, method, params }), cache: "no-store", credentials: "omit", signal: AbortSignal.timeout(12000) });
         } catch (_) { continue; }
-        if (response.status === 429 || response.status >= 500) continue;
+        // Some public readers require a token for transaction history. Fall
+        // back only for read/simulation transport; this cannot repeat a send.
+        if ([401, 403, 429].includes(response.status) || response.status >= 500) continue;
         if (!response.ok) throw new Error("Base could not verify this request. Check status before trying again.");
         const result = await response.json();
         if (result.error?.code === -32005) continue;
@@ -63,7 +106,7 @@
       return pending;
     };
   }
-  function create({ rpc, plan, storage, locks, now = () => Date.now() }) {
+  function create({ rpc, plan, storage, locks, now = () => Date.now(), walletReadTimeoutMs = 10000 }) {
     async function snapshot(contract, account, tag = "safe") {
       contract = address(contract); account = account ? address(account) : null;
       if (await rpc("eth_chainId", []) !== CHAIN) throw new Error("The chain service is not Base.");
@@ -100,7 +143,7 @@
       if (storage.getItem(name) !== encoded) throw new Error("This browser cannot save recovery progress. No new request can be sent safely.");
     }
     async function walletContext(provider, account) {
-      const [chain, accounts] = await Promise.all([provider.request({ method: "eth_chainId" }), provider.request({ method: "eth_accounts" })]);
+      const [chain, accounts] = await Promise.all([walletRead(provider, "eth_chainId", walletReadTimeoutMs), walletRead(provider, "eth_accounts", walletReadTimeoutMs)]);
       if (String(chain).toLowerCase() !== CHAIN || address(accounts?.[0]) !== address(account)) throw new Error("Your wallet or network changed. Reconnect the original wallet on Base.");
     }
     function eligible(view, account, action) {
@@ -108,14 +151,16 @@
       if (action === "cancel" && ![0, 1].includes(view.state)) throw new Error("This bounty cannot be cancelled while claimed, under review, settled, or already cancelled.");
       if (action === "refund" && (view.state !== 5 || BigInt(view.contribution) <= 0n)) throw new Error("A confirmed cancellation and a remaining contribution are required for a refund.");
     }
-    async function request({ contract, account, action, provider }) {
+    async function request({ contract, account, action, provider, onProgress = () => {} }) {
       contract = address(contract); account = address(account);
       if (!["cancel", "refund"].includes(action)) throw new Error("Unsupported recovery action.");
       if (!locks?.request) throw new Error("This browser cannot safely coordinate wallet requests. Use a supported browser.");
       return locks.request(key(contract, account), { ifAvailable: true }, async lock => {
         if (!lock) throw new Error("A recovery request is already open in another tab.");
         if (saved(contract, account)) throw new Error("Check the previous wallet request before sending another.");
+        onProgress("wallet_check");
         await walletContext(provider, account);
+        onProgress("bounty_check");
         const view = await snapshot(contract, account);
         eligible(view, account, action);
         const expected = selector(action === "cancel" ? "cancel()" : "withdrawRefund()");
@@ -130,6 +175,7 @@
         const record = { contract, account, action, startBlock: view.block, bountyId: view.bountyId, createdAt: now(), txHash: null };
         save(record); // Before opening the wallet: a lost response must not cause a repeat.
         try {
+          onProgress("wallet_approval");
           record.txHash = hash(await provider.request({ method: "eth_sendTransaction", params: [tx] }));
           save(record);
           return record;
@@ -140,8 +186,17 @@
       });
     }
     async function reconcile(contract, account) {
+      const name = key(contract, account), original = storage.getItem(name);
       const record = saved(contract, account);
       if (!record) return { status: "idle" };
+      async function settle(result) {
+        await locks.request(name, { ifAvailable: true }, lock => {
+          if (!lock || storage.getItem(name) !== original) return;
+          storage.setItem(`${name}:confirmed`, JSON.stringify({ ...result, request: record }));
+          storage.removeItem(name);
+        });
+        return result;
+      }
       if (!record.txHash) return { status: "unknown", message: "The wallet response was lost. Check wallet activity; do not send another request." };
       const [receipt, safe] = await Promise.all([
         rpc("eth_getTransactionReceipt", [record.txHash]), rpc("eth_getBlockByNumber", ["safe", false]),
@@ -154,8 +209,7 @@
       if (!block || block.hash?.toLowerCase() !== receipt.blockHash?.toLowerCase()) return { status: "pending", txHash: record.txHash };
       if (!transaction || hash(receipt.transactionHash) !== record.txHash || hash(transaction.hash) !== record.txHash || address(transaction.from) !== record.account || address(transaction.to) !== record.contract || transaction.input?.toLowerCase() !== expectedData || BigInt(transaction.value) !== 0n) throw new Error("The transaction does not match the saved recovery request.");
       if (BigInt(receipt.status) === 0n) {
-        storage.removeItem(key(contract, account));
-        return { status: "failed", txHash: record.txHash };
+        return settle({ status: "failed", txHash: record.txHash });
       }
       if (BigInt(receipt.status) !== 1n) throw new Error("Unknown transaction result.");
       const eventTopic = topic(record.action === "cancel" ? "BountyCancelled(bytes32,uint256)" : "RefundWithdrawn(bytes32,address,uint256,uint256,uint256)");
@@ -166,11 +220,9 @@
       if (record.action === "cancel" && (event.topics.length !== 2 || !/^0x[0-9a-f]{64}$/i.test(event.data))) throw new Error("The cancellation event is invalid.");
       const amount = record.action === "refund" ? uint(`0x${event.data.slice(-64)}`).toString() : null;
       const result = { status: "confirmed", action: record.action, txHash: record.txHash, amount };
-      storage.setItem(`${key(contract, account)}:confirmed`, JSON.stringify(result));
-      storage.removeItem(key(contract, account));
-      return result;
+      return settle(result);
     }
     return { snapshot, request, reconcile, saved };
   }
-  return Object.freeze({ create, createRpc, address, usdc, CHAIN, FACTORY, IMPLEMENTATION, TOKEN, CODE, selector, topic });
+  return Object.freeze({ create, createRpc, address, usdc, connectWallet, switchToBase, walletRead, CHAIN, FACTORY, IMPLEMENTATION, TOKEN, CODE, selector, topic });
 });
