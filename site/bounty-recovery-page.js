@@ -3,8 +3,9 @@
   const core = window.AgentBountiesRecovery;
   const ui = Object.fromEntries(["contract", "owner", "balance", "wallet", "contribution", "connect", "send", "refresh", "status", "receipt", "next"].map(name => [name, document.getElementById(`recovery-${name}`)]));
   const api = "https://api.agentbounties.app";
-  let contract, provider, account, view, busy = false, walletWaiting = false, refreshing = false, timer;
+  let contract, provider, account, view, busy = false, walletWaiting = false, refreshing = false, timer, refreshVersion = 0;
   const message = text => { ui.status.textContent = text; };
+  const invalidateReads = () => { refreshVersion++; clearTimeout(timer); };
   async function json(url, init) {
     const response = await fetch(url, { ...init, cache: "no-store", credentials: "omit", signal: AbortSignal.timeout(20000) });
     if (!response.ok) throw new Error(response.status === 409 ? "The service is still reconciling this bounty. Check status and try again shortly." : `The recovery service is unavailable (${response.status}). No new transaction was sent.`);
@@ -33,10 +34,15 @@
   }
   async function refresh() {
     clearTimeout(timer);
-    const connected = account;
-    let result = connected ? await engine.reconcile(contract, connected) : { status: "idle" };
-    const nextView = await engine.snapshot(contract, connected);
-    if (connected !== account) return;
+    const connected = account, version = ++refreshVersion;
+    const current = () => version === refreshVersion && connected === account;
+    let result, nextView;
+    try {
+      result = connected ? await engine.reconcile(contract, connected) : { status: "idle" };
+      if (!current()) return;
+      nextView = await engine.snapshot(contract, connected);
+    } catch (error) { if (current()) throw error; return; }
+    if (!current()) return;
     view = nextView;
     ui.next.hidden = !(result.status === "confirmed" && result.action === "refund");
     if (result.txHash) {
@@ -58,6 +64,7 @@
   }
   ui.connect.addEventListener("click", async () => {
     if (busy) return;
+    invalidateReads();
     busy = true; render();
     try {
       const choice = await window.AgentBountiesWalletLink.select({ purpose: "recovery" });
@@ -71,7 +78,7 @@
         if (String(await core.walletRead(choice.provider, "eth_chainId")).toLowerCase() !== core.CHAIN) throw new Error("Your wallet is still on another network. Switch to Base, then connect again.");
       }
       provider = choice.provider; account = selected; view = null;
-      const changed = () => { if (provider !== choice.provider) return; provider = null; account = null; clearTimeout(timer); ui.next.hidden = true; ui.send.disabled = true; message("Your wallet changed. Connect it again before continuing."); render(); };
+      const changed = () => { if (provider !== choice.provider) return; invalidateReads(); provider = null; account = null; ui.next.hidden = true; ui.send.disabled = true; message("Your wallet changed. Connect it again before continuing."); render(); };
       provider.on?.("accountsChanged", changed); provider.on?.("chainChanged", changed); provider.on?.("disconnect", changed);
       render(); ui.contribution.textContent = "Checking…"; message("Wallet connected. Checking your refundable balance…");
       await refresh();
@@ -80,6 +87,7 @@
   });
   ui.send.addEventListener("click", async (event) => {
     if (!event.isTrusted || busy || refreshing || !provider || !account || !view) return;
+    invalidateReads();
     busy = true; render();
     try {
       const action = view.state === 5 ? "refund" : "cancel";
@@ -91,7 +99,7 @@
       } });
       walletWaiting = false;
       await refresh();
-    } catch (error) { message(error.code === 4001 ? "You declined the wallet request. No transaction was sent." : `${error.message}\nCheck wallet activity before retrying if a request was opened.`); }
+    } catch (error) { invalidateReads(); message(error.code === 4001 ? "You declined the wallet request. No transaction was sent." : `${error.message}\nCheck wallet activity before retrying if a request was opened.`); }
     finally { busy = false; walletWaiting = false; render(); }
   });
   ui.refresh.addEventListener("click", async () => {

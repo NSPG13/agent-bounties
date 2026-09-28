@@ -289,6 +289,31 @@ test("check status stays available during wallet approval without another send",
   await p.click("refresh"); assert.match(p.node("recovery-status").textContent, /Do not send it again/);
   assert.equal(p.f.sends.length, 1); finish(); await sending; p.close();
 });
+for (const failRead of [false, true]) test(`a stale status ${failRead ? "error" : "result"} cannot overwrite an explicit wallet rejection`, async () => {
+  let rejectSend, finishRead;
+  const waitRead = new Promise(resolve => { finishRead = resolve; });
+  const p = await pageFixture(f => {
+    f.waitSend = new Promise((_, reject) => { rejectSend = reject; });
+    const rpc = f.rpc;
+    f.rpc = async (method, params) => {
+      if (f.pauseRead && method === "eth_chainId") {
+        await waitRead;
+        if (failRead) throw new Error("Stale RPC failure");
+      }
+      return rpc(method, params);
+    };
+  });
+  await p.click("connect");
+  const sending = p.click("send"); await new Promise(done => setImmediate(done));
+  p.f.pauseRead = true;
+  const checking = p.click("refresh"); await new Promise(done => setImmediate(done));
+  rejectSend(Object.assign(new Error("User rejected"), { code: 4001 })); await sending;
+  assert.match(p.node("recovery-status").textContent, /You declined/);
+  finishRead(); await checking;
+  assert.match(p.node("recovery-status").textContent, /You declined/);
+  assert.equal(p.node("recovery-send").disabled, false);
+  assert.equal(p.f.stored.size, 0); assert.equal(p.f.sends.length, 1); p.close();
+});
 
 if (process.env.RECOVERY_BROWSER_TEST === "1") test("real browser: review, reload pending cancellation, refund, mobile layout", async () => {
   const http = require("node:http");
