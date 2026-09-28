@@ -6,13 +6,20 @@
 })(typeof window === "object" ? window : globalThis, function createWalletLink(win) {
   const doc = win.document;
   const discovered = new Map();
-  let chooser, list, status, createButton, pending, bundlePromise, brand = null, continuation;
+  let chooser, list, status, createButton, pending, bundlePromise, brand = null, continuation, purpose;
   const cancelled = () => Object.assign(new Error("Wallet selection cancelled."), { code: 4001 });
 
   function remember(detail) {
     if (!detail?.provider || typeof detail.provider.request !== "function") return;
     const name = String(detail.info?.name || "Browser wallet").trim().slice(0, 64);
-    discovered.set(detail.provider, { provider: detail.provider, label: name || "Browser wallet", kind: "browser", rdns: String(detail.info?.rdns || "") });
+    const uuid = String(detail.info?.uuid || "").toLowerCase();
+    const rdns = String(detail.info?.rdns || "").toLowerCase();
+    // A provider may re-announce through another wrapper after an extension
+    // refresh. UUID identifies that announcement, not ownership or authority.
+    if (/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(uuid)) {
+      for (const [provider, item] of discovered) if (item.uuid === uuid && item.rdns === rdns) discovered.delete(provider);
+    }
+    discovered.set(detail.provider, { provider: detail.provider, label: name || "Browser wallet", kind: "browser", rdns, uuid });
     if (chooser?.open) render();
   }
   win.addEventListener("eip6963:announceProvider", (event) => remember(event.detail));
@@ -22,11 +29,14 @@
     const phone = win.AgentBountiesPhoneWallet;
     const embedded = win.AgentBountiesCoinbaseEmbeddedWallet?.provider;
     const result = [...discovered.values()].filter((item) => item.provider !== phone?.provider && item.provider !== embedded);
-    const injected = Array.isArray(win.ethereum?.providers) && win.ethereum.providers.length
+    // EIP-6963 is authoritative for discovery when extensions announce. The
+    // legacy global may be a proxy for one of them or another wallet's shim.
+    const injected = result.length ? [] : Array.isArray(win.ethereum?.providers) && win.ethereum.providers.length
       ? win.ethereum.providers : [win.ethereum];
     for (const provider of injected) {
       if (!provider || provider === phone?.provider || provider === embedded || typeof provider.request !== "function" || result.some((item) => item.provider === provider)) continue;
-      result.push({ provider, kind: "browser", label: provider.isCoinbaseWallet ? "Base App / Coinbase Wallet" : provider.isMetaMask ? "MetaMask" : "Browser wallet" });
+      const choice = { provider, kind: "browser", label: provider.isBraveWallet ? "Brave Wallet" : provider.isCoinbaseWallet ? "Base App / Coinbase Wallet" : provider.isMetaMask ? "MetaMask" : "Browser wallet" };
+      result.push(choice);
     }
     if (phone?.state().available) result.push({ provider: phone.provider, kind: "phone", label: "Use a phone wallet" });
     return result;
@@ -127,6 +137,23 @@
     chooser.querySelector("[data-wallet-intro]").textContent = brand ? "" : "Use one wallet to add money and approve your bounty.";
     chooser.querySelector("[data-wallet-back]").hidden = !brand;
     chooser.querySelector("[data-wallet-create]").hidden = brand !== "coinbase";
+    if (purpose === "recovery") {
+      chooser.querySelector("#wallet-link-title").textContent = "Connect your wallet";
+      chooser.querySelector("[data-wallet-intro]").textContent = "Use the wallet that funded this bounty. Connecting does not move money.";
+      chooser.querySelector("[data-wallet-back]").hidden = true;
+      chooser.querySelector("[data-wallet-create]").hidden = true;
+      const available = choices().filter(item => item.provider.agentBountiesCapabilities?.directTransactions !== false);
+      const labels = new Map();
+      for (const choice of available) {
+        const label = choice.kind === "phone" ? "Use a phone wallet" : `${choice.label} in this browser`;
+        const index = (labels.get(label) || 0) + 1; labels.set(label, index);
+        list.append(option(index === 1 ? label : `${label} (${index})`, choice.kind === "phone"
+          ? "Scan a QR code with MetaMask or another phone wallet."
+          : "Open this wallet's extension to approve the connection.", () => finish(choice)));
+      }
+      if (!available.length) note("No wallet was found. Unlock your browser wallet or open this page in your wallet app.");
+      return;
+    }
     if (!brand) {
       for (const [id, title, description] of [
         ["coinbase", "Coinbase", "Use your Base app or Coinbase account wallet."],
@@ -149,7 +176,7 @@
       return;
     }
     const matches = choices().filter(item => item.kind !== "phone" && brandOf(item) === brand);
-    for (const choice of matches) list.append(option("Connect " + names[brand], "Approve the connection in this wallet.", () => finish(choice)));
+    for (const [index, choice] of matches.entries()) list.append(option(`${choice.label} in this browser${matches.length > 1 ? ` (${index + 1})` : ""}`, "Open the extension to approve the connection.", () => finish(choice)));
     if (brand === "coinbase") {
       if (!matches.length) {
         note("Open this bounty in the Base app’s browser. Coinbase Wallet is now the Base app.");
@@ -160,11 +187,9 @@
       createButton.disabled = !embeddedConfigured();
       if (!embeddedConfigured()) status.textContent = "Email wallet sign-in is unavailable here.";
     } else if (brand === "metamask") {
-      if (!matches.length) {
-        const phone = choices().find(item => item.kind === "phone");
-        if (phone) list.append(option("Connect MetaMask on my phone", "Open MetaMask on this phone, or scan from another device.", () => finish(phone)));
-        else note("Open this bounty in MetaMask’s browser.");
-      }
+      const phone = choices().find(item => item.kind === "phone");
+      if (phone) list.append(option("MetaMask on my phone", "Scan a QR code with the MetaMask app.", () => finish(phone)));
+      else if (!matches.length) note("Open this bounty in MetaMask’s browser.");
       note("Buy USDC on Base in MetaMask. Return here to approve your bounty with the same wallet.");
     }
   }
@@ -202,7 +227,7 @@
   function select(options = {}) {
     if (pending) return pending.promise;
     mount();
-    brand = null; continuation = options.prepareContinuation;
+    brand = null; continuation = options.prepareContinuation; purpose = options.purpose;
     status.textContent = "";
     createButton.disabled = !embeddedConfigured();
     render();

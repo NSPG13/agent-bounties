@@ -150,6 +150,43 @@ test("OAuth continuation retains its selected address and remains bound to the a
 });
 
 const options = h => h.dialog().querySelector("[data-wallet-choices]").children;
+function announce(h, provider, info) {
+  const event = new Event("eip6963:announceProvider"); event.detail = { provider, info }; h.win.dispatchEvent(event);
+}
+test("recovery offers one announced MetaMask, distinct Brave and phone, without spending guidance", async () => {
+  const h = harness(), meta = { request() { throw new Error("discovery only"); } }, brave = { isMetaMask: true, isBraveWallet: true, request() {} };
+  const phone = { request() {} };
+  h.win.ethereum.providers = [h.win.ethereum, brave];
+  h.win.AgentBountiesPhoneWallet = { provider: phone, state: () => ({ available: true }) };
+  announce(h, meta, { name: "MetaMask", rdns: "io.metamask", uuid: "11111111-1111-4111-8111-111111111111" });
+  announce(h, brave, { name: "Brave Wallet", rdns: "com.brave.wallet", uuid: "22222222-2222-4222-8222-222222222222" });
+  const selection = h.chooser.select({ purpose: "recovery" });
+  assert.deepEqual(options(h).map(x => x.children[0].textContent), ["MetaMask in this browser", "Brave Wallet in this browser", "Use a phone wallet"]);
+  assert.equal(h.dialog().querySelector("[data-wallet-create]").hidden, true);
+  assert.match(h.dialog().querySelector("[data-wallet-intro]").textContent, /does not move money/);
+  options(h)[0].click(); assert.equal((await selection).provider, meta);
+  assert.deepEqual(h.calls, []);
+});
+test("re-announcing a provider UUID through another wrapper leaves one choice", async () => {
+  const h = harness(), info = { name: "MetaMask", rdns: "io.metamask", uuid: "11111111-1111-4111-8111-111111111111" };
+  announce(h, { request() {} }, info);
+  const current = { request() {} }; announce(h, current, info);
+  assert.equal(h.chooser.choices().length, 1);
+  assert.equal(h.chooser.choices()[0].provider, current);
+});
+test("phone remains available with a browser MetaMask extension installed", async () => {
+  const h = harness(), phone = { request() {} };
+  h.win.AgentBountiesPhoneWallet = { provider: phone, state: () => ({ available: true }) };
+  const selection = h.chooser.select(); options(h)[1].click();
+  assert.deepEqual(options(h).slice(0, 2).map(x => x.children[0].textContent), ["MetaMask in this browser", "MetaMask on my phone"]);
+  options(h)[1].click(); assert.equal((await selection).provider, phone);
+});
+test("recovery never offers an adapter unable to send direct transactions", async () => {
+  const h = harness(); h.win.ethereum.agentBountiesCapabilities = { directTransactions: false };
+  const selection = h.chooser.select({ purpose: "recovery" });
+  assert.match(options(h)[0].textContent, /No wallet was found/);
+  h.chooser.cancel(); await assert.rejects(selection, { code: 4001 });
+});
 test("three distinct brands never connect or switch a wallet on discovery", async () => {
   const h = harness(); const pending = h.chooser.select();
   assert.deepEqual(options(h).slice(0, 3).map(item => item.children[0].textContent), ["Coinbase", "MetaMask", "MoonPay"]);
@@ -166,9 +203,9 @@ test("three distinct brands never connect or switch a wallet on discovery", asyn
 test("Coinbase compatibility flags never turn it into the MetaMask choice", async () => {
   const h = harness(); h.win.ethereum.isCoinbaseWallet = true;
   const pending = h.chooser.select(); options(h)[1].click();
-  assert.equal(options(h).some(item => item.children[0]?.textContent === "Connect MetaMask"), false);
+  assert.equal(options(h).some(item => item.children[0]?.textContent === "MetaMask in this browser"), false);
   h.dialog().querySelector("[data-wallet-back]").click(); options(h)[0].click();
-  assert.equal(options(h)[0].children[0].textContent, "Connect Coinbase"); options(h)[0].click();
+  assert.equal(options(h)[0].children[0].textContent, "Base App / Coinbase Wallet in this browser"); options(h)[0].click();
   assert.equal((await pending).provider, h.win.ethereum);
   assert.deepEqual(h.calls, []);
 });
@@ -191,6 +228,6 @@ test("a different announced brand with MetaMask compatibility stays under Other 
   event.detail = {provider:h.win.ethereum, info:{name:"Trust Wallet", rdns:"com.trustwallet.app"}};
   h.win.dispatchEvent(event);
   const pending = h.chooser.select(); options(h)[1].click();
-  assert.equal(options(h).some(item => item.children[0]?.textContent === "Connect MetaMask"), false);
+  assert.equal(options(h).some(item => item.children[0]?.textContent === "MetaMask in this browser"), false);
   h.chooser.cancel(); await assert.rejects(pending, {code:4001});
 });
