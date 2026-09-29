@@ -1,0 +1,24 @@
+metrics:
+  canonical:
+    gmv:
+      source: settlement_ledger
+      exclude: ["creator_awards", "refunds"]
+    protocol_completion:
+      source: contract_ledger
+      exclude: ["creator_awards"]
+    active_identities:
+      source: identity_db
+      exclude: ["award_recipients"]
+  separate:
+    creator_awards:
+      source: creator_ledger
+      description: "Direct CAD/design awards outside canonical metrics"
+      includes: ["1506", "1345"]
+    refund_history:
+      source: dispute_log
+      description: "Cancelled contracts and refunds"
+
+links:
+  past_work: /pages/past-work.md
+  submissions: /pages/submissions.md
+  metrics: /pages/metrics.md

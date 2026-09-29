@@ -1,0 +1,33 @@
+{
+  "id": "1506",
+  "type": "CAD",
+  "amount": 15.068098,
+  "currency": "USDC",
+  "recipient": "spike-token",
+  "transfer_type": "direct",
+  "status": "published",
+  "evaluation": {
+    "checks_passed": [
+      "technical_feasibility",
+      "community_alignment",
+      "maintainability"
+    ],
+    "rationale": "Proposal B (#1345) passed all three checks with superior OpenSCAD modularity and Rust integration. Proposal A (#1510) repeated B's design without innovation. No formal contract submission met all criteria due to drawing errors and missed review deadlines (our responsibility).",
+    "comparison": {
+      "proposal_a": {
+        "score": 2,
+        "notes": "Design reuse without CAD improvements"
+      },
+      "proposal_b": {
+        "score": 3,
+        "notes": "Modular OpenSCAD components + Rust validation hooks"
+      }
+    }
+  },
+  "metadata": {
+    "transfer_date": "2024-05-18T12:00:00Z",
+    "receipt_url": "https://example.com/transfer/1506",
+    "ledger": "creator_awards",
+    "excluded_from": ["canonical_gmv", "protocol_completion", "active_identities"]
+  }
+}
