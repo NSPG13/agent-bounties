@@ -230,8 +230,9 @@ claim conversion, active identities, platform revenue or leaderboard payouts.
 Those API metrics and their existing exclusion policy are unchanged. The operator
 creator is identified in this separate ledger; this is not external GMV.
 
-The homepage and completed-work board show all-time separate awards. The metrics
-page uses the canonical response’s exact selected `[started_at, ended_at)` window
+The completed-work board links to the separate award records. The homepage
+shows only contract payout totals. The metrics page uses the canonical response’s
+exact selected `[started_at, ended_at)` window
 for its separately labeled award panel. Unknown dates or missing/malformed data
 show unavailable, not zero. IDs and `(chain_id, transaction_hash, log_index)`
 must be unique; duplicates fail closed. Totals use integer base units. Future

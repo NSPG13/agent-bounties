@@ -188,7 +188,15 @@
       const counts = workflow.inventoryCounts(selectedView() === "completed" ? [] : items, nowMs);
       const visible = filterItems(items, search?.value, timing?.value || "now", nowMs, kind?.value || "all");
       list.innerHTML = visible.length ? visible.map((item, index) => renderOpportunity(item, index, nowMs)).join("") : emptyState(kind?.value, counts.unavailable);
-      list.querySelector?.("[data-market-clear]")?.addEventListener("click", () => { if (search) search.value = ""; if (kind) kind.value = "all"; render(); search?.focus(); });
+      list.querySelector?.("[data-market-clear]")?.addEventListener("click", () => {
+        if (search) search.value = "";
+        if (kind) kind.value = "all";
+        render();
+        // Notify other views that share these controls after both values reset.
+        search?.dispatchEvent(new win.Event("input", { bubbles: true }));
+        kind?.dispatchEvent(new win.Event("change", { bubbles: true }));
+        search?.focus();
+      });
       list.setAttribute("aria-busy", "false");
       if (summary) summary.textContent = `${counts.now} ${counts.unavailable ? "confirmed " : ""}open now (${counts.direct} direct tasks · ${counts.competition} competitions · ${counts.child_funding} child-funding tasks) · ${counts.ended} scoring closed · ${counts.upcoming} upcoming · ${items.length} funded${counts.unavailable ? ` · Timing unavailable for ${counts.unavailable}; open-now total unconfirmed` : ""}${counts.closed ? ` · ${counts.closed} past deadline` : ""}${generatedAt ? ` · refreshed ${new Date(generatedAt).toLocaleTimeString()}` : ""}`;
       if (summary && selectedView() === "completed") summary.textContent = `${visible.length} completed ${visible.length === 1 ? "bounty" : "bounties"}${items.length === 300 ? " · showing the latest 300" : ""} · Open a submission to see the work and result.`;
