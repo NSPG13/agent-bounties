@@ -77,7 +77,9 @@ def check_home(body: str) -> Page:
     require(tag == "form" and attrs.get("action") == "post.html"
             and attrs.get("method", "get").lower() == "get", "task form lost the posting fallback")
     task = page.nodes[page.one("name", "task")]
-    require(task[0] == "textarea" and form in task[2], "task input is outside the posting form")
+    require(task[0] == "input" and task[1].get("type") == "hidden"
+            and task[1].get("id") == "home-task" and "disabled" not in task[1]
+            and form in task[2], "hidden task handoff is missing or outside the posting form")
     button = page.nodes[page.one("id", "post-a-bounty")]
     require(button[0] == "button" and form in button[2] and "data-bounty-open" in button[1]
             and button[1].get("type") == "button", "primary posting control is not wired")

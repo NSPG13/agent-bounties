@@ -776,7 +776,10 @@ def check_homepage(site_dir: Path) -> None:
         [
             'data-home-task',
             'id="home-task"',
-            'maxlength="4000"',
+            'name="task" type="hidden"',
+            'data-missing-ingredient',
+            'Other AIs have',
+            'they will get your work done.',
             'class="ab-hero"',
             'data-example-deck',
             'class="ab-process"',
