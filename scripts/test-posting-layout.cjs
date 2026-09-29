@@ -393,7 +393,7 @@ async function guidedTopupRegressions(browser, origin) {
       assert.equal(await page.locator("[data-topup-address]").textContent(), wallet.address);
       assert.match(await page.locator("[data-topup-connection]").textContent(), /Wallet connected.*Base/);
       assert.ok(await page.locator("[data-topup-wallet-buy]").evaluate(el => parseFloat(getComputedStyle(el).fontSize) >= 18));
-      assert.equal(await page.locator("[data-topup-needed]").textContent(), "2.01 USDC still needed");
+      await page.waitForFunction(() => document.querySelector("[data-topup-needed]").textContent === "2.01 USDC still needed");
       if (process.env.POSTING_LAYOUT_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.POSTING_LAYOUT_SCREENSHOTS, `topup-guide-${width}.png`) });
       await page.getByRole("button", { name: "Use my wallet app", exact: true }).click();
       assert.equal(await page.locator("#onramp-title").textContent(), "Choose your wallet app");
