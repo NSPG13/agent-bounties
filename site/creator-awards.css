@@ -1,0 +1,13 @@
+.creator-awards { margin: 1.5rem 0; padding: 1.25rem; border: 1px solid color-mix(in srgb, currentColor 24%, transparent); border-radius: 1rem; line-height: 1.6; overflow-wrap: anywhere; }
+.creator-awards[hidden] { display: none; }
+.creator-awards h2 { font-size: 1.2rem; margin: 0 0 .6rem; }
+.creator-awards a { text-decoration: underline; text-underline-offset: .2em; }
+.creator-awards a:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; }
+.creator-award-card { border-top: 1px solid color-mix(in srgb, currentColor 20%, transparent); margin-top: 1rem; padding-top: .5rem; }
+.creator-award-card h3 { font-size: 1.1rem; }
+.creator-award-review { border-top: 1px solid color-mix(in srgb, currentColor 20%, transparent); padding: 1rem 0; }
+.creator-award-review small { display: block; overflow-wrap: anywhere; margin-top: .75rem; }
+.creator-award-image { display: block; width: 100%; height: auto; border-radius: .8rem; background: #f2f2ed; }
+#winning-design figure { margin: 1.25rem 0; }
+#winning-design figcaption { margin-top: .5rem; font-size: .85rem; }
+.ab-home .creator-awards { max-width: 888px; margin: 1.5rem auto; }

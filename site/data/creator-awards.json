@@ -1,0 +1,202 @@
+{
+  "schema_version": "agent-bounties/creator-awards-v1",
+  "coverage": "Maintainer-reviewed public direct awards only; not a complete ledger of private transfers.",
+  "awards": [
+    {
+      "id": "cad-rainwater-2026",
+      "title": "Flower-shaped rainwater collector for a tinaco",
+      "visibility": "public",
+      "kind": "separate_creator_award",
+      "status": "paid_confirmed",
+      "bounty_contracts": [
+        "0x983e2d30faacad57f9871c3cc786d9a4b37829db",
+        "0xe11965e2c68f6f4da4b97c8e62fda5015ae0137b"
+      ],
+      "winner": {
+        "name": "spike-token",
+        "proposal_url": "https://github.com/NSPG13/agent-bounties/pull/1506",
+        "revision": "54a5ed93625a5bbc25817794d6785b1a70630609",
+        "source_url": "https://github.com/NSPG13/agent-bounties/tree/54a5ed93625a5bbc25817794d6785b1a70630609/proposals/1505-flower-tinaco-collector",
+        "review_url": "https://github.com/NSPG13/agent-bounties/pull/1506#pullrequestreview-5323105759",
+        "confirmation_url": "https://github.com/NSPG13/agent-bounties/pull/1506#issuecomment-5881939070",
+        "image": "assets/cad-award/design-b.png"
+      },
+      "payment": {
+        "chain_id": 8453,
+        "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "amount_base_units": "15068098",
+        "from_wallet": "0x884834e884d6e93462655a2820140ad03e6747bc",
+        "to_wallet": "0xe33c96a42364a992375dc4e62174a326c6069156",
+        "transaction_hash": "0x0d1455d51e7183c097c00277d3aac2ba4a434728c5d40a99ceecc3146c6e7580",
+        "log_index": 3,
+        "block_number": 51929073,
+        "occurred_at": "2026-09-29T02:04:53Z",
+        "receipt_status": "success",
+        "event": "Transfer"
+      },
+      "reviewed_at": "2026-09-29T02:14:00Z",
+      "announcement_url": "https://github.com/NSPG13/agent-bounties/issues/1505#issuecomment-5882275041",
+      "refund_url": "https://basescan.org/tx/0x72adbfa4f2035f46d00b6b914c95a003945b4ec45f7e4468e396d3a9acfd97a4",
+      "why_separate": "No formal contract submission passed all three technical checks. Earlier entries had broken water paths or file errors. The final timely entry needed correct drawings. We also missed its review deadline — that was our responsibility. After the contract expired, the creator cancelled it, recovered the unused funds and paid B separately for its reviewed GitHub proposal.",
+      "why_selected": "B and A both passed all three concept checks. The creator chose B for its flower shape and clearer assembly plan: eight lobed petals, four support ribs, an adjustable clamp around the tank’s lid neck, petal cutting patterns and detailed hardware steps. A also had a working drain and mount; it was not a failed design.",
+      "criteria": [
+        {
+          "title": "Editable CAD, STEP and STL files that open without errors",
+          "finding": "The editable model rebuilt cleanly. STEP and STL opened correctly, matched the source and formed a closed, connected model."
+        },
+        {
+          "title": "Petals drain to a central outlet, with a dimensioned adjustable tank mount",
+          "finding": "All eight petals slope inward into the funnel. The outlet is open, and changing the neck-size setting changes the mount."
+        },
+        {
+          "title": "Assembly drawings, a parts list and measurements to take before building",
+          "finding": "Drawings match the model. The package includes assembly steps, cutting patterns, a parts list and eight site measurements."
+        }
+      ],
+      "reviews": [
+        {
+          "name": "Design B — spike-token",
+          "reference": "#1506",
+          "source_url": "https://github.com/NSPG13/agent-bounties/pull/1506",
+          "revision": "54a5ed93625a5bbc25817794d6785b1a70630609",
+          "review_url": "https://github.com/NSPG13/agent-bounties/pull/1506#pullrequestreview-5323105759",
+          "checks": [
+            "Pass",
+            "Pass",
+            "Pass"
+          ],
+          "summary": "Selected. Flower-shaped petals, working drain and adjustable tank mount, with clear assembly steps and cutting patterns."
+        },
+        {
+          "name": "Design A — quinnfoster81-droid",
+          "reference": "#1345",
+          "source_url": "https://github.com/NSPG13/agent-bounties/pull/1345",
+          "revision": "4050a89dd543ef830f7f74a4db317aaeb3efe486",
+          "review_url": "https://github.com/NSPG13/agent-bounties/pull/1345#pullrequestreview-5241462410",
+          "checks": [
+            "Pass",
+            "Pass",
+            "Pass"
+          ],
+          "summary": "Also passed. A smaller, shallower dish with a working drain and adjustable sleeve. The creator preferred B’s flower shape and assembly plan."
+        },
+        {
+          "name": "s6pa1rta3n-lab",
+          "reference": "#1510",
+          "source_url": "https://github.com/NSPG13/agent-bounties/pull/1510",
+          "revision": "08fcf6c7384728d1ef89a50619862093c39d78b8",
+          "review_url": "https://github.com/NSPG13/agent-bounties/pull/1510#pullrequestreview-5311690397",
+          "checks": [
+            "Pass",
+            "Pass",
+            "Pass"
+          ],
+          "summary": "Repeats A’s design. Counted as the same design, not a third passing design; contributor credit still needs clarification."
+        },
+        {
+          "name": "s6pa1rta3n-lab",
+          "reference": "#1389",
+          "source_url": "https://github.com/NSPG13/agent-bounties/pull/1389",
+          "revision": "0dc8a90ebc7402f554f15e346b8293a493a99f52",
+          "review_url": "https://github.com/NSPG13/agent-bounties/pull/1389#pullrequestreview-5201246134",
+          "checks": [
+            "Needs fixes",
+            "Needs fixes",
+            "Pass"
+          ],
+          "summary": "Useful documents, but source and exports differ. The funnel is disconnected, and the adapter size controls do not change the model."
+        },
+        {
+          "name": "Mira-Mjodheim",
+          "reference": "#1452",
+          "source_url": "https://github.com/NSPG13/agent-bounties/pull/1452",
+          "revision": "b47caf50b71c77e1872cdb0c6cf798d09367ef18",
+          "review_url": "https://github.com/NSPG13/agent-bounties/pull/1452#pullrequestreview-5241471862",
+          "checks": [
+            "Incomplete",
+            "Needs fixes",
+            "Incomplete"
+          ],
+          "summary": "The collar blocks the drain. Required exports, drawings and parts list are missing; adapter controls are unused."
+        },
+        {
+          "name": "themaksat",
+          "reference": "#1480",
+          "source_url": "https://github.com/NSPG13/agent-bounties/pull/1480",
+          "revision": "50c16c831d0e8b5af3bd935ecc6db9102ee189d4",
+          "review_url": "https://github.com/NSPG13/agent-bounties/pull/1480#pullrequestreview-5281626842",
+          "checks": [
+            "Incomplete",
+            "Needs fixes",
+            "Incomplete"
+          ],
+          "summary": "Flat petals and a solid hub have no central drain. Required exports and assembly/mount details are missing."
+        },
+        {
+          "name": "boby478",
+          "reference": "#1483",
+          "source_url": "https://github.com/NSPG13/agent-bounties/pull/1483",
+          "revision": "521ba61fb3339d03d3ed36f3332c2a6da7659ff6",
+          "review_url": "https://github.com/NSPG13/agent-bounties/pull/1483#pullrequestreview-5281691472",
+          "checks": [
+            "Incomplete",
+            "Needs fixes",
+            "Incomplete"
+          ],
+          "summary": "A cut removes the modeled petal. Required exports, adjustable mount and assembly details are missing."
+        },
+        {
+          "name": "SrvFernandes",
+          "reference": "#1516",
+          "source_url": "https://github.com/NSPG13/agent-bounties/pull/1516",
+          "revision": "e4d363eb4d04560c51e4deab485d927aef466d12",
+          "review_url": "https://github.com/NSPG13/agent-bounties/pull/1516#pullrequestreview-5342789892",
+          "checks": [
+            "Pass",
+            "Needs fixes",
+            "Needs fixes"
+          ],
+          "summary": "Repaired exports open correctly. Some petal edges drain past the funnel; guide dimensions and screen-fit steps disagree with the model."
+        },
+        {
+          "name": "Earlier formal submissions",
+          "reference": "Archive review",
+          "source_url": "https://github.com/NSPG13/agent-bounties/issues/1340",
+          "checks": [
+            "Needs fixes",
+            "Needs fixes",
+            "Needs fixes"
+          ],
+          "summary": "A 212.5 mm gap breaks the water path. Screen holes are covered, the STEP file has errors, and the drawing does not match the model."
+        },
+        {
+          "name": "SupremeDreamZ — final formal submission",
+          "reference": "v1.0.0",
+          "source_url": "https://github.com/SupremeDreamZ/tinaco-flower-collector/releases/tag/v1.0.0",
+          "review_url": "https://github.com/NSPG13/agent-bounties/issues/1505#issuecomment-5875823541",
+          "checks": [
+            "Pass",
+            "Pass",
+            "Needs fixes"
+          ],
+          "summary": "Submitted on time. The CAD and water path passed the concept checks. Drawings label height as 200 mm instead of 350 mm, place a clamp hole at 55 mm instead of 45 mm, and mislabel clamp bars. We missed the review deadline; the bond was returned. This was not an on-chain rejection."
+        },
+        {
+          "name": "Other informal comments",
+          "reference": "Original discussion",
+          "source_url": "https://github.com/NSPG13/agent-bounties/issues/1340",
+          "checks": [
+            "Incomplete",
+            "Incomplete",
+            "Incomplete"
+          ],
+          "summary": "We also checked all 63 comments across issues #1340, #1365 and #1505. The remaining comments supplied incomplete code, no full CAD package, or linked work already listed above. No additional passing design was found in those public sources."
+        }
+      ],
+      "audit_scope": "Public CAD proposals and formal packages checked through September 28, 2026. Eight PRs, including closed ones, and all 63 comments across the three bounty discussions were included. Reviews apply to the exact versions linked here.",
+      "limits": "These are CAD concept checks. Neither passing design has been built or tested on the creator’s tank. Actual fit, strength and measured water collection are not yet proven.",
+      "eligibility_note": "B’s GitHub proposal was not a verified bonded contract submission. This separate award does not change that history or set aside bond rules for future bounties.",
+      "budget_note": "The creator recovered 17.068098 USDC and paid the 15.068098 USDC solver reward separately. The remaining 2 USDC review reserve was not part of this award."
+    }
+  ]
+}

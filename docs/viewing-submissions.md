@@ -70,3 +70,22 @@ node ../../scripts/test-submissions-layout.cjs
 The browser test uses synthetic records and blocks external requests. It covers
 open work to completed work to the winning submission, mobile layouts, failed
 reads, refresh, unknown identities and late responses after changing views.
+
+## Work awarded separately by a creator
+
+The completed-work board has a separate creator-award section. Its View
+Submissions button opens the review history and View Winning Submission jumps
+to the selected design. Related public contract pages link to the award even
+when the contract itself has no winner. These records do not change a contract’s
+submission, bond, refund or settlement history.
+
+For the CAD award, no formal submission passed all three technical checks; the
+last timely formal entry needed drawing fixes, and the creator also missed its
+review deadline. Two distinct GitHub designs passed. The creator preferred B’s
+flower shape and clearer assembly plan and paid its author directly after the
+contract refund. A is credited as a passing design. The page distinguishes the
+technical findings, the creator’s preference and the confirmed direct payment.
+
+The source is `site/data/creator-awards.json`; only reviewed public work and
+confirmed direct awards belong there. See [metrics policy](platform-metrics.md#separate-creator-awards)
+for evidence requirements and exclusions.
