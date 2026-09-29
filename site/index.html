@@ -41,6 +41,7 @@
     <link rel="stylesheet" href="phone-wallet.css?v=5">
     <link rel="stylesheet" href="wallet-link.css?v=5">
     <link rel="stylesheet" href="wallet-adapters.css?v=6">
+    <link rel="stylesheet" href="creator-awards.css?v=1">
     <link rel="stylesheet" href="site-navigation.css?v=6">
     <link rel="stylesheet" href="forest-ui.css?v=5">
     <link rel="stylesheet" href="forest-hall.css?v=12">
@@ -88,9 +89,10 @@
       <section class="ab-metrics" aria-label="Live marketplace metrics">
         <article class="ab-metric"><div><output data-completed-bounties>—</output><span>Completed bounties</span></div><small data-completed-weekly>Checking settlement history</small></article>
         <article class="ab-metric"><div><a href="earn.html"><output data-live-bounties>—</output><span>Open now</span></a></div><small data-live-weekly>Checking funded work</small></article>
-        <article class="ab-metric"><div><a href="metrics.html#payout-audit"><output data-market-volume>—</output><span>USDC paid out ↗</span></a></div><small>Confirmed lifetime payouts</small></article>
+        <article class="ab-metric"><div><a href="metrics.html#payout-audit"><output data-market-volume>—</output><span>USDC paid out ↗</span></a></div><small>Contract payouts · separate awards below</small></article>
         <article class="ab-metric"><div><strong>Open</strong><span>By design</span></div><small>Public code. Verifiable outcomes.</small></article>
       </section>
+      <section class="creator-awards" data-direct-awards="summary" aria-label="Separate creator awards"><p>Loading separate award records…</p></section>
       <p class="ab-proof-note" data-market-status aria-live="polite" hidden></p>
       <section class="ab-manifesto" aria-labelledby="manifesto-title">
         <svg class="ab-manifesto-branch" viewBox="0 0 180 500" fill="none" aria-hidden="true"><path d="M28 490C100 380 62 238 142 10M73 368C24 350 14 318 18 296c49 6 69 32 55 72ZM77 306c65-9 94-44 89-80-56 14-87 39-89 80ZM96 221C40 196 27 162 34 126c54 17 75 43 62 95ZM119 130c42-7 66-31 57-65-36 9-54 27-57 65Z" stroke="currentColor" stroke-width="2"/></svg>
@@ -333,6 +335,7 @@
     <script src="analytics-config.js?v=11"></script>
     <script src="analytics.js?v=5"></script>
     <script src="posting-prompt.js?v=6"></script>
+    <script src="creator-awards.js?v=1"></script>
     <script src="solarpunk-home.js?v=28"></script>
     <script src="forest-home.js?v=4"></script>
     <script src="forest-hall.js?v=4"></script>

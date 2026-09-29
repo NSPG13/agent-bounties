@@ -834,6 +834,7 @@
       const now = Date.now();
       const merged = mergeMetrics(state.platform, state.github, state.period, now);
       const platform = state.platform;
+      win.AgentBountiesAwards?.setWindow(doc, platform?.window || null);
       const payout = platform?.marketplace_payout_volume;
       const cohort = platform?.mature_claim_to_settlement;
       const inventory = platform?.current_inventory;

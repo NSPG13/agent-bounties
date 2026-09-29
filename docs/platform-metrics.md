@@ -208,3 +208,37 @@ node --test scripts/test-metrics-dashboard.js
 python scripts/check-site.py
 scripts/check-postgres.ps1
 ```
+
+## Separate creator awards
+
+The website also shows a separate, maintainer-reviewed public award ledger at
+`site/data/creator-awards.json` (`agent-bounties/creator-awards-v1`). It covers
+explicit direct creator awards for reviewed public work, not all wallet transfers.
+Each record has the exact Base USDC transfer, sender and recipient, integer
+base-unit amount, block, log index, payment time, reviewed work revision and
+public review links. Addition requires checking a successful receipt and the
+matching native-USDC Transfer log, creator authorization, recipient confirmation
+and the public-work scope. A signature, transaction hash or proposal alone is
+insufficient. The website renders this reviewed snapshot; it does not claim to
+verify the blockchain again in each browser.
+
+The first record is the CAD creator’s 15.068098 USDC direct payment to the
+selected #1506 design. The expired bounty was cancelled and refunded, so this
+is **one separate award**, not a BountySettled event. It must never be added to
+canonical payout volume, GMV, lifetime settled rounds, completed contract counts,
+claim conversion, active identities, platform revenue or leaderboard payouts.
+Those API metrics and their existing exclusion policy are unchanged. The operator
+creator is identified in this separate ledger; this is not external GMV.
+
+The homepage and completed-work board show all-time separate awards. The metrics
+page uses the canonical response’s exact selected `[started_at, ended_at)` window
+for its separately labeled award panel. Unknown dates or missing/malformed data
+show unavailable, not zero. IDs and `(chain_id, transaction_hash, log_index)`
+must be unique; duplicates fail closed. Totals use integer base units. Future
+payments are excluded. Canonical totals and charts never consume this ledger.
+
+Readers can inspect `submissions.html?award=cad-rainwater-2026` for the design,
+all review findings, creator’s choice, refund and payment receipt. Public handles
+and wallet addresses appear only in these explicitly public award records and
+case details, not the canonical aggregate. Unresolved private work must never
+be added. Run `node --test scripts/test-creator-awards.js` after any ledger edit.

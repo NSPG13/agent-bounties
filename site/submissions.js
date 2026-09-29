@@ -187,6 +187,17 @@
       if (busy) return;
       busy = true; refresh.disabled = true; page.setAttribute('aria-busy', 'true'); page.innerHTML = '<h1>Bounty submissions</h1>'; status.textContent = 'Loading public submissions…';
       try {
+        const awardId = new URLSearchParams(win.location.search).get('award');
+        if (awardId !== null) {
+          const awards = win.AgentBountiesAwards;
+          if (!awards) throw new Error('Award records could not load. Try Refresh.');
+          const row = awards.summarize(await awards.load(win)).rows.find(candidate => candidate.id === awardId);
+          if (!row) throw new Error('This award is not available in the public record.');
+          page.innerHTML = awards.renderDetail(row);
+          status.textContent = 'Separate creator award. Review findings and payment receipt are linked below.';
+          doc.title = `Award: ${row.title} | AgentBounties.app`;
+          return;
+        }
         const item = await loadOpportunity(win, new URLSearchParams(win.location.search).get('opportunity'));
         page.innerHTML = renderHistory(await loadHistory(win, item)); status.textContent = 'Public records checked. Private work is not shown here.';
         doc.title = `Submissions: ${item.title} | AgentBounties.app`;

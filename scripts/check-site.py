@@ -199,6 +199,8 @@ REQUIRED_FILES = {
     "x402-test-vectors.json",
 }
 ALLOWED_UI_CODE = {
+    "creator-awards.js",
+    "creator-awards.css",
     "bounty-recovery.js",
     "bounty-recovery-page.js",
     "bounty-recovery.css",
@@ -1352,7 +1354,7 @@ def main() -> int:
     recovery_node = shutil.which("node")
     if not recovery_node:
         fail("Node.js is required for the recovery safety checks")
-    subprocess.run([recovery_node, "--test", str(repo_root / "scripts/test-bounty-recovery.cjs")], check=True)
+    subprocess.run([recovery_node, "--test", str(repo_root / "scripts/test-bounty-recovery.cjs"), str(repo_root / "scripts/test-creator-awards.js")], check=True)
     for relative in sorted(REQUIRED_FILES | EXPECTED_SCENE_ASSETS):
         if not (site_dir / relative).exists():
             fail(f"missing required site file: {relative}")
