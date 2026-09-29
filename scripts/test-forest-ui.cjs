@@ -33,7 +33,7 @@ async function main() {
   const origin = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({headless:true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined});
   try {
-    for (const width of [390,701,768,900,1280,1440,1920]) {
+    for (const width of [320,390,701,768,900,1280,1440,1920]) {
       const ctx = await browser.newContext({viewport:{width,height:900},reducedMotion:"reduce",colorScheme:"light",locale:"en-US",timezoneId:"America/Los_Angeles"});
       let mode = "empty", account = "signed_out";
       await ctx.route("**/*", route => {
@@ -61,24 +61,22 @@ async function main() {
       assert.ok(await page.locator(".ab-forest-poster").evaluate(image=>image.currentSrc.includes(innerWidth<=700?"agent-hall-loop-poster-small-v2.webp":"agent-hall-loop-poster-v2.webp")),"responsive forest artwork");
       assert.deepEqual(await page.locator(".ab-site-nav a").allTextContents(), ["How it works", "Browse work"]);
       assert.equal(await page.locator(".ab-site-menu, [data-site-header] .ab-site-login").count(), 0);
-      assert.equal(await page.locator("#hero-title mark").innerText(), "get your work done");
+      assert.equal(await page.locator("#hero-title mark").innerText(), "what yours is missing");
       const titleLines = await page.locator(".ab-title-line").evaluateAll(els => els.map(el => ({ height: el.getBoundingClientRect().height, line: parseFloat(getComputedStyle(el).lineHeight), width: el.clientWidth, scroll: el.scrollWidth })));
-      assert.equal(titleLines.length, 3);
-      for (const line of titleLines) assert.ok(Math.abs(line.height - line.line) < 1 && line.scroll <= line.width + 1, "headline stays on three lines");
-      assert.equal(await page.locator(".ab-usecases-label").innerText(), "USE CASES");
-      assert.equal(await page.locator(".ab-usecases-label").evaluate(el => getComputedStyle(el).color), "rgb(255, 255, 255)");
-      assert.equal(await page.locator(".ab-payoff").evaluate(el => getComputedStyle(el).textDecorationLine), "underline");
-      assert.equal(await page.locator(".ab-only").evaluate(el => getComputedStyle(el).backgroundColor), "rgba(0, 0, 0, 0)");
-      assert.equal(await page.locator(".ab-only").evaluate(el => getComputedStyle(el).transform), "none");
+      assert.equal(titleLines.length, 2);
+      for (const line of titleLines) assert.ok(Math.abs(line.height - line.line) < 1 && line.scroll <= line.width + 1, "headline stays on two lines");
+      assert.equal((await page.locator("#hero-title").textContent()).trim(), "Other AIs have what yours is missing");
+      assert.equal(await page.locator(".ab-ingredient-label").innerText(), "With");
+      assert.equal(await page.locator(".ab-hero textarea, .ab-hero input:not([type=hidden])").count(), 0, "hero has text instead of a task input");
+      assert.equal(await page.locator("[data-missing-ingredient]").innerText(), "More compute");
+      assert.equal(await page.locator(".ab-ingredient-result").innerText(), "they will get your work done.");
+      assert.equal(await page.locator("#hero-payment-note").innerText(), "only pay for results, not tokens.");
+      const paymentNote = await page.locator("#hero-payment-note").boundingBox(), postButton = await page.locator("#post-a-bounty").boundingBox();
+      assert.ok(paymentNote.y >= postButton.y + postButton.height, "payment note sits beneath the posting button");
+      assert.equal(await page.locator(".ab-hero-subtitle [data-missing-ingredient]").count(), 1, "animation is part of the subtitle");
+      assert.ok(await page.locator(".ab-ingredient").evaluate(el => el.scrollWidth <= el.clientWidth), "ingredient text fits");
       assert.equal(await page.locator(".ab-funding-note").count(), 0);
-      const inputLines = await page.locator("#home-task").evaluate(el => {
-        const css = getComputedStyle(el);
-        return { visible: (el.clientHeight - parseFloat(css.paddingTop) - parseFloat(css.paddingBottom)) / parseFloat(css.lineHeight), wrap: css.whiteSpace };
-      });
-      assert.equal(inputLines.visible, width <= 700 ? 2 : 1, "two visible mobile lines and one desktop line");
-      assert.equal(inputLines.wrap, width <= 700 ? "pre-wrap" : "pre");
       assert.match(await page.locator(".ab-faq article").first().innerText(), /rejected result does not pay the solver.*another attempt.*refundable.*cancellation.*withdraw their refund/s);
-      assert.equal(await page.locator("[data-outcome-word]").evaluate(el => getComputedStyle(el).backgroundColor), "rgb(142, 228, 107)");
       if (width >= 1280) assert.ok(await page.locator("#hero-title").evaluate(el => parseFloat(getComputedStyle(el).fontSize) >= 64), "desktop headline is larger");
       const metrics = await page.locator(".ab-metric").evaluateAll(els => els.map(el => { const r = el.getBoundingClientRect(); return { x:r.x, y:r.y, background:getComputedStyle(el).backgroundColor, transform:getComputedStyle(el).transform }; }));
       assert.ok(metrics.every(metric => metric.background === "rgba(0, 0, 0, 0)" && metric.transform === "none"), "metrics are open statistics, without cards");
@@ -117,11 +115,15 @@ async function main() {
       await page.waitForFunction(()=>document.documentElement.dataset.theme==="dark");
       assert.equal(await page.locator('button[data-theme-choice="auto"]').getAttribute("aria-pressed"),"true");
       await page.locator('button[data-theme-choice="dark"]').click();
-      const task="Prepare a source-backed competitor report.";
-      await page.locator("#home-task").fill(task);
       await page.locator("#post-a-bounty").click();
       await page.locator("[data-bounty-launcher][open]").waitFor();
-      assert.ok((await page.locator("[data-bounty-prompt]").textContent()).includes(await page.locator("#home-task").inputValue()), "AI picker keeps the typed task");
+      assert.ok(!(await page.locator("[data-bounty-prompt]").textContent()).includes("My task:"), "posting works without an example");
+      await page.locator("[data-bounty-close]").click();
+      const example = page.locator("[data-task-example]").first();
+      const task = await example.getAttribute("data-task-example");
+      await example.click();
+      await page.locator("[data-bounty-launcher][open]").waitFor();
+      assert.ok((await page.locator("[data-bounty-prompt]").textContent()).includes(await page.locator("#home-task").inputValue()), "AI picker keeps the selected example");
       assert.equal(new URL(page.url()).pathname, "/", "posting CTA opens the picker in place");
       await capture(page,`ai-picker-${width}`);
       await page.locator("[data-bounty-close]").click();
@@ -129,9 +131,9 @@ async function main() {
       assert.equal(await page.locator("#bounty-composer-input").inputValue(),task,"first task survives synchronous journey creation");
       await page.reload();assert.equal(await page.locator("#bounty-composer-input").inputValue(),task,"saved after reload");
       assert.equal(await page.locator('[data-stage-target="fund"]').isDisabled(),true);
-      await page.goto(origin);await page.locator("#home-task").fill("A different idea");await page.locator("#post-a-bounty").click();
+      await page.goto(origin);await page.locator("[data-task-example]").nth(1).click();
       await page.locator("[data-bounty-launcher][open]").waitFor();
-      assert.ok((await page.locator("[data-bounty-prompt]").textContent()).includes(await page.locator("#home-task").inputValue()), "AI picker keeps the typed task");
+      assert.ok((await page.locator("[data-bounty-prompt]").textContent()).includes(await page.locator("#home-task").inputValue()), "AI picker keeps the selected example");
       assert.equal(new URL(page.url()).pathname, "/", "posting CTA opens the picker in place");
       await page.locator("[data-bounty-close]").click();
       await page.goto(origin+"/post.html");
@@ -189,13 +191,15 @@ async function main() {
     const motion = await browser.newContext({ viewport: { width: 1280, height: 900 }, reducedMotion: "no-preference" });
     await motion.route("**/*", route => new URL(route.request().url()).origin === origin ? route.continue() : route.fulfill({ status: 503, body: "Isolated motion check" }));
     const animated = await motion.newPage(); await animated.goto(origin);
-    const word = animated.locator("[data-outcome-word]");
-    await animated.locator("#home-task").fill("Keep my own task while the headline changes");
-    for (const expected of ["Cheaper", "Better", "Faster"]) await animated.waitForFunction(value => document.querySelector("[data-outcome-word]").textContent === value, expected);
-    assert.equal(await animated.locator("#home-task").inputValue(), "Keep my own task while the headline changes");
+    const word = animated.locator("[data-missing-ingredient]");
+    const ingredientBox = await animated.locator(".ab-ingredient-rotator").boundingBox();
+    for (const expected of ["private data", "specialized software", "greater intelligence", "more agents", "an Independent verifier", "the right credentials", "influence with X", "More compute"]) {
+      await animated.waitForFunction(value => document.querySelector("[data-missing-ingredient]").textContent === value, expected);
+      assert.deepEqual(await animated.locator(".ab-ingredient-rotator").boundingBox(), ingredientBox, "typing reserves space without layout shifts");
+    }
     await animated.emulateMedia({reducedMotion:"reduce"});
     const stoppedWord = await word.innerText();
-    await animated.waitForTimeout(3000);
+    await animated.waitForTimeout(4700);
     assert.equal(await word.innerText(), stoppedWord, "reduced motion stops the word loop");
     await animated.emulateMedia({reducedMotion:"no-preference"});
     await animated.waitForFunction(()=>document.querySelector("[data-forest-scene]").dataset.forestMotion==="running");
@@ -212,13 +216,19 @@ async function main() {
     await animated.waitForFunction(()=>document.querySelector("[data-forest-video]").currentTime<1);
     assert.equal(await video.evaluate(el=>el.paused),false,"the actual media repeats across its loop boundary");
     // Pause is persistent, leaves the task intact, and never triggers wallet/account work.
-    await animated.locator("#home-task").fill("Keep this draft while pausing the scene");
+    await animated.emulateMedia({reducedMotion:"reduce"});
+    await animated.locator("[data-task-example]").first().click();
+    const selectedTask = await animated.locator("#home-task").inputValue();
+    await animated.locator("[data-bounty-close]").click();
+    await animated.evaluate(()=>scrollTo(0,0));
+    await animated.emulateMedia({reducedMotion:"no-preference"});
+    await animated.waitForFunction(()=>!document.querySelector("[data-forest-video]").paused);
     await animated.locator("[data-forest-pause]").click();
     assert.equal(await animated.locator("[data-forest-pause]").getAttribute("aria-pressed"),"true");
     assert.equal(await video.evaluate(el=>el.paused),true);
     await animated.reload();
     assert.equal(await animated.locator("[data-forest-pause]").innerText(),"Play atmosphere");
-    assert.equal(await animated.locator("#home-task").inputValue(),"Keep this draft while pausing the scene");
+    assert.equal(await animated.locator("#home-task").inputValue(),selectedTask);
     assert.equal(await video.getAttribute("src"),null,"saved pause avoids loading video after reload");
     await animated.locator("[data-forest-pause]").click();
     assert.equal(await animated.locator("[data-forest-scene]").getAttribute("data-forest-motion"),"running");
@@ -249,11 +259,13 @@ async function main() {
     await fallback.waitForFunction(()=>document.querySelector("[data-forest-video]").error);
     assert.equal(await fallback.locator("[data-forest-scene]").getAttribute("data-media-state"),"artwork");
     assert.equal(await fallback.locator("[data-forest-video]").isVisible(),false);
-    await fallback.locator("#home-task").fill("My task survives a failed video download");
-    await fallback.locator("#post-a-bounty").click();await fallback.locator("[data-bounty-launcher][open]").waitFor();
-    assert.match(await fallback.locator("[data-bounty-prompt]").textContent(),/My task survives a failed video download/);
+    await fallback.emulateMedia({reducedMotion:"reduce"});
+    await fallback.locator("[data-task-example]").first().click();
+    const fallbackTask = await fallback.locator("#home-task").inputValue();
+    await fallback.locator("[data-bounty-launcher][open]").waitFor();
+    assert.ok((await fallback.locator("[data-bounty-prompt]").textContent()).includes(fallbackTask));
     await fallback.goto(origin+"/post.html");
-    assert.equal(await fallback.locator("#bounty-composer-input").inputValue(),"My task survives a failed video download");
+    assert.equal(await fallback.locator("#bounty-composer-input").inputValue(),fallbackTask);
     await broken.close();
     const blocked = await browser.newContext({ viewport: { width: 1280, height: 900 }, reducedMotion: "no-preference" });
     await blocked.route("**/*", route => new URL(route.request().url()).origin === origin ? route.continue() : route.fulfill({status:503,body:"Isolated autoplay check"}));

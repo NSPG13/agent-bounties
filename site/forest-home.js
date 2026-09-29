@@ -5,7 +5,7 @@ if (typeof document !== "undefined") {
     const input = document.querySelector("#home-task");
     if (!form || !input) return;
     const storageKey = "agent-bounties.home-task";
-    try { input.value = sessionStorage.getItem(storageKey) || ""; } catch (_) { /* Input remains usable. */ }
+    try { input.value = sessionStorage.getItem(storageKey) || ""; } catch (_) { /* Examples remain usable. */ }
     input.addEventListener("input", () => {
       try { sessionStorage.setItem(storageKey, input.value); } catch (_) { /* Submission reports unavailable storage. */ }
     });
@@ -16,27 +16,44 @@ if (typeof document !== "undefined") {
     document.querySelectorAll("[data-task-example]").forEach(button => button.addEventListener("click", () => {
       input.value = button.dataset.taskExample;
       input.dispatchEvent(new Event("input", { bubbles: true }));
-      input.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
-      input.focus({ preventScroll: true });
+      document.querySelector("#post-a-bounty")?.click();
     }));
-    // A cycling placeholder never replaces user input and stops during editing.
-    const examples = Array.from(new Set(Array.from(document.querySelectorAll("[data-task-example]"), button => button.dataset.taskExample)));
-    let example = 0;
     const reduced = matchMedia("(prefers-reduced-motion: reduce)");
-    const outcome = document.querySelector("[data-outcome-word]");
-    const outcomes = ["Faster", "Cheaper", "Better"];
-    let outcomeIndex = 0, outcomeAnimation;
+    const ingredient = document.querySelector("[data-missing-ingredient]");
+    const ingredients = [
+      "More compute",
+      "private data",
+      "specialized software",
+      "greater intelligence",
+      "more agents",
+      "an Independent verifier",
+      "the right credentials",
+      "influence with X",
+    ];
+    let ingredientIndex = 0, typingTimer;
+    const finishTyping = () => {
+      window.clearTimeout(typingTimer);
+      if (ingredient) ingredient.textContent = ingredients[ingredientIndex];
+    };
+    const typeIngredient = () => {
+      if (!ingredient) return;
+      window.clearTimeout(typingTimer);
+      const phrase = ingredients[ingredientIndex];
+      let length = 0;
+      const typeNext = () => {
+        ingredient.textContent = phrase.slice(0, ++length);
+        if (length < phrase.length) typingTimer = window.setTimeout(typeNext, 24);
+      };
+      typeNext();
+    };
+    if (!reduced.matches) typeIngredient();
     window.setInterval(() => {
-      if (!outcome || document.hidden || reduced.matches || outcome.getBoundingClientRect().bottom < 0) return;
-      outcomeIndex = (outcomeIndex + 1) % outcomes.length;
-      outcome.textContent = outcomes[outcomeIndex];
-      outcomeAnimation?.cancel();
-      outcomeAnimation = outcome.animate?.([
-        { opacity: 0, transform: "translateY(.3em)" },
-        { opacity: 1, transform: "translateY(0)" },
-      ], { duration: 420, easing: "cubic-bezier(.2,.8,.2,1)" });
-    }, 2800);
-    reduced.addEventListener("change", () => { if (reduced.matches) outcomeAnimation?.cancel(); });
+      if (!ingredient || document.hidden || reduced.matches || ingredient.getBoundingClientRect().bottom < 0) return;
+      ingredientIndex = (ingredientIndex + 1) % ingredients.length;
+      typeIngredient();
+    }, 4500);
+    reduced.addEventListener("change", () => { if (reduced.matches) finishTyping(); });
+    document.addEventListener("visibilitychange", () => { if (document.hidden) finishTyping(); });
     if (!reduced.matches && "IntersectionObserver" in window) {
       const reveal = new IntersectionObserver(entries => entries.forEach(entry => {
         if (!entry.isIntersecting) return;
@@ -50,11 +67,6 @@ if (typeof document !== "undefined") {
         document.querySelectorAll("[data-enter]").forEach(step => { step.dataset.enter = "visible"; });
       });
     }
-    window.setInterval(() => {
-      if (!examples.length || document.hidden || reduced.matches || input.value || document.activeElement === input) return;
-      example = (example + 1) % examples.length;
-      input.placeholder = examples[example];
-    }, 5000);
     const deck = document.querySelector("[data-example-deck]");
     const cards = Array.from(deck.querySelectorAll(".ab-example-card"));
     let active = 0, pointerX = null;
