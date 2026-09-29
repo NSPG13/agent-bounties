@@ -118,8 +118,17 @@ async function journey(browser, origin, width) {
   const separate = page.locator('[data-direct-awards="board"]');
   await separate.getByRole('link', { name: 'View Submissions', exact: true }).waitFor();
   assert.match(await separate.innerText(), /1 paid award · 15.068098 USDC/);
+  mode = 'ready';
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await page.locator('.opportunity-row[data-phase="completed"]').waitFor();
+  await page.locator('[data-market-kind]').selectOption('competition');
   await page.locator('[data-market-search]').fill('unrelated');
   assert.equal(await separate.getByRole('link', { name: 'View Submissions', exact: true }).count(), 0);
+  await page.getByRole('button', { name: 'Clear filters', exact: true }).click();
+  await separate.getByRole('link', { name: 'View Submissions', exact: true }).waitFor({ timeout: 3000 });
+  await page.locator('.opportunity-row[data-phase="completed"]').waitFor();
+  assert.equal(await page.locator('[data-market-search]').inputValue(), '');
+  assert.equal(await page.locator('[data-market-kind]').inputValue(), 'all');
   await page.locator('[data-market-search]').fill('tinaco');
   await separate.getByRole('link', { name: 'View Submissions', exact: true }).click();
   await page.getByRole('link', { name: 'View Winning Submission', exact: true }).click();
