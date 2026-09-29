@@ -2822,6 +2822,49 @@ fn attributed_api_interface(headers: &HeaderMap) -> Option<ObservedInterface> {
     }
 }
 
+/// Explicit caching contract for the canonical Agent Card response.
+///
+/// Discovery clients must revalidate with the strong ETag instead of caching
+/// a stale card, matching the website host (`crates/web-public`).
+pub fn agent_card_cache_headers(card: &str) -> Vec<(&'static str, String)> {
+    vec![
+        ("content-type", "application/json".to_string()),
+        ("cache-control", "public, max-age=300, must-revalidate".to_string()),
+        ("etag", web_public::agent_card_etag(card)),
+    ]
+}
+
+/// Conditional GET handling for `/.well-known/agent-card.json`.
+pub fn agent_card_status(if_none_match: Option<&str>, card: &str) -> u16 {
+    match if_none_match {
+        Some(value) if value.trim() == web_public::agent_card_etag(card) => 304,
+        _ => 200,
+    }
+}
+
+#[cfg(test)]
+mod agent_card_cache_tests {
+    use super::*;
+
+    #[test]
+    fn agent_card_response_sets_etag_and_cache_control() {
+        let card = web_public::agent_card_json();
+        let headers = agent_card_cache_headers(card);
+        let names: Vec<&str> = headers.iter().map(|(k, _)| *k).collect();
+        assert!(names.contains(&"etag"));
+        assert!(names.contains(&"cache-control"));
+    }
+
+    #[test]
+    fn agent_card_revalidates_with_matching_etag() {
+        let card = web_public::agent_card_json();
+        let etag = web_public::agent_card_etag(card);
+        assert_eq!(agent_card_status(Some(&etag), card), 304);
+        assert_eq!(agent_card_status(Some("\"stale\""), card), 200);
+        assert_eq!(agent_card_status(None, card), 200);
+    }
+}
+
 fn discovery_route_attribution(
     path: &str,
     headers: &HeaderMap,
