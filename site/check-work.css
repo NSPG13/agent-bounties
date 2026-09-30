@@ -1,0 +1,10 @@
+.submissions-shell { max-width: 850px; margin: 3rem auto; padding: 1.5rem; }
+.submissions-shell h1 { font-size: clamp(2rem, 5vw, 3.5rem); }
+.submissions-shell form, .submissions-shell details { padding: 1.2rem; border: 1px solid currentColor; border-radius: 1rem; margin: 1.2rem 0; }
+.submissions-shell label { display: block; font-weight: 600; }
+.submissions-shell input, .submissions-shell textarea { display: block; max-width: 100%; margin-top: .5rem; }
+.submissions-shell textarea { width: 100%; color: inherit; background: transparent; }
+.submissions-shell pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.submissions-shell output { display: block; margin: 1rem 0; }
+.submissions-shell button { margin: .3rem; }
+.submissions-shell [hidden] { display: none !important; }

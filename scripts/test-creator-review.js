@@ -4,7 +4,7 @@ const review = require("../site/creator-review.js"), workspace = require("../sit
 const contract = "0x" + "22".repeat(20), creator = "0x" + "11".repeat(20), solver = "0x" + "33".repeat(20);
 const hash = (byte) => "0x" + byte.repeat(32);
 function environment(options = {}) {
-  const elements = new Map(), records = new Map(), requests = [];
+  const elements = new Map(), records = new Map(), requests = [], savedReports = [];
   const element = () => ({ hidden: true, disabled: true, textContent: "", children: [], handlers: {}, addEventListener(name, fn) { this.handlers[name] = fn; }, replaceChildren() { this.children = []; }, append(child) { this.children.push(child); } });
   const root = element(); root.querySelector = (name) => { if (!elements.has(name)) elements.set(name, element()); return elements.get(name); };
   const win = { location: { search: `?bountyContract=${contract}` }, document: { querySelector: () => root, createElement: element }, sessionStorage: { getItem: (key) => records.get(key) || null, setItem: (key, value) => records.set(key, value), removeItem: (key) => records.delete(key) } };
@@ -13,19 +13,28 @@ function environment(options = {}) {
   const job = { bounty_contract: contract, bounty_id: hash("cc"), round: 1, solver_wallet: solver, threshold: 1, eligible_verifiers: [creator], terms, verifier_reward: "2000000", current_solver_payout: "20000000", verification_expires_at: now + 3600, submission_evidence: { artifact_hash: hash("dd"), evidence_hash: hash("ee") } };
   const submitted = { kind: "submission_added", id: "submission", contract_address: contract, bounty_id: job.bounty_id, block_number: 1, log_index: 0, data: { round: 1, solver, submission_hash: hash("dd"), evidence_hash: hash("ee") } };
   const item = { status: "submitted", bounty_contract: contract, bounty_id: job.bounty_id, creator, terms_valid: true, terms_hash: terms.terms_hash, terms, events: [submitted] };
-  win.AgentBountiesWorkflow = { createClient: () => ({ async request(path, body) {
+  win.AgentBountiesWorkflow = { apiBase: () => "https://api.example.test", createClient: () => ({ async request(path, body) {
     if (path.includes("/feed?")) return [item];
     if (path.includes("/verification-jobs?")) return [job];
     if (path.endsWith("verification-attestation-plan")) { const plan = workspace.typedData(body.attestation); if (options.alteredSignature) plan.message.verifier = solver; return plan; }
     if (path.endsWith("attestation-settlement-plan")) return { from: creator, to: options.alteredTransaction ? solver : contract, value_wei: "0", data: workspace.settlementData(body.attestations[0], win.AgentBountiesEvm) };
     throw new Error(`Unexpected endpoint ${path}`);
   } }) };
+  win.fetch = async (url, init) => {
+    const body = JSON.parse(init.body || '{}');
+    savedReports.push({url,body});
+    if (options.storageFails) return {ok:false,status:503};
+    return {ok:true,json:async()=>({id:'00000000-0000-4000-8000-000000000001',...body})};
+  };
   let rejected = false;
   win.ethereum = { async request({ method }) {
     requests.push(method);
     if (method === "eth_accounts" || method === "eth_requestAccounts") return [options.foreignWallet ? solver : creator];
     if (method === "eth_chainId") return "0x2105";
-    if (method === "eth_signTypedData_v4") return "0x" + "ab".repeat(65);
+    if (method === "eth_signTypedData_v4") {
+      assert.ok(savedReports.some(r => r.url.endsWith('/reviews') && r.body.assessment.checks.length === 2), 'the complete explanation is saved before signing');
+      return "0x" + "ab".repeat(65);
+    }
     if (method === "eth_sendTransaction") {
       if (options.rejectOnce && !rejected) { rejected = true; throw Object.assign(new Error("Rejected"), { code: 4001 }); }
       if (options.lostResponse) throw new Error("Connection lost after sending");
@@ -115,4 +124,11 @@ test("saved brief edits reach the shared journey and invalidate an older funding
   document.activeElement = timezone; timezone.value = "CST"; timezone.handlers.input();
   assert.equal(client.load().brief.deadline_at, null, "ambiguous zones cannot stage a guessed deadline");
   assert.match(deadline.validationMessage, /ambiguous/);
+});
+
+test("unavailable durable review storage prevents signatures and payments", async () => {
+  const env=environment({storageFails:true}); await env.stage(); await env.click();
+  assert.equal(env.requests.includes('eth_signTypedData_v4'),false);
+  assert.equal(env.requests.includes('eth_sendTransaction'),false);
+  assert.match(env.elements.get('output').textContent,/could not be saved/);
 });

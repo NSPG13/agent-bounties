@@ -71,7 +71,7 @@ It must not be treated as permission to submit.
 
 ## Full tool surface
 
-New ChatGPT scans advertise exactly these ten non-overlapping tools:
+New ChatGPT scans advertise exactly these nine non-overlapping tools:
 
 | Tool | Effect | Required annotations |
 | --- | --- | --- |
@@ -81,7 +81,6 @@ New ChatGPT scans advertise exactly these ten non-overlapping tools:
 | `prepare_bounty_post` | Prepares the exact approved terms and, when supplied, stores the matching user-approved image for the first-party review handoff | non-read-only, open-world, destructive, idempotent |
 | `prepare_bounty_action` | Creates one opaque, expiring, idempotent first-party lifecycle-review intent | non-read-only, closed-world, non-destructive, idempotent |
 | `get_bounty_action_status` | Reconciles one intent against indexed canonical events | non-read-only, closed-world, non-destructive, idempotent |
-| `compile_objective_with_cloud_agent` | Produces bounded child-bounty drafts | non-read-only, open-world, non-destructive, non-idempotent |
 | `list_bounty_comments` | Reads public comments | read-only, closed-world, idempotent |
 | `add_bounty_comment` | Publishes one explicit bounded comment | non-read-only, destructive, open-world, non-idempotent |
 | `create_share_bundle` | Formats a caption and safe share intents | read-only, closed-world, idempotent |
@@ -118,7 +117,7 @@ renders the completed approved terms and optional image; it does not publish or
 move funds without the separate wallet-reviewed flow.
 
 The posting handoff also preserves the following optional fields in both the
-ten-tool ChatGPT and thirteen-tool core catalogs, including legacy clients:
+nine-tool ChatGPT and twenty-eight-tool core catalogs, including legacy clients:
 
 | Field | Reviewed behavior |
 | --- | --- |
@@ -272,7 +271,7 @@ The endpoint uses MCP `2026-07-28` stateless discovery and strict per-request
 transport metadata, with a separate legacy initialization lane for current
 clients. See [MCP protocol compatibility](mcp-protocol-compatibility.md).
 Modern requests whose standard MCP client-info name is exactly `openai-mcp`
-receive the ten-tool app catalog. Exact ChatGPT browser origins provide the
+receive the nine-tool app catalog. Exact ChatGPT browser origins provide the
 same fallback. Other server-to-server clients receive the core catalog with
 the compatibility alias. These self-declared signals select metadata only and
 are never authorization signals.
@@ -341,7 +340,7 @@ Before a developer-mode public beta:
 6. Run `cargo test -p mcp-server moonpay -- --nocapture` for the preserved server-side boundary.
 7. Run `python scripts/check-site.py` and the widget JavaScript syntax checks.
 8. Confirm a modern request with exact MCP client-info name `openai-mcp` and no
-   `Origin` lists exactly the ten full-product tools, including
+   `Origin` lists exactly the nine full-product tools, including
    `prepare_bounty_post` with `openai/fileParams=["bounty_image"]`.
 9. Confirm modern and legacy server-to-server discovery retain
    `list_autonomous_bounties`, while a cached ChatGPT `tools/call` can still
@@ -371,3 +370,5 @@ technical validation and developer-mode distribution.
 - [Plugin guidelines](https://developers.openai.com/plugins/app-guidelines)
 - [MCP server review requirements](https://developers.openai.com/plugins/deploy/app-review)
 - [Submission JSON schema](https://developers.openai.com/plugins/schemas/chatgpt-app-submission.v1.json)
+
+Broad verification adds sixteen core tools for check discovery, private evidence, shared execution and assigned review. It does not add wallet signing to ChatGPT. See [Broad verification](broad-verification.md) for the exact API/MCP mapping and limits.

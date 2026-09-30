@@ -1,0 +1,27 @@
+{
+  "schema_version": "broad-verification/v1",
+  "criteria": [
+    {
+      "id": "report",
+      "text": "Deliver the report and sources",
+      "review": "Does the report answer the brief and support its claims?"
+    }
+  ],
+  "checks": [
+    {
+      "id": "files",
+      "criteria": [
+        "report"
+      ],
+      "purpose": "required",
+      "rule": {
+        "checker": "contents_v1",
+        "paths": [
+          "report.pdf",
+          "sources.txt"
+        ],
+        "folders": []
+      }
+    }
+  ]
+}
