@@ -148,3 +148,11 @@ signed retry-stable acquisition header and canonical `prepare_bounty_post` catal
 entry, and does not invoke a draft, wallet, or payment action. A paid rail should
 not activate until its own route passes this probe and the wider exclusion,
 verification, incident, and approval gates are satisfied.
+
+## Consented website advertising
+
+Google Ads uses a separate consented private acquisition path; it is not an MCP
+click tag. See [Google Ads outcome measurement](google-ads-measurement.md).
+The additional `google-ads` and `website` rails preserve original source while
+recording later assists. Reporting remains explicitly autonomous-v1, not all
+platform protocols. Google upload acceptance is not campaign credit.

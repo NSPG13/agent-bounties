@@ -459,6 +459,37 @@ fn valid_posting_recovery(value: &Value) -> bool {
         return false;
     }
     let object = value.as_object().expect("validated object");
+    if let Some(ad) = object.get("ad_measurement") {
+        // Opaque analytics continuation only; never click data or wallet authority.
+        let valid = ad.as_object().is_some_and(|ad| {
+            ad.len() == 2
+                && ad
+                    .get("handoff")
+                    .and_then(Value::as_str)
+                    .and_then(|id| Uuid::parse_str(id).ok())
+                    .is_some()
+                && ad
+                    .get("acquisition")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| {
+                        id.strip_prefix("aba1_")
+                            .and_then(|s| s.split_once('.'))
+                            .is_some_and(|(a, b)| {
+                                a.len() == 64
+                                    && b.len() == 64
+                                    && a.bytes()
+                                        .chain(b.bytes())
+                                        .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+                            })
+                    })
+        });
+        if !valid {
+            return false;
+        }
+        let mut remainder = value.clone();
+        remainder.as_object_mut().unwrap().remove("ad_measurement");
+        return valid_posting_recovery(&remainder);
+    }
     if object.is_empty() {
         return true;
     }
@@ -2177,6 +2208,24 @@ mod tests {
             .unwrap()
             .remove("continuation_hash");
         assert!(!valid_posting_recovery(&recovery));
+    }
+
+    #[test]
+    fn ad_recovery_allows_only_opaque_pair_without_payment_authority() {
+        let pair = json!({"acquisition":format!("aba1_{}.{}","a".repeat(64),"b".repeat(64)),"handoff":Uuid::new_v4()});
+        assert!(valid_posting_recovery(&json!({"ad_measurement":pair})));
+        assert!(valid_posting_recovery(
+            &json!({"ad_measurement":pair,"display_context":{"timezone":"America/Mexico_City"}})
+        ));
+        assert!(!valid_posting_recovery(
+            &json!({"ad_measurement":pair,"paid":true})
+        ));
+        assert!(!valid_posting_recovery(
+            &json!({"ad_measurement":{"gclid":"private_click"}})
+        ));
+        assert!(!valid_posting_recovery(
+            &json!({"ad_measurement":{"acquisition":"invalid","handoff":Uuid::new_v4()}})
+        ));
     }
 
     #[test]

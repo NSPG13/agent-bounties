@@ -5909,6 +5909,7 @@ fn load_api_routes(contract_root: &Path) -> Result<BTreeSet<String>> {
         "crates/api/src/main.rs",
         "crates/api/src/discoverability.rs",
         "crates/api/src/distribution.rs",
+        "crates/api/src/google_ads.rs",
         "crates/api/src/open_competition_v2_api.rs",
         "crates/api/src/site_auth.rs",
         "crates/mcp-server/src/main.rs",

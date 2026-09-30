@@ -27,6 +27,7 @@ payments-stripe = { path = "../payments-stripe" }
 payments-x402 = { path = "../payments-x402" }
 risk = { path = "../risk" }
 reqwest.workspace = true
+ring = "=0.17.14"
 serde.workspace = true
 serde_json.workspace = true
 service-runtime = { path = "../service-runtime" }

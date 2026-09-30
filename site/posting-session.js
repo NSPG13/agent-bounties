@@ -93,12 +93,14 @@
     function uncertain(value) { return Boolean(value && (value.authorizationIssued || value.transactions?.length || ["signing", "sending", "authorized", "pending", "submitted", "batch_submitted", "creation_confirmed", "funding_confirmed"].includes(value.phase))); }
     function journal(value) {
       if (!value || typeof value !== "object") return null;
-      const clean = { ...value }; delete clean.display_context;
+      const clean = { ...value }; delete clean.display_context; delete clean.ad_measurement;
       return Object.keys(clean).length ? clean : null;
     }
     function recoveryEnvelope(journey) {
       const value = { ...(journal(read(JOURNAL)) || {}) }, timezone = journey?.brief?.timezone;
       if (typeof timezone === "string" && timezone.length <= 100 && !/[\u0000-\u001f]/.test(timezone)) value.display_context = { timezone };
+      const attribution = win.AgentBountiesAdMeasurement?.current(journey?.id);
+      if (attribution) value.ad_measurement = attribution;
       return value;
     }
     function mergeRecovery(local, remote, sameOperation) {
@@ -188,6 +190,9 @@
       if (conflict) throw new Error("This draft changed on another device. Reload its saved version before continuing.");
       if (!UUID.test(journey.id)) throw new Error("The posting operation has no valid identifier.");
       if (remoteId && remoteId !== journey.id) throw new Error("The saved posting operation does not match this draft.");
+      await win.AgentBountiesAdMeasurement?.prepare(journey.id, "login");
+      checkEpoch(expectedEpoch);
+      if (stable(client.load()) !== stable(journey)) throw conflictError("The draft changed while preparing its save. Save the updated draft again.");
       remoteId = journey.id;
       const draft = envelope(journey), recovery = recoveryEnvelope(journey), hash = await digest(win, draft), approval = localApproval();
       checkEpoch(expectedEpoch);
@@ -243,6 +248,7 @@
         if (old && old.id !== value.operation_id) win.sessionStorage.setItem("agent-bounties.previous-local-journey.v1", JSON.stringify(old));
         remoteId = value.operation_id; revision = value.revision; lastSaved = stable(value.draft); remoteApproval = value.approved_draft_hash;
         lastRecovery = journal(value.recovery_state);
+        win.AgentBountiesAdMeasurement?.restore(value.operation_id, value.recovery_state?.ad_measurement);
         const journey = { ...value.draft, schema: "agent-bounties/guided-journey-v1", steps: old?.id === remoteId ? old.steps || {} : {}, updated_at: value.updated_at };
         const timezone = value.recovery_state?.display_context?.timezone;
         if (typeof timezone === "string" && timezone.length <= 100 && !/[\u0000-\u001f]/.test(timezone)) journey.brief = { ...journey.brief, timezone };

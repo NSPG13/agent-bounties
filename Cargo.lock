@@ -690,6 +690,7 @@ dependencies = [
  "payments-stripe",
  "payments-x402",
  "reqwest",
+ "ring",
  "risk",
  "serde",
  "serde_json",

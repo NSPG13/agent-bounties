@@ -3,6 +3,7 @@ mod account_activity;
 mod discoverability;
 mod distribution;
 mod github_discovery;
+mod google_ads;
 mod open_competition_v2_api;
 mod opportunities;
 mod site_auth;
@@ -227,6 +228,11 @@ use worker::{
         distribution::public_summary,
         distribution::mark_wallet_reviewed,
         distribution::upsert_wallet_exclusion,
+        google_ads::acquire,
+        google_ads::handoff,
+        google_ads::revoke,
+        google_ads::report,
+        google_ads::cost,
         create_discovery_subscription,
         get_discovery_subscription,
         delete_discovery_subscription,
@@ -908,7 +914,7 @@ const PLATFORM_LAUNCH_AT: &str = "2026-07-08T20:22:19Z";
 const PLATFORM_FIRST_MONTH_ENDED_AT: &str = "2026-08-08T20:22:19Z";
 const PUBLIC_METRICS_POLICY_JSON: &str = include_str!("../fixtures/public-metrics-policy.json");
 const LEGAL_TERMS_VERSION: &str = "2026-07-18";
-const LEGAL_PRIVACY_VERSION: &str = "2026-07-18";
+const LEGAL_PRIVACY_VERSION: &str = "2026-09-30";
 const LEGAL_ACCEPTANCE_STATEMENT: &str = "I meet the age requirement in the Terms and am authorized to use this wallet and perform this action. I understand that public and blockchain records may be permanent. I accept the posted task, verification, and settlement rules. I am responsible for legal compliance, taxes, content rights, agent authority, and wallet security. I agree to the Terms of Use and Privacy Policy.";
 const LEGAL_ACTIONS: &[&str] = &[
     "post_bounty",
@@ -2274,11 +2280,13 @@ async fn main() -> anyhow::Result<()> {
         discovery_webhooks,
         neynar_social,
     });
+    google_ads::start(state.store.clone());
     let public_app = Router::new()
         .route("/health", get(health))
         .merge(a2a::router())
         .merge(discoverability::router())
         .merge(distribution::router())
+        .merge(google_ads::router())
         .route("/llms.txt", get(llms_txt))
         .route("/v1/legal/policy", get(legal_policy))
         .route("/v1/legal/acceptances", post(record_legal_acceptance))
@@ -21008,6 +21016,16 @@ mod tests {
         );
         let paths = value["paths"].as_object().unwrap();
 
+        for path in [
+            "/v1/distribution/website-acquisitions",
+            "/v1/distribution/website-handoffs",
+            "/v1/distribution/website-consent/revoke",
+            "/v1/operator/google-ads/report",
+            "/v1/operator/google-ads/costs",
+        ] {
+            assert!(paths.contains_key(path));
+        }
+
         assert!(paths.contains_key("/v1/route-blocked-goal"));
         assert!(paths.contains_key("/.well-known/agent-card.json"));
         assert!(paths.contains_key("/a2a/v1/message:send"));
@@ -21264,6 +21282,53 @@ mod tests {
             "Stripe checkout webhook must remain callable by Stripe without operator auth"
         );
         assert!(paths["/v1/stripe/checkout-webhooks"]["post"]["responses"]["503"].is_object());
+    }
+
+    #[tokio::test]
+    async fn google_ads_private_routes_reject_untrusted_origins_and_unauthorized_reports() {
+        use serde_json::json;
+        let app = google_ads::router().with_state(test_state(BountyNetwork::default()));
+        for (method, path, body, expected) in [
+            (
+                "GET",
+                "/v1/operator/google-ads/report",
+                json!(null),
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "PUT",
+                "/v1/operator/google-ads/costs",
+                json!({"campaign":"fixture","day":"2026-09-30","cost_micros":0,"clicks":0}),
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "POST",
+                "/v1/distribution/website-acquisitions",
+                json!({"nonce":"a".repeat(64),"identifier_kind":"gclid","click_id":"local_fixture_only","campaign":"fixture","consent_version":"google-ads-outcomes-v1","consent_granted":true}),
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "POST",
+                "/v1/distribution/website-consent/revoke",
+                json!({"acquisition":"invalid"}),
+                StatusCode::FORBIDDEN,
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .header("origin", "https://untrusted.invalid")
+                        .header("content-type", "application/json")
+                        .body(axum::body::Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected, "{path}");
+        }
     }
 
     #[tokio::test]

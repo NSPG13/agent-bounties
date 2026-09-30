@@ -132,6 +132,22 @@ test("fresh authenticated draft uses object recovery state and private credentia
   assert.doesNotMatch(session.snapshot().continuation_url, /Create|budget|email|signature/);
 });
 
+test("ad attribution survives account draft continuation without changing approval or wallet journal", async () => {
+  const one = await ready(); await one.session.approve();
+  const hash = one.server.record().approved_draft_hash;
+  const pair = { acquisition: `aba1_${"a".repeat(64)}.${"b".repeat(64)}`, handoff: "cb6edbaa-c36a-4b41-a7e9-90f48a225923" };
+  one.win.AgentBountiesAdMeasurement = { current: () => pair, prepare: async () => pair };
+  await one.session.flush({requireServer:true});
+  assert.deepEqual(one.server.record().recovery_state.ad_measurement,pair);
+  assert.equal(one.server.record().approved_draft_hash,hash);
+  const next = browser(one.server,{url:`https://agentbounties.app/post.html?operation_id=${OPERATION}`});
+  let restored;
+  next.AgentBountiesAdMeasurement = { current:()=>restored, restore:(_id,value)=>{restored=value},prepare:async()=>restored };
+  const resumed=posting.create(next);await resumed.hydrate(account());
+  assert.deepEqual(restored,pair);assert.equal(await resumed.approved(),true);
+  assert.equal(next.sessionStorage.getItem(JOURNAL),null);
+});
+
 test("exact terms approval survives same-operation continuation without granting payment", async () => {
   const { server, session } = await ready(); await session.approve();
   const other = await second(server);

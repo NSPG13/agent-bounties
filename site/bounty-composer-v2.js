@@ -196,6 +196,7 @@
     speech: null,
     handoffReview: false,
     distributionAttribution: null,
+    websiteAttribution: false,
     observedWalletState: null,
     postingAccountStatus: "checking",
     postingAuthReceipt: null,
@@ -1653,6 +1654,15 @@
 
   async function openFunding() {
     if (!state.approved) return;
+    if (state.websiteAttribution && !window.AgentBountiesAdMeasurement?.current(postingSession.snapshot().operation_id)) {
+      state.distributionAttribution = null;
+      state.websiteAttribution = false;
+    }
+    if (!state.distributionAttribution) {
+      const operation = postingSession.snapshot().operation_id;
+      state.distributionAttribution = await window.AgentBountiesAdMeasurement?.prepare(operation, "wallet_review") || null;
+      state.websiteAttribution = Boolean(state.distributionAttribution);
+    }
     const attribution = state.distributionAttribution;
     if (attribution) {
       ui.fund.disabled = true;
@@ -1673,12 +1683,21 @@
           throw new Error("The bounty changed before wallet review. Review and approve it again.");
         }
       } catch (error) {
-        ui.fund.disabled = !state.approved;
-        setStatus(`${error.message || String(error)} No wallet interface was opened.`, "error");
-        return;
+        if (state.websiteAttribution) {
+          // Optional measurement must not prevent a legitimate wallet review.
+          state.distributionAttribution = null;
+          state.websiteAttribution = false;
+          setStatus("Advertising measurement is unavailable. You can still review and fund this bounty.", "pending");
+        } else {
+          ui.fund.disabled = !state.approved;
+          setStatus(`${error.message || String(error)} No wallet interface was opened.`, "error");
+          return;
+        }
       }
       ui.fund.disabled = false;
     }
+    // Measurement fallback must never bypass a revoked draft approval.
+    if (!state.approved) return;
     const onrampUrl = new URL("onramp.html", window.location.href);
     onrampUrl.searchParams.set("purpose", "post");
     onrampUrl.searchParams.set("amount", formatUsdc(state.fundingUsdc));
@@ -1831,7 +1850,9 @@
       });
       state.provider.on?.("chainChanged", () => { if (state.provider !== item.provider) return; state.balances = null; ui.fundNow.disabled = true; void refreshWalletReadiness().catch((error) => setPaymentStatus(error.message, "error")); });
       updatePostingTracker();
-      track("wallet_connected"); await switchToBase(state.provider, protocol); await refreshWalletReadiness();
+      track("wallet_connected");
+      void window.AgentBountiesAdMeasurement?.prepare(postingSession.snapshot().operation_id, "wallet");
+      await switchToBase(state.provider, protocol); await refreshWalletReadiness();
     } catch (error) { setPaymentStatus(error.message || String(error), "error"); }
     finally { walletConnecting = false; renderFundingGuide(); }
   }
@@ -2140,6 +2161,7 @@
     const approvedDraft = state.draft;
     const approvedAccount = state.account;
     track("canonical_post_started");
+    void window.AgentBountiesAdMeasurement?.prepare(postingSession.snapshot().operation_id, "funding_started");
     ui.fundNow.disabled = true;
     setPaymentStatus("Preparing the exact canonical Base USDC funding request…", "pending");
     try {
