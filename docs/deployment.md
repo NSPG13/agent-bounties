@@ -1,5 +1,11 @@
 # Deployment
 
+For the hosted production release, use
+[Releases without paid GitHub Actions](release-without-paid-actions.md).
+Private runtime releases now use local validation and direct Render builds.
+Hosted AI generation is retired: do not follow older provider-key provisioning
+or hosted-drafting setup steps below. Those notes describe legacy deployments.
+
 Canonical domain, DNS, redirect, analytics, and search migration procedures are
 defined in [`domain-portfolio.md`](domain-portfolio.md).
 

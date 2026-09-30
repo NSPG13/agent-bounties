@@ -22,9 +22,9 @@ python scripts/check-mcp-protocol-eras.py \
 | Legacy `initialize` handshake | Negotiates a supported legacy version and preserves legacy result shapes |
 | Modern `initialize` or `ping` | `404` with JSON-RPC `-32601`; those methods are not in the modern core |
 | Modern `GET /mcp` or `DELETE /mcp` | `405`; modern Streamable HTTP uses one `POST` per request |
-| Ordinary core discovery (client name is not `openai-mcp` and no exact ChatGPT `Origin`) | Thirteen-tool core catalog: the ten app tools, cached-client compatibility tool `list_autonomous_bounties`, and the two Open Competition V2 tools |
-| Modern discovery with exact `params._meta["io.modelcontextprotocol/clientInfo"].name="openai-mcp"` | Ten-tool app catalog; the only bounty-discovery entry point is **get_bounty_feed** |
-| Discovery from an exact ChatGPT browser `Origin` | Ten-tool app catalog as a browser-client fallback |
+| Ordinary core discovery (client name is not `openai-mcp` and no exact ChatGPT `Origin`) | Twenty-eight-tool core catalog: the nine app tools, cached-client compatibility tool `list_autonomous_bounties`, the two Open Competition V2 tools, and sixteen broad verification tools |
+| Modern discovery with exact `params._meta["io.modelcontextprotocol/clientInfo"].name="openai-mcp"` | Nine-tool app catalog; the only bounty-discovery entry point is **get_bounty_feed** |
+| Discovery from an exact ChatGPT browser `Origin` | Nine-tool app catalog as a browser-client fallback |
 | `tools/call` for `list_autonomous_bounties` from a cached ChatGPT registration | Accepted and dispatched even though the alias is absent from new ChatGPT discovery |
 
 Modern and legacy MCP implementations are not directly interoperable. The
@@ -114,9 +114,10 @@ implement.
 
 ## Published catalog stability
 
-The ten-tool ChatGPT catalog and thirteen-tool core catalog are versioned
-public contracts. Their tool names, model instructions, input and output
-schemas, and safety annotations are pinned by
+The hosted release uses the nine-tool ChatGPT catalog and twenty-eight-tool core
+catalog described here. Query the deployed service for its actual version and
+available tools; an older source checkout may have a different catalog. The
+release runtime pins tool names, instructions, schemas and safety annotations in
 `crates/mcp-server/fixtures/public-mcp-contract-v1.json`. An intentional change
 must update that fixture and the affected public onboarding documentation in
 the same reviewed PR. Additive specialist capabilities should remain in the
@@ -172,12 +173,12 @@ MCP_ALLOWED_ORIGINS=https://client.example,https://another.example
 
 Do not use wildcard origins. This check is the endpoint's DNS-rebinding
 boundary, not an authentication substitute. A modern client whose standard MCP
-client-info name is exactly `openai-mcp` receives the ten-tool app catalog;
+client-info name is exactly `openai-mcp` receives the nine-tool app catalog;
 exact ChatGPT browser origins provide the same metadata-only fallback. These
 self-declared signals never authenticate a caller or grant wallet, payment,
 publishing, analytics-exclusion, or operator authority. Release must stop
 before registration changes if a real ChatGPT metadata scan sees the
-thirteen-tool core catalog.
+twenty-eight-tool core catalog.
 
 ## Verification
 
@@ -190,8 +191,8 @@ python scripts/check-mcp-protocol-eras.py --endpoint http://127.0.0.1:8080/mcp -
 
 The runtime check calls modern `server/discover`, both modern catalog profiles,
 a resource, and a tool, plus legacy `initialize` and both legacy catalog
-profiles through the real HTTP endpoint. It requires ten tools for the exact
-`openai-mcp` client-info name, thirteen tools for an ordinary core client, and a
+profiles through the real HTTP endpoint. It requires nine tools for the exact
+`openai-mcp` client-info name, twenty-eight tools for an ordinary core client, and a
 successful cached-client dispatch attempt for `list_autonomous_bounties`.
 
 The deployed production smoke performs modern discovery and legacy initialize
@@ -208,3 +209,5 @@ Protocol references:
 - [Versioning and compatibility](https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning)
 - [Streamable HTTP transport](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)
 - [`server/discover`](https://modelcontextprotocol.io/specification/2026-07-28/server/discover)
+
+Broad verification adds sixteen core tools for check discovery, private evidence, shared execution and assigned review. It does not add wallet signing to ChatGPT. See [Broad verification](broad-verification.md) for the exact API/MCP mapping and limits.

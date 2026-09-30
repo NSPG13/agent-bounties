@@ -1,0 +1,51 @@
+{
+  "schema_version": "broad-verification/v1",
+  "criteria": [
+    {
+      "id": "records",
+      "text": "Deliver 10 to 100 records with unique identifiers",
+      "review": "Are the sources reliable and the sample appropriate?"
+    }
+  ],
+  "checks": [
+    {
+      "id": "rows",
+      "criteria": [
+        "records"
+      ],
+      "purpose": "required",
+      "rule": {
+        "checker": "csv_v1",
+        "path": "data.csv",
+        "fields": [
+          {
+            "field": "id",
+            "kind": "string",
+            "equals": null,
+            "minimum": null,
+            "maximum": null
+          }
+        ],
+        "min_records": 10,
+        "max_records": 100
+      }
+    },
+    {
+      "id": "unique-ids",
+      "criteria": [
+        "records"
+      ],
+      "purpose": "required",
+      "rule": {
+        "checker": "consistency_v1",
+        "left": {
+          "path": "data.csv",
+          "format": "csv",
+          "field": "id"
+        },
+        "right": null,
+        "relation": "unique"
+      }
+    }
+  ]
+}

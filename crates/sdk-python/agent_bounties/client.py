@@ -223,8 +223,24 @@ class AgentBountiesHttpError(httpx.HTTPStatusError):
     """HTTP error that preserves the platform's parsed machine-readable problem."""
 
     def __init__(self, response: httpx.Response, body):
+        problem = body if isinstance(body, dict) else {}
+        self.error_code = problem.get("error_code") or problem.get("error")
+        self.next_action = problem.get("next_action")
+        self.retryable = problem.get("retryable", response.status_code in (429, 503))
+        if self.error_code == "hosted_generation_removed":
+            self.retryable = False
+            self.next_action = "Prepare or analyze the draft in your own AI account, then review it at https://agentbounties.app/post.html. Hosted generation is permanently removed."
+        if not self.next_action:
+            self.next_action = {
+                401: "Use a current wallet session or an explicitly configured operator credential.",
+                403: "Use the account or verified wallet that owns this resource.",
+                409: "Reuse an idempotency key only with the same prepared content.",
+                429: "Wait for the request limit to reset before trying again.",
+                503: "The required service is unavailable. Do not retry in a tight loop.",
+            }.get(response.status_code)
         super().__init__(
-            f"{response.request.url.path} failed: {response.status_code}",
+            f"{response.request.url.path} failed: {response.status_code}"
+            + (f". {self.next_action}" if self.next_action else ""),
             request=response.request,
             response=response,
         )
@@ -245,20 +261,81 @@ def _x402_response_body(response: httpx.Response) -> dict:
 
 
 class AgentBountiesClient:
+    def open_artifact_dispute(self, artifact_id: str, reason: str):
+        return self._request("POST", f"/v1/verification/artifacts/{uuid.UUID(artifact_id)}/disputes", {"reason": reason})
+
+    def resolve_artifact_dispute(self, dispute_id: str, reason: str):
+        return self._request("POST", f"/v1/verification/disputes/{uuid.UUID(dispute_id)}/resolve", {"reason": reason})
+
+    def list_review_tasks(self):
+        return self._request("GET", "/v1/verification/review-tasks")
+
+    def assign_review_task(self, task_id: str, assignee_principal: str):
+        return self._request("POST", f"/v1/verification/review-tasks/{uuid.UUID(task_id)}/assign", {"assignee_principal": assignee_principal})
+
+    def accept_review_task(self, task_id: str):
+        return self._request("POST", f"/v1/verification/review-tasks/{uuid.UUID(task_id)}/accept", {})
+
+    def save_verification_review(self, draft: dict):
+        return self._request("POST", "/v1/verification/reviews", draft)
+
+    def get_verification_review(self, report_id: str):
+        return self._request("GET", f"/v1/verification/reviews/{uuid.UUID(report_id)}")
+
+    def prepare_artifact_submission(self, artifact_id: str, request: dict):
+        return self._request("POST", f"/v1/verification/artifacts/{uuid.UUID(artifact_id)}/prepare-submission", request)
+
+    def confirm_artifact_submission(self, artifact_id: str, request: dict):
+        return self._request("POST", f"/v1/verification/artifacts/{uuid.UUID(artifact_id)}/confirm-submission", request)
+
+    def find_verification_checks(self):
+        return self._request("GET", "/v1/verification/checkers")
+
+    def validate_verification_plan(self, plan: dict):
+        return self._request("POST", "/v1/verification/plans/validate", json=plan)
+
+    def upload_verification_artifact(self, files: list[dict], idempotency_key: str):
+        return self._request("POST", "/v1/verification/artifacts", json={"files": files}, headers={"Idempotency-Key": idempotency_key})
+
+    def import_verification_github(self, repository: str, commit: str, paths: list[str], idempotency_key: str):
+        return self._request("POST", "/v1/verification/artifacts/import-github", json={"repository": repository, "commit": commit, "paths": paths}, headers={"Idempotency-Key": idempotency_key})
+
+    def get_verification_artifact(self, artifact_id: str):
+        return self._request("GET", f"/v1/verification/artifacts/{uuid.UUID(artifact_id)}")
+
+    def run_verification_checks(self, artifact_id: str, plan: dict):
+        return self._request("POST", "/v1/verification/runs", json={"artifact_id": str(uuid.UUID(artifact_id)), "plan": plan})
+
+    def get_verification_run(self, run_id: str):
+        return self._request("GET", f"/v1/verification/runs/{uuid.UUID(run_id)}")
+
     def __init__(
         self,
         base_url: str = "http://127.0.0.1:8080",
         operator_api_token: str | None = None,
         analytics_exclusion_token: str | None = None,
+        *,
+        session_token: str | None = None,
+        headers: dict[str, str] | None = None,
     ):
         self.base_url = base_url.rstrip("/")
-        self.operator_api_token = operator_api_token or os.getenv("OPERATOR_API_TOKEN")
+        self.session_token = session_token
+        self.request_headers = dict(headers or {})
+        caller_auth = any(name.lower() in ("authorization", "cookie", "x-operator-token") for name in self.request_headers)
+        if session_token and (operator_api_token or caller_auth):
+            raise ValueError("Choose one wallet session or caller credential for this client")
+        # A wallet/cookie client must never inherit broader operator authority.
+        self.operator_api_token = operator_api_token or (
+            os.getenv("OPERATOR_API_TOKEN") if not (session_token or caller_auth) else None
+        )
         self.analytics_exclusion_token = analytics_exclusion_token or os.getenv(
             "AGENT_BOUNTIES_ANALYTICS_EXCLUSION_TOKEN"
         )
 
     def _headers(self) -> dict[str, str]:
-        headers = {"x-agent-bounties-interface": "api"}
+        headers = {"x-agent-bounties-interface": "api", **self.request_headers}
+        if self.session_token:
+            headers["authorization"] = f"Bearer {self.session_token}"
         if self.operator_api_token:
             headers["x-operator-token"] = self.operator_api_token
         if self.analytics_exclusion_token:
@@ -285,6 +362,7 @@ class AgentBountiesClient:
             params={key: value for key, value in params.items() if value is not None} if params else None,
             headers=request_headers or None,
             timeout=30,
+            follow_redirects=False,
         )
 
     def _request(
@@ -352,6 +430,37 @@ class AgentBountiesClient:
     def get_x402_discovery(self):
         return self._request("GET", "/.well-known/x402.json")
 
+    def create_wallet_challenge(self, address: str, chain_id: int = 8453):
+        """Get the exact sign-in message for human review; this does not sign it."""
+        return self._request("POST", "/v1/auth/wallet/challenge", json={"address": address, "chain_id": chain_id})
+
+    def create_wallet_session(self, challenge_id: str, signature: str, chain_id: int = 8453):
+        """Exchange the reviewed message's signature for a short wallet-only session.
+
+        Pass the returned token to a new client's session_token argument. This
+        does not link a website account or authorize a transaction or payment.
+        """
+        return self._request("POST", "/v1/auth/wallet/session", json={"challenge_id": challenge_id, "signature": signature, "chain_id": chain_id})
+
+    def get_auth_session(self):
+        """Read the current authenticated principal."""
+        return self._request("GET", "/v1/auth/session")
+
+    def revoke_auth_session(self):
+        """Revoke this wallet session and stop sending its bearer locally."""
+        result = self._request("POST", "/v1/auth/session/revoke")
+        self.session_token = None
+        self.request_headers = {name: value for name, value in self.request_headers.items() if name.lower() != "authorization"}
+        return result
+
+    def get_cloud_agent_readiness(self):
+        """Compatibility status: hosted generation is permanently unavailable."""
+        return self._request("GET", "/v1/cloud-agent/readiness")
+
+    def publish_unfunded_bounty(self, title: str, goal: str, acceptance_criteria: list[str], idempotency_key: str, source_url: str | None = None):
+        """Publish authenticated, caller-prepared voluntary work without model generation."""
+        return self._request("POST", "/v1/unfunded-bounties", json={"title": title, "goal": goal, "acceptance_criteria": acceptance_criteria, "idempotency_key": idempotency_key, "source_url": source_url})
+
     def compile_objective(
         self,
         objective: str,
@@ -363,7 +472,7 @@ class AgentBountiesClient:
         source_url: str | None = None,
         idempotency_key: str | None = None,
     ):
-        """Compile one objective into an advisory, validated bounty graph."""
+        """Retired compatibility route: raises HTTP410; prepare the plan in your own AI."""
         return self._request(
             "POST",
             "/v1/cloud-agent/objective-plans",
@@ -968,11 +1077,12 @@ class AgentBountiesClient:
             },
         )
 
-    def register_agent(self, handle: str, payout_wallet: str | None = None):
+    def register_agent(self, handle: str, payout_wallet: str | None = None, *, idempotency_key: str | None = None):
         return self._request(
             "POST",
             "/v1/agents",
             json={"handle": handle, "payout_wallet": payout_wallet},
+            headers={"idempotency-key": idempotency_key} if idempotency_key else None,
         )
 
     def register_capability(
@@ -1327,7 +1437,7 @@ class AgentBountiesClient:
     def analyze_bounty_fit(
         self, bounty_contract: str, network: str | None = None
     ):
-        """Return advisory analysis cached by immutable terms hash."""
+        """Retired compatibility route: raises HTTP410; analyze the terms in your own AI."""
         return self._request(
             "GET",
             f"/v1/base/autonomous-bounties/{bounty_contract}/analysis",

@@ -1,0 +1,28 @@
+{
+  "schema_version": "broad-verification/v1",
+  "criteria": [
+    {
+      "id": "design",
+      "text": "Deliver editable design files, exports and assembly notes",
+      "review": "Do the dimensions, geometry and assembly meet the agreed design requirements?"
+    }
+  ],
+  "checks": [
+    {
+      "id": "files",
+      "criteria": [
+        "design"
+      ],
+      "purpose": "required",
+      "rule": {
+        "checker": "contents_v1",
+        "paths": [
+          "design/source.bin",
+          "design/export.step",
+          "assembly.pdf"
+        ],
+        "folders": []
+      }
+    }
+  ]
+}

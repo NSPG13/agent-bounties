@@ -2,7 +2,8 @@ name: Pages
 
 on:
   schedule:
-    - cron: "17 * * * *"
+    # Refresh participation totals daily. Code changes still deploy on push.
+    - cron: "17 12 * * *"
   pull_request:
     paths:
       - ".github/workflows/pages.yml"
@@ -107,7 +108,10 @@ concurrency:
 
 jobs:
   validate:
+    # The private runtime has no public Pages site. Never spend private minutes here.
+    if: github.repository == 'NSPG13/agent-bounties'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v7.0.0
@@ -223,9 +227,10 @@ jobs:
           grep -q 'googleMeasurementId: "G-TEST123"' /tmp/analytics-config.js
 
   deploy:
-    if: github.event_name != 'pull_request'
+    if: github.repository == 'NSPG13/agent-bounties' && github.event_name != 'pull_request'
     needs: validate
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       pages: write

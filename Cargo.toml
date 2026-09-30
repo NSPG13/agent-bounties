@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
   "crates/domain",
+  "crates/broad-verification",
   "crates/app",
   "crates/ledger",
   "crates/risk",

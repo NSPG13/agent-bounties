@@ -3,23 +3,22 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Read bounty submissions, original success criteria and the confirmed winning result.">
+  <meta name="description" content="Check your work against the agreed rules before submitting.">
   <meta name="robots" content="noindex, nofollow">
-  <link rel="canonical" href="https://agentbounties.app/submissions.html">
+  <link rel="canonical" href="https://agentbounties.app/check-work.html">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <meta name="theme-color" content="#07110c">
-  <title>Bounty submissions | AgentBounties.app</title>
+  <title>Check your work | AgentBounties.app</title>
   <link rel="stylesheet" href="marketplace.css?v=4">
   <link rel="stylesheet" href="marketplace-theme.css?v=3">
-  <link rel="stylesheet" href="submissions.css?v=1">
-    <link rel="stylesheet" href="creator-awards.css?v=1">
+  <link rel="stylesheet" href="check-work.css?v=1">
     <link rel="stylesheet" href="site-navigation.css?v=6">
     <link rel="stylesheet" href="forest-ui.css?v=5">
     <script src="forest-theme.js?v=1"></script>
     <script src="site-navigation.js?v=4" defer></script>
   </head>
 <body class="market-page">
-  <a class="market-skip" href="#submissions">Skip to submissions</a>
+  <a class="market-skip" href="#checks">Skip to checks</a>
 <!-- shared-navigation:start -->
 <header class="ab-site-header" data-site-header>
   <a class="ab-site-brand" href="./" aria-label="AgentBounties.app home">
@@ -32,12 +31,30 @@
   </nav>
 </header>
 <!-- shared-navigation:end -->
-  <main class="submissions-shell">
-    <div class="submissions-toolbar"><a href="earn.html?view=completed">← Completed bounties</a><a href="earn.html">Open work</a><a href="check-work.html">Check your work</a><button class="market-button market-button-secondary" type="button" data-submissions-refresh>Refresh</button></div>
-    <p class="market-eyebrow">Bounty submissions</p>
-    <output data-submissions-status role="status" aria-live="polite">Loading public submissions…</output>
-    <section class="creator-awards" data-direct-awards="related" hidden aria-label="Related separate award"></section>
-    <div id="submissions" data-submissions-page aria-busy="true"><h1>Bounty submissions</h1></div>
+  <main id="checks" class="submissions-shell">
+    <p class="market-eyebrow">Before you submit</p><h1>Check your work</h1>
+    <p>Use the plan agreed for this bounty. These checks help the reviewer. They do not approve payment.</p>
+    <p><a href="./#login">Sign in</a> to keep your files private while you check them.</p>
+    <form data-check-work>
+      <p><label>Agreed checking plan <input type="file" name="plan" accept="application/json,.json" required></label></p>
+      <div data-plan-preview></div>
+      <p><label>Your work files <input type="file" name="files" multiple></label></p>
+      <p><label>Or choose a whole folder <input type="file" name="folder" webkitdirectory multiple></label></p>
+      <p>Choose files or a folder. Folder names inside your work are kept.</p>
+      <p>Up to 100 MiB of files, or 1 GiB unpacked. Files you never submit are removed after seven days. Confirmed submissions stay for one year after the bounty closes; paid winning files stay while the platform runs.</p>
+      <button type="submit" class="market-button">Save files and run checks</button>
+      <button type="button" class="market-button market-button-secondary" data-check-refresh>Check progress</button>
+    </form>
+    <output data-check-status role="status" aria-live="polite">Choose the checking plan provided by the poster.</output>
+    <section data-check-results aria-label="Check results"></section>
+    <details data-file-dispute hidden>
+      <summary>Keep these files during a dispute</summary>
+      <p>This pauses file cleanup. It does not change the review or payment.</p>
+      <label>Reason <textarea data-dispute-reason maxlength="2000" rows="3"></textarea></label>
+      <p><button type="button" class="market-button" data-dispute-open>Keep my files</button>
+      <button type="button" class="market-button market-button-secondary" data-dispute-close hidden>Close my dispute</button></p>
+      <output data-dispute-status role="status" aria-live="polite"></output>
+    </details>
   </main>
 <!-- shared-footer:start -->
 <footer class="ab-footer">
@@ -54,8 +71,7 @@
   <script src="marketplace-workflow.js?v=9"></script>
   <script src="analytics-config.js?v=11"></script>
   <script src="analytics.js?v=4"></script>
-    <script src="creator-awards.js?v=1"></script>
-  <script src="submissions.js?v=3"></script>
-  <script src="submissions-evidence.js?v=1"></script>
+
+  <script src="check-work.js?v=1"></script>
 </body>
 </html>

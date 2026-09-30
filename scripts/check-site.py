@@ -12,6 +12,7 @@ from urllib.parse import urldefrag, urlparse
 
 
 CANONICAL_PAGES = {
+    "check-work.html": "https://agentbounties.app/check-work.html",
     "app-testing.html": "https://agentbounties.app/app-testing.html",
     "api-integration.html": "https://agentbounties.app/api-integration.html",
     "bug-fix.html": "https://agentbounties.app/bug-fix.html",
@@ -82,6 +83,9 @@ INDEXABLE_PAGES = {
     "terms.html",
 }
 REQUIRED_FILES = {
+    "check-work.js",
+    "check-work.css",
+    "submissions-evidence.js",
     "forest-ui.css",
     "forest-theme.js",
     "forest-home.js",
@@ -199,6 +203,9 @@ REQUIRED_FILES = {
     "x402-test-vectors.json",
 }
 ALLOWED_UI_CODE = {
+    "check-work.js",
+    "check-work.css",
+    "submissions-evidence.js",
     "creator-awards.js",
     "creator-awards.css",
     "bounty-recovery.js",

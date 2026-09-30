@@ -1,3 +1,5 @@
+mod broad_checks;
+
 use anyhow::{anyhow, bail, Context, Result};
 use app::{
     build_live_money_readiness_report, hash_artifact, stripe_secret_key_mode_from_secret,
@@ -117,6 +119,10 @@ struct DiscoveryReportArgs {
 
 #[derive(Subcommand)]
 enum Command {
+    Verification {
+        #[command(subcommand)]
+        command: broad_checks::VerificationCommand,
+    },
     Demo,
     PooledFundingDemo,
     RealFundingReadiness {
@@ -633,6 +639,7 @@ fn run_cli() -> Result<()> {
 async fn async_main() -> Result<()> {
     let args = Args::parse();
     match args.command {
+        Command::Verification { command } => broad_checks::execute(command).await,
         Command::Demo => demo().await,
         Command::PooledFundingDemo => pooled_funding_demo(),
         Command::RealFundingReadiness {
@@ -6804,6 +6811,9 @@ mod tests {
             ));
         }
         let help = sections.join("\n---\n").replace("\r\n", "\n");
+        if let Ok(path) = std::env::var("AGENT_BOUNTIES_CLI_HELP_EXPORT_PATH") {
+            std::fs::write(path, &help).unwrap();
+        }
         let fixture: serde_json::Value =
             serde_json::from_str(include_str!("../fixtures/public-help-contract.json")).unwrap();
         assert_eq!(help.lines().count(), fixture["normalized_lines"]);

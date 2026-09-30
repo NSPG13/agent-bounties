@@ -825,9 +825,28 @@ export interface X402FundingLoopOptions {
   timeoutMs?: number;
 }
 
+export type WalletAuthChainId = 8453 | 84532;
+
+export interface WalletAuthChallenge {
+  challenge_id: string;
+  message: string;
+  expires_at: string;
+  chain_id: WalletAuthChainId;
+  address: string;
+}
+
+export interface WalletAuthSession {
+  token: string;
+  token_type: "Bearer";
+  expires_at: string;
+  principal: { kind: "wallet"; chain_id: WalletAuthChainId; address: string };
+}
+
 export interface AgentBountiesClientOptions {
   baseUrl?: string;
   operatorApiToken?: string | null;
+  sessionToken?: string | null;
+  credentials?: RequestCredentials;
   analyticsExclusionToken?: string | null;
 }
 
@@ -1314,6 +1333,8 @@ export class AgentBountiesClient {
   private readonly baseUrl: string;
   private readonly operatorApiToken?: string;
   private readonly analyticsExclusionToken?: string;
+  private sessionToken?: string;
+  private readonly credentials?: RequestCredentials;
 
   constructor(
     baseUrlOrOptions: string | AgentBountiesClientOptions = "http://127.0.0.1:8080",
@@ -1323,20 +1344,53 @@ export class AgentBountiesClient {
       this.baseUrl = baseUrlOrOptions;
       this.operatorApiToken = operatorApiToken ?? undefined;
       this.analyticsExclusionToken = undefined;
+      this.credentials = undefined;
     } else {
       this.baseUrl = baseUrlOrOptions.baseUrl ?? "http://127.0.0.1:8080";
       this.operatorApiToken = baseUrlOrOptions.operatorApiToken ?? undefined;
       this.analyticsExclusionToken = baseUrlOrOptions.analyticsExclusionToken ?? undefined;
+      this.credentials = baseUrlOrOptions.credentials;
+      if (baseUrlOrOptions.sessionToken) this.setSessionToken(baseUrlOrOptions.sessionToken);
     }
+  }
+
+  setSessionToken(token: string | null): void {
+    if (token && !/^abws_[0-9a-f]{64}$/.test(token)) throw new Error("Invalid wallet session token");
+    if (token && this.operatorApiToken) throw new Error("Choose either an operator token or a wallet session");
+    this.sessionToken = token ?? undefined;
+  }
+
+  async createWalletChallenge(address: string, chainId: WalletAuthChainId = 8453): Promise<WalletAuthChallenge> {
+    return this.post("/v1/auth/wallet/challenge", { address, chain_id: chainId }) as Promise<WalletAuthChallenge>;
+  }
+
+  async createWalletSession(challenge: WalletAuthChallenge, signature: string): Promise<WalletAuthSession> {
+    return this.post("/v1/auth/wallet/session", {
+      challenge_id: challenge.challenge_id,
+      chain_id: challenge.chain_id,
+      signature,
+    }) as Promise<WalletAuthSession>;
+  }
+
+  async getSessionStatus(): Promise<unknown> {
+    return this.request("/v1/auth/session");
+  }
+
+  async revokeSession(): Promise<void> {
+    await this.post("/v1/auth/session/revoke", {});
+    this.sessionToken = undefined;
   }
 
   private async request(path: string, init?: RequestInit): Promise<unknown> {
     const response = await fetch(`${this.baseUrl}${path}`, {
+      ...(this.credentials ? { credentials: this.credentials } : {}),
       ...init,
+      redirect: "error",
       headers: {
         "content-type": "application/json",
         "x-agent-bounties-interface": "api",
         ...(this.operatorApiToken ? { "x-operator-token": this.operatorApiToken } : {}),
+        ...(this.sessionToken ? { authorization: `Bearer ${this.sessionToken}` } : {}),
         ...(this.analyticsExclusionToken
           ? { "x-agent-bounties-analytics-exclusion": this.analyticsExclusionToken }
           : {}),
@@ -1411,10 +1465,13 @@ export class AgentBountiesClient {
       relayer: request.relayer,
     });
     const response = await fetch(`${this.baseUrl}${path}`, {
+      redirect: "error",
+      ...(this.credentials ? { credentials: this.credentials } : {}),
       method: "GET",
       headers: {
         "x-agent-bounties-interface": "api",
         ...(this.operatorApiToken ? { "x-operator-token": this.operatorApiToken } : {}),
+        ...(this.sessionToken ? { authorization: `Bearer ${this.sessionToken}` } : {}),
         ...(request.payment_signature
           ? { "PAYMENT-SIGNATURE": request.payment_signature }
           : {}),
@@ -1434,9 +1491,12 @@ export class AgentBountiesClient {
   async getX402RelayStatus(relayId: string): Promise<X402BountyFundingResponse> {
     const path = `/v1/x402/base/relays/${relayId}`;
     const response = await fetch(`${this.baseUrl}${path}`, {
+      redirect: "error",
+      ...(this.credentials ? { credentials: this.credentials } : {}),
       headers: {
         "x-agent-bounties-interface": "api",
         ...(this.operatorApiToken ? { "x-operator-token": this.operatorApiToken } : {}),
+        ...(this.sessionToken ? { authorization: `Bearer ${this.sessionToken}` } : {}),
       },
     });
     if (![200, 202, 404, 422, 503].includes(response.status)) {
@@ -1749,9 +1809,12 @@ export class AgentBountiesClient {
   ): Promise<X402BountyFundingResponse> {
     const path = `/v1/base/open-competition-v2-beta3/proof-jobs/${encodeURIComponent(jobId)}/payment`;
     const response = await fetch(`${this.baseUrl}${path}`, {
+      redirect: "error",
+      ...(this.credentials ? { credentials: this.credentials } : {}),
       method: "POST",
       headers: {
         ...(this.operatorApiToken ? { "x-operator-token": this.operatorApiToken } : {}),
+        ...(this.sessionToken ? { authorization: `Bearer ${this.sessionToken}` } : {}),
         ...(paymentSignature ? { "PAYMENT-SIGNATURE": paymentSignature } : {}),
       },
     });
@@ -1864,8 +1927,8 @@ export class AgentBountiesClient {
     return this.post(`/v1/risk/events/${request.risk_event_id}/reject`, request);
   }
 
-  async registerAgent(handle: string, payoutWallet?: string): Promise<unknown> {
-    return this.post("/v1/agents", { handle, payout_wallet: payoutWallet ?? null });
+  async registerAgent(handle: string, payoutWallet?: string, idempotencyKey?: string): Promise<unknown> {
+    return this.post("/v1/agents", { handle, payout_wallet: payoutWallet ?? null }, idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined);
   }
 
   async registerCapability(request: RegisterCapabilityRequest): Promise<unknown> {
@@ -2534,6 +2597,29 @@ export class AgentBountiesClient {
   async runEvalLoops(): Promise<unknown> {
     return this.request("/v1/evals/loops");
   }
+
+  async listReviewTasks(): Promise<unknown> { return this.request("/v1/verification/review-tasks"); }
+  async openArtifactDispute(id: string, reason: string): Promise<unknown> { return this.post(`/v1/verification/artifacts/${encodeURIComponent(id)}/disputes`, {reason}); }
+  async resolveArtifactDispute(id: string, reason: string): Promise<unknown> { return this.post(`/v1/verification/disputes/${encodeURIComponent(id)}/resolve`, {reason}); }
+  async assignReviewTask(id: string, assigneePrincipal: string): Promise<unknown> { return this.post(`/v1/verification/review-tasks/${encodeURIComponent(id)}/assign`, {assignee_principal: assigneePrincipal}); }
+  async acceptReviewTask(id: string): Promise<unknown> { return this.post(`/v1/verification/review-tasks/${encodeURIComponent(id)}/accept`, {}); }
+  async saveVerificationReview(draft: object): Promise<unknown> { return this.post("/v1/verification/reviews", draft); }
+  async getVerificationReview(id: string): Promise<unknown> { return this.request(`/v1/verification/reviews/${encodeURIComponent(id)}`); }
+  async prepareArtifactSubmission(id: string, request: object): Promise<unknown> { return this.post(`/v1/verification/artifacts/${encodeURIComponent(id)}/prepare-submission`, request); }
+  async confirmArtifactSubmission(id: string, request: object): Promise<unknown> { return this.post(`/v1/verification/artifacts/${encodeURIComponent(id)}/confirm-submission`, request); }
+  async findVerificationChecks(): Promise<unknown> { return this.request("/v1/verification/checkers"); }
+  async validateVerificationPlan(plan: object): Promise<unknown> { return this.post("/v1/verification/plans/validate", plan); }
+  async uploadVerificationArtifact(files: {path: string; base64: string}[], idempotencyKey: string): Promise<unknown> {
+    return this.post("/v1/verification/artifacts", {files}, {"Idempotency-Key": idempotencyKey});
+  }
+  async importVerificationGithub(request: {repository: string; commit: string; paths: string[]}, idempotencyKey: string): Promise<unknown> {
+    return this.post("/v1/verification/artifacts/import-github", request, {"Idempotency-Key": idempotencyKey});
+  }
+  async getVerificationArtifact(id: string): Promise<unknown> { return this.request(`/v1/verification/artifacts/${encodeURIComponent(id)}`); }
+  async runVerificationChecks(artifactId: string, plan: object): Promise<unknown> {
+    return this.post("/v1/verification/runs", {artifact_id: artifactId, plan});
+  }
+  async getVerificationRun(id: string): Promise<unknown> { return this.request(`/v1/verification/runs/${encodeURIComponent(id)}`); }
 
   async getEvalRuns(): Promise<unknown> {
     return this.request("/v1/evals/runs");
