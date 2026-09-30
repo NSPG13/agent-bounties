@@ -4,7 +4,7 @@
   const FALLBACK_POLICY = Object.freeze({
     schema_version: "agent-bounties/legal-policy-v1",
     terms_version: "2026-07-18",
-    privacy_version: "2026-07-18",
+    privacy_version: "2026-09-30",
     statement: "I meet the age requirement in the Terms and am authorized to use this wallet and perform this action. I understand that public and blockchain records may be permanent. I accept the posted task, verification, and settlement rules. I am responsible for legal compliance, taxes, content rights, agent authority, and wallet security. I agree to the Terms of Use and Privacy Policy.",
     terms_url: "terms.html",
     privacy_url: "privacy.html",

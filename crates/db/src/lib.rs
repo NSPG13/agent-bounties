@@ -27,6 +27,7 @@ use std::collections::{BTreeMap, HashMap};
 use thiserror::Error;
 use uuid::Uuid;
 
+pub mod google_ads;
 mod site_posting_drafts;
 pub use site_posting_drafts::{PostingDraftError, SitePostingDraft, SitePostingDraftSummary};
 
@@ -97,6 +98,8 @@ pub const SITE_POSTING_DRAFTS_MIGRATION: &str =
 pub const SITE_WALLET_PROVIDER_MIGRATION: &str =
     include_str!("../../../migrations/0037_site_wallet_provider.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
+pub const GOOGLE_ADS_MEASUREMENT_MIGRATION: &str =
+    include_str!("../../../migrations/0038_google_ads_measurement.sql");
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
             VALUES ($1, $2, $3, $4, $5, $6)
@@ -649,7 +652,7 @@ pub struct NewDiscoverabilitySnapshot {
     pub payload: serde_json::Value,
 }
 
-pub const APPROVED_DISTRIBUTION_RAILS: [&str; 16] = [
+pub const APPROVED_DISTRIBUTION_RAILS: [&str; 18] = [
     "bankr",
     "openclaw",
     "vscode",
@@ -666,6 +669,8 @@ pub const APPROVED_DISTRIBUTION_RAILS: [&str; 16] = [
     "mcp-so-paid",
     "mcpmarket",
     "mcpmarket-paid",
+    "google-ads",
+    "website",
 ];
 
 pub const DISTRIBUTION_EXCLUSION_CLASSES: [&str; 8] = [
@@ -1500,10 +1505,12 @@ impl PostgresStore {
                 DISTRIBUTION_ATTRIBUTION_MIGRATION,
                 // 0035 is a strict superset of 0033. Replaying 0033 would
                 // reject valid MCPMarket rows on subsequent startups.
-                DISTRIBUTION_MCPMARKET_SOURCES_MIGRATION,
+                // 0038 includes the 0035 rail constraints. Do not replay the
+                // narrower check after consented Google acquisitions exist.
                 DISTRIBUTION_COMPETITION_BINDINGS_MIGRATION,
                 SITE_POSTING_DRAFTS_MIGRATION,
                 SITE_WALLET_PROVIDER_MIGRATION,
+                GOOGLE_ADS_MEASUREMENT_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -11713,7 +11720,7 @@ mod tests {
         }
         for rail in APPROVED_DISTRIBUTION_RAILS {
             assert!(
-                DISTRIBUTION_MCPMARKET_SOURCES_MIGRATION.contains(&format!("'{rail}'")),
+                GOOGLE_ADS_MEASUREMENT_MIGRATION.contains(&format!("'{rail}'")),
                 "missing approved distribution rail {rail}"
             );
         }
@@ -11776,6 +11783,8 @@ mod tests {
                 "mcp-so-paid",
                 "mcpmarket",
                 "mcpmarket-paid",
+                "google-ads",
+                "website",
             ]
         );
         assert_eq!(

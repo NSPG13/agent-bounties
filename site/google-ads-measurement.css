@@ -1,0 +1,31 @@
+.ad-measurement-choice {
+  position: fixed;
+  bottom: 1rem;
+  left: 1rem;
+  right: 1rem;
+  z-index: 200;
+  max-width: 48rem;
+  max-height: 65vh;
+  overflow-y: auto;
+  padding: 1rem;
+  border: 1px solid #b9cbbd;
+  border-radius: 0.75rem;
+  background: #102018;
+  color: #f5faf6;
+  box-shadow: 0 4px 24px #0007;
+  font: 1rem/1.5 system-ui, sans-serif;
+}
+.ad-measurement-choice[hidden] { display: none; }
+.ad-measurement-choice p { margin: 0 0 0.75rem; }
+.ad-measurement-choice button, .ad-measurement-choice a {
+  display: inline-block;
+  margin: 0.25rem 0.75rem 0.25rem 0;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid #b9cbbd;
+  border-radius: 0.4rem;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+.ad-measurement-choice :focus-visible { outline: 3px solid #d8f594; outline-offset: 2px; }

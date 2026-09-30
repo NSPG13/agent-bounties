@@ -203,6 +203,8 @@ REQUIRED_FILES = {
     "x402-test-vectors.json",
 }
 ALLOWED_UI_CODE = {
+    "google-ads-measurement.js",
+    "google-ads-measurement.css",
     "check-work.js",
     "check-work.css",
     "submissions-evidence.js",
