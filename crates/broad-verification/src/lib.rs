@@ -747,6 +747,10 @@ pub fn catalog() -> Value {
             })
             .cloned()
             .unwrap_or(Value::Null);
+        // An agent may validate one checker without retaining the whole catalog.
+        // Local references must therefore resolve within this schema document.
+        entry["parameters_schema"]["$defs"] = schema["$defs"].clone();
+        entry["parameters_schema"]["$schema"] = schema["$schema"].clone();
         entry["version"] = json!(1);
         entry["payment_approval_status"] = json!("advisory_only");
         entry["assurance"] = json!("trusted_runner_not_cryptographic_computation_proof");
