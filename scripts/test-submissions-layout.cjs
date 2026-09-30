@@ -18,7 +18,7 @@ const server = http.createServer((req, res) => {
 });
 async function journey(browser, origin, width) {
   const context = await browser.newContext({ viewport: { width, height: 900 }, reducedMotion: 'reduce' });
-  let mode = 'ready', heldRoute, feedReads = 0;
+  let mode = 'ready', heldRoute, feedReads = 0, savedHistoryReads = 0;
   const unexpected = [], mutations = [], errors = [];
   await context.addInitScript(() => { window.ethereum = { request: () => { throw new Error('Submissions must not request a wallet'); } }; });
   await context.route('**/*', route => {
@@ -38,6 +38,15 @@ async function journey(browser, origin, width) {
       return route.fulfill({ json: [{ ...fixture.item, events: [event('submission_added', 1), result] }] });
     }
     if (url.pathname.startsWith('/v1/base/autonomous-bounties/submission-evidence/')) return route.fulfill({ status: mode === 'evidenceOffline' ? 503 : 200, json: evidence });
+    if (url.pathname === `/v1/verification/bounties/base-mainnet/${paid.source_id}/submissions`) {
+      savedHistoryReads++;
+      return route.fulfill({ status: mode === 'evidenceOffline' ? 503 : 200, json: {
+        submissions: [{ round: 1, confirmed_payment: true,
+          files: [{id:'00000000-0000-0000-0000-000000000001',manifest:{files:[{path:'design.step',size:42}]}}],
+          reviews: [{reviewer:wallet,assessment:{checks:[{passed:true,criterion:'Editable files',reason:'Exact source and exports were retained.'}]}}] }],
+        selection_notice:'Qualification and confirmed payment are shown separately.'
+      }});
+    }
     if (url.origin !== origin) { unexpected.push(request.url()); return route.abort(); }
     return route.continue();
   });
@@ -53,6 +62,9 @@ async function journey(browser, origin, width) {
   await page.locator('[data-opportunity-list]').getByRole('link', { name: 'View Submissions', exact: true }).click();
   await page.getByRole('link', { name: 'View Winning Submission', exact: true }).waitFor();
   assert.equal(await page.locator('.submission-card').count(), 1);
+  await page.getByRole('heading', {name:'Saved files and review notes'}).waitFor();
+  assert.equal(await page.getByRole('link', {name:'Download design.step (42 bytes)'}).count(), 1);
+  await page.getByText('Pass: Editable files — Exact source and exports were retained.').waitFor();
   assert.equal(await page.getByRole('link', { name: 'View proposals on GitHub' }).getAttribute('href'), paid.source_url);
   assert.equal(await page.locator('.submission-criteria li').count(), 3);
   assert.equal(await page.getByRole('link', { name: 'Open submitted work' }).getAttribute('href'), evidence.artifact_reference);
@@ -86,9 +98,12 @@ async function journey(browser, origin, width) {
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'expired history fits the screen');
   mode = 'ready';
   const before = feedReads;
+  const savedBefore = savedHistoryReads;
   await page.goto(`${origin}/submissions.html?opportunity=canonical:base-mainnet:0x${'f'.repeat(40)}`);
   await page.getByText('This bounty is not available in the public history.').waitFor();
   assert.equal(feedReads, before, 'unlisted identities cannot trigger artifact or event reads');
+  assert.equal(savedHistoryReads, savedBefore, 'unlisted identities cannot trigger saved-file reads');
+  assert.equal(await page.locator('[data-durable-evidence]').count(), 0, 'unavailable work has one authoritative message');
   assert.equal(await page.locator('.submission-card').count(), 0);
   await page.goto(origin + '/earn.html?view=completed');
   await page.locator('.opportunity-row[data-phase="completed"]').waitFor();
