@@ -1,5 +1,32 @@
 use super::*;
 #[test]
+fn each_checker_schema_can_be_used_independently() {
+    fn check_references(value: &Value, root: &Value) {
+        match value {
+            Value::Object(fields) => {
+                if let Some(reference) = fields.get("$ref").and_then(Value::as_str) {
+                    let pointer = reference.strip_prefix('#').expect("local schema reference");
+                    assert!(root.pointer(pointer).is_some(), "unresolved {reference}");
+                }
+                for child in fields.values() {
+                    check_references(child, root);
+                }
+            }
+            Value::Array(children) => {
+                for child in children {
+                    check_references(child, root);
+                }
+            }
+            _ => {}
+        }
+    }
+    for checker in catalog()["checks"].as_array().unwrap() {
+        let schema = &checker["parameters_schema"];
+        assert_eq!(schema["properties"]["checker"]["const"], checker["id"]);
+        check_references(schema, schema);
+    }
+}
+#[test]
 fn new_contests_have_separate_stages_and_exact_funding_boundaries() {
     let mut p = plan(Rule::IntegrityV1);
     p.criteria[0].review = Some("Does the work meet the brief?".into());
