@@ -41,6 +41,17 @@
     const key = `agent-bounties.creator-review.v1:${contract}`;
     const output = root.querySelector("output"), confirm = root.querySelector("button");
     let job = null, staged = null, busy = false, importedDraft = null;
+    const calendarButton = doc.createElement("button"); calendarButton.type = "button"; calendarButton.textContent = "Add review deadline to calendar"; calendarButton.hidden = true;
+    root.append(calendarButton);
+    calendarButton.addEventListener("click", (event) => {
+      if (!event.isTrusted || !job) return;
+      try {
+        const body = win.AgentBountiesReviewDeadline.calendar(job);
+        const url = win.URL.createObjectURL(new win.Blob([body], { type: "text/calendar;charset=utf-8" }));
+        const link = doc.createElement("a"); link.href = url; link.download = `bounty-review-${job.round}.ics`; link.click();
+        win.setTimeout(() => win.URL.revokeObjectURL(url), 1000);
+      } catch (error) { output.textContent = error.message; }
+    });
     const load = () => JSON.parse(win.sessionStorage.getItem(key) || "null");
     const save = (record) => win.sessionStorage.setItem(key, JSON.stringify(record));
     async function reportRequest(path, body) {
@@ -65,14 +76,16 @@
       const jobs = item.status === "submitted" ? await client.request("/v1/base/autonomous-bounties/verification-jobs?network=base-mainnet") : [];
       job = jobs.find((entry) => lower(entry.bounty_contract) === contract && entry.bounty_id === item.bounty_id && entry.terms.terms_hash === item.terms_hash && entry.threshold === 1
         && entry.eligible_verifiers.length === 1 && lower(entry.eligible_verifiers[0]) === lower(item.creator)) || null;
+      calendarButton.hidden = !job || job.verification_expires_at * 1000 <= Date.now();
+      if (job) calendarButton.title = `Review by ${new Date(job.verification_expires_at * 1000).toISOString()}`;
       if (operation?.phase === "signed" && operation.request.deadline <= Date.now() / 1000) {
         // This phase proves no broadcast was attempted. An expired signature cannot settle.
         win.sessionStorage.setItem(`${key}.previous`, JSON.stringify(operation)); win.sessionStorage.removeItem(key);
         staged = null; return refresh();
       }
-      if (operation?.phase === "signed") {
+      if (["signed", "relay_pending"].includes(operation?.phase)) {
         staged = operation.assessment; if (job && staged) renderAssessment(); confirm.disabled = !job || !staged;
-        output.textContent = "Your verdict is already signed. Confirm in wallet to submit this same verdict without signing it again.";
+        output.textContent = "Your verdict is already signed. Continue to reconcile and relay this same verdict; Agent Bounties pays the network fee.";
       } else if (operation) output.textContent = "A verdict wallet step is recorded. Check its canonical status; do not repeat it.";
       else if (!staged) output.textContent = job ? "A submission is ready. Your AI can check every criterion and prepare your verdict here." : "The creator will confirm the verdict here after a submission arrives.";
       return { status: operation ? "pending_confirmation" : job ? "review_available" : "waiting_for_submission", paid: false, job, operation: operation ? { phase: operation.phase, transaction_hash: operation.hash || null } : null, user_confirmation_required: false };
@@ -81,7 +94,7 @@
       const list = root.querySelector("ol"); list.replaceChildren();
       for (const check of staged.checks) { const li = doc.createElement("li"); li.textContent = `${check.passed ? "Pass" : "Fail"}: ${check.criterion} — ${check.reason}`; list.append(li); }
       output.textContent = `${staged.passed ? "Proposed pass" : "Proposed rejection"}. ${staged.on_time ? "Submitted by the delivery deadline." : "The submission missed the delivery deadline."} Review every check before confirming.`;
-      root.querySelector("[data-review-cost]").textContent = `On Base: a pass pays ${Number(job.current_solver_payout) / 1e6} USDC to solver ${job.solver_wallet}; either verdict pays ${Number(job.verifier_reward) / 1e6} USDC to reviewer ${job.eligible_verifiers[0]}. A rejection forfeits the solver bond. Review expires ${new Date(job.verification_expires_at * 1000).toLocaleString()}. Your wallet will show the additional gas fee.`;
+      root.querySelector("[data-review-cost]").textContent = `On Base: a pass pays ${Number(job.current_solver_payout) / 1e6} USDC to solver ${job.solver_wallet}; either verdict pays ${Number(job.verifier_reward) / 1e6} USDC to reviewer ${job.eligible_verifiers[0]}. A rejection forfeits the solver bond. Review expires ${new Date(job.verification_expires_at * 1000).toLocaleString()}. Agent Bounties pays the network fee. If sponsorship is unavailable, the verdict stays saved.`;
     }
     async function importDraft(id) {
       if (!/^[0-9a-f-]{36}$/i.test(id) || busy || load()) throw new Error("Check the existing wallet step before opening another review.");
@@ -102,7 +115,7 @@
       return { status: "verdict_staged", assessment: staged, paid: false, user_confirmation_required: true, next_action: "The creator reviews these checks and confirms the verdict in the page and wallet. Do not click their confirmation." };
     }
     confirm.addEventListener("click", async (event) => {
-      if (!event.isTrusted || busy || !staged || (load() && load().phase !== "signed")) return;
+      if (!event.isTrusted || busy || !staged || (load() && !["signed", "relay_pending"].includes(load().phase))) return;
       busy = true; confirm.disabled = true;
       try {
         const priorJob = job, existing = load(); await refresh();
@@ -122,6 +135,8 @@
         const report_id = storedReport.id;
         let attestation = existing?.attestation;
         if (!attestation) {
+          const sponsor = await client.request("/v1/base/gas-sponsorship");
+          if (sponsor.schema !== "agent-bounties/gas-sponsorship-v1" || !sponsor.creator_verdict?.available || sponsor.creator_verdict.customer_gas_wei !== "0") throw new Error("Gas sponsorship is unavailable. Your review is saved; recheck before signing. You do not need to buy ETH.");
           const plan = await client.request("/v1/base/autonomous-bounties/verification-attestation-plan", { network: "base-mainnet", attestation: request });
           if (stable(plan) !== stable(typedData(request))) throw new Error("The requested signature differs from your reviewed verdict.");
           save({ phase: "signing", request, assessment: staged, report_id });
@@ -133,8 +148,10 @@
         const tx = await client.request("/v1/base/autonomous-bounties/attestation-settlement-plan", { network: "base-mainnet", bounty_contract: contract, caller: wallet, attestations: [attestation] });
         if (lower(tx.from) !== wallet || lower(tx.to) !== contract || String(tx.value_wei) !== "0" || lower(tx.data) !== lower(settlementData(attestation, evm))) throw new Error("The settlement transaction differs from the signed verdict.");
         if (lower((await provider.request({ method: "eth_accounts" }))[0]) !== wallet || lower(await provider.request({ method: "eth_chainId" })) !== "0x2105") throw new Error("Wallet or chain changed; no transaction was sent.");
-        save({ phase: "sending", request, attestation, assessment: staged, report_id });
-        const hash = await provider.request({ method: "eth_sendTransaction", params: [{ from: wallet, to: contract, data: tx.data, value: "0x0" }] });
+        save({ phase: "relay_pending", request, attestation, assessment: staged, report_id });
+        const result = await client.request("/v1/base/autonomous-bounties/creator-verdict-relay", { network: "base-mainnet", attestation: request, signature: attestation.signature });
+        if (result.schema !== "agent-bounties/sponsored-verdict-v1" || result.network !== "base-mainnet" || lower(result.bounty_contract) !== contract || result.round !== request.round || result.customer_gas_wei !== "0") throw new Error("The relay returned a different review. Preserve this signed verdict and check its canonical status.");
+        const hash = result.transaction_hash;
         if (!/^0x[0-9a-f]{64}$/i.test(hash)) throw new Error("The transaction response is uncertain. Check status before retrying.");
         save({ phase: "submitted", request, hash, attestation, assessment: staged, report_id });
         await reportRequest(`/v1/verification/reviews/${report_id}/confirm`, {transaction_hash:hash});
@@ -142,9 +159,8 @@
       } catch (error) {
         const record = load();
         if (error.code === 4001 && record?.phase === "signing") win.sessionStorage.removeItem(key);
-        if (error.code === 4001 && record?.phase === "sending") save({ ...record, phase: "signed" });
         output.textContent = error.message || String(error);
-        confirm.disabled = Boolean(load() && load().phase !== "signed");
+        confirm.disabled = Boolean(load() && !["signed", "relay_pending"].includes(load().phase));
       } finally { busy = false; }
     });
     win.AgentBountiesCreatorReviewWorkspace = Object.freeze({ refresh, stage, importDraft });

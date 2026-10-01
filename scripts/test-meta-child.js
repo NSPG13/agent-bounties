@@ -82,9 +82,9 @@ test("altered funding, chain, quorum, preimages and wallet calls fail before sig
   }
 });
 
-test("the confirmed funding branch uses the bounded child plan and retries a lost preparation with the same nonce", async () => {
+test("caller-dependent child posting preserves the approved draft without a wallet-paid fallback", async () => {
   const source = fs.readFileSync(require.resolve("../site/bounty-composer-v2.js"), "utf8");
-  const start = source.indexOf("  async function fundApprovedBounty()"), end = source.indexOf("  function configureSpeech", start);
+  const start = source.indexOf("  async function fundApprovedBounty()"), end = source.indexOf("  function showAuthorizationRecovery", start);
   const guardStart = source.indexOf("  async function assertPostingBinding()"), guardEnd = source.indexOf("  async function watchUsdcAsset", guardStart);
   const legalStart = source.indexOf("  const LEGAL_RECEIPT_KEY"), legalEnd = source.indexOf("  async function refreshWalletReadiness", legalStart);
   const finishStart = source.indexOf("  async function finishPosting("), finishEnd = source.indexOf("  async function continueSignedBounty", finishStart);
@@ -132,18 +132,15 @@ test("the confirmed funding branch uses the bounded child plan and retries a los
     sendWalletCalls: async calls => { await postingSession.flush({ requireServer: true }); sent.push(calls); journal.checkpoint("batch_submitted", { id: "test-only" }); },
     pollCreation: async () => true, fetchFeedItem: async () => ({ verification_ready: true }),
   });
-  await run(); assert.equal(sent.length, 0); assert.equal(journal.load(), null); assert.ok(fields.every(field => !field.disabled));
-  assert.deepEqual(errors, ["lost response"]);
+  await run();
+  await run();
+  assert.equal(sent.length, 0);
+  assert.equal(requests.length, 0, "Unsupported sponsorship cannot publish new child terms");
+  assert.equal(consents.length, 0, "Explain unavailable sponsorship before asking for commitment");
   assert.equal(navigations.length, 0);
-  await run(); assert.equal(sent.length, 1); assert.deepEqual(sent[0], fixture.pre_claim_wallet_calls);
-  assert.deepEqual(errors, ["lost response"]);
-  assert.equal(consents.length, 1, "The unchanged child retains its legal receipt after lost preparation");
-  assert.equal(requests[0].creation_nonce, requests[1].creation_nonce);
-  assert.equal(journal.load().phase, "funding_confirmed");
-  assert.deepEqual(navigations, [`funded.html?bountyContract=${fixture.child_creation.predicted_bounty_contract}&network=base-mainnet`]);
-  assert.ok(fields.every(field => field.disabled));
-  await run(); assert.equal(sent.length, 1);
-  assert.equal(refreshes.length, 2, "The same operation is refreshed before each preparation; a recorded result cannot start another");
-  assert.ok(saved.some(value => value.required && value.recovery?.phase === "prepared"), "Save recovery before the isolated wallet stub runs");
-  assert.ok(saved.every(value => postingHelper.stable(value.envelope) === approvedEnvelope), "Refresh/save cannot change the exact approved child draft");
+  assert.equal(journal.load(), null);
+  assert.ok(fields.every(field => !field.disabled));
+  assert.deepEqual(errors, Array(2).fill("Sponsored child creation still needs a caller-preserving wallet path. Your draft is saved; no gas will be charged."));
+  assert.equal(refreshes.length, 2);
+  assert.ok(saved.every(value => postingHelper.stable(value.envelope) === approvedEnvelope), "The same approved child draft stays intact");
 });

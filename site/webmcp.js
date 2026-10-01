@@ -1,19 +1,8 @@
 (function () {
   "use strict";
 
-  const context = typeof document === "undefined" ? undefined : document.modelContext;
-  if (!context || typeof context.registerTool !== "function") {
-    const showHint = () => {
-      const host = document.querySelector("[data-agent-guidance]");
-      if (host) {
-        host.textContent = "Your AI can guide every step. Use a browser with WebMCP support or connect Agent Bounties. Your wallet confirmations stay with you. ";
-        const link = document.createElement("a"); link.href = "/install/"; link.textContent = "Agent setup"; host.append(link);
-      }
-    };
-    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", showHint, { once: true });
-    else showHint();
-    return;
-  }
+  const contexts = [...new Set([document.modelContext, window.navigator?.modelContext])]
+    .filter(context => typeof context?.registerTool === "function");
   if (window.__agentBountiesWebMcpRegistered) return;
 
   const params = new URLSearchParams(window.location.search);
@@ -33,6 +22,44 @@
   const PENDING_DRAFT_KEY = "agent-bounties.webmcp.pending-funded-draft.v1";
   const registrations = [];
   const names = [];
+  const fallbackTools = new Map();
+  // Same validated implementations and consent boundaries in older browsers.
+  window.AgentBountiesWebMCP = Object.freeze({
+    list: () => [...fallbackTools.values()].map(({ execute, ...metadata }) => JSON.parse(JSON.stringify(metadata))),
+    call: async (name, input = {}) => {
+      if (lifecycle.signal.aborted) throw new Error("This page is no longer active.");
+      const tool = fallbackTools.get(name);
+      if (!tool) throw new Error("Unknown or unavailable Agent Bounties tool.");
+      if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Tool input must be an object.");
+      validateFallbackInput(input, tool.inputSchema);
+      return tool.execute(input);
+    },
+  });
+  function validateFallbackInput(value, schema, path = "input", depth = 0) {
+    if (depth > 20) throw new Error("Tool input is too deeply nested.");
+    if (!schema) return;
+    const type = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
+    const allowed = Array.isArray(schema.type) ? schema.type : [schema.type];
+    if (schema.type && !allowed.some(expected => expected === type || expected === "integer" && Number.isSafeInteger(value))) throw new Error(`${path} has the wrong type.`);
+    if (schema.enum && !schema.enum.includes(value)) throw new Error(`${path} is not a supported choice.`);
+    if (type === "string") {
+      if (schema.minLength != null && value.length < schema.minLength || schema.maxLength != null && value.length > schema.maxLength
+        || schema.pattern && !new RegExp(schema.pattern).test(value)
+        || schema.format === "uuid" && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) throw new Error(`${path} is invalid.`);
+    } else if (type === "number") {
+      if (!Number.isFinite(value) || schema.minimum != null && value < schema.minimum || schema.maximum != null && value > schema.maximum) throw new Error(`${path} is outside the supported range.`);
+    } else if (type === "array") {
+      if (schema.minItems != null && value.length < schema.minItems || schema.maxItems != null && value.length > schema.maxItems) throw new Error(`${path} has an invalid number of items.`);
+      value.forEach((item, index) => validateFallbackInput(item, schema.items, `${path}[${index}]`, depth + 1));
+    } else if (type === "object") {
+      for (const key of schema.required || []) if (!Object.prototype.hasOwnProperty.call(value, key)) throw new Error(`${path}.${key} is required.`);
+      for (const key of Object.keys(value)) {
+        const known = Object.prototype.hasOwnProperty.call(schema.properties || {}, key);
+        if (!known && schema.additionalProperties === false) throw new Error(`${path}.${key} is not supported.`);
+        if (known) validateFallbackInput(value[key], schema.properties[key], `${path}.${key}`, depth + 1);
+      }
+    }
+  }
   const flow = window.AgentBountiesWorkflow;
   if (!flow) throw new Error("The shared marketplace workflow did not load.");
   const client = flow.createClient(window);
@@ -58,11 +85,12 @@
     try {
       const execute = tool.execute;
       tool.execute = (...args) => { window.dispatchEvent(new CustomEvent("agent-bounties:site-tool-used")); return execute(...args); };
-      const registered = context.registerTool(tool, { signal: lifecycle.signal });
+      fallbackTools.set(tool.name, tool);
       names.push(tool.name);
-      registrations.push(
-        Promise.resolve(registered).catch((error) => { const index = names.indexOf(tool.name); if (index >= 0) names.splice(index, 1); reportError(error); }),
-      );
+      for (const context of contexts) {
+        try { registrations.push(Promise.resolve(context.registerTool(tool, { signal: lifecycle.signal })).catch(reportError)); }
+        catch (error) { reportError(error); }
+      }
     } catch (error) {
       reportError(error);
     }

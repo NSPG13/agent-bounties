@@ -6,7 +6,7 @@
 })(typeof window === "object" ? window : globalThis, function createWalletLink(win) {
   const doc = win.document;
   const discovered = new Map();
-  let chooser, list, status, createButton, pending, bundlePromise, brand = null, continuation, purpose;
+  let chooser, list, status, createButton, pending, bundlePromise, brand = null, continuation, purpose, requestedChain = 8453;
   const cancelled = () => Object.assign(new Error("Wallet selection cancelled."), { code: 4001 });
 
   function remember(detail) {
@@ -137,12 +137,12 @@
     chooser.querySelector("[data-wallet-intro]").textContent = brand ? "" : "Use one wallet to add money and approve your bounty.";
     chooser.querySelector("[data-wallet-back]").hidden = !brand;
     chooser.querySelector("[data-wallet-create]").hidden = brand !== "coinbase";
-    if (purpose === "recovery") {
+    if (purpose === "recovery" || ["creator-open", "sponsored-setup"].includes(purpose)) {
       chooser.querySelector("#wallet-link-title").textContent = "Connect your wallet";
-      chooser.querySelector("[data-wallet-intro]").textContent = "Use the wallet that funded this bounty. Connecting does not move money.";
+      chooser.querySelector("[data-wallet-intro]").textContent = ["creator-open", "sponsored-setup"].includes(purpose) ? "Choose the wallet that will authorize this action. Connecting does not move money." : "Use the wallet that funded this bounty. Connecting does not move money.";
       chooser.querySelector("[data-wallet-back]").hidden = true;
       chooser.querySelector("[data-wallet-create]").hidden = true;
-      const available = choices().filter(item => item.provider.agentBountiesCapabilities?.directTransactions !== false);
+      const available = choices().filter(item => ["creator-open", "sponsored-setup"].includes(purpose) ? !item.provider.agentBountiesCapabilities?.reviewedPostingOnly && (item.kind !== "phone" || requestedChain === 8453) : item.provider.agentBountiesCapabilities?.directTransactions !== false);
       const labels = new Map();
       for (const choice of available) {
         const label = choice.kind === "phone" ? "Use a phone wallet" : `${choice.label} in this browser`;
@@ -158,7 +158,7 @@
       for (const [id, title, description] of [
         ["coinbase", "Coinbase", "Use your Base app or Coinbase account wallet."],
         ["metamask", "MetaMask", "Use your phone app or browser extension."],
-        ["moonpay", "MoonPay", "Full bounty payments are not available here yet."],
+        ["moonpay", "MoonPay", "Transfer existing Base USDC to your signing wallet."],
       ]) list.append(option(title, description, () => chooseBrand(id)));
       const more = doc.createElement("details"), summary = doc.createElement("summary");
       summary.textContent = "Other wallets";
@@ -170,7 +170,21 @@
     }
     if (brand === "moonpay") {
       note("MoonPay can hold, buy and send USDC. Approving a bounty from its wallet is not supported here yet.");
-      note("Do not buy more for this bounty in MoonPay. Your existing money stays in your MoonPay wallet.");
+      note("Use your existing Base USDC: choose the wallet that will sign your bounty, then transfer only the missing amount. Use Base, not Ethereum or another network.");
+      list.append(option("Transfer my MoonPay USDC", "Open a guided transfer with the destination address, exact shortfall and arrival checks.", async () => {
+        const request = pending;
+        try {
+          const journey = win.AgentBountiesWorkflow?.createClient(win).load();
+          if (!journey?.draft) throw new Error("Prepare your bounty and its budget first, then return here to transfer the exact missing Base USDC.");
+          const back = continuation ? await continuation() : win.location.href;
+          if (pending !== request) return;
+          const url = new URL("/onramp.html", win.location.href);
+          url.searchParams.set("purpose", "post"); url.searchParams.set("source", "moonpay"); url.searchParams.set("return", back);
+          if (journey?.id) url.searchParams.set("operation_id", journey.id);
+          if (journey?.draft) url.searchParams.set("amount", String(Number(journey.draft.solver_reward_usdc) + Number(journey.draft.verifier_reward_usdc)));
+          win.location.assign(url.href);
+        } catch (error) { if (pending === request) status.textContent = error.message; }
+      }));
       const help = doc.createElement("a"); help.href = "https://support.moonpay.com/en/articles/383215-managing-your-wallets";
       help.target = "_blank"; help.rel = "noopener noreferrer"; help.textContent = "MoonPay wallet help"; list.append(help);
       return;
@@ -227,7 +241,7 @@
   function select(options = {}) {
     if (pending) return pending.promise;
     mount();
-    brand = null; continuation = options.prepareContinuation; purpose = options.purpose;
+    brand = null; continuation = options.prepareContinuation; purpose = options.purpose; requestedChain = options.chainId || 8453;
     status.textContent = "";
     createButton.disabled = !embeddedConfigured();
     render();

@@ -327,6 +327,7 @@ def main() -> int:
         ["--test", "scripts/test-assistant-referrals.js", "scripts/test-solarpunk-home.js", "scripts/test-ai-bounty-handoff.js"],
         ["--test", "scripts/test-phone-wallet.js", "scripts/test-phone-wallet-network.cjs", "scripts/test-webmcp.js", "scripts/test-meta-child.js", "scripts/test-competition-proof.js"],
         ["--test", "scripts/test-posting-auth.js", "scripts/test-account-navigation.js", "scripts/test-posting-brief.cjs", "scripts/test-posting-reference.js", "scripts/test-posting-session.js", "scripts/test-funding-readiness.js"],
+        ["--test", "scripts/test-bounty-composer-retirement.cjs", "scripts/test-creator-open.cjs", "scripts/test-creator-push.js", "scripts/test-review-deadline.cjs", "scripts/test-sponsored-posting.cjs", "scripts/test-sponsored-setup.cjs", "scripts/test-wallet-session.cjs", "scripts/test-creator-review.js", "scripts/test-wallet-link.js"],
         ["--check", "scripts/open-competition-v1-signer.js"],
         ["scripts/test-open-competition-v1-signer-console.js"],
     )])

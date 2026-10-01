@@ -8,6 +8,23 @@
   const HASH = /^0x[0-9a-f]{64}$/i;
   const lower = (value) => String(value || "").toLowerCase();
   const stable = (value) => value && typeof value === "object" ? Array.isArray(value) ? `[${value.map(stable).join(",")}]` : `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stable(value[key])}`).join(",")}}` : JSON.stringify(value);
+  // A URL selects presentation only; it never establishes verifier authority.
+  function verifierReviewState(item, now = Math.floor(Date.now() / 1000)) {
+    if (item.status !== "submitted") return { title: "Check the current bounty", summary: "There is no work to review right now. Check the latest status below.", deadline: "" };
+    const submission = (item.events || []).filter((event) => event.kind === "submission_added"
+      && lower(event.contract_address) === lower(item.bounty_contract) && event.bounty_id === item.bounty_id
+      && event.id && Number.isSafeInteger(event.block_number) && event.block_number > 0
+      && Number.isSafeInteger(event.log_index) && event.log_index >= 0)
+      .sort((a, b) => b.block_number - a.block_number || b.log_index - a.log_index)[0];
+    const deadline = submission?.data?.verification_expires_at;
+    if (item.terms_valid !== true || !Number.isSafeInteger(submission?.data?.round) || submission.data.round <= 0
+      || !Number.isSafeInteger(deadline) || deadline <= 0 || !Number.isFinite(new Date(deadline * 1000).getTime())) return {
+      title: "Refresh review details", summary: "We can’t load the work or its review date. Try again before you decide.", deadline: "",
+    };
+    const date = new Date(deadline * 1000).toLocaleString();
+    if (now >= deadline) return { title: "The review deadline has passed", summary: "The time to review this work has ended. Refresh to see what happened next.", deadline: `Review deadline: ${date} (your local time).` };
+    return { title: "Review the solution", summary: "Read the work below and check it against the bounty’s rules. Your AI can help. Only the chosen review wallet can sign your decision.", deadline: `Review by ${date} (your local time). This date is for your review.` };
+  }
   function recoveryStatus(item, now = Math.floor(Date.now() / 1000)) {
     if (["paid", "cancelled"].includes(item.status)) return null;
     const events = (item.events || []).filter((event) => lower(event.contract_address) === lower(item.bounty_contract)
@@ -59,11 +76,41 @@
     });
     return calls;
   }
+  function validateSubmissionSignature(submission, contract, wallet, now = Math.floor(Date.now() / 1000)) {
+    const typed = submission?.signing_payload, m = typed?.message, domain = typed?.domain;
+    const fields = (pairs) => pairs.map(([name, type]) => ({ name, type }));
+    const types = {
+      EIP712Domain: fields([["name", "string"], ["version", "string"], ["chainId", "uint256"], ["verifyingContract", "address"]]),
+      Submit: fields([["bounty", "address"], ["bountyId", "bytes32"], ["solver", "address"], ["round", "uint64"], ["submissionHash", "bytes32"], ["evidenceHash", "bytes32"], ["policyHash", "bytes32"], ["deadline", "uint256"]]),
+    };
+    if (typed?.primaryType !== "Submit" || stable(typed.types) !== stable(types)
+      || domain?.name !== "Agent Bounties" || domain.version !== "1" || Number(domain.chainId) !== 8453 || lower(domain.verifyingContract) !== contract
+      || lower(m?.bounty) !== contract || lower(m.solver) !== wallet || lower(m.bountyId) !== lower(submission.bounty_id)
+      || String(m.round) !== String(submission.round) || lower(m.submissionHash) !== lower(submission.submission_hash)
+      || lower(m.evidenceHash) !== lower(submission.evidence_hash) || lower(m.policyHash) !== lower(submission.policy_hash)
+      || !HASH.test(m.policyHash) || !HASH.test(m.bountyId) || !Number.isSafeInteger(Number(m.deadline))
+      || Number(m.deadline) !== submission.authorization_deadline || Number(m.deadline) <= now || Number(m.deadline) > now + 1800
+      || Number(m.deadline) > submission.claim_expires_at) throw new Error("The submission signature differs from your exact claim, evidence or deadline. Refresh before signing.");
+    return typed;
+  }
+  function validateTransferSignature(typed, { contract, wallet, amount, nonce, expiry }, evm, now = Math.floor(Date.now() / 1000)) {
+    const m = typed?.message, d = typed?.domain;
+    if (typed?.primaryType !== "TransferWithAuthorization" || stable(typed.types) !== stable(evm.transferWithAuthorizationTypes())
+      || d?.name !== "USD Coin" || d.version !== "2" || Number(d.chainId) !== 8453 || lower(d.verifyingContract) !== TOKEN
+      || lower(m?.from) !== wallet || lower(m.to) !== contract || String(m.value) !== String(amount) || String(m.validAfter) !== "0"
+      || !HASH.test(m.nonce) || nonce && lower(m.nonce) !== lower(nonce) || !Number.isSafeInteger(Number(m.validBefore))
+      || expiry && Number(m.validBefore) !== expiry || Number(m.validBefore) <= now || Number(m.validBefore) > now + 3600) {
+      throw new Error("The wallet signature differs from your exact USDC amount, destination or expiry. No signature was requested.");
+    }
+    return typed;
+  }
   async function start(win, doc) {
     const flow = win.AgentBountiesWorkflow, client = flow.createClient(win), evm = win.AgentBountiesEvm;
     const find = (s) => doc.querySelector(s), put = (s, value) => { find(s).textContent = value; };
     const params = new URLSearchParams(win.location.search), contract = lower(params.get("bountyContract"));
     const network = params.get("network") || flow.NETWORK;
+    const reviewVisit = params.get("role") === "verifier";
+    if (reviewVisit) doc.body?.classList.add("verifier-review-visit");
     let intentId = params.get("intent"), intent = null, item = null, wallet = null, provider = null, calls = null, submission = null, busy = false;
     const recordKey = `agent-bounties.wallet-step.v1:${intentId || contract}`;
     let record;
@@ -87,7 +134,7 @@
       put("[data-work-reward]", `${Number(item.solver_reward) / 1e6} USDC`);
       put("[data-work-bond]", `${Number(item.claim_bond) / 1e6} USDC`);
       put("[data-work-funding]", `${Number(item.funded_amount) / 1e6} / ${Number(item.target_amount) / 1e6} USDC`);
-      put("[data-work-costs]", "The claim bond is at risk if you miss the work deadline. Gas and any required child-bounty funding are additional costs. Your AI should explain these before you commit.");
+      put("[data-work-costs]", "The claim bond is at risk if you miss the work deadline. Agent Bounties pays transaction gas. Any required child-bounty funding is part of your approved USDC commitment.");
       const criteria = find("[data-work-criteria]"); criteria.replaceChildren();
       for (const criterion of terms.acceptance_criteria) { const li = doc.createElement("li"); li.textContent = criterion; criteria.append(li); }
       const events = scopeEvents(item.events || []);
@@ -113,10 +160,10 @@
         }
         intent = await client.progress(intentId);
         if (lower(intent.bounty_contract) !== contract || intent.network !== network) throw new Error("This review belongs to another bounty or network.");
-        find("[data-action-review]").hidden = intent.status !== "review_required" || intent.action === "verify" || Boolean(record.finalHash || record.sending);
-        put("[data-review-summary]", intent.action === "complete" ? "Review the exact public artifact and evidence, then confirm submission in your wallet."
-          : intent.action === "fund" ? `Contribute exactly ${intent.amount_base_units / 1e6} USDC to this bounty. Your wallet shows the destination and gas.`
-          : `Claim this work with a ${Number(item.claim_bond) / 1e6} USDC bond. Your wallet shows the exact bond and gas.`);
+        find("[data-action-review]").hidden = (intent.status !== "review_required" && !record.submissionRequest && !record.sponsoredRequest?.signature) || intent.action === "verify" || Boolean(record.finalHash || record.sending);
+        put("[data-review-summary]", intent.action === "complete" ? "Review the exact public artifact and evidence, then sign your submission. Agent Bounties pays gas."
+          : intent.action === "fund" ? `Contribute exactly ${intent.amount_base_units / 1e6} USDC to this bounty. Sign the exact contribution; Agent Bounties pays gas.`
+          : `Claim this work with a ${Number(item.claim_bond) / 1e6} USDC bond. Sign the exact bond authorization; Agent Bounties pays gas.`);
         find("[data-public-evidence-note]").hidden = intent.action !== "complete";
         put("[data-action-details]", JSON.stringify(intent.details, null, 2));
         const help = new URL("onramp.html", win.location.href);
@@ -138,6 +185,14 @@
       put("[data-step-title]", recovery ? "Review recovery" : item.status === "paid" ? "Canonical result" : item.status === "claimed" ? "Track the agreed work" : item.status === "submitted" ? "Verification in progress" : "Review the next step");
       put("[data-step-summary]", recovery ? recovery.instructions : item.verification_ready ? "Your AI can read the exact requirements and prepare the next action."
         : item.verification_readiness_reason || "The verifier is not ready. Do not commit to new work yet.");
+      if (reviewVisit && !intentId) {
+        const review = verifierReviewState(item);
+        put("[data-step-title]", review.title);
+        put("[data-step-summary]", review.summary);
+        put("[data-work-deadline]", review.deadline);
+        find("[data-work-prepare]").hidden = true;
+        find("[data-work-evidence]").parentElement.open = true;
+      }
       put("[data-work-evidence]", JSON.stringify({ verification: terms.verification_policy, benchmark: terms.benchmark, evidence_schema: terms.evidence_schema, events, jobs }, null, 2));
       const next = paidEvent ? null
         : item.status === "paid" ? { action: "show_canonical_result", instructions: "Show the recorded settlement and its actual recipient. This is not a claim that the current person earned money unless their wallet and submission are matched." }
@@ -147,7 +202,9 @@
         : item.status === "claimed" && ownsClaim ? { action: "complete_agreed_work", instructions: "Use the current assistant's execution tools to complete and test the exact accepted work. Prepare action complete with the public artifact and evidence when it passes. No permission is needed for routine preparation." }
         : item.status === "claimed" ? { action: "track_claimed_work", instructions: "This work is reserved by the displayed claim owner. Track that solver's progress; do not start duplicate work or represent the claim as yours without matching the person's wallet." }
         : item.status === "submitted" && terms.benchmark?.engine === "creator_review_v1" ? { tool: "agent_bounties_get_creator_review", input: {}, instructions: "The creator signs the verdict. Prepare their assessment only after examining the exact submitted artifacts; a solver cannot approve their own payment." }
-        : item.status === "submitted" ? { action: "continue_committed_verification", instructions: "Read the returned verification job. Execute its exact committed flow through an available interface, or wait for the committed verifier. Do not ask for a new approval just to check status." }
+        : item.status === "submitted" ? { action: "continue_committed_verification", instructions: reviewVisit
+          ? "Read the current submission evidence and committed verification policy. Check that the person's wallet is a designated verifier before preparing their verdict; this URL grants no authority. Use the committed verification flow and first-party signing pages."
+          : "Read the returned verification job. Execute its exact committed flow through an available interface, or wait for the committed verifier. Do not ask for a new approval just to check status." }
         : { action: "review_current_requirements", instructions: "Resolve the listed prerequisites before preparing a claim. If posting, wait for a solver or continue preparing an authorized contribution." };
       return { bounty_contract: contract, bounty_id: item.bounty_id, status: item.status, terms, events, claim_owner: claimOwner, claim_owned_by_review_wallet: ownsClaim, verification_jobs: jobs,
         action: intent, paid: Boolean(paidEvent), payment_evidence: paidEvent || null, wallet_connected: Boolean(wallet), poll_after_seconds: 15, evidence_boundary: flow.BOUNDARY,
@@ -176,31 +233,56 @@
       put("[data-work-status]", "Submission confirmed and evidence published. The committed verifier can now check your work.");
       return { status: "evidence_published", paid: false, next_action: "Read the committed verifier job and continue its exact verification flow.", user_confirmation_required: false };
     }
+    let loginToken = null;
+    async function claimRequest(body) {
+      try { return await client.request("/v1/base/autonomous-bounties/claims", body, {account:!loginToken,token:loginToken}); }
+      catch (error) {
+        if (![401,403].includes(error.status) || !win.AgentBountiesWalletSession) throw error;
+        if (loginToken) win.AgentBountiesWalletSession.clear(win);
+        put("[data-wallet-status]", "Confirm a 15-minute wallet login. This message cannot move funds; the bond uses a separate exact authorization.");
+        loginToken = await win.AgentBountiesWalletSession.authenticate(win, provider, wallet, client.request, flow.apiBase(win.location));
+        return client.request("/v1/base/autonomous-bounties/claims",body,{token:loginToken});
+      }
+    }
     async function prepareWallet() {
-      if (!intent || intent.status !== "review_required" || record.finalHash || record.sending) throw new Error("Refresh the current confirmation before preparing another wallet request.");
-      if (record.calls && record.wallet) {
-        if (record.wallet !== wallet) throw new Error("Reconnect the wallet used for this pending review.");
-        calls = record.calls; submission = record.submission;
+      if (!intent || record.finalHash || record.sending) throw new Error("Refresh the current confirmation before preparing another wallet request.");
+      if (record.wallet && record.wallet !== wallet) throw new Error("Reconnect the wallet used for this pending review.");
+      if (record.submissionRequest || record.sponsoredRequest?.signature) {
+        calls = []; submission = record.submission;
         find("[data-wallet-confirm]").disabled = false;
-        put("[data-wallet-status]", "Your existing wallet step is restored. Confirm to continue from the last transaction without repeating it.");
+        put("[data-wallet-status]", "Your signed request is preserved. Continue with the same signature; Agent Bounties pays gas.");
         return;
       }
+      if (intent.status !== "review_required") throw new Error("Refresh the current action before preparing a new signature.");
+      if (record.pendingHash && !await receipt(record.pendingHash)) throw new Error("Your previous wallet transaction is still pending. Reconcile it before preparing another request.");
+      const actionKey = { solve: "claim", fund: "contribution", complete: "submission" }[intent.action];
+      const gas = await client.request("/v1/base/gas-sponsorship");
+      if (!actionKey || gas?.[actionKey]?.available !== true || gas[actionKey].customer_gas_wei !== "0") throw new Error("Gas sponsorship is temporarily unavailable. Keep this review and retry; no paid wallet transaction is needed.");
       if (intent.action === "solve") {
-        const plan = await client.request("/v1/base/autonomous-bounties/claim-plan", { network, bounty_contract: contract, solver: wallet });
-        if (plan.network?.chain_id !== 8453 || lower(plan.bounty_contract) !== contract || String(plan.claim_bond) !== String(item.claim_bond)) throw new Error("Claim terms changed. Refresh and review the current bond.");
-        calls = plan.wallet_calls;
+        const body = { idempotency_key: `participate:${intentId}:${wallet}`, network, bounty_contract: contract, solver_wallet: wallet, request_bond_sponsorship: false };
+        const plan = await claimRequest(body);
+        if (plan.schema_version !== "agent-bounties/agent-native-claim-v1" || plan.candidate?.network !== network
+          || lower(plan.candidate.bounty_contract) !== contract || lower(plan.candidate.solver_wallet) !== wallet
+          || String(plan.claim_bond) !== String(item.claim_bond)) throw new Error("Claim terms changed. Refresh and review the current bond.");
+        if (plan.claim_transaction_hash) { record.wallet = wallet; acceptClaim(plan); await refresh(); return; }
+        validateTransferSignature(plan.signing_payload, { contract, wallet, amount: item.claim_bond }, evm);
+        record.sponsoredRequest = { action: "solve", body, typed: plan.signing_payload };
       } else if (intent.action === "fund") {
-        const plan = await client.request("/v1/base/autonomous-bounties/contribution-plan", { network, contribution: { bounty_contract: contract, contributor: wallet, amount: { amount: intent.amount_base_units, currency: "usdc" } } });
+        const contribution = { bounty_contract: contract, contributor: wallet, amount: { amount: intent.amount_base_units, currency: "usdc" },
+          authorization_nonce: evm.randomBytes32(), authorization_valid_before: Math.floor(Date.now() / 1000) + 1800 };
+        const plan = await client.request("/v1/base/autonomous-bounties/contribution-plan", { network, contribution });
         if (plan.network?.chain_id !== 8453) throw new Error("The funding plan uses another chain.");
-        calls = plan.wallet_calls;
+        validateTransferSignature(plan.eip3009_authorization, { contract, wallet, amount: intent.amount_base_units, nonce: contribution.authorization_nonce, expiry: contribution.authorization_valid_before }, evm);
+        record.sponsoredRequest = { action: "fund", body: { network, contribution }, typed: plan.eip3009_authorization };
       } else if (intent.action === "complete") {
         submission = await client.request("/v1/base/autonomous-bounties/submission-preparation", { network, bounty_contract: contract, solver_wallet: wallet, ...intent.details });
         validateSubmission(submission, intent.details, contract, wallet, item.bounty_id);
-        calls = [await client.request("/v1/base/autonomous-bounties/submission-plan", { network, bounty_contract: contract, solver: wallet, submission_hash: submission.submission_hash, evidence_hash: submission.evidence_hash })];
+        validateSubmissionSignature(submission, contract, wallet);
       } else throw new Error("The committed verifier handles this step. Refresh verification status.");
-      validateCalls(calls, { action: intent.action, contract, wallet, amount: intent.action === "fund" ? intent.amount_base_units : item.claim_bond, submission }, evm);
-      record.calls = calls; record.wallet = wallet; record.submission = submission; saveRecord();
-      put("[data-wallet-status]", `Ready on Base: ${wallet}. ${calls.length} wallet confirmation${calls.length === 1 ? "" : "s"}; only the exact displayed amount is authorized.`);
+      calls = []; record.calls = []; record.wallet = wallet; record.submission = submission;
+      record.reviewedIntent = { action: intent.action, network, bounty_contract: contract, details: intent.details, amount_base_units: intent.amount_base_units };
+      saveRecord();
+      put("[data-wallet-status]", "Sign the exact action once. Agent Bounties pays the network fee.");
       find("[data-wallet-confirm]").disabled = false;
     }
     const providers = [];
@@ -239,61 +321,76 @@
       if (result.status !== "0x1") throw new Error("The transaction reverted. Refresh the bounty before trying again.");
       return true;
     }
+    async function relaySubmission() {
+      if (!record.submissionRequest) {
+        const typed = validateSubmissionSignature(submission, contract, wallet);
+        const m = typed.message;
+        const signature = await provider.request({ method: "eth_signTypedData_v4", params: [wallet, JSON.stringify(typed)] });
+        if (!/^0x(?:[0-9a-f]{2}){1,4096}$/i.test(signature)) throw new Error("The wallet returned an invalid or oversized signature. No relay was requested.");
+        record.submissionRequest = { network, signature, submission: { bounty_contract: contract, bounty_id: m.bountyId, solver: wallet, round: Number(m.round),
+          submission_hash: m.submissionHash, evidence_hash: m.evidenceHash, policy_hash: m.policyHash, deadline: Number(m.deadline) } };
+        record.submission = submission; saveRecord();
+      }
+      const result = await client.request("/v1/base/autonomous-bounties/submission-relay", record.submissionRequest);
+      const r = record.submissionRequest.submission;
+      if (result.schema !== "agent-bounties/sponsored-submission-v1" || result.network !== network || lower(result.bounty_contract) !== contract
+        || lower(result.bounty_id) !== lower(r.bounty_id) || lower(result.solver) !== wallet || result.round !== r.round
+        || lower(result.submission_hash) !== lower(r.submission_hash) || lower(result.evidence_hash) !== lower(r.evidence_hash)
+        || result.customer_gas_wei !== "0" || result.solver_paid !== false
+        || result.transaction_hash && !HASH.test(result.transaction_hash)) throw new Error("The sponsor returned a different submission. Keep the signed request and reconcile; do not sign another.");
+      if (!result.transaction_hash) throw new Error("Your exact submission is reserved. Retry this same signed request to check progress; no new signature is needed.");
+      record.finalHash = result.transaction_hash; saveRecord();
+      put("[data-work-status]", "Submission relayed with platform gas. Checking canonical confirmation.");
+    }
+    function acceptClaim(result) {
+      if (result.schema_version !== "agent-bounties/agent-native-claim-v1" || result.candidate?.network !== network
+        || lower(result.candidate.bounty_contract) !== contract || lower(result.candidate.solver_wallet) !== record.wallet
+        || String(result.claim_bond) !== String(item.claim_bond)
+        || result.claim_transaction_hash && !HASH.test(result.claim_transaction_hash)) throw new Error("The sponsor returned a different claim. Keep this request and reconcile.");
+      if (result.claim_transaction_hash) { record.finalHash = result.claim_transaction_hash; saveRecord(); }
+    }
+    async function relayFundingOrClaim() {
+      const request = record.sponsoredRequest;
+      if (!request.signature) {
+        const amount = request.action === "fund" ? request.body.contribution.amount.amount : item.claim_bond;
+        validateTransferSignature(request.typed, { contract, wallet, amount }, evm);
+        request.signature = await provider.request({ method: "eth_signTypedData_v4", params: [wallet, JSON.stringify(request.typed)] });
+        if (!/^0x[0-9a-f]{130}$/i.test(request.signature)) { delete request.signature; throw new Error("The wallet returned no usable signature. No relay was requested."); }
+        saveRecord();
+      }
+      if (request.action === "solve") {
+        acceptClaim(await claimRequest({ ...request.body, wallet_signature: request.signature }));
+      } else {
+        const result = await client.request("/v1/base/autonomous-bounties/contribution-relay", { ...request.body, signature: request.signature });
+        const r = result.relay;
+        if (result.schema !== "agent-bounties/sponsored-contribution-v1" || result.customer_gas_wei !== "0" || result.solver_paid !== false
+          || r?.network !== network || lower(r.bountyContract) !== contract || lower(r.contributor) !== record.wallet
+          || String(r.amount) !== String(request.body.contribution.amount.amount)
+          || r.transaction && !HASH.test(r.transaction)) throw new Error("The sponsor returned a different contribution. Keep the signed request and reconcile.");
+        if (r.transaction) { record.finalHash = r.transaction; saveRecord(); }
+      }
+      if (!record.finalHash) throw new Error("Your signed request is reserved. Continue this same request to check progress; no new signature is needed.");
+    }
     find("[data-wallet-confirm]").addEventListener("click", async (event) => {
       if (!event.isTrusted || busy || !calls || !wallet || !intent) return;
       busy = true; find("[data-wallet-confirm]").disabled = true;
       try {
         if (record.finalHash || record.sending) throw new Error("A wallet submission has already started. Refresh its status or inspect the wallet; do not send a duplicate.");
-        if (record.pendingHash) {
-          if (!await receipt(record.pendingHash)) throw new Error("Your transaction is still pending. Wait; do not sign it again.");
-          record.pendingHash = null; record.next = (record.next || 0) + 1; saveRecord();
-        }
+        if (record.submissionRequest) { await relaySubmission(); await refresh(); return; }
+        if (record.sponsoredRequest?.signature) { await relayFundingOrClaim(); await refresh(); return; }
         const accounts = await provider.request({ method: "eth_accounts" });
-        if (lower(accounts[0]) !== wallet || await provider.request({ method: "eth_chainId" }) !== "0x2105") throw new Error("Your wallet or network changed. Connect again to prepare an exact review.");
+        if (lower(accounts[0]) !== wallet || lower(await provider.request({ method: "eth_chainId" })) !== "0x2105") throw new Error("Your wallet or network changed. Connect again to prepare an exact review.");
         intent = await client.progress(intentId);
-        if (intent.status !== "review_required" || lower(intent.bounty_contract) !== contract) throw new Error("This action has changed or is already pending. Refresh progress instead of signing again.");
+        const current = { action: intent.action, network: intent.network, bounty_contract: lower(intent.bounty_contract), details: intent.details, amount_base_units: intent.amount_base_units };
+        if (intent.status !== "review_required" || stable(current) !== stable(record.reviewedIntent)) throw new Error("This action has changed or is already pending. Refresh progress instead of signing again.");
         const legal = { solve: "claim_bounty", fund: "fund_bounty", complete: "submit_result" }[intent.action];
         const acceptance = await win.AgentBountiesLegal.requireAcceptance({ action: legal, walletAddress: wallet });
         if (!acceptance.durable) throw new Error("The agreement could not be recorded. Retry when the service is available; no transaction was sent.");
-        validateCalls(calls, { action: intent.action, contract, wallet, amount: intent.action === "fund" ? intent.amount_base_units : item.claim_bond, submission }, evm);
-        for (let index = record.next || 0; index < calls.length; index++) {
-          const current = await client.progress(intentId);
-          if (current.status !== "review_required" || current.network !== network || lower(current.bounty_contract) !== contract
-            || current.action !== intent.action || stable(current.details) !== stable(intent.details) || current.amount_base_units !== intent.amount_base_units) throw new Error("The review expired or changed. Reconcile the current wallet step before continuing.");
-          const call = calls[index];
-          record.sending = true; saveRecord();
-          let hash;
-          try { hash = await provider.request({ method: "eth_sendTransaction", params: [{ from: wallet, to: call.to, data: call.data, value: "0x0" }] }); }
-          catch (error) {
-            if (error.code === 4001) { record.sending = false; saveRecord(); }
-            throw error;
-          }
-          if (!HASH.test(hash)) throw new Error("The wallet returned no valid transaction hash. Inspect the wallet before retrying.");
-          record.sending = false; record.pendingHash = hash; record.lastHash = hash; record.next = index; record.submission = submission;
-          if (index === calls.length - 1) record.finalHash = hash;
-          saveRecord();
-          if (index === calls.length - 1) {
-            await client.request(`/v1/chatgpt/action-intents/${intentId}/observations`, { transaction_hash: hash, bounty_contract: contract, actor_wallet: wallet });
-            record.observed = true; saveRecord();
-            put("[data-work-status]", "Sent. Your AI will check confirmation; no new signature is needed.");
-            break;
-          }
-          // Continue the already-confirmed sequence once the token approval lands.
-          // Only an unusually long pending approval needs a later resume click.
-          let mined = await receipt(hash);
-          for (let attempt = 0; !mined && attempt < 10; attempt++) {
-            put("[data-wallet-status]", "Waiting for token approval. The wallet will show the final action next; no extra chat approval is needed.");
-            await new Promise((resolve) => win.setTimeout(resolve, 2000));
-            mined = await receipt(hash);
-          }
-          if (!mined) throw new Error("Token approval is still pending. Resume with Confirm in wallet after it confirms; the approval will not repeat.");
-          const currentAccounts = await provider.request({ method: "eth_accounts" });
-          if (lower(currentAccounts[0]) !== wallet || lower(await provider.request({ method: "eth_chainId" })) !== "0x2105") throw new Error("The wallet changed while approval was pending. Reconnect the original wallet to continue.");
-          record.pendingHash = null; record.next = index + 1; saveRecord();
-        }
+        if (intent.action === "complete") await relaySubmission();
+        else await relayFundingOrClaim();
         await refresh();
       } catch (error) { message(error); }
-      finally { busy = false; find("[data-wallet-confirm]").disabled = intent?.status !== "review_required" || Boolean(record.finalHash || record.sending); }
+      finally { busy = false; find("[data-wallet-confirm]").disabled = Boolean(record.finalHash || record.sending) || intent?.status !== "review_required" && !record.submissionRequest && !record.sponsoredRequest?.signature; }
     });
     find("[data-work-prepare]").addEventListener("click", async (event) => {
       if (!event.isTrusted) return;
@@ -305,7 +402,7 @@
     find("[data-work-refresh]").addEventListener("click", () => refresh().catch(message));
     win.AgentBountiesParticipation = Object.freeze({ refresh, publishEvidence, prepareRecovery });
     try { await refresh(); } catch (error) { message(error); }
-    win.setInterval(() => { if (!doc.hidden && !busy && intentId) refresh().catch(message); }, 15000);
+    win.setInterval(() => { if (!doc.hidden && !busy && (intentId || reviewVisit)) refresh().catch(message); }, 15000);
   }
-  return { validateCalls, validateSubmission, recoveryStatus, start };
+  return { validateCalls, validateSubmission, validateSubmissionSignature, validateTransferSignature, recoveryStatus, verifierReviewState, start };
 });

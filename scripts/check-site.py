@@ -21,6 +21,8 @@ CANONICAL_PAGES = {
     "leaderboard.html": "https://agentbounties.app/leaderboard.html",
     "competition.html": "https://agentbounties.app/competition.html",
     "participate.html": "https://agentbounties.app/participate.html",
+    "creator-open.html": "https://agentbounties.app/creator-open.html",
+    "setup.html": "https://agentbounties.app/setup.html",
     "funded.html": "https://agentbounties.app/funded.html",
     "submissions.html": "https://agentbounties.app/submissions.html",
     "recover-bounty.html": "https://agentbounties.app/recover-bounty.html",
@@ -123,8 +125,18 @@ REQUIRED_FILES = {
     "meta-child.js",
     "webmcp.js",
     "participate.js",
+    "wallet-session.js",
+    "creator-open-core.js",
+    "sponsored-setup-core.js",
+    "sponsored-setup.js",
+    "creator-open-workspace.js",
+    "github-origin.js",
+    "creator-push.js",
+    "creator-push-sw.js",
     "earn.html",
     "participate.html",
+    "creator-open.html",
+    "creator-open.css",
     "about.css",
     "about.html",
     "blog/agentic-economy-needs-a-market-for-work.html",
@@ -144,6 +156,7 @@ REQUIRED_FILES = {
     "posting-workspace.css",
     "creator-review.js",
     "creator-review-workspace.js",
+    "review-deadline.js",
     "authorize.html",
     "authorize.js",
     "bounty-chat-controls.css",
@@ -203,14 +216,15 @@ REQUIRED_FILES = {
     "x402-test-vectors.json",
 }
 ALLOWED_UI_CODE = {
-    "check-work.js",
-    "check-work.css",
-    "submissions-evidence.js",
+    "creator-open.css",
     "creator-awards.js",
     "creator-awards.css",
     "bounty-recovery.js",
     "bounty-recovery-page.js",
     "bounty-recovery.css",
+    "check-work.js",
+    "check-work.css",
+    "submissions-evidence.js",
     "forest-ui.css",
     "forest-theme.js",
     "forest-home.js",
@@ -237,6 +251,7 @@ ALLOWED_UI_CODE = {
     "posting-workspace.css",
     "creator-review.js",
     "creator-review-workspace.js",
+    "review-deadline.js",
     "meta-child.js",
     "about.css",
     "ai-bounty-handoff.css",
@@ -256,6 +271,14 @@ ALLOWED_UI_CODE = {
     "marketplace-workflow.js",
     "webmcp.js",
     "participate.js",
+    "wallet-session.js",
+    "creator-open-core.js",
+    "sponsored-setup-core.js",
+    "sponsored-setup.js",
+    "creator-open-workspace.js",
+    "github-origin.js",
+    "creator-push.js",
+    "creator-push-sw.js",
     "evm.js",
     "guild-pages.css",
     "guild-shell.js",
@@ -646,7 +669,7 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
             "data-card-verifier",
             "function renderVerifierTerms",
             "if (!ui.verifierSummary || !ui.verifier) return;",
-            'bounty-composer-v2.js?v=26',
+            'bounty-composer-v2.js?v=30',
             "function verificationReadiness",
             "verificationReadiness(benchmark, state.draft?.evidence_schema)",
             'sourceSnapshotDigest.pattern === "^sha256:[0-9a-f]{64}$"',
@@ -683,8 +706,8 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
         [
             'data-post-auth-start',
             'posting-auth.js?v=3',
-            'solarpunk-home.js?v=28',
-            'bounty-composer-v2.js?v=26',
+            'solarpunk-home.js?v=29',
+            'bounty-composer-v2.js?v=30',
             'label: "LOG IN TO POST"',
             'credentials: "include"',
             'account_status === "ready" && payload.account_complete === true',
@@ -1052,7 +1075,7 @@ def check_transactional_handoffs(site_dir: Path) -> None:
             "topup-guide.css",
             "Buying crypto does not fund the bounty.",
             "ETH on Base for network fees",
-            "New-bounty creation is not gas-sponsored",
+            "Signed new-bounty creation uses platform-paid gas",
         ],
     )
     onramp_js = (site_dir / "moonpay-onramp.js").read_text(encoding="utf-8")
@@ -1060,7 +1083,7 @@ def check_transactional_handoffs(site_dir: Path) -> None:
         "moonpay-onramp.js",
         onramp_js,
         [
-            "New-bounty creation cannot proceed",
+            "Signed creation uses platform-paid gas",
             'if (provider === "moonpay") throw new Error',
             'body.environment !== "live"',
             'body.destination_network !== "base-mainnet"',
@@ -1364,7 +1387,7 @@ def main() -> int:
     recovery_node = shutil.which("node")
     if not recovery_node:
         fail("Node.js is required for the recovery safety checks")
-    subprocess.run([recovery_node, "--test", str(repo_root / "scripts/test-bounty-recovery.cjs"), str(repo_root / "scripts/test-creator-awards.js")], check=True)
+    subprocess.run([recovery_node, "--test", str(repo_root / "scripts/test-bounty-recovery.cjs"), str(repo_root / "scripts/test-creator-awards.js"), str(repo_root / "scripts/test-sponsored-setup.cjs")], check=True)
     for relative in sorted(REQUIRED_FILES | EXPECTED_SCENE_ASSETS):
         if not (site_dir / relative).exists():
             fail(f"missing required site file: {relative}")

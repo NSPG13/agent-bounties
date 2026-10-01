@@ -253,6 +253,7 @@
 
   function renderFundingGuide() {
     window.AgentBountiesFundingGuide?.render({
+      gasSponsored: state.gasSponsored === true,
       account: state.account, connected: Boolean(state.provider), balances: state.balances,
       connecting: walletConnecting, busy: postingBusy, approved: state.approved,
       recorded: Boolean(postingJournal.load()), continuable: postingSession.canContinue(),
@@ -293,7 +294,12 @@
 
   function syncPrimaryAction() {
     if (!state.approved) ui.fundNow.disabled = true;
-    if (!state.draft || !state.imageReady) return;
+    if (!state.draft || !state.imageReady || state.reviewStale) {
+      ui.approve.disabled = true; ui.fund.disabled = true;
+      ui.approve.dataset.nextAction = "blocked";
+      setStatus(!state.draft ? "Prepare a proposal before approving." : state.reviewStale ? "Your brief changed. Update the proposal, then review its new terms." : state.imageError || "The bounty image is still loading. Approval will be available when the complete card is ready.", state.imageError ? "error" : "pending");
+      return;
+    }
     const action = postingPrimaryAction(state.postingAccountStatus, state.handoffReview);
     if (action.action !== "approve") {
       ui.approve.dataset.nextAction = action.action;
@@ -536,6 +542,9 @@
   async function requestJson(url, options = {}) {
     const acceptance = window.AgentBountiesLegal && window.AgentBountiesLegal.latestReceipt();
     const response = await fetch(url, {
+      credentials: "include",
+      cache: "no-store",
+      referrerPolicy: "no-referrer",
       ...options,
       headers: {
         "content-type": "application/json",
@@ -549,12 +558,22 @@
       try { body = JSON.parse(text); } catch (_error) { body = text; }
     }
     if (!response.ok) {
-      const message = typeof body === "string"
+      const guidance = {
+        401: "Sign in again to continue. Your prepared draft is still in this tab.",
+        403: "Use the account that owns this work and verify its wallet before continuing.",
+        404: "This work is unavailable to your current account.",
+        409: "This request conflicts with an existing result. Refresh its status before trying again.",
+        410: "Prepare the content in your own AI tool, then paste it here for review.",
+        429: "You have reached the current request limit. Keep your draft and try again later.",
+      };
+      const message = guidance[response.status] || (typeof body === "string"
         ? body
         : body && (body.message || body.error)
           ? body.message || body.error
-          : `Request failed (${response.status}).`;
-      throw new Error(message);
+          : `Request failed (${response.status}).`);
+      const error = new Error(message);
+      error.status = response.status;
+      throw error;
     }
     return body;
   }
@@ -569,32 +588,8 @@
   }
 
   async function generateInitialDraft() {
-    ui.submit.disabled = true;
-    ui.input.disabled = true;
-    setStatus("The AI is turning your words into clear, measurable terms…", "pending");
-    try {
-      const readiness = await requestJson(`${API}/v1/cloud-agent/readiness`, { cache: "no-store" });
-      if (!readiness.available || !readiness.public_drafts) throw new Error("The AI composer is temporarily unavailable. Nothing was posted or funded.");
-      const draft = await requestJson(`${API}/v1/cloud-agent/bounty-drafts`, {
-        method: "POST",
-        body: JSON.stringify({
-          objective: state.originalRequest,
-          context: draftContext(),
-          constraints: [],
-          source_url: null,
-          idempotency_key: `web-card:${randomBytes32().slice(2)}`,
-        }),
-      });
-      state.initialDraft = normalizeDraft(draft);
-      state.draft = state.initialDraft;
-      state.aiRounds += 1;
-      queueQuestions(state.draft.questions);
-      advanceConversation();
-    } catch (error) {
-      setStatus(error.message || String(error), "error");
-      ui.input.disabled = false;
-      ui.submit.disabled = false;
-    }
+    requestUserOwnedAi(state.originalRequest, { context: draftContext() });
+    setStatus("Continue in your own AI account, then return with the draft.");
   }
 
   function normalizeDraft(draft) {
@@ -749,36 +744,12 @@
   }
 
   async function buildMissionPlan() {
-    ui.input.disabled = true;
-    ui.submit.disabled = true;
-    setStatus("The AI is breaking the mission into definite, verifiable tasks…", "pending");
-    try {
-      const plan = await requestJson(`${API}/v1/cloud-agent/objective-plans`, {
-        method: "POST",
-        body: JSON.stringify({
-          objective: state.originalRequest,
-          context: [
-            `Clarified draft: ${state.initialDraft.goal}`,
-            `Mission horizon: ${state.horizon.label}`,
-            ...state.context,
-            "Break this mission into independent public digital tasks. Each task must have a definite inspectable artifact and binary acceptance criteria. No individual task should require more than 30 days once claimed.",
-          ].join("\n").slice(0, 16_000),
-          constraints: ["Each task must be bounded, measurable, and independently fundable."],
-          max_tasks: MAX_PLAN_TASKS,
-          solver_budget_usdc: null,
-          source_url: null,
-          idempotency_key: `web-mission:${randomBytes32().slice(2)}`,
-        }),
-      });
-      state.missionPlan = plan;
-      state.selectedTaskId = plan.tasks[0].task_id;
-      state.draft = draftFromTask(plan.tasks[0]);
-      askTaskWindow();
-    } catch (error) {
-      setStatus(error.message || String(error), "error");
-      ui.input.disabled = false;
-      ui.submit.disabled = false;
-    }
+    requestUserOwnedAi(state.originalRequest, {
+      context: state.context,
+      mission_horizon: state.horizon?.label,
+      instruction: "Break this objective into small, independently reviewable tasks with clear acceptance criteria.",
+    });
+    setStatus("Ask your own AI to prepare the task plan, then return with a draft.");
   }
 
   function draftFromTask(task) {
@@ -1113,6 +1084,8 @@
     state.phase = "review";
     state.approved = false;
     state.imageReady = false;
+    state.imageError = null;
+    document.querySelector("[data-retry-posting-image]")?.remove();
     setProgress("review");
     renderCardText();
     renderMissionPlan();
@@ -1132,7 +1105,17 @@
         "pending",
       );
     }
-    await renderAiVisualForCurrentDraft();
+    try { await renderAiVisualForCurrentDraft(); }
+    catch (error) {
+      state.imageError = `${error.message || "The approved image could not be loaded."} Use Retry image to load this same image again.`;
+      const retry = document.createElement("button"); retry.type = "button"; retry.dataset.retryPostingImage = ""; retry.textContent = "Retry image";
+      ui.imageStatus.after(retry);
+      retry.addEventListener("click", async () => {
+        retry.disabled = true;
+        await renderPreview();
+        state.approved = await postingSession.approved(); syncPrimaryAction();
+      });
+    }
     syncPrimaryAction();
   }
 
@@ -1193,32 +1176,7 @@
     };
   }
 
-  async function requestVisualSpecForTask(task) {
-    const cached = state.visualCache.get(task.task_id);
-    if (cached) return cached;
-    try {
-      const visualDraft = await requestJson(`${API}/v1/cloud-agent/bounty-drafts`, {
-        method: "POST",
-        body: JSON.stringify({
-          objective: task.goal,
-          context: draftContext([
-            `Mission: ${state.missionPlan.title}`,
-            `Selected task: ${task.title}`,
-            `Fixed acceptance criteria: ${task.acceptance_criteria.join(" | ")}`,
-            "Do not ask questions. Preserve the selected task. The only extra work is the bounded visual annotation.",
-          ].join("\n")),
-          constraints: task.acceptance_criteria,
-          source_url: null,
-          idempotency_key: `web-task-visual:${task.task_id}:${randomBytes32().slice(2)}`,
-        }),
-      });
-      const spec = extractVisualSpec(visualDraft);
-      if (spec) state.visualCache.set(task.task_id, spec);
-      return spec;
-    } catch (_error) {
-      return null;
-    }
-  }
+
 
   async function renderAiVisualForCurrentDraft() {
     if (state.bountyImage) {
@@ -1234,10 +1192,6 @@
     ui.imageStatus.textContent = "Preparing visual…";
     ui.imageStatus.dataset.tone = "";
     let spec = extractVisualSpec(state.draft);
-    if (!spec && state.scope === "mission") {
-      const task = selectedTask();
-      if (task) spec = await requestVisualSpecForTask(task);
-    }
     if (spec) {
       state.visualSpec = spec;
       state.visualSource = "ai";
@@ -1288,14 +1242,16 @@
     image.crossOrigin = "anonymous";
     image.decoding = "async";
     image.alt = imageReference.alt_text;
+    let timeout;
     const loaded = new Promise((resolve, reject) => {
+      timeout = window.setTimeout(() => { image.src = ""; reject(new Error("Loading the approved image timed out.")); }, 15000);
       image.addEventListener("load", resolve, { once: true });
       image.addEventListener("error", () => reject(new Error(
         "The approved ChatGPT image could not be loaded. Nothing was replaced or published."
       )), { once: true });
     });
     image.src = imageReference.asset_url;
-    await loaded;
+    try { await loaded; } finally { window.clearTimeout(timeout); }
     canvas.width = 1200;
     canvas.height = 675;
     canvas.setAttribute("aria-label", imageReference.alt_text);
@@ -1623,10 +1579,12 @@
   }
 
   async function approveCard() {
-    if (!state.imageReady) return;
+    if (!state.imageReady) { setStatus("The bounty image is still loading. Wait for the complete review card before approving.", "pending"); return; }
+    if (state.reviewStale) { setStatus("The brief changed. Update and review the proposal before approving.", "pending"); return; }
     if (state.postingAccountStatus !== "ready") { beginPostingLogin(); return; }
     try { supportedVerificationPolicy(); } catch (error) { setStatus(error.message, "error"); return; }
-    await postingSession.approve();
+    try { await postingSession.refresh(); await postingSession.approve(); }
+    catch (error) { setStatus(error.message || "Approval could not be saved. Review the saved draft and retry.", "error"); return; }
     state.approved = true;
     ui.approve.dataset.approved = "true";
     ui.approve.textContent = state.handoffReview ? "Confirmed ✓" : "Approved ✓";
@@ -1726,7 +1684,7 @@
       const destination = new URL("onramp.html", window.location.href);
       destination.searchParams.set("purpose", "post");
       destination.searchParams.set("amount", formatUsdc(state.fundingUsdc));
-      if (state.balances && state.balances.usdc >= state.balances.required && state.balances.eth === 0n) destination.searchParams.set("asset", "eth");
+
       destination.searchParams.set("return", back.href);
       if (operation) destination.searchParams.set("operation_id", operation);
       if (state.account) destination.searchParams.set("wallet", state.account);
@@ -1895,32 +1853,38 @@
       if (priorConsent) { legalCheckbox.checked = true; legalCheckbox.disabled = true; }
       else if (legalCheckbox.disabled) { legalCheckbox.checked = false; legalCheckbox.disabled = false; }
     }
+    let sponsorship;
+    try { sponsorship = await requestJson(`${API}/v1/base/gas-sponsorship`, { cache: "no-store" }); } catch (_) { sponsorship = null; }
+    if (!current()) return;
+    state.gasSponsored = sponsorship?.schema === "agent-bounties/gas-sponsorship-v1" && sponsorship.network === "base-mainnet" && sponsorship.creation?.available === true && !state.metaParent;
     const required = usdcBaseUnits(state.fundingUsdc), { usdc, eth } = balances;
     state.balances = { ...balances, required };
-    const usdcReady = usdc >= required, gasAvailable = eth > 0n;
+    const usdcReady = usdc >= required, gasAvailable = state.gasSponsored;
     ui.account.textContent = `${account.slice(0,8)}…${account.slice(-6)}`;
     ui.usdcBalance.textContent = `${window.AgentBountiesFundingReadiness.formatUnits(usdc)} USDC`;
     ui.ethBalance.textContent = `${window.AgentBountiesFundingReadiness.formatUnits(eth, 18, 8)} ETH`;
     ui.requiredUsdc.textContent = `${formatUsdc(state.fundingUsdc)} USDC`;
     ui.readiness.hidden = false; ui.fundingHelp.hidden = usdcReady && gasAvailable;
     ui.missingUsdc.textContent = `${window.AgentBountiesFundingReadiness.formatUnits(required > usdc ? required - usdc : 0n)} USDC`;
-    ui.fundNow.disabled = !state.approved || !provider || !usdcReady || !gasAvailable || Boolean(postingJournal.load() && !postingSession.canContinue()) || postingSession.snapshot().conflict;
+    ui.fundNow.disabled = !state.approved || !provider || (!postingSession.canContinue() && (!usdcReady || !gasAvailable || Boolean(postingJournal.load()))) || postingSession.snapshot().conflict;
     ui.fundNow.textContent = postingSession.canContinue() ? "Continue funding" : "Review and post";
-    walletState.textContent = `${connection} · ${usdcReady ? "USDC available" : "USDC shortfall"}. Gas is checked for the exact transaction before sending.`;
+    walletState.textContent = `${connection} · ${usdcReady ? "USDC available" : "USDC shortfall"}. ${gasAvailable ? "Network fees paid by Agent Bounties." : "Gas sponsorship is temporarily unavailable. Recheck to continue; no ETH purchase is required."}`;
     for (const link of ui.onramps) { const url = new URL(link.href); url.searchParams.set("wallet", account); url.searchParams.set("operation_id", window.AgentBountiesWorkflow.createClient(window).load()?.id || ""); link.href = url.href; link.target = "_self"; }
     updatePostingTracker(); updatePostingCost();
     if (!provider) setPaymentStatus("Choose your wallet to connect it. No money will move.", "pending");
-    else if (!usdcReady || !gasAvailable) setPaymentStatus("Top up the displayed shortfall, then return here. Buying funds does not create or fund the bounty.", "pending");
-    else setPaymentStatus("Funds are available. Review and post prepares the exact request and its network fee; you confirm it in your wallet.", "success");
+    else if (postingSession.canContinue()) setPaymentStatus("Your signed request is saved. Continue funding to reconcile this same payment; no additional funds or new authorization are needed to check its status.", "pending");
+    else if (!gasAvailable) setPaymentStatus("Gas sponsorship is unavailable for this operation. Your draft is saved. Recheck to continue; no wallet transaction will be requested.", "error");
+    else if (!usdcReady) setPaymentStatus("Add the displayed Base USDC shortfall, then return here. Agent Bounties pays the network fee.", "pending");
+    else setPaymentStatus("USDC is available. Sign the exact funding authorization in your wallet; Agent Bounties pays all gas for this creation.", "success");
   }
 
   function updatePostingCost(fees = null, request = null) {
     if (state.fundingUsdc == null) return;
     const cost = `Bounty budget — rewards: ${formatUsdc(state.fundingUsdc)} USDC + platform fee: 0.00 USDC.`;
     const debit = request ? ` This request transfers ${window.AgentBountiesFundingReadiness.formatUnits(request.transferUsdcUnits)} USDC.` : "";
-    const gas = fees?.estimatedTotalWei != null
+    const gas = state.gasSponsored ? " Network fee paid by Agent Bounties: 0 ETH charged to you." : fees?.estimatedTotalWei != null
       ? ` Estimated network fee for this request: ${window.AgentBountiesFundingReadiness.formatUnits(fees.estimatedTotalWei, 18, 18)} ETH. Your wallet confirms the final network fee; this is not a guaranteed maximum.`
-      : " Network fee: not yet available for the exact transaction. Creation is not gas-sponsored. Your wallet shows the fee before you send; an unknown fee is never treated as zero.";
+      : " Gas sponsorship is checked before signing. Posting pauses if it is unavailable; you will not be asked to pay gas.";
     for (const selector of ["[data-posting-cost]", "[data-wallet-cost]"]) { const output = document.querySelector(selector); if (output) output.textContent = cost + debit + gas; }
   }
 
@@ -1954,7 +1918,7 @@
   async function watchUsdcAsset(){try{const protocol=await loadProtocol();await state.provider.request({method:"wallet_watchAsset",params:{type:"ERC20",options:{address:protocol.native_usdc,symbol:"USDC",decimals:6}}});setPaymentStatus("Base USDC was offered to the wallet. This does not buy or transfer tokens.","success");}catch(error){setPaymentStatus(error.message||String(error),"error");}}
   async function copyUsdcAddress(){const protocol=await loadProtocol();await navigator.clipboard.writeText(protocol.native_usdc);setPaymentStatus("Base USDC contract address copied. Verify the network and address inside your wallet before acquiring tokens.","success");}
 
-  function signatureParts(signature){const value=String(signature).replace(/^0x/,"");if(value.length!==130)throw new Error("The wallet returned an invalid signature.");return{r:`0x${value.slice(0,64)}`,s:`0x${value.slice(64,128)}`,v:Number.parseInt(value.slice(128,130),16)};}
+  function signatureParts(signature){const value=String(signature).replace(/^0x/,"");if(!/^[0-9a-f]{128}(?:1b|1c|00|01)$/i.test(value))throw new Error("This factory requires an exact 65-byte wallet authorization. A wallet using a longer contract signature needs the open creator-review flow; preserve this request and check its status before changing workflows.");return{r:`0x${value.slice(0,64)}`,s:`0x${value.slice(64,128)}`,v:Number.parseInt(value.slice(128,130),16)};}
   async function sendTransaction(transaction) {
     if (!transaction?.to || !transaction.data || Number(transaction.value_wei || 0) !== 0) throw new Error("The planned transaction is invalid.");
     const continuation = Boolean(state.provider.agentBountiesCapabilities?.reviewedPostingOnly && postingSession.canContinue());
@@ -1969,14 +1933,6 @@
     postingJournal.checkpoint("submitted", hash); await postingSession.flush({ requireServer: true }); return hash;
   }
   async function waitReceipt(hash,timeoutMs=150000){const started=Date.now();while(Date.now()-started<timeoutMs){const receipt=await state.provider.request({method:"eth_getTransactionReceipt",params:[hash]});if(receipt){if(receipt.status!=="0x1")throw new Error(`The Base transaction reverted: ${hash}`);return receipt;}await new Promise((resolve)=>setTimeout(resolve,1600));}throw new Error("The transaction is still pending. Check the wallet or Base explorer before trying again.");}
-  async function isContractAccount() {
-    const code = await state.provider.request({ method: "eth_getCode", params: [state.account, "latest"] });
-    if (code === "0x" || code === "0x0") return false;
-    if (typeof code !== "string" || !/^0x(?:[0-9a-f]{2})+$/i.test(code)) throw new Error("The wallet account type could not be checked. No signature was requested.");
-    // EIP-7702 delegates code but retains the EOA's signing key and transaction
-    // authority. It can use the same bounded USDC authorization as an EOA.
-    return !/^0xef0100[0-9a-f]{40}$/i.test(code);
-  }
   async function sendWalletCalls(calls,protocol){
     postingJournal.checkpoint("sending",null,"wallet_sendCalls");
     await prepareWalletRequest(calls);
@@ -2070,17 +2026,48 @@
       window.location.assign(`funded.html?bountyContract=${encodeURIComponent(state.bountyContract)}&network=base-mainnet${childPlan && state.metaParent?.parent_bounty_contract ? `&parentBounty=${encodeURIComponent(state.metaParent.parent_bounty_contract)}` : ""}`);
   }
 
+  async function relaySignedCreation(api, saved) {
+    const progress = await postingSession.reconcile();
+    if (progress.funding_confirmed) return null;
+    await assertPostingBinding();
+    postingJournal.reserveHostedRelay();
+    await postingSession.flush({ requireServer: true });
+    await assertPostingBinding();
+    setPaymentStatus("Agent Bounties is verifying your signed request on Base and paying the network fee. You do not need ETH.", "pending");
+    const response = await fetch(`${api}/v1/base/autonomous-bounties/creation-relay`, {
+      method: "POST", headers: { "content-type": "application/json" }, cache: "no-store",
+      body: JSON.stringify({ network: "base-mainnet", create: saved.create, signature: signatureParts(saved.signature), authorization_valid_before: saved.authorization_valid_before }),
+    });
+    const result = await response.json().catch(() => ({}));
+    await assertPostingBinding();
+    const hash = result.relay?.transaction;
+    if (hash && /^0x[0-9a-f]{64}$/i.test(hash)) {
+      if (result.schema !== "agent-bounties/sponsored-creation-v1" || result.customer_gas_wei !== "0" || result.relay.network !== "base-mainnet") throw new Error("The relay response does not match platform-paid creation on Base. Preserve this operation for reconciliation.");
+      if (String(result.relay.bountyContract).toLowerCase() !== saved.bounty_contract.toLowerCase()) throw new Error("Relay returned a different bounty. Preserve this operation for reconciliation.");
+      postingJournal.checkpoint("submitted", hash); await postingSession.flush({ requireServer: true });
+      return hash;
+    }
+    if ((saved.authorization_valid_before || saved.create.funding_deadline) * 1000 <= Date.now()) throw new Error("This authorization has expired. Keep the saved operation and reconcile its canonical status; expiry alone does not prove an earlier transaction failed. Do not sign a replacement payment yet.");
+    throw new Error(response.status === 429 ? "The gas sponsor is at capacity. Your signed request is saved; retry the same request shortly."
+      : result.relay?.errorMessage || "Sponsorship is still pending or unavailable. Your signed request is saved. Choose Continue funding to reconcile and retry this same authorization; no new payment authorization is needed.");
+  }
+
   async function continueSignedBounty() {
     if (postingBusy || !state.approved || !state.provider || !state.account) return;
-    if (!state.provider.agentBountiesCapabilities?.reviewedPostingOnly) {
-      setPaymentStatus("Restore the Coinbase wallet that signed this request to continue.", "pending"); return;
-    }
     postingBusy = true; ui.fundNow.disabled = true;
     postingBinding = { provider: state.provider, account: state.account, draft: state.draft,
       envelope: window.AgentBountiesPostingSession.stable(window.AgentBountiesPostingSession.envelope(window.AgentBountiesWorkflow.createClient(window).load())) };
     try {
       await postingSession.refresh(); await assertPostingBinding();
       const saved = await postingSession.loadContinuation();
+      const protocol = await loadProtocol(), api = String(protocol.api_base_url).replace(/\/$/, "");
+      // A lost reply may already have consumed the creator's USDC. Reconcile
+      // before any balance, capacity, expiry or new-consent check.
+      const progress = await postingSession.reconcile();
+      if (progress.funding_confirmed) {
+        await finishPosting(api, { bounty_id: saved.bounty_id, predicted_bounty_contract: saved.bounty_contract }, protocol, null);
+        return;
+      }
       const policy = await window.AgentBountiesLegal.loadPolicy();
       const consent = saved.legal_acceptance;
       if (!consent?.durable || consent.action !== "post_bounty" || consent.wallet_address?.toLowerCase() !== state.account.toLowerCase()
@@ -2088,12 +2075,10 @@
         || ["terms_version", "privacy_version", "statement_hash"].some(key => consent[key] !== policy[key]))
         throw new Error("The legal terms changed or could not be checked. Review them before continuing; nothing was sent.");
       if (saved.create.creator.toLowerCase() !== state.account.toLowerCase()) throw new Error("Restore the original signing wallet to continue this bounty.");
-      if (saved.create.funding_deadline * 1000 <= Date.now()) throw new Error("This funding authorization expired. Nothing was sent; keep the saved operation for review.");
-      await refreshWalletReadiness();
-      if (state.balances.usdc < state.balances.required || state.balances.eth === 0n) throw new Error("Top up the displayed shortfall, then choose Continue funding.");
-      const protocol = await loadProtocol(), api = String(protocol.api_base_url).replace(/\/$/, "");
+      // The relay can return an earlier broadcast even after expiry or daily
+      // capacity depletion. Only its fresh-send path checks balance and budget.
       const plan = await requestJson(`${api}/v1/base/autonomous-bounties/creation-plan`, {
-        method: "POST", body: JSON.stringify({ network: "base-mainnet", create: saved.create }),
+        method: "POST", body: JSON.stringify({ network: "base-mainnet", create: saved.create, authorization_valid_before: saved.authorization_valid_before }),
       });
       validateCreationPlan(plan, protocol, saved.create);
       if (plan.bounty_id !== saved.bounty_id || plan.predicted_bounty_contract !== saved.bounty_contract)
@@ -2101,16 +2086,8 @@
       const rewards = currentRewardSplit();
       postingBinding.requestContext = { chainId: 8453, usdcAddress: protocol.native_usdc, factoryAddress: protocol.factory,
         bountyAddress: saved.bounty_contract, fundingUsdcUnits: rewards.total, creatorAddress: state.account, validatedCalls: [] };
-      const authorized = await requestJson(`${api}/v1/base/autonomous-bounties/authorized-creation-plan`, {
-        method: "POST", body: JSON.stringify({ network: "base-mainnet", create: saved.create, signature: signatureParts(saved.signature), relayer: state.account }),
-      });
-      if (authorized.bounty_id !== saved.bounty_id || authorized.predicted_bounty_contract !== saved.bounty_contract
-        || Number(authorized.network?.chain_id) !== 8453 || authorized.relay_transaction?.to?.toLowerCase() !== protocol.factory.toLowerCase())
-        throw new Error("The authorized request does not match the saved bounty. Nothing was sent.");
-      postingBinding.requestContext.validatedCalls.push({ ...authorized.relay_transaction });
       await assertPostingBinding();
-      const transactionHash = await sendTransaction(authorized.relay_transaction);
-      await waitReceipt(transactionHash);
+      const transactionHash = await relaySignedCreation(api, saved);
       await finishPosting(api, plan, protocol, transactionHash);
     } catch (error) {
       await postingSession.flush().catch(() => {});
@@ -2149,14 +2126,15 @@
       await postingSession.flush({ requireServer: true });
       await assertPostingBinding();
       await refreshWalletReadiness();
-      if (state.balances.usdc < state.balances.required || state.balances.eth === 0n) throw new Error("The wallet is not ready to fund this bounty.");
+      if (state.metaParent) throw new Error("Sponsored child creation still needs a caller-preserving wallet path. Your draft is saved; no gas will be charged.");
+      if (state.balances.usdc < state.balances.required || !state.gasSponsored) throw new Error("The wallet is not ready to fund this bounty.");
       if (!window.AgentBountiesLegal) throw new Error("The legal agreement could not be loaded. Reload before using the wallet.");
       const agreement = await postingLegalAcceptance();
       if (!agreement.durable) throw new Error("The agreement could not be recorded. Retry when the service is available; no transaction was sent.");
       const protocol = await loadProtocol();
       const api = String(protocol.api_base_url).replace(/\/$/, "");
       const rewards = currentRewardSplit();
-      let create, plan, childPlan = null;
+      let create, plan, childPlan = null, authorizationValidBefore;
       if (state.metaParent) {
         const parent = await metaChild.resolve(state.metaParent, window.AgentBountiesWorkflow.createClient(window));
         if (parent.terms_hash !== state.metaParent.terms_hash) throw new Error("The parent terms changed. Review the child again.");
@@ -2189,8 +2167,9 @@
           body: JSON.stringify({ creator_wallet: state.account, document }),
         });
         create = createPayload(terms, committed);
+        authorizationValidBefore = Math.min(create.funding_deadline, Math.floor(Date.now() / 1000) + 7200);
         plan = await requestJson(`${api}/v1/base/autonomous-bounties/creation-plan`, {
-          method: "POST", body: JSON.stringify({ network: "base-mainnet", create }),
+          method: "POST", body: JSON.stringify({ network: "base-mainnet", create, authorization_valid_before: authorizationValidBefore }),
         });
       }
       validateCreationPlan(plan, protocol, create);
@@ -2213,9 +2192,9 @@
       if (childPlan) {
         setPaymentStatus("Create the reviewed 1 USDC child: publish its exact on-chain terms, approve only 1 USDC, then create and fully fund it. Parent claiming is a later step. These direct wallet calls require Base ETH for gas.", "pending");
         await sendWalletCalls(childPlan.pre_claim_wallet_calls, protocol);
-      } else if (!(await isContractAccount()) && plan.eip3009_authorization) {
+      } else if (plan.eip3009_authorization) {
         const authorization = window.AgentBountiesFundingReadiness.validateFundingAuthorization({ typedData: plan.eip3009_authorization,
-          context: { ...postingBinding.requestContext, creationNonce: create.creation_nonce, fundingDeadline: create.funding_deadline } });
+          context: { ...postingBinding.requestContext, creationNonce: create.creation_nonce, fundingDeadline: authorizationValidBefore } });
         if (!deferEmbeddedCheckpoint) {
           postingJournal.checkpoint("signing");
           await postingSession.flush({ requireServer: true });
@@ -2224,7 +2203,7 @@
         setPaymentStatus(authorization.summary, "pending");
         const signature = await state.provider.request({ method: "eth_signTypedData_v4", params: [state.account, authorization.serialized],
           ...(state.provider.agentBountiesCapabilities?.reviewedPostingOnly ? {
-            agentBountiesPostingContext: { ...postingBinding.requestContext, creationNonce: create.creation_nonce, fundingDeadline: create.funding_deadline },
+            agentBountiesPostingContext: { ...postingBinding.requestContext, creationNonce: create.creation_nonce, fundingDeadline: authorizationValidBefore },
             agentBountiesBeforeSubmit: async () => {
               await assertPostingBinding();
               if (postingJournal.load()) throw new Error("A wallet operation is already recorded. Check that same operation before signing.");
@@ -2234,20 +2213,11 @@
               await assertPostingBinding();
             },
           } : {}) });
-        if (deferEmbeddedCheckpoint) await postingSession.saveContinuation({ create, signature, legal_acceptance: agreement, bounty_id: plan.bounty_id, bounty_contract: plan.predicted_bounty_contract });
-        else { postingJournal.checkpoint("authorized"); await postingSession.flush({ requireServer: true }); }
-        const authorized = await requestJson(`${api}/v1/base/autonomous-bounties/authorized-creation-plan`, {
-          method: "POST", body: JSON.stringify({ network: "base-mainnet", create, signature: signatureParts(signature), relayer: state.account }),
-        });
-        if (authorized.bounty_id !== plan.bounty_id || String(authorized.predicted_bounty_contract).toLowerCase() !== String(plan.predicted_bounty_contract).toLowerCase() || Number(authorized.network?.chain_id) !== 8453) throw new Error("The authorized creation response does not match the recorded bounty and Base network.");
-        if (!authorized.relay_transaction || String(authorized.relay_transaction.to).toLowerCase() !== String(protocol.factory).toLowerCase()) throw new Error("The authorized transaction does not target the canonical factory.");
-        postingBinding.requestContext.validatedCalls.push({ ...authorized.relay_transaction });
-        transactionHash = await sendTransaction(authorized.relay_transaction);
-        await waitReceipt(transactionHash);
+        const savedRequest = { create, signature, authorization_valid_before: authorizationValidBefore, legal_acceptance: agreement, bounty_id: plan.bounty_id, bounty_contract: plan.predicted_bounty_contract };
+        await postingSession.saveContinuation(savedRequest);
+        transactionHash = await relaySignedCreation(api, savedRequest);
       } else {
-        if (deferEmbeddedCheckpoint) postingJournal.prepare(plan);
-        await sendWalletCalls(plan.wallet_calls, protocol);
-        // Batch identifiers are not transaction hashes. The journal retains either form for recovery.
+        throw new Error("The sponsor did not provide a supported funding authorization. Your draft is saved; no customer-paid transaction will be requested.");
       }
       await finishPosting(api, plan, protocol, transactionHash, childPlan);
     } catch (error) {
@@ -2266,6 +2236,48 @@
     }
   }
 
+  function showAuthorizationRecovery() {
+    const panel = document.querySelector("[data-authorization-recovery]");
+    if (panel) panel.hidden = !postingSession.canContinue();
+  }
+  window.addEventListener("agent-bounties:posting-state", showAuthorizationRecovery);
+  document.querySelector("[data-revoke-authorization]")?.addEventListener("click", async (event) => {
+    if (!event.isTrusted || postingBusy) return;
+    const button = event.currentTarget; button.disabled = true; postingBusy = true;
+    try {
+      const saved = await postingSession.loadContinuation(), authorizer = saved.create.creator.toLowerCase(), nonce = saved.create.creation_nonce.toLowerCase();
+      const protocol = await loadProtocol();
+      const key = `agent-bounties.revoke-authorization.v1:${authorizer}:${nonce}`;
+      let request = JSON.parse(window.sessionStorage.getItem(key) || "null");
+      if (!request) {
+        if (!state.provider || state.account?.toLowerCase() !== authorizer) throw new Error("Connect the original signing wallet to revoke this exact authorization.");
+        const accounts = await state.provider.request({method:"eth_accounts"});
+        if (accounts[0]?.toLowerCase() !== authorizer || await state.provider.request({method:"eth_chainId"}) !== "0x2105") throw new Error("Reconnect the original wallet on Base before revoking.");
+        const typed = {primaryType:"CancelAuthorization",domain:{name:"USD Coin",version:"2",chainId:8453,verifyingContract:protocol.native_usdc},
+          types:{EIP712Domain:[{name:"name",type:"string"},{name:"version",type:"string"},{name:"chainId",type:"uint256"},{name:"verifyingContract",type:"address"}],CancelAuthorization:[{name:"authorizer",type:"address"},{name:"nonce",type:"bytes32"}]},message:{authorizer,nonce}};
+        const signature = await state.provider.request({method:"eth_signTypedData_v4",params:[authorizer,JSON.stringify(typed)]});
+        if (!/^0x(?:[0-9a-f]{2}){1,4096}$/i.test(signature)) throw new Error("The wallet returned no usable bounded revocation signature. No relay was requested.");
+        request = {network:"base-mainnet",authorizer,nonce,signature};
+        window.sessionStorage.setItem(key,JSON.stringify(request));
+      }
+      if (request.network !== "base-mainnet" || request.authorizer !== authorizer || request.nonce !== nonce) throw new Error("The saved revocation does not match this operation.");
+      const result = await requestJson(`${API}/v1/base/usdc/authorization-revocation-relay`,{method:"POST",body:JSON.stringify(request)});
+      if (result.schema !== "agent-bounties/sponsored-usdc-revocation-v1" || result.network !== "base-mainnet" || result.authorizer?.toLowerCase() !== authorizer || result.nonce !== nonce || result.customer_gas_wei !== "0") throw new Error("The revocation reply did not match. Keep the original operation and reconcile it.");
+      setPaymentStatus(result.authorization_cancelled ? "Revocation confirmed. Once it is finalized, choose Check and recover this draft. Your original payment record stays saved until then." : "Revocation is pending. Retry this same button to check the saved request; no second signature is needed.","pending");
+    } catch (error) { setPaymentStatus(error.message || "Revocation is unavailable. Your original operation is preserved.","error"); }
+    finally {button.disabled=false; postingBusy=false;}
+  });
+  document.querySelector("[data-renew-authorization]")?.addEventListener("click", async (event) => {
+    if (!event.isTrusted || postingBusy) return;
+    const button = event.currentTarget; button.disabled = true;
+    try {
+      await postingSession.renewExpiredAuthorization();
+      ui.dialog.close();
+      setStatus("Your draft is preserved. Review and approve it before a new wallet signature.", "success");
+    } catch (error) {
+      setPaymentStatus(error.status === 409 ? "This authorization or its bounty is still active. Keep the same operation and check again after expiry and chain finalization." : error.message || "Finalized recovery is unavailable. Your original request is preserved.", "error");
+    } finally { button.disabled = false; showAuthorizationRecovery(); }
+  });
   function configureSpeech(){const Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;if(!Recognition){ui.mic.hidden=true;ui.hint.textContent="Type naturally. Your words are not posted until you approve the final card.";return;}const recognition=new Recognition();recognition.continuous=false;recognition.interimResults=true;recognition.lang=document.documentElement.lang||navigator.language||"en-US";let original="";recognition.addEventListener("start",()=>{original=ui.input.value.trim();ui.mic.dataset.listening="true";setStatus("Listening…","pending");});recognition.addEventListener("result",(event)=>{let transcript="";for(let index=event.resultIndex;index<event.results.length;index+=1)transcript+=event.results[index][0].transcript;ui.input.value=[original,transcript.trim()].filter(Boolean).join(original?" ":"");});recognition.addEventListener("end",()=>{ui.mic.dataset.listening="false";setStatus("Review the dictated text, then continue.");});recognition.addEventListener("error",(event)=>{ui.mic.dataset.listening="false";setStatus(event.error==="not-allowed"?"Microphone permission was not granted. You can still type.":"Dictation stopped. You can continue typing.","error");});ui.mic.addEventListener("click",()=>{if(ui.mic.dataset.listening==="true")recognition.stop();else recognition.start();});state.speech=recognition;}
 
   let metaContextPromise = null;

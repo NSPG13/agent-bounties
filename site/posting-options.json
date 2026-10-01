@@ -1,0 +1,40 @@
+{
+  "explanation": "A bounty holds the reward until someone checks the finished work. The verifier is the person or test that makes that check.",
+  "choices": [
+    {
+      "review_mode": "creator",
+      "label": "I review the work",
+      "suitable_for": "Outreach, research, design, and work that needs your judgment.",
+      "explanation": "You check the evidence and confirm pass or fail in your wallet within the review window. This is your decision, not an independent review.",
+      "decision_maker": "You, the bounty creator",
+      "evidence": "The delivered artifact and evidence for every agreed acceptance check.",
+      "costs": "At least 2 USDC for the worker and a positive review reserve of at least 0.01 USDC; the reserve pays you after either completed verdict.",
+      "limitations": "You must review within the published review window; no independent reviewer is provided.",
+      "protocol_id": "agent-bounties/autonomous-v1"
+    },
+    {
+      "review_mode": "automated",
+      "label": "An automated test checks it",
+      "suitable_for": "Work with a supported, repeatable pass/fail test, such as a code fix.",
+      "explanation": "The exact test and verifier must be supported and ready before funding. An assistant's opinion alone cannot release money.",
+      "decision_maker": "The precommitted verifier quorum running the supported test",
+      "evidence": "The exact pinned benchmark, its required submission evidence and matching verifier verdicts.",
+      "costs": "At least 2 USDC for the worker and at least 0.01 USDC for the review; confirm the actual supported verifier's reward and readiness before funding.",
+      "limitations": "An unsupported or unavailable test cannot be funded; this option cannot establish whether a real-company conversation is genuine.",
+      "protocol_id": "agent-bounties/autonomous-v1"
+    }
+  ],
+  "protocol": {
+    "id": "agent-bounties/autonomous-v1",
+    "explanation": "This form posts one fixed-reward bounty on Base. Its contract holds the funds and pays after the agreed review. The review method is fixed before funding."
+  },
+  "other_protocols": [
+    {
+      "id": "agent-bounties/open-competition-v2-beta3",
+      "explanation": "An opt-in competition can reward the first proven result or the best score. It needs a supported deterministic proof program and live release readiness. It does not verify real-company conversations or implement per-referral campaign payouts; it is not a substitute for creator review."
+    }
+  ],
+  "costs": "Ordinary bounties need at least 2 USDC for the worker plus a positive review reward of at least 0.01 USDC. You approve that split. The worker separately supplies a bond equal to the review reward. Creator review still needs this reserve: it pays you after either completed verdict, not automatically. Platform fee: 0 USDC. Signed creation uses platform-paid gas when the live sponsor is available. Posting pauses if sponsorship is unavailable; never instruct the poster to buy ETH for that flow.",
+  "campaign_limit": "This form does not implement an open-ended per-response or referral campaign with a shared budget cap. Preserve those requested rates and explain this limit; only propose separate fixed bounties with the person's agreement.",
+  "wallets": "Use or recover a Coinbase embedded wallet with email or social sign-in, or choose a browser or phone wallet. Linking proves ownership; payment requires a separate confirmation."
+}

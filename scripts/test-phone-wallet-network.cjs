@@ -17,22 +17,23 @@ const { validateFundingAuthorization } = fundingReadinessWindow.AgentBountiesFun
 const address = "0x" + "12".repeat(20), other = "0x" + "34".repeat(20);
 const nativeUsdc = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
 const source = fs.readFileSync(require.resolve("../site/bounty-composer-v2.js"), "utf8");
-const start = source.indexOf("  async function fundApprovedBounty()"), end = source.indexOf("  function configureSpeech", start);
+const start = source.indexOf("  async function fundApprovedBounty()"), end = source.indexOf("  function showAuthorizationRecovery", start);
 assert.ok(start >= 0 && end > start);
 const fundingFunction = source.slice(start, end) + "; fundApprovedBounty";
 const batchFunction = source.slice(source.indexOf("  async function sendWalletCalls("), source.indexOf("  function contractTerms("));
 const walletFunctions = source.slice(source.indexOf("  function signatureParts("), source.indexOf("  async function sendWalletCalls("));
 const bindingFunctions = source.slice(source.indexOf("  async function prepareWalletRequest("), source.indexOf("  async function watchUsdcAsset("));
 const legalFunctions = source.slice(source.indexOf("  const LEGAL_RECEIPT_KEY"), source.indexOf("  async function refreshWalletReadiness("));
-const finishFunction = source.slice(source.indexOf("  async function finishPosting("), source.indexOf("  async function continueSignedBounty("));
+const finishFunction = source.slice(source.indexOf("  async function finishPosting("), source.indexOf("  async function fundApprovedBounty("));
 const atomicError = { code: -32602, message: "Invalid params\n\n0 > atomicRequired - Expected a value of type `boolean`, but received: `undefined`" };
 const rejection = { code: 4001, message: "MetaMask Tx Signature: User denied transaction signature." };
 const syntheticSignature = "0x" + "12".repeat(64) + "1b", transactionHash = "0x" + "ab".repeat(32);
 
 async function fixture({ adapted = true, change = null, uncertain = false, batch = false, legacy = false, pending = false,
   accountCode = batch ? "0x6001600055" : "0x", approveAuthorization = false, wrapped = false, rejectTransaction = false,
-  mutateAt = null, mutation = "draft", syncFailure = false, authorizedMismatch = null, batchReply = { id: "synthetic-batch-id" }, authorizationTamper = null } = {}) {
-  const storage = new Map(), signing = [], statuses = [], network = [], checkpoints = [], publications = [];
+  mutateAt = null, mutation = "draft", syncFailure = false, authorizedMismatch = null, batchReply = { id: "synthetic-batch-id" }, authorizationTamper = null, relayFault = null, gasSponsored = true, walletSignature = syntheticSignature } = {}) {
+  const storage = new Map(), signing = [], statuses = [], network = [], checkpoints = [], publications = [], relays = [];
+  let saved = null, broadcast = false, faulted = false, synchronized = false;
   const store = { getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) };
   store.setItem("agent-bounties-phone-connected-v1", "ab-phone-12345678-1234-1234-1234-123456789012");
   const namespace = { chains: ["eip155:8453"], accounts: [`eip155:8453:${address}`], methods: ["eth_signTypedData_v4", "wallet_sendCalls", "eth_sendTransaction"], events: [], rpcMap: { "eip155:8453": "http://127.0.0.1:1" } };
@@ -52,7 +53,7 @@ async function fixture({ adapted = true, change = null, uncertain = false, batch
         if (typeof request.request.params[0].atomicRequired !== "boolean") throw Object.assign(new Error(atomicError.message), atomicError);
         return batchReply;
       }
-      if (approveAuthorization) return syntheticSignature;
+      if (approveAuthorization) return walletSignature;
       throw Object.assign(new Error("Fixture user rejected the wallet request"), { code: 4001 });
     },
   };
@@ -73,7 +74,7 @@ async function fixture({ adapted = true, change = null, uncertain = false, batch
     addEventListener() {}, dispatchEvent() {}, setTimeout, clearTimeout,
     AgentBountiesLegal: {
       loadPolicy: async () => ({ source: "hosted", supported_actions: ["post_bounty"], terms_version: "test-terms", privacy_version: "test-privacy", statement_hash: "test-statement" }),
-      requireAcceptance: async () => { if (mutateAt === "legal") mutate(); return { durable: true, terms_version: "test-terms", privacy_version: "test-privacy", statement_hash: "test-statement" }; },
+      requireAcceptance: async () => { if (mutateAt === "legal") mutate(); return { durable: true, action: "post_bounty", wallet_address: address, terms_version: "test-terms", privacy_version: "test-privacy", statement_hash: "test-statement" }; },
     },
   };
   win.location.assign = () => {};
@@ -81,7 +82,7 @@ async function fixture({ adapted = true, change = null, uncertain = false, batch
   await phone.restore();
   const provider = adapted ? phone.provider : sdk;
   const journal = createPostingJournal(win);
-  const state = { approved: true, provider, account: address, balances: { usdc: 1000000n, required: 1000000n, eth: 1n }, draft: { title: "Synthetic review" }, fundingUsdc: 1 };
+  const state = { approved: true, provider, account: address, gasSponsored, balances: { usdc: 1000000n, required: 1000000n, eth: 0n }, draft: { title: "Synthetic review" }, fundingUsdc: 1 };
   let journey = { id: "12345678-1234-1234-1234-123456789012", role: "post", draft: state.draft };
   function mutate() {
     if (mutation === "draft") journey = { ...journey, draft: { title: "Other device revised this draft" } };
@@ -119,22 +120,34 @@ async function fixture({ adapted = true, change = null, uncertain = false, batch
   const calls = [{ to: other, data: "0x010203" }, { to: address, data: "0x040506" }];
   const plan = { bounty_id: "0x" + "56".repeat(32), predicted_bounty_contract: "0x" + "78".repeat(20), eip3009_authorization: authorization, wallet_calls: calls };
   const postingSession = {
-    // External wallets do not use the Coinbase-only retained-signature route.
-    canContinue: () => false,
+    canContinue: () => Boolean(saved && ["authorized","sending"].includes(journal.load()?.phase) && !journal.load()?.transactions?.length),
+    saveContinuation: async request => { saved = structuredClone(request); journal.authorizeContinuation("0x" + "56".repeat(32)); if (mutateAt === "authorization_save") mutate(); await postingSession.flush({requireServer:true}); },
+    loadContinuation: async () => { if (!synchronized) throw new Error("Account sync unavailable; saved authority is not durably confirmed"); return saved; },
     snapshot: () => ({ operation_id: journey.id }),
     refresh: async () => { if (mutateAt === "refresh") mutate(); },
     flush: async (options = {}) => {
       checkpoints.push({ required: options.requireServer === true, phase: journal.load()?.phase });
       if ((mutateAt === "sync" || (mutateAt === "signing_sync" && journal.load()?.phase === "signing")) && options.requireServer) mutate();
       if (options.requireServer && (syncFailure === true || (syncFailure && syncFailure === journal.load()?.phase))) throw new Error("Account sync unavailable; no further wallet request dispatched");
+      if (options.requireServer && journal.load()?.continuation_hash) synchronized = true;
       for (const identifier of journal.load()?.transactions || []) assert.equal(typeof identifier, "string", "durable recovery accepts batch identifiers, not response objects");
     },
     approved: async () => state.approved,
-    reconcile: async () => ({ creation_confirmed: !pending, funding_confirmed: !pending, claimable: !pending, public_inventory_verified: !pending }),
+    reconcile: async () => ({ creation_confirmed: broadcast && !pending, funding_confirmed: broadcast && !pending, claimable: broadcast && !pending, public_inventory_verified: broadcast && !pending }),
   };
   const run = vm.runInNewContext(legalFunctions + bindingFunctions + walletFunctions + (legacy ? batchFunction.replace("atomicRequired:false,", "") : batchFunction) + finishFunction + fundingFunction, {
     postingBusy: false, postingBinding: null, postingJournal: journal, postingSession, state, window: win, ui: { form: { querySelectorAll: () => [] }, fundNow: {}, badge: {} }, document: { querySelector: () => null },
     sessionStorage: store,
+    fetch: async (url, options) => {
+      assert.ok(url.endsWith("/creation-relay"));
+      assert.equal(checkpoints.at(-1).phase,"sending"); assert.equal(checkpoints.at(-1).required,true);
+      assert.ok(saved); relays.push(JSON.parse(options.body));
+      if (relayFault === "lost_before" && !faulted) { faulted=true; throw new Error("relay response lost"); }
+      if ([429,503].includes(relayFault)) return {status:relayFault,json:async()=>({})};
+      broadcast=true;
+      if (relayFault === "lost_after" && !faulted) { faulted=true; throw new Error("relay response lost"); }
+      return {status:202,json:async()=>({schema:"agent-bounties/sponsored-creation-v1",customer_gas_wei:"0",relay:{transaction:transactionHash,network:relayFault==="network"?"base-sepolia":"base-mainnet",bountyContract:relayFault==="bounty"?other:plan.predicted_bounty_contract}})};
+    },
     track() {}, renderFundingGuide() {}, setPaymentStatus: value => statuses.push(value), refreshWalletReadiness: async () => {},
     updatePostingCost() {}, updatePostingTracker() {},
     loadProtocol: async () => ({ api_base_url: "https://api.agentbounties.app", factory: "0x" + "90".repeat(20), chain_id_hex: "0x2105", native_usdc: nativeUsdc }),
@@ -157,209 +170,64 @@ async function fixture({ adapted = true, change = null, uncertain = false, batch
       if (change === "chain") { sdk.chainId = 1; universal.rpcProviders.eip155.chainId = 1; }
       return plan;
     },
-    pollCreation: async () => pending ? null : [{ kind: "canonical_bounty_created" }, { kind: "funding_added" }, { kind: "bounty_became_claimable" }],
+    pollCreation: async () => pending || !broadcast ? null : [{ kind: "canonical_bounty_created" }, { kind: "funding_added" }, { kind: "bounty_became_claimable" }],
     fetchFeedItem: async () => ({ terms_valid: true, verification_ready: true }),
   });
-  return { sdk, provider, run, signing, statuses, network, journal, authorization, calls, checkpoints, publications };
+  return { sdk, provider, run, signing, statuses, network, journal, authorization, calls, checkpoints, publications, relays, saved: () => saved };
 }
 
-test("the old batch reproduces the wallet's exact atomicRequired schema rejection through the pinned SDK", async () => {
-  const env = await fixture({ batch: true, legacy: true }); await env.run();
-  assert.equal(env.signing.length, 1); assert.equal(env.statuses.at(-1), atomicError.message);
-  assert.equal(env.journal.load().wallet_error.code, -32602);
-  assert.equal(env.journal.load().transactions.length, 0);
-  await env.run(); assert.equal(env.signing.length, 1, "no automatic replay or transaction fallback");
-});
 
-for (const pending of [false, true]) test(`a smart-wallet batch passes the real SDK with canonical funding ${pending ? "pending" : "confirmed"}`, async () => {
-  const env = await fixture({ batch: true, pending }); await env.run();
-  assert.equal(env.signing.length, 1); assert.equal(env.network.length, 0);
-  const wire = env.signing[0]; assert.equal(wire.chainId, "eip155:8453");
-  assert.deepEqual(JSON.parse(JSON.stringify(wire.request)), { method: "wallet_sendCalls", params: [{ version: "2.0.0", atomicRequired: false,
-    chainId: "0x2105", from: address, calls: env.calls.map(call => ({ ...call, value: "0x0" })) }] });
-  assert.equal(env.journal.load().transactions[0], "synthetic-batch-id");
-  assert.equal(env.journal.load().phase, pending ? "batch_submitted" : "funding_confirmed");
-  await env.run(); assert.equal(env.signing.length, 1, "neither pending nor confirmed funding is repeated");
+test("pinned SDK network normalization reaches one exact signature and no wallet-paid transaction", async () => {
+  const old=await fixture({adapted:false});assert.equal(await old.sdk.request({method:"eth_chainId"}),8453);await old.run();assert.equal(old.signing.length,0);assert.match(old.statuses.at(-1),/network changed/);
+  const env=await fixture();assert.equal(await env.provider.request({method:"eth_chainId"}),"0x2105");await env.run();assert.equal(env.signing.length,1);assert.equal(env.signing[0].request.method,"eth_signTypedData_v4");assert.match(env.statuses.at(-1),/Wallet request cancelled/);assert.equal(env.journal.load(),null);assert.equal(env.relays.length,0);
 });
-
-test("a lost smart-wallet batch reply stays recorded and cannot dispatch a second request", async () => {
-  const env = await fixture({ batch: true, uncertain: true }); await env.run();
-  assert.match(env.statuses.at(-1), /response was lost/); assert.equal(env.journal.load().phase, "sending");
-  assert.equal(env.journal.load().wallet_error, undefined);
-  await env.run(); assert.equal(env.signing.length, 1); assert.equal(env.network.length, 0);
-});
-
-test("legacy string batch IDs remain durable and unsupported replies cannot be repeated", async () => {
-  const legacy = await fixture({ batch: true, pending: true, batchReply: "legacy-batch-id" }); await legacy.run();
-  assert.equal(legacy.journal.load().transactions[0], "legacy-batch-id");
-  for (const batchReply of [{}, { id: "x".repeat(257) }, { id: "" }]) {
-    const env = await fixture({ batch: true, batchReply }); await env.run();
-    assert.equal(env.journal.load().phase, "sending"); assert.equal(env.journal.load().transactions.length, 0);
-    assert.match(env.statuses.at(-1), /unsupported batch identifier/);
-    await env.run(); assert.equal(env.signing.length, 1);
-  }
-});
-
-for (const accountCode of ["0x", "0xef0100" + "34".repeat(20)]) {
-  for (const pending of [false, true]) test(`EOA authorization completes without a batch for ${accountCode === "0x" ? "ordinary" : "delegated"} account; canonical pending=${pending}`, async () => {
-    const env = await fixture({ accountCode, approveAuthorization: true, pending }); await env.run();
-    assert.deepEqual(env.signing.map(call => call.request.method), ["eth_signTypedData_v4", "eth_sendTransaction"]);
-    assert.deepEqual(Array.from(env.signing[0].request.params), [address, JSON.stringify(env.authorization)]);
-    assert.deepEqual(JSON.parse(JSON.stringify(env.signing[1].request.params)), [{ from: address, to: "0x" + "90".repeat(20), data: "0xaabbcc", value: "0x0" }]);
-    assert.equal(env.journal.load().authorizationIssued, true); assert.equal(env.journal.load().transactions[0], transactionHash);
-    assert.equal(env.journal.load().phase, pending ? "submitted" : "funding_confirmed");
-    await env.run(); assert.equal(env.signing.length, 2); assert.equal(env.network.length, 0);
+for (const accountCode of ["0x","0xef0100"+"34".repeat(20),"0x6001600055"]) for (const pending of [false,true]) {
+  test(`zero-ETH sponsored SDK creation, code=${accountCode}, pending=${pending}`, async()=>{
+    const env=await fixture({accountCode,pending,approveAuthorization:true});await env.run();
+    assert.deepEqual(env.signing.map(x=>x.request.method),["eth_signTypedData_v4"]);
+    assert.deepEqual(Array.from(env.signing[0].request.params),[address,JSON.stringify(env.authorization)]);
+    assert.equal(env.relays.length,1);assert.equal(env.relays[0].signature.v,27);
+    assert.equal(env.saved().signature,syntheticSignature);assert.equal(env.journal.load().transactions[0],transactionHash);
+    assert.equal(env.journal.load().phase,pending?"submitted":"funding_confirmed");
+    await env.run();assert.equal(env.signing.length,1);assert.equal(env.relays.length,1);assert.equal(env.network.length,0);
   });
 }
-
-test("wrapped MetaMask rejection ends one request and reopens preparation without automatic retries", async () => {
-  for (const batch of [false, true]) {
-    const env = await fixture({ batch, wrapped: true }); await env.run();
-    assert.equal(env.signing.length, 1); assert.equal(env.journal.load(), null);
-    assert.match(env.statuses.at(-1), /Wallet request cancelled/); assert.equal(env.network.length, 0);
-  }
+for (const relayFault of ["lost_before","lost_after"]) test(`lost ${relayFault} keeps one authorization and reconciles safely`,async()=>{
+  const env=await fixture({approveAuthorization:true,relayFault});await env.run();
+  assert.match(env.statuses.at(-1),/relay response lost/);assert.equal(env.journal.load().authorizationIssued,true);assert.equal(env.journal.load().transactions.length,0);
+  await env.run();assert.equal(env.signing.length,1);assert.equal(env.journal.load().phase,"funding_confirmed");
+  assert.equal(env.relays.length,relayFault==="lost_before"?2:1);if(env.relays.length===2)assert.deepEqual(env.relays[0],env.relays[1]);
 });
-
-test("a wrapped rejection after a USDC signature preserves the live authorization and prevents a second signing request", async () => {
-  const env = await fixture({ accountCode: "0xef0100" + "34".repeat(20), approveAuthorization: true, rejectTransaction: true }); await env.run();
-  assert.equal(env.signing.length, 2); assert.equal(env.journal.load().authorizationIssued, true);
-  assert.equal(env.journal.load().phase, "sending"); assert.equal(env.journal.load().wallet_method, "eth_sendTransaction");
-  await env.run(); assert.equal(env.signing.length, 2);
+for (const relayFault of [429,503,"network","bounty"]) test(`unavailable or foreign relay ${relayFault} cannot trigger customer gas`,async()=>{
+ const env=await fixture({approveAuthorization:true,relayFault,pending:true});await env.run();
+ assert.equal(env.journal.load().transactions.length,0);assert.equal(env.journal.load().authorizationIssued,true);
+ await env.run();assert.equal(env.signing.length,1);assert.deepEqual(env.relays[0],env.relays[1]);assert.equal(env.network.length,0);
 });
-
-for (const authorizedMismatch of ["bounty_id", "bounty_contract", "network"]) {
-  test(`a mismatched authorized creation ${authorizedMismatch} cannot send and retains the existing USDC authorization`, async () => {
-    const env = await fixture({ approveAuthorization: true, authorizedMismatch });
-    await env.run();
-    assert.deepEqual(env.signing.map(entry => entry.request.method), ["eth_signTypedData_v4"]);
-    assert.match(env.statuses.at(-1), /authorized creation response does not match/);
-    assert.equal(env.journal.load().authorizationIssued, true);
-    assert.equal(env.journal.load().phase, "authorized");
-    assert.equal(env.journal.load().transactions.length, 0);
-    assert.ok(env.checkpoints.some(entry => entry.required && entry.phase === "authorized"));
-    assert.equal(env.network.length, 0);
-    await env.run();
-    assert.equal(env.signing.length, 1, "a mismatched response cannot cause another signature or transaction request");
-    assert.equal(env.publications.filter(url => url.endsWith("/authorized-creation-plan")).length, 1);
-  });
-}
-
-for (const authorizationTamper of ["sender", "recipient", "amount", "nonce", "deadline", "expired", "domain", "types"]) {
-  test(`the real funding authorization validator blocks ${authorizationTamper} tampering before any SDK signature`, async () => {
-    const env = await fixture({ approveAuthorization: true, authorizationTamper }); await env.run();
-    assert.match(env.statuses.at(-1), /USDC authorization does not match/);
-    assert.equal(env.signing.length, 0);
-    assert.equal(env.network.length, 0);
-    assert.equal(env.checkpoints.some(entry => entry.phase === "signing" || entry.phase === "authorized"), false);
-    assert.equal(env.publications.some(url => url.endsWith("/authorized-creation-plan")), false);
-    assert.notEqual(env.journal.load()?.authorizationIssued, true);
-    await env.run(); assert.equal(env.signing.length, 0);
-  });
-}
-
-test("invalid account code cannot request a signature and other contracts cannot borrow EOA authorization", async () => {
-  for (const accountCode of [null, undefined, true, "", "0xnothex", "0xef010"]) {
-    const env = await fixture({ accountCode: accountCode === undefined ? {} : accountCode }); await env.run();
-    assert.match(env.statuses.at(-1), /account type could not be checked/); assert.equal(env.signing.length, 0);
-  }
-  for (const accountCode of ["0xef0100", "0xef0100" + "34".repeat(21), "0xef0101" + "34".repeat(20), "0x6001600055"]) {
-    const env = await fixture({ batch: true, accountCode }); await env.run();
-    assert.equal(env.signing[0].request.method, "wallet_sendCalls");
-  }
+for (const authorizationTamper of ["sender","recipient","amount","nonce","deadline","expired","domain","types"]) test(`exact funding authority rejects ${authorizationTamper} before signing`,async()=>{
+ const env=await fixture({approveAuthorization:true,authorizationTamper});await env.run();assert.match(env.statuses.at(-1),/USDC authorization does not match/);assert.equal(env.signing.length,0);assert.equal(env.relays.length,0);
 });
-
-test("the real pinned SDK reproduces the false network-change stop before adaptation", async () => {
-  const env = await fixture({ adapted: false });
-  assert.equal(await env.sdk.request({ method: "eth_chainId" }), 8453);
-  await env.run();
-  assert.match(env.statuses.at(-1), /network changed/);
-  assert.equal(env.signing.length, 0); assert.equal(env.journal.load(), null);
+for (const change of ["account","chain"]) test(`SDK ${change} change stops before signing`,async()=>{
+ const env=await fixture({change,approveAuthorization:true});await env.run();assert.match(env.statuses.at(-1),/wallet or network changed/);assert.equal(env.signing.length,0);assert.equal(env.relays.length,0);
 });
-
-test("the unchanged posting guard reaches one signature request through the adapted SDK", async () => {
-  const env = await fixture();
-  assert.equal(await env.provider.request({ method: "eth_chainId" }), "0x2105");
-  await env.run();
-  assert.equal(env.signing.length, 1);
-  assert.equal(env.signing[0].chainId, "eip155:8453");
-  assert.equal(env.signing[0].request.method, "eth_signTypedData_v4");
-  assert.deepEqual(Array.from(env.signing[0].request.params), [address, JSON.stringify(env.authorization)]);
-  assert.match(env.statuses.at(-1), /Wallet request cancelled/);
-  assert.equal(env.network.length, 0);
-  assert.equal(env.journal.load(), null, "An explicit rejection authorizes no payment and leaves the review available");
+for (const mutateAt of ["refresh","legal","signing_sync"]) for (const mutation of ["draft","account","provider","approval"]) test(`changed ${mutation} during ${mutateAt} cannot borrow approval`,async()=>{
+ const env=await fixture({mutateAt,mutation,approveAuthorization:true});await env.run();assert.equal(env.signing.length,0);assert.equal(env.relays.length,0);assert.match(env.statuses.at(-1),/approved draft or wallet changed/);
 });
-
-test("an uncertain signature reply retains the existing journal and cannot dispatch again", async () => {
-  const env = await fixture({ uncertain: true }); await env.run();
-  assert.match(env.statuses.at(-1), /Fixture wallet response was lost/);
-  assert.ok(env.journal.load());
-  await env.run(); assert.equal(env.signing.length, 1);
+for (const syncFailure of [true,"signing","authorized","sending"]) test(`durable sync failure ${syncFailure} prevents gas or principal submission`,async()=>{
+ const env=await fixture({syncFailure,approveAuthorization:true});await env.run();assert.equal(env.relays.length,0);assert.match(env.statuses.at(-1),/sync unavailable/);
+ assert.equal(env.signing.length,["authorized","sending"].includes(syncFailure)?1:0);
+ if(env.signing.length){assert.equal(env.journal.load().authorizationIssued,true);await env.run();assert.equal(env.signing.length,1);assert.equal(env.relays.length,0);}
 });
-
-for (const change of ["account", "chain"]) {
-  test(`a real ${change} change still stops the posting flow before any signature`, async () => {
-    const env = await fixture({ change }); await env.run();
-    assert.match(env.statuses.at(-1), /wallet or network changed/);
-    assert.equal(env.signing.length, 0); assert.equal(env.network.length, 0); assert.equal(env.journal.load(), null);
-  });
-}
-
-test("a refreshed draft cannot borrow the previous device's approval or publish its old plan", async () => {
-  const env = await fixture({ mutateAt: "refresh", mutation: "draft", approveAuthorization: true });
-  await env.run();
-  assert.match(env.statuses.at(-1), /approved draft or wallet changed/);
-  assert.equal(env.publications.length, 0); assert.equal(env.signing.length, 0); assert.equal(env.journal.load(), null);
+for(const mutation of ["draft","account","provider","approval"]) test(`changed ${mutation} after signature is saved cannot send it`,async()=>{
+ const env=await fixture({mutateAt:"authorization_save",mutation,approveAuthorization:true});await env.run();assert.equal(env.signing.length,1);assert.equal(env.relays.length,0);assert.equal(env.journal.load().authorizationIssued,true);
 });
-
-test("a change during legal review cannot publish terms under stale approval", async () => {
-  const env = await fixture({ mutateAt: "legal", mutation: "draft", approveAuthorization: true }); await env.run();
-  assert.match(env.statuses.at(-1), /approved draft or wallet changed/);
-  assert.equal(env.publications.length, 0); assert.equal(env.signing.length, 0); assert.equal(env.journal.load(), null);
+test("lost signature reply remains locked and sponsor outage prevents signing",async()=>{
+ const env=await fixture({uncertain:true});await env.run();await env.run();assert.equal(env.signing.length,1);assert.equal(env.relays.length,0);assert.ok(env.journal.load());
+ const unavailable=await fixture({gasSponsored:false,approveAuthorization:true});await unavailable.run();assert.equal(unavailable.signing.length,0);assert.equal(unavailable.relays.length,0);
 });
-
-for (const mutation of ["draft", "account", "provider", "approval"]) {
-  test(`changing ${mutation} during fee preparation stops dispatch and preserves the recorded attempt`, async () => {
-    const env = await fixture({ batch: true, mutateAt: "fees", mutation }); await env.run();
-    assert.match(env.statuses.at(-1), /approved draft or wallet changed/);
-    assert.equal(env.signing.length, 0); assert.ok(env.journal.load());
-    await env.run(); assert.equal(env.signing.length, 0, "the pending operation cannot be replayed");
-  });
-}
-
-test("a changed approval after durable sync cannot reach the USDC signature", async () => {
-  const env = await fixture({ approveAuthorization: true, mutateAt: "signing_sync", mutation: "approval" }); await env.run();
-  assert.equal(env.signing.length, 0); assert.match(env.statuses.at(-1), /approved draft or wallet changed/);
-  assert.ok(env.checkpoints.some(entry => entry.required && entry.phase === "signing"));
+test("a wider legacy creation signature is preserved without truncation or a paid fallback",async()=>{
+ const signature="0x7f"+syntheticSignature.slice(2);const env=await fixture({approveAuthorization:true,walletSignature:signature});await env.run();
+ assert.equal(env.saved().signature,signature);assert.equal(env.signing.length,1);assert.equal(env.relays.length,0);assert.match(env.statuses.at(-1),/exact 65-byte/);await env.run();assert.equal(env.signing.length,1);
 });
-
-test("failed initial account sync leaves terms unpublished, no journal and no wallet request", async () => {
-  for (const batch of [false, true]) {
-    const env = await fixture({ batch, approveAuthorization: true, syncFailure: true }); await env.run();
-    assert.equal(env.signing.length, 0); assert.match(env.statuses.at(-1), /sync unavailable/);
-    assert.equal(env.publications.length, 0); assert.equal(env.journal.load(), null);
-    await env.run(); assert.equal(env.signing.length, 0);
-    assert.equal(env.publications.length, 0); assert.equal(env.journal.load(), null);
-  }
-});
-
-test("account sync failure after authorization retains the signature record and cannot send or sign again", async () => {
-  const env = await fixture({ approveAuthorization: true, syncFailure: "authorized" }); await env.run();
-  assert.deepEqual(env.signing.map(entry => entry.request.method), ["eth_signTypedData_v4"]);
-  assert.match(env.statuses.at(-1), /sync unavailable/);
-  assert.equal(env.journal.load().authorizationIssued, true);
-  assert.equal(env.journal.load().phase, "authorized");
-  assert.equal(env.journal.load().transactions.length, 0);
-  assert.equal(env.publications.some(url => url.endsWith("/authorized-creation-plan")), false);
-  await env.run(); assert.equal(env.signing.length, 1);
-});
-
-test("a wallet change after a USDC authorization stops the transaction and retains that authorization", async () => {
-  const env = await fixture({ approveAuthorization: true, mutateAt: "fees", mutation: "account" }); await env.run();
-  assert.deepEqual(env.signing.map(entry => entry.request.method), ["eth_signTypedData_v4"]);
-  assert.equal(env.journal.load().authorizationIssued, true);
-  await env.run(); assert.equal(env.signing.length, 1);
-});
-
 test("revoking approval while account reads await blocks the final dispatch boundary", async () => {
   const fn = source.slice(source.indexOf("  async function assertPostingBinding("), source.indexOf("  async function watchUsdcAsset("));
   let resolveAccounts;

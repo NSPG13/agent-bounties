@@ -393,3 +393,97 @@ test("explicit new-task after canonical completion saves a fresh operation witho
   assert.equal(one.server.record("owner-a", next.id).approved_draft_hash, null);
   assert.equal(await one.session.approved(), false);
 });
+
+test("all wallet continuations retry the identical hosted request after a lost reply", async () => {
+  const one = await ready(); await one.session.approve();
+  const journal = workflow.createPostingJournal(one.win);
+  journal.prepare({ bounty_id: BOUNTY, predicted_bounty_contract: CONTRACT }); journal.checkpoint("signing");
+  await one.session.flush({ requireServer: true });
+  await one.session.saveContinuation({ bounty_id: BOUNTY, bounty_contract: CONTRACT, create: { creator: CONTRACT }, signature: "0xphone", authorization_valid_before: 2000 });
+  const before = await one.session.loadContinuation();
+  journal.reserveHostedRelay(); await one.session.flush({ requireServer: true });
+  assert.equal(one.session.canContinue(), true);
+  const restored = await second(one.server, { storage: one.win.sessionStorage });
+  assert.equal(restored.session.canContinue(), true);
+  assert.deepEqual(await restored.session.loadContinuation(), before);
+  journal.checkpoint("submitted", HASH); await one.session.flush({ requireServer: true });
+  assert.equal(one.session.canContinue(), false);
+});
+
+test("a stale local marker cannot overwrite an otherwise identical fresh server draft", async () => {
+  const one = await ready();
+  const stored = one.win.sessionStorage;
+  edit(one.win, value => { value.draft_stale = true; });
+  const restored = await second(one.server, { storage: stored });
+  assert.equal(current(restored.win).draft_stale, false);
+  assert.equal(await restored.session.approved(), false);
+});
+
+test("reapproval explains exact money and acceptance changes, then clears after approval", async () => {
+  const { win, session } = await ready(); await session.approve();
+  session.invalidate();
+  edit(win, journey => { journey.draft.solver_reward_usdc = "20.30"; journey.draft.verifier_reward_usdc = "1.00"; journey.draft.acceptance_criteria[0] = "45 seconds"; });
+  const changes = session.approvalChanges();
+  assert.ok(changes.includes("Worker reward (USDC): 4.50 → 20.30"));
+  assert.ok(changes.includes("Review reserve (USDC): 0.50 → 1.00"));
+  assert.ok(changes.includes("Acceptance check 1: 30 seconds → 45 seconds"));
+  assert.equal(await session.approved(), false);
+  await session.approve();
+  assert.deepEqual(session.approvalChanges(), []);
+});
+
+async function renewalFixture() {
+  const one=await ready(); await one.session.approve();
+  const journal=workflow.createPostingJournal(one.win);
+  journal.prepare({bounty_id:BOUNTY,predicted_bounty_contract:CONTRACT}); journal.checkpoint("signing");
+  await one.session.flush({requireServer:true});
+  await one.session.saveContinuation({bounty_id:BOUNTY,bounty_contract:CONTRACT,create:{creator:CONTRACT},authorization_valid_before:1,signature:"0xfixture"});
+  const original=one.win.fetch, old=clone(one.server.record());
+  const state={active:true,drop:false,next:null,requests:[]};
+  one.win.fetch=async(url,args)=>{
+    if(!url.endsWith("/renew")) return original(url,args);
+    state.requests.push(JSON.parse(args.body));
+    if(state.active) return new Response(JSON.stringify({error:"authorization_or_bounty_still_active"}),{status:409});
+    if(!state.next){
+      const id=randomUUID(),draft=clone(old.draft);draft.id=id;draft.draft.posting_operation_id=id;
+      state.next={operation_id:id,draft,draft_hash:await posting.digest(one.win,draft),approved_draft_hash:null,recovery_state:{},revision:1,updated_at:new Date().toISOString()};
+      one.server.records.set(`owner-a:${id}`,state.next);
+    }
+    if(state.drop){state.drop=false;throw new Error("renewal response lost");}
+    return new Response(JSON.stringify(state.next),{status:200});
+  };
+  return {...one,state,old};
+}
+test("renewal keeps active authorizations and survives a lost reply without duplicate drafts",async()=>{
+  const one=await renewalFixture();const journal=one.win.sessionStorage.getItem("agent-bounties.posting-operation.v1");
+  await assert.rejects(one.session.renewExpiredAuthorization(),/still_active/);
+  assert.equal(one.win.sessionStorage.getItem("agent-bounties.posting-operation.v1"),journal);
+  one.state.active=false;one.state.drop=true;
+  await assert.rejects(one.session.renewExpiredAuthorization(),/response lost/);
+  assert.equal(one.win.sessionStorage.getItem("agent-bounties.posting-operation.v1"),journal);
+  const next=await one.session.renewExpiredAuthorization();
+  assert.equal(next.operation_id,one.state.next.operation_id);assert.notEqual(next.operation_id,OPERATION);
+  assert.equal(current(one.win).draft.title,one.old.draft.draft.title);assert.equal(await one.session.approved(),false);
+  assert.equal(one.win.sessionStorage.getItem("agent-bounties.posting-operation.v1"),null);
+  assert.equal(one.win.sessionStorage.getItem("agent-bounties.posting-continuation.v1"),null);
+  assert.deepEqual(one.state.requests[1],one.state.requests[2]);
+});
+test("tampered recovery signatures and changed accounts cannot renew the original draft",async()=>{
+  const one=await renewalFixture(),key="agent-bounties.posting-continuation.v1";
+  const saved=JSON.parse(one.win.sessionStorage.getItem(key));saved.signature="changed";one.win.sessionStorage.setItem(key,JSON.stringify(saved));
+  await assert.rejects(one.session.renewExpiredAuthorization(),/exact authorization/);assert.equal(one.state.requests.length,0);
+  one.win.user="owner-b";await one.session.hydrate(account("owner-b"));
+  await assert.rejects(one.session.renewExpiredAuthorization());assert.equal(one.state.requests.length,0);
+});
+test("another device follows only the server-retired authorization into the unapproved replacement",async()=>{
+  const one=await renewalFixture();one.state.active=false;
+  const storageCopy=storage();for(const key of ["agent-bounties.posting-operation.v1","agent-bounties.posting-continuation.v1"]){storageCopy.setItem(key,one.win.sessionStorage.getItem(key));}
+  const oldJourney=clone(current(one.win));
+  await one.session.renewExpiredAuthorization();
+  const win=browser(one.server,{storage:storageCopy,url:`https://agentbounties.app/post.html?operation_id=${OPERATION}`});
+  workflow.createClient(win).save(oldJourney);
+  const fetch=win.fetch;
+  win.fetch=async(url,args)=>url.endsWith(OPERATION)&&args.method==="GET"?new Response(JSON.stringify({...one.state.next,retired_operation_id:OPERATION,retired_continuation_hash:one.old.recovery_state.continuation_hash}),{status:200}):fetch(url,args);
+  const session=posting.create(win);await session.hydrate(account());
+  assert.equal(current(win).id,one.state.next.operation_id);assert.equal(await session.approved(),false);
+});

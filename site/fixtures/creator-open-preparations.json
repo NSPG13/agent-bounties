@@ -1,0 +1,796 @@
+{
+  "now": 1989999400,
+  "plans": [
+    {
+      "action_authorization": null,
+      "approval_hash": "0x65afb5b4593f8f2f373394e0b18c1e8804ab86dfe55f08ad383ee13a1f86af07",
+      "bounty_contract": "0xed821ff2617d686f15f8bd2b3fab725e075a853e",
+      "customer_gas_wei": "0",
+      "customer_principal_micro_usdc": "21000000",
+      "evidence_boundary": "Preparation and transaction hashes are not funding or payment. The platform pays gas only within its shared daily allowance; it never switches to customer-paid gas.",
+      "network": "base-sepolia",
+      "protocol": "agent-bounties/creator-open-v1",
+      "request": {
+        "action": {
+          "kind": "create",
+          "token_nonce": "0x0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
+        },
+        "expected_revision": 1,
+        "expected_solver_reward_micro_usdc": 20000000,
+        "original_terms": {
+          "acceptance_criteria": [
+            "Exact evidence"
+          ],
+          "bounty_id": "0x0505050505050505050505050505050505050505050505050505050505050505",
+          "creator": "0x0606060606060606060606060606060606060606",
+          "disclosure": "The creator judges the published criteria. The first passing creator verdict pays one solver. Rejected entries pay their bond to the creator; unreviewed entries recover only their bond after their review deadline or another winner. There is no exclusive claim or guarantee of payment for work.",
+          "goal": "Deliver evidence",
+          "max_pending_entries": 8,
+          "network": "base-sepolia",
+          "review_reward_micro_usdc": 1000000,
+          "review_window_seconds": 3600,
+          "schema": "agent-bounties/creator-open-v1",
+          "solver_reward_micro_usdc": 20000000,
+          "submission_deadline": 2000000000,
+          "title": "Open review"
+        },
+        "user_salt": "0x0707070707070707070707070707070707070707070707070707070707070707",
+        "valid_before": 1990000000
+      },
+      "token_authorization": {
+        "digest": "0x14c2cecfe681402f97262354fd627e282f76117cb6e17f380e91aa1b87764f5e",
+        "signer": "0x0606060606060606060606060606060606060606",
+        "typed_data": {
+          "domain": {
+            "chainId": "84532",
+            "name": "USDC",
+            "verifyingContract": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+            "version": "2"
+          },
+          "message": {
+            "from": "0x0606060606060606060606060606060606060606",
+            "nonce": "0x0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+            "to": "0xed821ff2617d686f15f8bd2b3fab725e075a853e",
+            "validAfter": "0x0",
+            "validBefore": "0x769cfd80",
+            "value": "0x1406f40"
+          },
+          "primaryType": "ReceiveWithAuthorization",
+          "types": {
+            "EIP712Domain": [
+              {
+                "name": "name",
+                "type": "string"
+              },
+              {
+                "name": "version",
+                "type": "string"
+              },
+              {
+                "name": "chainId",
+                "type": "uint256"
+              },
+              {
+                "name": "verifyingContract",
+                "type": "address"
+              }
+            ],
+            "ReceiveWithAuthorization": [
+              {
+                "name": "from",
+                "type": "address"
+              },
+              {
+                "name": "to",
+                "type": "address"
+              },
+              {
+                "name": "value",
+                "type": "uint256"
+              },
+              {
+                "name": "validAfter",
+                "type": "uint256"
+              },
+              {
+                "name": "validBefore",
+                "type": "uint256"
+              },
+              {
+                "name": "nonce",
+                "type": "bytes32"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "action_authorization": {
+        "digest": "0xb2916d7b4e69363d64ff391b725fa66e93be882122556ae68a541837d978291c",
+        "signer": "0x0909090909090909090909090909090909090909",
+        "typed_data": {
+          "domain": {
+            "chainId": "84532",
+            "name": "Agent Bounties Creator Open",
+            "verifyingContract": "0xed821ff2617d686f15f8bd2b3fab725e075a853e",
+            "version": "1"
+          },
+          "message": {
+            "deadline": "0x769cfd80",
+            "evidenceHash": "0xc5c6459a1ab590ed0c9a193c67b29f543a81871361b89d8ce1bb8b70de9e6e1b",
+            "revision": 1,
+            "solver": "0x0909090909090909090909090909090909090909",
+            "submissionHash": "0x0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+            "termsHash": "0x00e0617e8c6f786709e7b92d9e1cc8502ff65835c9124ec9503586fd262214ec",
+            "tokenNonce": "0x0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
+          },
+          "primaryType": "OpenSubmission",
+          "types": {
+            "EIP712Domain": [
+              {
+                "name": "name",
+                "type": "string"
+              },
+              {
+                "name": "version",
+                "type": "string"
+              },
+              {
+                "name": "chainId",
+                "type": "uint256"
+              },
+              {
+                "name": "verifyingContract",
+                "type": "address"
+              }
+            ],
+            "OpenSubmission": [
+              {
+                "name": "solver",
+                "type": "address"
+              },
+              {
+                "name": "submissionHash",
+                "type": "bytes32"
+              },
+              {
+                "name": "evidenceHash",
+                "type": "bytes32"
+              },
+              {
+                "name": "termsHash",
+                "type": "bytes32"
+              },
+              {
+                "name": "revision",
+                "type": "uint64"
+              },
+              {
+                "name": "tokenNonce",
+                "type": "bytes32"
+              },
+              {
+                "name": "deadline",
+                "type": "uint256"
+              }
+            ]
+          }
+        }
+      },
+      "approval_hash": "0xe0216d326b57f87c460f7347d0d012266e3629945a28bbe8c0318e250e92fb76",
+      "bounty_contract": "0xed821ff2617d686f15f8bd2b3fab725e075a853e",
+      "customer_gas_wei": "0",
+      "customer_principal_micro_usdc": "1000000",
+      "evidence_boundary": "Preparation and transaction hashes are not funding or payment. The platform pays gas only within its shared daily allowance; it never switches to customer-paid gas.",
+      "network": "base-sepolia",
+      "protocol": "agent-bounties/creator-open-v1",
+      "request": {
+        "action": {
+          "evidence_hash": "0xc5c6459a1ab590ed0c9a193c67b29f543a81871361b89d8ce1bb8b70de9e6e1b",
+          "kind": "submit",
+          "solver": "0x0909090909090909090909090909090909090909",
+          "submission_hash": "0x0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+          "token_nonce": "0x0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
+        },
+        "expected_revision": 1,
+        "expected_solver_reward_micro_usdc": 20000000,
+        "original_terms": {
+          "acceptance_criteria": [
+            "Exact evidence"
+          ],
+          "bounty_id": "0x0505050505050505050505050505050505050505050505050505050505050505",
+          "creator": "0x0606060606060606060606060606060606060606",
+          "disclosure": "The creator judges the published criteria. The first passing creator verdict pays one solver. Rejected entries pay their bond to the creator; unreviewed entries recover only their bond after their review deadline or another winner. There is no exclusive claim or guarantee of payment for work.",
+          "goal": "Deliver evidence",
+          "max_pending_entries": 8,
+          "network": "base-sepolia",
+          "review_reward_micro_usdc": 1000000,
+          "review_window_seconds": 3600,
+          "schema": "agent-bounties/creator-open-v1",
+          "solver_reward_micro_usdc": 20000000,
+          "submission_deadline": 2000000000,
+          "title": "Open review"
+        },
+        "public_evidence": {
+          "artifact_sha256": "sha256:abababababababababababababababababababababababababababababababab",
+          "artifact_url": "https://example.org/deliverable",
+          "notes": "Check the committed artifact before deciding."
+        },
+        "user_salt": "0x0707070707070707070707070707070707070707070707070707070707070707",
+        "valid_before": 1990000000
+      },
+      "token_authorization": {
+        "digest": "0xe93da067e021184544328d526197effc87472617f90686a36e50e8d4a42e750a",
+        "signer": "0x0909090909090909090909090909090909090909",
+        "typed_data": {
+          "domain": {
+            "chainId": "84532",
+            "name": "USDC",
+            "verifyingContract": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+            "version": "2"
+          },
+          "message": {
+            "from": "0x0909090909090909090909090909090909090909",
+            "nonce": "0x0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+            "to": "0xed821ff2617d686f15f8bd2b3fab725e075a853e",
+            "validAfter": "0x0",
+            "validBefore": "0x769cfd80",
+            "value": "0xf4240"
+          },
+          "primaryType": "ReceiveWithAuthorization",
+          "types": {
+            "EIP712Domain": [
+              {
+                "name": "name",
+                "type": "string"
+              },
+              {
+                "name": "version",
+                "type": "string"
+              },
+              {
+                "name": "chainId",
+                "type": "uint256"
+              },
+              {
+                "name": "verifyingContract",
+                "type": "address"
+              }
+            ],
+            "ReceiveWithAuthorization": [
+              {
+                "name": "from",
+                "type": "address"
+              },
+              {
+                "name": "to",
+                "type": "address"
+              },
+              {
+                "name": "value",
+                "type": "uint256"
+              },
+              {
+                "name": "validAfter",
+                "type": "uint256"
+              },
+              {
+                "name": "validBefore",
+                "type": "uint256"
+              },
+              {
+                "name": "nonce",
+                "type": "bytes32"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "action_authorization": {
+        "digest": "0x4404c3302e951886b0c8e4277674dd5e0bf861442e23d796cb9b337abb9b9118",
+        "signer": "0x0606060606060606060606060606060606060606",
+        "typed_data": {
+          "domain": {
+            "chainId": "84532",
+            "name": "Agent Bounties Creator Open",
+            "verifyingContract": "0xed821ff2617d686f15f8bd2b3fab725e075a853e",
+            "version": "1"
+          },
+          "message": {
+            "deadline": "0x769cfd80",
+            "entry": 1,
+            "evidenceHash": "0xc5c6459a1ab590ed0c9a193c67b29f543a81871361b89d8ce1bb8b70de9e6e1b",
+            "passed": true,
+            "responseHash": "0x0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+            "revision": 1,
+            "solver": "0x0909090909090909090909090909090909090909",
+            "submissionHash": "0x0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+            "termsHash": "0x00e0617e8c6f786709e7b92d9e1cc8502ff65835c9124ec9503586fd262214ec"
+          },
+          "primaryType": "CreatorReview",
+          "types": {
+            "CreatorReview": [
+              {
+                "name": "entry",
+                "type": "uint64"
+              },
+              {
+                "name": "solver",
+                "type": "address"
+              },
+              {
+                "name": "submissionHash",
+                "type": "bytes32"
+              },
+              {
+                "name": "evidenceHash",
+                "type": "bytes32"
+              },
+              {
+                "name": "termsHash",
+                "type": "bytes32"
+              },
+              {
+                "name": "revision",
+                "type": "uint64"
+              },
+              {
+                "name": "passed",
+                "type": "bool"
+              },
+              {
+                "name": "responseHash",
+                "type": "bytes32"
+              },
+              {
+                "name": "deadline",
+                "type": "uint256"
+              }
+            ],
+            "EIP712Domain": [
+              {
+                "name": "name",
+                "type": "string"
+              },
+              {
+                "name": "version",
+                "type": "string"
+              },
+              {
+                "name": "chainId",
+                "type": "uint256"
+              },
+              {
+                "name": "verifyingContract",
+                "type": "address"
+              }
+            ]
+          }
+        }
+      },
+      "approval_hash": "0x1c1bbdf52ad232d9aabc1b7c5fa08c09fbcd95509d426f64165db2ad446ff9df",
+      "bounty_contract": "0xed821ff2617d686f15f8bd2b3fab725e075a853e",
+      "customer_gas_wei": "0",
+      "customer_principal_micro_usdc": "0",
+      "evidence_boundary": "Preparation and transaction hashes are not funding or payment. The platform pays gas only within its shared daily allowance; it never switches to customer-paid gas.",
+      "network": "base-sepolia",
+      "protocol": "agent-bounties/creator-open-v1",
+      "request": {
+        "action": {
+          "entry": 1,
+          "evidence_hash": "0xc5c6459a1ab590ed0c9a193c67b29f543a81871361b89d8ce1bb8b70de9e6e1b",
+          "kind": "review",
+          "passed": true,
+          "response_hash": "0x0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+          "solver": "0x0909090909090909090909090909090909090909",
+          "submission_hash": "0x0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
+        },
+        "expected_revision": 1,
+        "expected_solver_reward_micro_usdc": 20000000,
+        "original_terms": {
+          "acceptance_criteria": [
+            "Exact evidence"
+          ],
+          "bounty_id": "0x0505050505050505050505050505050505050505050505050505050505050505",
+          "creator": "0x0606060606060606060606060606060606060606",
+          "disclosure": "The creator judges the published criteria. The first passing creator verdict pays one solver. Rejected entries pay their bond to the creator; unreviewed entries recover only their bond after their review deadline or another winner. There is no exclusive claim or guarantee of payment for work.",
+          "goal": "Deliver evidence",
+          "max_pending_entries": 8,
+          "network": "base-sepolia",
+          "review_reward_micro_usdc": 1000000,
+          "review_window_seconds": 3600,
+          "schema": "agent-bounties/creator-open-v1",
+          "solver_reward_micro_usdc": 20000000,
+          "submission_deadline": 2000000000,
+          "title": "Open review"
+        },
+        "user_salt": "0x0707070707070707070707070707070707070707070707070707070707070707",
+        "valid_before": 1990000000
+      },
+      "token_authorization": null
+    },
+    {
+      "action_authorization": {
+        "digest": "0x668f4226aa896997bbfb7651d32890b4d95bfb8df5362c4e37ca0165d4e684f7",
+        "signer": "0x0606060606060606060606060606060606060606",
+        "typed_data": {
+          "domain": {
+            "chainId": "84532",
+            "name": "Agent Bounties Creator Open",
+            "verifyingContract": "0xed821ff2617d686f15f8bd2b3fab725e075a853e",
+            "version": "1"
+          },
+          "message": {
+            "deadline": "0x769cfd80",
+            "newReward": "0x17d7840",
+            "newTermsHash": "0x5b864c613825a5f9e54446dfbfb8a707ec8ab4c6e8680f1b038b33fe44190634",
+            "revision": 1,
+            "termsHash": "0x00e0617e8c6f786709e7b92d9e1cc8502ff65835c9124ec9503586fd262214ec",
+            "tokenNonce": "0x0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
+          },
+          "primaryType": "IncreaseReward",
+          "types": {
+            "EIP712Domain": [
+              {
+                "name": "name",
+                "type": "string"
+              },
+              {
+                "name": "version",
+                "type": "string"
+              },
+              {
+                "name": "chainId",
+                "type": "uint256"
+              },
+              {
+                "name": "verifyingContract",
+                "type": "address"
+              }
+            ],
+            "IncreaseReward": [
+              {
+                "name": "revision",
+                "type": "uint64"
+              },
+              {
+                "name": "termsHash",
+                "type": "bytes32"
+              },
+              {
+                "name": "newTermsHash",
+                "type": "bytes32"
+              },
+              {
+                "name": "newReward",
+                "type": "uint256"
+              },
+              {
+                "name": "tokenNonce",
+                "type": "bytes32"
+              },
+              {
+                "name": "deadline",
+                "type": "uint256"
+              }
+            ]
+          }
+        }
+      },
+      "approval_hash": "0xa5da5eb7adedb900eadf2dd4d1a7d4f8963fc430f1c686f603c8ceabcb54883b",
+      "bounty_contract": "0xed821ff2617d686f15f8bd2b3fab725e075a853e",
+      "customer_gas_wei": "0",
+      "customer_principal_micro_usdc": "5000000",
+      "evidence_boundary": "Preparation and transaction hashes are not funding or payment. The platform pays gas only within its shared daily allowance; it never switches to customer-paid gas.",
+      "network": "base-sepolia",
+      "protocol": "agent-bounties/creator-open-v1",
+      "request": {
+        "action": {
+          "kind": "increase",
+          "new_reward_micro_usdc": 25000000,
+          "token_nonce": "0x0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
+        },
+        "expected_revision": 1,
+        "expected_solver_reward_micro_usdc": 20000000,
+        "original_terms": {
+          "acceptance_criteria": [
+            "Exact evidence"
+          ],
+          "bounty_id": "0x0505050505050505050505050505050505050505050505050505050505050505",
+          "creator": "0x0606060606060606060606060606060606060606",
+          "disclosure": "The creator judges the published criteria. The first passing creator verdict pays one solver. Rejected entries pay their bond to the creator; unreviewed entries recover only their bond after their review deadline or another winner. There is no exclusive claim or guarantee of payment for work.",
+          "goal": "Deliver evidence",
+          "max_pending_entries": 8,
+          "network": "base-sepolia",
+          "review_reward_micro_usdc": 1000000,
+          "review_window_seconds": 3600,
+          "schema": "agent-bounties/creator-open-v1",
+          "solver_reward_micro_usdc": 20000000,
+          "submission_deadline": 2000000000,
+          "title": "Open review"
+        },
+        "user_salt": "0x0707070707070707070707070707070707070707070707070707070707070707",
+        "valid_before": 1990000000
+      },
+      "token_authorization": {
+        "digest": "0xc369da6ea54f118b7040738463c7b284fbfc62d437f99f07efee27a4dd6b0453",
+        "signer": "0x0606060606060606060606060606060606060606",
+        "typed_data": {
+          "domain": {
+            "chainId": "84532",
+            "name": "USDC",
+            "verifyingContract": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+            "version": "2"
+          },
+          "message": {
+            "from": "0x0606060606060606060606060606060606060606",
+            "nonce": "0x0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+            "to": "0xed821ff2617d686f15f8bd2b3fab725e075a853e",
+            "validAfter": "0x0",
+            "validBefore": "0x769cfd80",
+            "value": "0x4c4b40"
+          },
+          "primaryType": "ReceiveWithAuthorization",
+          "types": {
+            "EIP712Domain": [
+              {
+                "name": "name",
+                "type": "string"
+              },
+              {
+                "name": "version",
+                "type": "string"
+              },
+              {
+                "name": "chainId",
+                "type": "uint256"
+              },
+              {
+                "name": "verifyingContract",
+                "type": "address"
+              }
+            ],
+            "ReceiveWithAuthorization": [
+              {
+                "name": "from",
+                "type": "address"
+              },
+              {
+                "name": "to",
+                "type": "address"
+              },
+              {
+                "name": "value",
+                "type": "uint256"
+              },
+              {
+                "name": "validAfter",
+                "type": "uint256"
+              },
+              {
+                "name": "validBefore",
+                "type": "uint256"
+              },
+              {
+                "name": "nonce",
+                "type": "bytes32"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "action_authorization": {
+        "digest": "0x73a5f50e53664e91020df87fad84514b606fb87fd1779ebb80fb90ae863528a5",
+        "signer": "0x0606060606060606060606060606060606060606",
+        "typed_data": {
+          "domain": {
+            "chainId": "84532",
+            "name": "Agent Bounties Creator Open",
+            "verifyingContract": "0xed821ff2617d686f15f8bd2b3fab725e075a853e",
+            "version": "1"
+          },
+          "message": {
+            "deadline": "0x769cfd80",
+            "revision": 1,
+            "termsHash": "0x00e0617e8c6f786709e7b92d9e1cc8502ff65835c9124ec9503586fd262214ec"
+          },
+          "primaryType": "CancelBounty",
+          "types": {
+            "CancelBounty": [
+              {
+                "name": "revision",
+                "type": "uint64"
+              },
+              {
+                "name": "termsHash",
+                "type": "bytes32"
+              },
+              {
+                "name": "deadline",
+                "type": "uint256"
+              }
+            ],
+            "EIP712Domain": [
+              {
+                "name": "name",
+                "type": "string"
+              },
+              {
+                "name": "version",
+                "type": "string"
+              },
+              {
+                "name": "chainId",
+                "type": "uint256"
+              },
+              {
+                "name": "verifyingContract",
+                "type": "address"
+              }
+            ]
+          }
+        }
+      },
+      "approval_hash": "0x073681e215efdd933652b329e0fd1edc883bbb1907df7b7c9629baa62326841c",
+      "bounty_contract": "0xed821ff2617d686f15f8bd2b3fab725e075a853e",
+      "customer_gas_wei": "0",
+      "customer_principal_micro_usdc": "0",
+      "evidence_boundary": "Preparation and transaction hashes are not funding or payment. The platform pays gas only within its shared daily allowance; it never switches to customer-paid gas.",
+      "network": "base-sepolia",
+      "protocol": "agent-bounties/creator-open-v1",
+      "request": {
+        "action": {
+          "kind": "cancel"
+        },
+        "expected_revision": 1,
+        "expected_solver_reward_micro_usdc": 20000000,
+        "original_terms": {
+          "acceptance_criteria": [
+            "Exact evidence"
+          ],
+          "bounty_id": "0x0505050505050505050505050505050505050505050505050505050505050505",
+          "creator": "0x0606060606060606060606060606060606060606",
+          "disclosure": "The creator judges the published criteria. The first passing creator verdict pays one solver. Rejected entries pay their bond to the creator; unreviewed entries recover only their bond after their review deadline or another winner. There is no exclusive claim or guarantee of payment for work.",
+          "goal": "Deliver evidence",
+          "max_pending_entries": 8,
+          "network": "base-sepolia",
+          "review_reward_micro_usdc": 1000000,
+          "review_window_seconds": 3600,
+          "schema": "agent-bounties/creator-open-v1",
+          "solver_reward_micro_usdc": 20000000,
+          "submission_deadline": 2000000000,
+          "title": "Open review"
+        },
+        "user_salt": "0x0707070707070707070707070707070707070707070707070707070707070707",
+        "valid_before": 1990000000
+      },
+      "token_authorization": null
+    },
+    {
+      "action_authorization": null,
+      "approval_hash": "0x79ce37d3f02dd42ce71f83b8a7396d94cf67b1c005508ec082de0de29b65f65d",
+      "bounty_contract": "0xed821ff2617d686f15f8bd2b3fab725e075a853e",
+      "customer_gas_wei": "0",
+      "customer_principal_micro_usdc": "0",
+      "evidence_boundary": "Preparation and transaction hashes are not funding or payment. The platform pays gas only within its shared daily allowance; it never switches to customer-paid gas.",
+      "network": "base-sepolia",
+      "protocol": "agent-bounties/creator-open-v1",
+      "request": {
+        "action": {
+          "kind": "expire"
+        },
+        "expected_revision": 1,
+        "expected_solver_reward_micro_usdc": 20000000,
+        "original_terms": {
+          "acceptance_criteria": [
+            "Exact evidence"
+          ],
+          "bounty_id": "0x0505050505050505050505050505050505050505050505050505050505050505",
+          "creator": "0x0606060606060606060606060606060606060606",
+          "disclosure": "The creator judges the published criteria. The first passing creator verdict pays one solver. Rejected entries pay their bond to the creator; unreviewed entries recover only their bond after their review deadline or another winner. There is no exclusive claim or guarantee of payment for work.",
+          "goal": "Deliver evidence",
+          "max_pending_entries": 8,
+          "network": "base-sepolia",
+          "review_reward_micro_usdc": 1000000,
+          "review_window_seconds": 3600,
+          "schema": "agent-bounties/creator-open-v1",
+          "solver_reward_micro_usdc": 20000000,
+          "submission_deadline": 2000000000,
+          "title": "Open review"
+        },
+        "user_salt": "0x0707070707070707070707070707070707070707070707070707070707070707",
+        "valid_before": 1990000000
+      },
+      "token_authorization": null
+    },
+    {
+      "action_authorization": null,
+      "approval_hash": "0x4b32f95d892d6725a225fe3bfcb727c5138243197da7cbbb5f30f8b93280c2cc",
+      "bounty_contract": "0xed821ff2617d686f15f8bd2b3fab725e075a853e",
+      "customer_gas_wei": "0",
+      "customer_principal_micro_usdc": "0",
+      "evidence_boundary": "Preparation and transaction hashes are not funding or payment. The platform pays gas only within its shared daily allowance; it never switches to customer-paid gas.",
+      "network": "base-sepolia",
+      "protocol": "agent-bounties/creator-open-v1",
+      "request": {
+        "action": {
+          "entry": 1,
+          "kind": "refund_bond"
+        },
+        "expected_revision": 1,
+        "expected_solver_reward_micro_usdc": 20000000,
+        "original_terms": {
+          "acceptance_criteria": [
+            "Exact evidence"
+          ],
+          "bounty_id": "0x0505050505050505050505050505050505050505050505050505050505050505",
+          "creator": "0x0606060606060606060606060606060606060606",
+          "disclosure": "The creator judges the published criteria. The first passing creator verdict pays one solver. Rejected entries pay their bond to the creator; unreviewed entries recover only their bond after their review deadline or another winner. There is no exclusive claim or guarantee of payment for work.",
+          "goal": "Deliver evidence",
+          "max_pending_entries": 8,
+          "network": "base-sepolia",
+          "review_reward_micro_usdc": 1000000,
+          "review_window_seconds": 3600,
+          "schema": "agent-bounties/creator-open-v1",
+          "solver_reward_micro_usdc": 20000000,
+          "submission_deadline": 2000000000,
+          "title": "Open review"
+        },
+        "user_salt": "0x0707070707070707070707070707070707070707070707070707070707070707",
+        "valid_before": 1990000000
+      },
+      "token_authorization": null
+    },
+    {
+      "action_authorization": null,
+      "approval_hash": "0xf4d6bf747533b93a1838b905c32e333196812faf9f6a290b421666428683502f",
+      "bounty_contract": "0xed821ff2617d686f15f8bd2b3fab725e075a853e",
+      "customer_gas_wei": "0",
+      "customer_principal_micro_usdc": "0",
+      "evidence_boundary": "Preparation and transaction hashes are not funding or payment. The platform pays gas only within its shared daily allowance; it never switches to customer-paid gas.",
+      "network": "base-sepolia",
+      "protocol": "agent-bounties/creator-open-v1",
+      "request": {
+        "action": {
+          "kind": "refund_principal"
+        },
+        "expected_revision": 1,
+        "expected_solver_reward_micro_usdc": 20000000,
+        "original_terms": {
+          "acceptance_criteria": [
+            "Exact evidence"
+          ],
+          "bounty_id": "0x0505050505050505050505050505050505050505050505050505050505050505",
+          "creator": "0x0606060606060606060606060606060606060606",
+          "disclosure": "The creator judges the published criteria. The first passing creator verdict pays one solver. Rejected entries pay their bond to the creator; unreviewed entries recover only their bond after their review deadline or another winner. There is no exclusive claim or guarantee of payment for work.",
+          "goal": "Deliver evidence",
+          "max_pending_entries": 8,
+          "network": "base-sepolia",
+          "review_reward_micro_usdc": 1000000,
+          "review_window_seconds": 3600,
+          "schema": "agent-bounties/creator-open-v1",
+          "solver_reward_micro_usdc": 20000000,
+          "submission_deadline": 2000000000,
+          "title": "Open review"
+        },
+        "user_salt": "0x0707070707070707070707070707070707070707070707070707070707070707",
+        "valid_before": 1990000000
+      },
+      "token_authorization": null
+    }
+  ],
+  "release": {
+    "deployment_block": 1,
+    "factory": "0x0101010101010101010101010101010101010101",
+    "factory_code_hash": "0x0303030303030303030303030303030303030303030303030303030303030303",
+    "implementation": "0x0202020202020202020202020202020202020202",
+    "implementation_code_hash": "0x0404040404040404040404040404040404040404040404040404040404040404",
+    "network": "base-sepolia",
+    "protocol": "agent-bounties/creator-open-v1"
+  }
+}

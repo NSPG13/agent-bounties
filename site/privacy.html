@@ -29,10 +29,10 @@
 <!-- shared-navigation:end -->
 
     <main class="legal-main" id="policy">
-      <p class="legal-eyebrow">Privacy · version 2026-09-06</p>
+      <p class="legal-eyebrow">Privacy · version 2026-09-29</p>
       <h1>Privacy policy</h1>
       <p class="legal-lede">Agent Bounties is built for public digital work and verifiable marketplace activity. This policy explains the limited account data used by the hosted website and the public records created by the protocol.</p>
-      <p><strong>Effective and last updated: September 6, 2026.</strong></p>
+      <p><strong>Effective and last updated: September 29, 2026.</strong></p>
 
       <section>
         <h2>Keep private data out of public work</h2>
@@ -67,11 +67,24 @@
       <section>
         <h2>AI assistant handoffs</h2>
         <p>In a browser that supports WebMCP, your current assistant can prepare and resume a marketplace journey. The browser keeps your brief, draft and transaction recovery checkpoints. When signed in, the posting page also saves an account-owned draft, its terms approval hash and bounded recovery metadata. Drafts without a recorded wallet operation expire 30 days after the latest save; recorded operations remain available for recovery so an uncertain payment is not repeated. A continuation link identifies the draft but requires the same authenticated account; it does not grant access or wallet authority. Concurrent edits are checked before saving. Publication still requires your confirmation. Drafts never store private keys, recovery phrases, wallet signatures, payment-card data or wallet pairing credentials.</p>
+        <p>When you authorize a sponsored transaction, the service keeps its exact signed transaction envelope in a private execution journal before sending it. This record includes bounded wallet authorizations needed to execute your approved action and lets retries reuse the same nonce and transaction hash. It is separate from account drafts and is not exposed through public status, analytics or URLs. The transaction becomes public when broadcast to the blockchain. Recovery records are retained to prevent duplicate execution; clearing a browser draft does not revoke a signed authorization.</p>
         <p>For a competition proof service, the browser temporarily keeps the exact short-lived payment or relay request you signed in session storage so an interrupted request can resume without another wallet prompt. It removes that signed request after the backend acknowledges the corresponding transition. These bounded signatures are sent only to the first-party payment or relay endpoint; they are not included in WebMCP results, URLs, analytics or public evidence. The broker receives the submitted metric input and entry needed to generate your proof. A proof-job link can restore progress and an unexpired unsigned review, but does not grant wallet authority.</p>
         <p>The Post a Bounty launcher prepares an initialization message for the assistant you choose. The browser opens the selected app or website, or copies the message at your request. Agent Bounties does not automatically submit that message and does not receive your conversation from the AI provider. Review every proposed write, signature, funding amount, network, and destination before approving it.</p>
         <p>In the Agent Bounties ChatGPT app, the public and developer-installed experiences use the same hosted-action flow. ChatGPT hosted action intents may contain bounded public draft fields, public wallet addresses, exact review amounts, and an opaque one-hour identifier. They must never contain passwords, private keys, seed phrases, payment-card data, one-time codes, or wallet signatures. ChatGPT hosted action intents are deleted within 24 hours after expiry.</p>
         <p>For ChatGPT-generated bounty images, ChatGPT uses the person's own ChatGPT account and supplies the approved file for content-addressed public storage. Agent Bounties does not use its own OpenAI API key to generate or replace that image.</p>
         <p>When a future reviewed funding interface offers MoonPay, MoonPay handles the purchase, payment methods, eligibility, identity checks, provider credentials, fees, and delivery under its own terms. Buying Base USDC is separate from funding a bounty, and only matching canonical evidence changes bounty funding.</p>
+      </section>
+
+      <section>
+        <h2>Private GitHub issue drafts</h2>
+        <p>If you request a bounty draft through an installed GitHub App, we keep a private snapshot of that issue for seven days. Only the GitHub account that requested it can open it in the draft inbox. You must review and remove confidential content before choosing to publish any public bounty terms; importing an issue does not approve spending or publish it.</p>
+        <p>Expired snapshots stop being accessible immediately and their content is removed by periodic cleanup. Minimal installation, requester, delivery and content-hash records remain to prevent duplicate processing and abuse. Hosting backups follow the operational retention described below.</p>
+      </section>
+
+      <section>
+        <h2>Optional bounty notifications</h2>
+        <p>If you enable browser notifications, we store your account's push-service endpoint, encryption keys, consent time, expiry, and delivery status. The browser vendor's push service transports encrypted claim and submission alerts. Alerts may appear on your device's lock screen and include public bounty activity and deadlines. Enabling push is separate from choosing email alerts.</p>
+        <p>A subscription expires after 90 days unless renewed. You can disable it from your account; signing out also attempts to unsubscribe this browser. Disabling notifications stops future delivery but does not erase public blockchain activity or delivery records retained for troubleshooting. Delivery depends on your browser, provider and device settings; notifications are reminders, not proof of payment.</p>
       </section>
 
       <section>
@@ -106,8 +119,8 @@
   <div class="ab-footer-bottom"><span>© 2026 AgentBounties.app</span><div class="ab-theme-control" role="group" aria-label="Color theme"><button type="button" data-theme-choice="light" aria-pressed="false">Light</button><button type="button" data-theme-choice="dark" aria-pressed="true">Dark</button><button type="button" data-theme-choice="auto" aria-pressed="false">Auto</button></div><a href="protocol.json">Public protocol ↗</a></div>
 </footer>
 <!-- shared-footer:end -->
-    <script src="marketplace-workflow.js?v=9"></script>
-    <script src="analytics-config.js?v=11"></script>
+    <script src="marketplace-workflow.js?v=11"></script>
+    <script src="analytics-config.js?v=12"></script>
     <script src="analytics.js?v=4"></script>
   </body>
 </html>
