@@ -1,0 +1,9 @@
+{
+  "protocol": "agent-bounties/creator-open-v1",
+  "network": "base-mainnet",
+  "factory": "0xf9c684ee0157d311ab20e365323575130c95af0d",
+  "implementation": "0x19c5b664c6cecbb0f5b1b8ad92f0ea03835c184c",
+  "factory_code_hash": "0x2c2a88db7729412714677f7567ce36167f5bbec2b72e23c2e97cc7f2365cda42",
+  "implementation_code_hash": "0x79b341789356227605b82b56c783106da735b229d07c2d415a9ac227474ea353",
+  "deployment_block": 52020697
+}

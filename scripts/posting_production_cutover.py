@@ -166,7 +166,7 @@ def run(phase):
             os.environ.get('GITHUB_REF') == 'refs/heads/' + BRANCH and
             os.environ.get('GITHUB_EVENT_NAME') == 'workflow_dispatch',
             'Only attended dispatch on the exact control branch is permitted')
-    require(phase in ('inventory', 'pause-and-api', 'workers', 'mainnet-preflight', 'resume-probe', 'hold-spenders', 'upgrade-held-spenders'), 'Unknown cutover phase')
+    require(phase in ('inventory', 'pause-and-api', 'workers', 'mainnet-preflight', 'resume-probe', 'hold-spenders', 'upgrade-held-spenders', 'upgrade-runtime'), 'Unknown cutover phase')
     require(len(os.environ.get('GAS_SPONSOR_BUDGET_TOKEN', '')) >= 32,
             'Dedicated reservation credential missing')
     output = Path('posting-cutover-evidence.json')
@@ -238,6 +238,36 @@ def run(phase):
                 for role in ('keeper', 'broker'):
                     api('render', '/services/' + SERVICES[role] + '/suspend', 'POST')
                 raise
+        return
+    if phase == 'upgrade-runtime':
+        require(all(item['state'] == 'disabled_manually' for item in evidence['workflows'].values()),
+                'Spending workflows must remain paused')
+        for role in ('keeper', 'broker'):
+            require(any(d['status'] == 'live' and d['commit'] == SPENDER_REVISION
+                        for d in evidence['services'][role]['deploys']), 'Budget-aware paused worker must be live')
+            setting = api('render', '/services/' + SERVICES[role] + '/env-vars/POSTING_SENDS_PAUSED')
+            require(setting.get('value', setting.get('envVar', {}).get('value')) == 'true',
+                    'Worker must remain paused')
+        root = Path(__file__).resolve().parents[1] / 'ops'
+        creator = (root / 'posting-creator-open-mainnet-release-20261001.json').read_text()
+        setup = (root / 'posting-setup-mainnet-release-20261001.json').read_text()
+        require(json.loads(creator)['factory'] == '0xf9c684ee0157d311ab20e365323575130c95af0d'
+                and json.loads(creator)['deployment_block'] == 52020697, 'Creator release differs')
+        require(json.loads(setup)['wallet_factory'] == '0xe3d4f7b203c5e8576e0225d3e64a8532429d3876'
+                and json.loads(setup)['deployment_block'] == 49539535, 'Setup release differs')
+        evidence['started_deploys'] = {}
+        for role in ('api', 'mcp'):
+            for key, value in FLAGS_OFF.items():
+                set_env(role, key, value)
+            set_env(role, 'CREATOR_OPEN_MAINNET_RELEASE_JSON', creator)
+            set_env(role, 'SPONSORED_SETUP_MAINNET_RELEASE_JSON', setup)
+        set_env('legacy', 'CREATOR_OPEN_RELEASE_JSON', creator)
+        set_env('legacy', 'POSTING_CREATOR_INDEXER_ENABLED', 'true')
+        for role in ('api', 'mcp', 'legacy', 'v1', 'v2', 'shadow'):
+            rebind(role)
+            evidence['started_deploys'][role] = deploy(role, SPENDER_REVISION)
+            output.write_text(json.dumps(evidence, indent=2) + '\n')
+        print(json.dumps({'started_deploys': evidence['started_deploys']}), flush=True)
         return
     if phase == 'mainnet-preflight':
         require(all(item['state'] == 'disabled_manually' for item in evidence['workflows'].values()), 'Spending workflows must remain paused')

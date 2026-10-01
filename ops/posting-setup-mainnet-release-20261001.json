@@ -1,0 +1,12 @@
+{
+  "network": "base-mainnet",
+  "deployment_block": 49539535,
+  "bounty_factory": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+  "bounty_factory_code_hash": "0x06f810de7b46f854ecc29e9c0c28156edab4b0d3e0bbe2bf5be8876687bebfc6",
+  "wallet_factory": "0xe3d4f7b203c5e8576e0225d3e64a8532429d3876",
+  "wallet_factory_code_hash": "0x254e247c3df7b38c257cd24b5d47c6ca1bc3ed335d6cb062498695bced540cf9",
+  "wallet_implementation": "0x00c250bda8fa3c49d80a11d9b6ebd961736b7202",
+  "wallet_implementation_code_hash": "0xade4fb51d0c5c866bb0cc44ca17ad0b254c6bba92ac5b47ddc2ced4963b05d18",
+  "participant_registry": "0x9875dcaf570bde8ff1aa62275d3c8985f4fd1294",
+  "participant_registry_code_hash": "0xd27541b8cfc1c154ae21b333917b12e0a40a6828d399a9f4be4e334a64c22854"
+}
