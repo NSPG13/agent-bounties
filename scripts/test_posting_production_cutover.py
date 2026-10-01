@@ -50,6 +50,27 @@ class CutoverTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'exact deployment revision'):
                 controller.deploy('api')
 
+    def test_queued_deploy_resolves_commit_without_resubmission(self):
+        with patch.object(controller, 'api', side_effect=[
+                {'id': 'dep-fixture', 'status': 'created', 'commit': None},
+                {'id': 'dep-fixture', 'status': 'build_in_progress',
+                 'commit': {'id': controller.SPENDER_REVISION}}]) as api, \
+                patch.object(controller.time, 'sleep'):
+            result = controller.deploy('keeper', controller.SPENDER_REVISION)
+            self.assertEqual(result['commit'], controller.SPENDER_REVISION)
+            self.assertEqual(api.call_count, 2)
+            self.assertEqual(api.call_args_list[1].args,
+                ('render', '/services/' + controller.SERVICES['keeper'] + '/deploys/dep-fixture'))
+
+    def test_unresolved_deploy_fails_closed_without_resubmission(self):
+        with patch.object(controller, 'api', return_value={
+                'id': 'dep-fixture', 'status': 'created', 'commit': None}) as api, \
+                patch.object(controller.time, 'sleep'):
+            with self.assertRaisesRegex(RuntimeError, 'exact deployment revision'):
+                controller.deploy('keeper', controller.SPENDER_REVISION)
+            self.assertEqual(sum(len(call.args) > 2 and call.args[2] == 'POST'
+                                 for call in api.call_args_list), 1)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -127,12 +127,23 @@ def rebind(role):
             observed['branch'] == PRIVATE_BRANCH, 'Source rebind did not read back')
 
 
-def deploy(role):
+def deploy(role, revision=PRIVATE_REVISION):
     value = api('render', '/services/' + SERVICES[role] + '/deploys',
-                'POST', {'commitId': PRIVATE_REVISION, 'clearCache': 'do_not_clear'})
-    require(value.get('commit', {}).get('id') == PRIVATE_REVISION,
+                'POST', {'commitId': revision, 'clearCache': 'do_not_clear'})
+    require(isinstance(value, dict) and str(value.get('id', '')).startswith('dep-'),
+            'Provider did not acknowledge a deployment ID')
+    # A newly queued deployment may have commit:null until the source resolves.
+    # Poll only that ID; never submit a replacement deployment on this condition.
+    deploy_id = value['id']
+    for _ in range(20):
+        if value.get('commit') is not None:
+            break
+        time.sleep(1)
+        value = api('render', '/services/' + SERVICES[role] + '/deploys/' + deploy_id)
+        require(value['id'] == deploy_id, 'Deployment identity changed')
+    require((value.get('commit') or {}).get('id') == revision,
             'Provider did not acknowledge exact deployment revision')
-    return {'id': value['id'], 'status': value['status'], 'commit': PRIVATE_REVISION}
+    return {'id': value['id'], 'status': value['status'], 'commit': revision}
 
 
 def run(phase):
@@ -193,12 +204,7 @@ def run(phase):
             try:
                 for role in ('keeper', 'broker'):
                     api('render', '/services/' + SERVICES[role] + '/resume', 'POST')
-                    deployed = api('render', '/services/' + SERVICES[role] + '/deploys',
-                                   'POST', {'commitId': SPENDER_REVISION, 'clearCache': 'do_not_clear'})
-                    require(deployed.get('commit', {}).get('id') == SPENDER_REVISION,
-                            'Paused spender deployment revision differs')
-                    evidence['started_deploys'][role] = {
-                        'id': deployed['id'], 'commit': SPENDER_REVISION, 'status': deployed['status']}
+                    evidence['started_deploys'][role] = deploy(role, SPENDER_REVISION)
                     output.write_text(json.dumps(evidence, indent=2) + '\n')
                 deadline = time.monotonic() + 600
                 while time.monotonic() < deadline:
