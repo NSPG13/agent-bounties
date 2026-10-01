@@ -46,8 +46,41 @@ function fixture(){
   assert.equal(await stalled.controller.enable(),false);
   assert.equal(stalled.messages.at(-1).busy,false);
   assert(stalled.messages.some(value=>value.message?.includes("setup timed out")));
-  finishSubscribe({toJSON:()=>({}),unsubscribe:async()=>true});await Promise.resolve();
+  assert.equal(await stalled.controller.enable(),false,"retry waits for the pending native subscription to be cleaned up");
+  let lateUnsubscribed=0;
+  finishSubscribe({toJSON:()=>({}),unsubscribe:async()=>{lateUnsubscribed++;return true;}});await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(lateUnsubscribed,1,"a native subscription arriving after timeout is explicitly unsubscribed");
   assert.equal(stalled.calls.filter(v=>v[0]==="fetch"&&v[2].method==="POST").length,0,"late native subscription cannot save after timeout");
+  const latePost=fixture();latePost.controller.setAccount("account-1");await latePost.controller.load();
+  const postFetch=latePost.win.fetch;let finishPost,finishCleanup;
+  latePost.win.fetch=async(url,options)=>{
+    const body=options.body&&JSON.parse(options.body);
+    if(body?.action==="subscribe")return new Promise(resolve=>finishPost=resolve);
+    if(body?.action==="unsubscribe"){latePost.calls.push(["cleanup",body]);return new Promise(resolve=>finishCleanup=resolve);}
+    return postFetch(url,options);
+  };
+  assert.equal(await latePost.controller.enable(),false);
+  assert.equal(latePost.calls.filter(v=>v[0]==="unsubscribe").length,1,"POST timeout revokes the native subscription immediately");
+  assert.equal(await latePost.controller.enable(),false,"an unresolved save cannot race another setup");
+  finishPost({ok:true,json:async()=>({subscribed:true,id})});await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(latePost.calls.find(v=>v[0]==="cleanup")[1],{action:"unsubscribe",id});
+  assert.equal(await latePost.controller.enable(),false,"new setup waits for late server cleanup too");
+  finishCleanup({ok:true,json:async()=>({subscribed:false})});await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(JSON.parse(latePost.win.localStorage.getItem("ab.creator-push-cleanup.v1")),[]);
+  assert.equal(latePost.messages.at(-1).enabled,false);
+  latePost.win.fetch=postFetch;assert.equal(await latePost.controller.enable(),true,"setup recovers after confirmed cleanup");
+  const switched=fixture();switched.controller.setAccount("account-1");await switched.controller.load();
+  const switchedFetch=switched.win.fetch;let finishOldAccount;
+  switched.win.fetch=async(url,options)=>options.body&&JSON.parse(options.body).action==="subscribe"?new Promise(resolve=>finishOldAccount=resolve):switchedFetch(url,options);
+  assert.equal(await switched.controller.enable(),false);
+  switched.controller.setAccount("account-2");await switched.controller.load();
+  finishOldAccount({ok:true,json:async()=>({subscribed:true,id})});await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(switched.calls.filter(v=>v[0]==="fetch"&&v[2].body?.includes('"unsubscribe"')).length,0,"old account cleanup is not sent under a new account session");
+  assert.deepEqual(JSON.parse(switched.win.localStorage.getItem("ab.creator-push-cleanup.v1")),[{account:"account-1",id}]);
+  const resumed=push.create(switched.win,"https://api.agentbounties.app/v1/site-auth/push-notifications",()=>{});
+  resumed.setAccount("account-1");await resumed.load();
+  assert.equal(switched.calls.filter(v=>v[0]==="fetch"&&v[2].body?.includes('"unsubscribe"')).length,1,"cleanup survives controller reload and resumes only for the owning account");
+  assert.deepEqual(JSON.parse(switched.win.localStorage.getItem("ab.creator-push-cleanup.v1")),[]);
   assert.throws(()=>push.publicKey("https://evil.example",f.win));
   const events={},notifications=[],opened=[];
   const self={location:{origin:"https://agentbounties.app"},addEventListener:(name,fn)=>events[name]=fn,skipWaiting:()=>{},registration:{showNotification:async(...value)=>notifications.push(value)},clients:{openWindow:async value=>opened.push(value)}};
@@ -55,6 +88,7 @@ function fixture(){
   const data={schema:"agent-bounties/creator-push-v1",id,kind:"submission",title:"untrusted override",deadline:"2026-10-01 12:00:00 UTC",url:"/participate.html?bountyContract=0x"+"11".repeat(20)+"&network=base-mainnet"};
   let pending;events.push({data:{json:()=>data},waitUntil:p=>pending=p});await pending;
   assert.equal(notifications.length,1);assert.equal(notifications[0][0],"A solution is ready for your review");assert.equal(notifications[0][1].renotify,false);assert.match(notifications[0][1].body,/2026-10-01/);
+  assert.equal(notifications[0][1].tag,`ab-${id}`);
   events.push({data:{json:()=>({...data,url:"https://evil.example/participate.html"})},waitUntil:()=>{throw Error("foreign notification");}});
   events.notificationclick({notification:{close:()=>{},data:{url:"https://evil.example/"}},waitUntil:()=>{throw Error("foreign navigation");}});assert.equal(opened.length,0);
   events.notificationclick({notification:{close:()=>{},data:notifications[0][1].data},waitUntil:p=>pending=p});await pending;assert.match(opened[0],/^https:\/\/agentbounties.app\/participate.html\?/);
@@ -67,11 +101,18 @@ function fixture(){
       events.push({data:{json:()=>({...source,schema:"agent-bounties/creator-push-v2",stage,expires_at:Math.floor(Date.now()/1000)+60})},waitUntil:p=>pending=p});await pending;
       const latest=notifications.at(-1);
       assert.equal(latest[0],stage==="overdue"?"A review deadline was missed":"Your review deadline is approaching");
+      assert.equal(latest[1].tag,`ab-${id}-${stage}`,"each deadline stage gets a distinct alert even when the initial notice remains visible");
+      assert.equal(latest[1].renotify,false,"duplicate delivery of the same stage does not re-alert");
       if(stage==="overdue"){assert.match(latest[1].body,/deadline passed/);assert.doesNotMatch(latest[1].body,/Review by/);}
     }
   }
   for(const invalid of [{...data,stage:"invented"},{...data,stage:"overdue",deadline:null},{...data,stage:"remaining_1h",kind:"claim"}])events.push({data:{json:()=>invalid},waitUntil:()=>{throw Error("invalid deadline notification");}});
   const reminder={...data,schema:"agent-bounties/creator-push-v2",stage:"remaining_1h",expires_at:Math.floor(Date.now()/1000)+60};
+  const tray=new Map();
+  for(const notice of notifications)tray.set(notice[1].tag,notice);
+  assert.equal(tray.size,5,"initial plus four distinct deadline stages survive replacement in the notification tray");
+  for(let duplicate=0;duplicate<2;duplicate++){events.push({data:{json:()=>reminder},waitUntil:p=>pending=p});await pending;const notice=notifications.at(-1);tray.set(notice[1].tag,notice);}
+  assert.equal(tray.size,5,"duplicate same-stage delivery reuses its tag");
   for(const invalid of [{...reminder,expires_at:Math.floor(Date.now()/1000)-1},{...reminder,expires_at:null},{...reminder,schema:"agent-bounties/creator-push-v1"},{...reminder,stage:"initial"}])events.push({data:{json:()=>invalid},waitUntil:()=>{throw Error("expired or mismatched deadline notification");}});
   const test={schema:"agent-bounties/push-test-v1",id,expires_at:Math.floor(Date.now()/1000)+60,title:"Review required",url:"https://evil.example"};
   events.push({data:{json:()=>test},waitUntil:p=>pending=p});await pending;
