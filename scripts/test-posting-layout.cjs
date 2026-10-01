@@ -67,6 +67,7 @@ async function fixtures(context, origin, options = {}) {
       mock.drafts.set(operation, saved);
       return route.fulfill({ json: saved });
     }
+    if (url.pathname === "/v1/base/gas-sponsorship") return route.fulfill({ json: { schema: "agent-bounties/gas-sponsorship-v1", network: "base-mainnet", creation: { available: mock.sponsorAvailable !== false } } });
     if (url.pathname === "/v1/base/autonomous-bounties/events") return route.fulfill({ json: mock.events });
     if (url.pathname === "/v1/opportunities") return route.fulfill({ json: { schema_version: "agent-bounties/opportunity-projection-v1", items: mock.inventory } });
     if (url.origin === "https://mainnet.base.org") {
@@ -105,9 +106,9 @@ async function fixtures(context, origin, options = {}) {
     window.ethereum = { isMetaMask: true, request: async ({ method }) => {
       window.__walletRequests.push(method);
       if (method === "eth_requestAccounts" || method === "eth_accounts") return ["0x1111111111111111111111111111111111111111"];
-      // No Base ETH in the injected layout wallet keeps the top-up details
-      // visible for keyboard/scroll checks; it cannot fund anything.
-      const result = ({ eth_chainId: "0x2105", eth_blockNumber: "0x64", eth_call: "0x5f5e100", eth_getBalance: "0x0" })[method];
+      // No USDC in the injected layout wallet keeps the add-funds details
+      // visible even when creation gas is sponsored; no wallet write is permitted.
+      const result = ({ eth_chainId: "0x2105", eth_blockNumber: "0x64", eth_call: "0x0", eth_getBalance: "0x0" })[method];
       if (result) return result;
       window.__walletWrites.push(method); throw new Error("Layout test prohibits wallet writes: " + method);
     } };
@@ -121,7 +122,7 @@ async function recoveryRegressions(browser, origin) {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
   const mock = await fixtures(context, origin, { wallets: [wallet], phoneRestored: true });
   const page = await context.newPage(), errors = [];
-  page.on("pageerror", error => errors.push(error.message));
+  page.on("pageerror", error => { errors.push(error.message); console.error(error.stack); });
   try {
     await page.goto(origin + "/post.html?from=webmcp&analytics=off");
     await awaitPosting(page);
@@ -193,6 +194,15 @@ async function recoveryRegressions(browser, origin) {
     assert.equal(await page.locator("[data-fund-now]").isDisabled(), true, "Unaccepted legal terms keep payment disabled");
     await page.locator("[data-legal-consent-checkbox]").check();
     assert.equal(await page.locator("[data-fund-now]").isEnabled(), true);
+    mock.sponsorAvailable = false;
+    await page.getByRole("button", { name: "Check my balance", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector("[data-payment-status]")?.textContent.includes("sponsorship is unavailable") || document.querySelector("#funding-dialog").dataset.fundingView === "topup");
+    assert.equal(await page.locator("[data-fund-now]").isDisabled(), true);
+    assert.equal(await page.getByRole("link", { name: "Add Base ETH", exact: true }).count(), 0);
+    mock.sponsorAvailable = true;
+    await page.getByRole("button", { name: "Check my balance", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector("#funding-dialog").dataset.fundingView === "review");
+
     await page.locator("[data-legal-consent-checkbox]").uncheck();
     await page.getByRole("button", { name: "Change wallet", exact: true }).click();
     await page.getByRole("button", { name: /Test wallet .*Saved to your account/ }).click();
@@ -210,10 +220,10 @@ async function recoveryRegressions(browser, origin) {
     // Popup blocking must not prevent top-up or lose the exact approved review.
     mock.usdcBalance = "0x0";
     await page.getByRole("button", { name: "Check my balance", exact: true }).click();
-    await page.getByRole("link", { name: "Add Base USDC", exact: true }).waitFor();
+    await page.getByRole("link", { name: "Add funds to wallet", exact: true }).waitFor();
     await page.evaluate(() => { window.open = () => { throw new Error("Popup blocked"); }; });
     const pagesBefore = context.pages().length;
-    await Promise.all([page.waitForURL(url => url.pathname === "/onramp.html"), page.getByRole("link", { name: "Add Base USDC", exact: true }).click()]);
+    await Promise.all([page.waitForURL(url => url.pathname === "/onramp.html"), page.getByRole("link", { name: "Add funds to wallet", exact: true }).click()]);
     assert.equal(context.pages().length, pagesBefore);
     const topup = new URL(page.url());
     assert.equal(topup.searchParams.get("operation_id"), approved.journey.id);
@@ -382,7 +392,7 @@ async function guidedTopupRegressions(browser, origin) {
       window.__openedPurchases = [];
     });
     const page = await context.newPage(), errors = [];
-    page.on("pageerror", error => errors.push(error.message));
+    page.on("pageerror", error => { errors.push(error.message); console.error(error.stack); });
     try {
       const back = origin + "/post.html?operation_id=guide-fixture&funding_review=1#bounty-preview";
       const url = origin + "/onramp.html?amount=2.01&operation_id=guide-fixture&wallet=" + wallet.address + "&return=" + encodeURIComponent(back);
@@ -483,31 +493,11 @@ async function guidedTopupRegressions(browser, origin) {
       mock.rpcFailure = false;
       await page.getByRole("button", { name: "Check my balance", exact: true }).click();
       await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "ready");
-      // Synthetic provider completion only: exercise the separate gas path.
+      // No ETH purchase is needed when the wallet has enough Base USDC.
       mock.ethBalance = "0x0";
       await page.getByRole("button", { name: "Check my balance", exact: true }).click();
-      await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "pending");
-      await page.getByText("My purchase is finished or cancelled", { exact: true }).click();
-      await page.locator("[data-purchase-resolved]").check();
-      await page.getByRole("button", { name: "Check after purchase", exact: true }).click();
-      await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "method");
-      assert.equal(await page.locator("[data-topup-needed]").textContent(), "ETH needed for the network fee");
-      await page.getByRole("button", { name: "Use money in MoonPay", exact: true }).filter({ visible: true }).click();
-      assert.match(await page.locator("[data-topup-transfer-amount]").textContent(), /Enough USDC/);
-      await page.getByRole("button", { name: "Back", exact: true }).click();
-      await page.getByRole("button", { name: "Buy with a card", exact: true }).click();
-      assert.equal(await page.locator("[data-onramp-asset]").inputValue(), "eth");
-      assert.equal(await page.locator("[data-topup-card-asset]").textContent(), "ETH on Base");
-      await page.evaluate(() => { window.open = () => ({ location: { replace(url) { window.__openedPurchases.push(url); } }, close() {}, focus() {} }); });
-      await page.getByRole("link", { name: "Open MetaMask", exact: true }).click();
-      assert.deepEqual(await page.evaluate(() => window.__openedPurchases), ["https://portfolio.metamask.io/"]);
-      assert.equal(await page.evaluate(() => window.AgentBountiesOnramp.hasPendingPurchase()), true);
-      await page.reload();
-      await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "pending");
-      assert.equal(await page.locator("[data-direct-moonpay]").isVisible(), false, "An ETH order survives a reload without asset=eth");
-      mock.ethBalance = "0x2386f26fc10000";
-      await page.reload();
       await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "ready");
+      assert.equal(await page.evaluate(() => window.AgentBountiesOnramp.status().ready_for_bounty_review), true);
       // A supplied address is never described as a live session without a match.
       await page.evaluate(() => { window.ethereum.request = async ({method}) => method === "eth_accounts" ? [] : "0x2105"; window.dispatchEvent(new Event("focus")); });
       await page.waitForFunction(() => document.querySelector("[data-topup-connection]").textContent.includes("not connected"));
@@ -526,7 +516,7 @@ async function topupPhoneConnectionRegression(browser, origin) {
   await fixtures(context, origin, { phoneRestored: true });
   await context.addInitScript(() => { delete window.ethereum; });
   const page = await context.newPage(), errors = [];
-  page.on("pageerror", error => errors.push(error.message));
+  page.on("pageerror", error => { errors.push(error.message); console.error(error.stack); });
   try {
     await page.goto(origin + "/onramp.html?amount=2.01&wallet=" + wallet.address);
     await page.waitForFunction(() => document.querySelector("[data-topup-connection]").dataset.connected === "true");
@@ -604,7 +594,7 @@ async function walletBrandRegressions(browser, origin) {
     const context = await browser.newContext({ viewport: {width, height:844} });
     await fixtures(context, origin);
     const page = await context.newPage(), errors = [];
-    page.on("pageerror", error => errors.push(error.message));
+    page.on("pageerror", error => { errors.push(error.message); console.error(error.stack); });
     try {
       await page.goto(origin + "/post.html"); await awaitPosting(page);
       await page.evaluate(() => { window.AgentBountiesWalletLink.select().then(choice => window.__selectedBrandProvider = choice.label).catch(() => {}); });
@@ -655,7 +645,7 @@ async function main() {
       const context = await browser.newContext({ viewport: { width: size.width, height: size.height }, reducedMotion: "reduce" });
       const page = await context.newPage();
       const errors = [];
-      page.on("pageerror", error => errors.push(error.message));
+      page.on("pageerror", error => { errors.push(error.message); console.error(error.stack); });
       await fixtures(context, origin);
       await page.goto(origin + "/post.html");
       await page.waitForFunction(() => window.AgentBountiesComposer);

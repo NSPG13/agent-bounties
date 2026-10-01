@@ -19,8 +19,8 @@ Default CTA: Post your own bounty.
 
 ## Choose one interface
 
-- WebMCP browser: discover page tools, start `agent_bounties_start_journey`, and resume `agent_bounties_get_journey`. Prepare without repeated permission asks; the person confirms exact commitments and wallet actions. Guide: https://github.com/NSPG13/agent-bounties/blob/main/docs/webmcp-guided-marketplace.md
-- MCP for person-reviewed conversational actions.
+- WebMCP browser: discover tools through navigator.modelContext or document.modelContext; if unavailable, use window.AgentBountiesWebMCP.list() and .call(name,input) on the page. Discover page tools, start `agent_bounties_start_journey`, and resume `agent_bounties_get_journey`. Prepare without repeated permission asks; the person confirms exact commitments and wallet actions. Guide: https://github.com/NSPG13/agent-bounties/blob/main/docs/webmcp-guided-marketplace.md
+- MCP for person-reviewed conversational actions: core tools `get_posting_options`, `prepare_bounty_post`, and `get_posting_status` provide choices, staging and public progress. Private approval stays on the first-party page.
 - A2A HTTP+JSON for read-only bounty discovery and protocol orientation.
 - REST/OpenAPI for typed service integration.
 - Portable skill for local or direct-chain fallback.
@@ -101,8 +101,8 @@ Advanced:
 
 Advanced creation tool: `plan_autonomous_bounty_creation`.
 
-The cloud objective compiler may draft a validated task graph. Its output has
-no wallet, funding, verification, or settlement authority.
+Prepare a task graph in your own AI account; hosted generation returns `410 hosted_generation_removed`.
+AI output has no wallet, funding, verification, or settlement authority.
 
 ## Fund or cancel
 
@@ -136,6 +136,5 @@ cancelled. Follow the live OpenAPI cancel and refund operations and confirm
     cargo run -p cli -- service-smoke-spawn
     cargo run -p cli -- docs-contract-check
     python scripts/check-mcp-protocol-eras.py --endpoint https://mcp.agentbounties.app/mcp --expect dual
-
 Full quickstart: https://github.com/NSPG13/agent-bounties/blob/main/docs/agent-quickstart.md
-Hosted broad verification keeps exact files and offers shared checks. Map every criterion to checks and remaining review questions, and have the creator accept the plan before funding. Checks do not authorize payment. Hosted endpoints, SDKs, CLI commands and examples: https://github.com/NSPG13/agent-bounties/blob/main/docs/broad-verification.md
+Broad verification: GET /v1/verification/checkers lists versioned checks and full plan schemas. Validate with POST /v1/verification/plans/validate. Authenticated artifact uploads and POST /v1/verification/runs check exact saved bytes. Map every criterion to required checks and remaining review questions; have the creator accept the meaning before funding. Check results do not authorize payment. Public documentation: https://github.com/NSPG13/agent-bounties/blob/main/docs/broad-verification.md

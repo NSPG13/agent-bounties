@@ -187,6 +187,25 @@
           <p class="wallet-status" data-wallet-status aria-live="polite"></p>
         </section>
 
+        <section class="account-review-emails" aria-labelledby="push-notifications-title">
+          <h3 id="push-notifications-title">Browser notifications</h3>
+          <p>Receive claims and review reminders on this device, including when this page is closed. Your browser’s push service handles encrypted delivery.</p>
+          <p data-push-status aria-live="polite">Sign in to manage browser notifications.</p>
+          <button type="button" data-push-enable disabled>Enable on this device</button>
+          <button type="button" data-push-disable hidden>Turn off this device</button>
+        </section>
+        <section class="account-review-emails" data-review-email-settings aria-labelledby="review-email-title" aria-busy="true">
+          <h3 id="review-email-title">Bounty emails</h3>
+          <label><input type="checkbox" data-review-email-enabled disabled> <span>Email me about claims on my bounties and solutions needing my review</span></label>
+          <p data-review-email-address></p>
+          <p data-review-email-status aria-live="polite">Checking review email settings…</p>
+          <div class="review-email-actions">
+            <button type="button" data-review-email-signin hidden>Confirm email</button>
+            <button type="button" data-review-email-wallet hidden>Link my verifier wallet</button>
+            <button type="button" data-review-email-retry hidden>Try again</button>
+          </div>
+        </section>
+
         <p class="account-setup-note" data-account-setup-note aria-live="polite">Checking your account setup…</p>
         <button class="account-setup-retry" type="button" data-account-setup-retry hidden>Check again</button>
 
@@ -327,12 +346,13 @@
     <script src="phone-wallet-config.js?v=1"></script>
     <script src="phone-wallet.js?v=8"></script>
     <script src="wallet-config.js?v=3"></script>
-    <script src="wallet-link.js?v=9"></script>
-    <script src="marketplace-workflow.js?v=9"></script>
+    <script src="wallet-link.js?v=11"></script>
+    <script src="marketplace-workflow.js?v=11"></script>
     <script src="analytics-config.js?v=11"></script>
     <script src="analytics.js?v=5"></script>
     <script src="posting-prompt.js?v=6"></script>
-    <script src="solarpunk-home.js?v=28"></script>
+    <script src="creator-push.js?v=1"></script>
+  <script src="solarpunk-home.js?v=29"></script>
     <script src="forest-home.js?v=7"></script>
     <script src="forest-hall.js?v=4"></script>
   <!-- shared-footer:start -->

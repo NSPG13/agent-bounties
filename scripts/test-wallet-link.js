@@ -231,3 +231,15 @@ test("a different announced brand with MetaMask compatibility stays under Other 
   assert.equal(options(h).some(item => item.children[0]?.textContent === "MetaMask in this browser"), false);
   h.chooser.cancel(); await assert.rejects(pending, {code:4001});
 });
+
+
+test("creator-open selection omits unsupported embedded and wrong-network phone routes", async () => {
+  const h = harness();
+  h.win.AgentBountiesPhoneWallet = { provider: { request() {} }, state: () => ({ available: true }) };
+  const selection = h.chooser.select({ purpose: "creator-open", chainId: 84532 });
+  const choices = h.dialog().querySelector("[data-wallet-choices]").children;
+  assert.equal(choices.length, 1);
+  assert.equal(choices[0].children[0].textContent, "MetaMask in this browser");
+  choices[0].click(); assert.equal((await selection).provider, h.win.ethereum);
+  assert.deepEqual(h.calls, []);
+});

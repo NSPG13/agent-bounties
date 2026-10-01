@@ -62,6 +62,13 @@
     const reserve = Math.max(1, Math.round(total / 10));
     return { solver: ((total - reserve) / 100).toFixed(2), reserve: (reserve / 100).toFixed(2), total: (total / 100).toFixed(2) };
   }
+  function estimateBudget(hours, hourlyRate, reviewReserve) {
+    // Hundredths of an hour times cents/hour; round the work budget up to a cent.
+    const time = cents(hours), rate = cents(hourlyRate), reserve = cents(reviewReserve);
+    if (time === null || rate === null || reserve === null || time > 100000 || rate > 1000000 || reserve > 100000000) return null;
+    const work = Math.ceil(time * rate / 100);
+    return { solver: (work / 100).toFixed(2), reserve: (reserve / 100).toFixed(2), total: ((work + reserve) / 100).toFixed(2) };
+  }
   function countdown(iso, now = Date.now()) {
     const remaining = Date.parse(iso) - now;
     if (!Number.isFinite(remaining)) return "";
@@ -85,5 +92,5 @@
     }
     return output;
   }
-  return Object.freeze({ resolveDeadline, wallTime, proposedSplit, countdown, warnings, cents });
+  return Object.freeze({ resolveDeadline, wallTime, proposedSplit, estimateBudget, countdown, warnings, cents });
 });

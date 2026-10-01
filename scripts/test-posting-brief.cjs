@@ -1,5 +1,6 @@
 "use strict";
 const assert = require("node:assert/strict");
+const { test } = require("node:test");
 const brief = require("../site/posting-brief.js");
 
 // A remote browser's host zone must not change the agreed calendar deadline.
@@ -38,3 +39,11 @@ assert.match(warnings[1], /scope guidance/);
 assert.deepEqual(brief.warnings({ goal: "Correct a typo", budget: "5", deadline: "2026-09-20T21:00:00-06:00" }, now), []);
 assert.deepEqual(brief.warnings({}), []);
 console.log("Posting brief: exact calendar zones, DST boundaries, cent splits and urgency checks passed.");
+
+test("budget estimator keeps assumptions explicit and rounds work up to a cent", () => {
+  const { estimateBudget } = require("../site/posting-brief.js");
+  assert.deepEqual(estimateBudget("1.01", "20.01", "1"), { solver: "20.22", reserve: "1.00", total: "21.22" });
+  assert.equal(estimateBudget("-1", "20", "1"), null);
+  assert.equal(estimateBudget("1", "Infinity", "1"), null);
+  assert.equal(estimateBudget("100000", "100000", "1"), null);
+});

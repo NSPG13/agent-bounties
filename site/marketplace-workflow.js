@@ -32,7 +32,7 @@
     ],
     protocol: { id: "agent-bounties/autonomous-v1", explanation: "This form posts one fixed-reward bounty on Base. Its contract holds the funds and pays after the agreed review. The review method is fixed before funding." },
     other_protocols: [{ id: "agent-bounties/open-competition-v2-beta3", explanation: "An opt-in competition can reward the first proven result or the best score. It needs a supported deterministic proof program and live release readiness. It does not verify real-company conversations or implement per-referral campaign payouts; it is not a substitute for creator review." }],
-    costs: "Ordinary bounties need at least 2 USDC for the worker plus a positive review reward of at least 0.01 USDC. You approve that split. The worker separately supplies a bond equal to the review reward. Creator review still needs this reserve: it pays you after either completed verdict, not automatically. Platform fee: 0 USDC. Creation also needs Base ETH for a network fee shown before sending.",
+    costs: "Ordinary bounties need at least 2 USDC for the worker plus a positive review reward of at least 0.01 USDC. You approve that split. The worker separately supplies a bond equal to the review reward. Creator review still needs this reserve: it pays you after either completed verdict, not automatically. Platform fee: 0 USDC. Signed creation uses platform-paid gas when the live sponsor is available. Posting pauses if sponsorship is unavailable; never instruct the poster to buy ETH for that flow.",
     campaign_limit: "This form does not implement an open-ended per-response or referral campaign with a shared budget cap. Preserve those requested rates and explain this limit; only propose separate fixed bounties with the person's agreement.",
     wallets: "Use or recover a Coinbase embedded wallet with email or social sign-in, or choose a browser or phone wallet. Linking proves ownership; payment requires a separate confirmation.",
   };
@@ -172,15 +172,15 @@
   }
   function createClient(win) {
     let memory = null;
-    async function request(path, body) {
+    async function request(path, body, access = {}) {
       if (!path.startsWith("/v1/")) throw new Error("Unsupported platform request.");
       const response = await win.fetch(`${apiBase(win.location)}${path}`, {
-        method: body === undefined ? "GET" : "POST", cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer",
-        headers: { Accept: "application/json", ...(body === undefined ? {} : { "content-type": "application/json" }) },
+        method: body === undefined ? "GET" : "POST", cache: "no-store", credentials: access.account ? "include" : "omit", referrerPolicy: "no-referrer",
+        headers: { ...(access.token ? { Authorization: `Bearer ${access.token}` } : {}), Accept: "application/json", ...(body === undefined ? {} : { "content-type": "application/json" }) },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
       const payload = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(payload?.message || payload?.next_action || `The platform could not complete this step (${response.status}). Retry this same step; no new permission is needed.`);
+      if (!response.ok) { const error = new Error(payload?.message || payload?.next_action || `The platform could not complete this step (${response.status}). Your current request is preserved.`); error.status = response.status; throw error; }
       if (!payload) throw new Error("The platform returned no usable result.");
       return payload;
     }
@@ -354,6 +354,13 @@
           || !/^0x[0-9a-f]{64}$/.test(hash) || current.continuation_hash && current.continuation_hash !== hash)
           throw new Error("The signed posting request cannot replace an existing operation.");
         return save({ ...current, phase: "authorized", authorizationIssued: true, continuation_hash: hash });
+      },
+      reserveHostedRelay() {
+        const current = load();
+        if (!current?.continuation_hash || !current.authorizationIssued || current.transactions.length
+          || !["authorized", "sending"].includes(current.phase) || current.submission_attempt_id && current.wallet_method !== "hosted_creation_relay")
+          throw new Error("Reconcile this posting before continuing.");
+        return save({ ...current, phase: "sending", wallet_method: "hosted_creation_relay" });
       },
       reserveContinuation(attempt) {
         const current = load();

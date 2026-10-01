@@ -168,15 +168,37 @@
       const hash = await digest(win, envelope(journey));
       checkEpoch(expectedEpoch);
       if (terms !== stable(envelope(client.load()))) throw new Error("The draft changed during approval. Review the updated terms.");
-      win.sessionStorage.setItem(APPROVAL, JSON.stringify({ owner, operation_id: journey.id, hash, approved_at: new Date().toISOString() }));
+      win.sessionStorage.setItem(APPROVAL, JSON.stringify({ owner, operation_id: journey.id, hash, reviewed_terms: envelope(journey), approved_at: new Date().toISOString() }));
       await flush();
       checkEpoch(expectedEpoch);
       if (!await approved()) throw new Error("The draft changed during approval. Review the updated terms.");
+      win.sessionStorage.removeItem(`${APPROVAL}.previous`);
       return hash;
     }
     function invalidate() {
+      const previous = read(APPROVAL);
+      if (previous?.reviewed_terms) win.sessionStorage.setItem(`${APPROVAL}.previous`, JSON.stringify(previous));
       win.sessionStorage.removeItem(APPROVAL); remoteApproval = null;
       schedule();
+    }
+    function approvalChanges() {
+      const previous = read(`${APPROVAL}.previous`);
+      if (previous?.owner !== owner || previous.operation_id !== client.load()?.id || !previous.reviewed_terms) return [];
+      const old = previous.reviewed_terms, current = envelope(client.load());
+      const changes = [], short = value => value == null ? "not set" : String(value).slice(0, 180);
+      for (const [section, fields] of [["brief", { budget_usdc: "Brief budget (USDC)", deadline_at: "Brief deadline", timezone: "Time zone" }],
+        ["draft", { title: "Title", goal: "Goal", solver_reward_usdc: "Worker reward (USDC)", verifier_reward_usdc: "Review reserve (USDC)", review_mode: "Reviewer", delivery_deadline: "Delivery deadline", task_window_days: "Work window (days)" }]]) {
+        for (const [key, label] of Object.entries(fields)) if (stable(old[section]?.[key]) !== stable(current[section]?.[key]))
+          changes.push(`${label}: ${short(old[section]?.[key])} → ${short(current[section]?.[key])}`);
+      }
+      const before = old.draft?.acceptance_criteria || [], after = current.draft?.acceptance_criteria || [];
+      for (let index = 0; index < Math.max(before.length, after.length); index++) if (before[index] !== after[index])
+        changes.push(`Acceptance check ${index + 1}: ${short(before[index])} → ${short(after[index])}`);
+      for (const [key, label] of [["benchmark", "Verification test"], ["evidence_schema", "Required evidence"], ["image", "Approved image"], ["meta_child", "Parent bounty requirements"], ["reference_attachment", "Frozen reference"]]) {
+        if (stable(old.draft?.[key]) !== stable(current.draft?.[key])) changes.push(`${label} changed; review its full details on the card`);
+      }
+      if (!changes.length && stable(old) !== stable(current)) changes.push("Other proposal details changed; review the updated card");
+      return changes;
     }
     async function saveRemote(required) {
       const expectedEpoch = epoch;
@@ -206,7 +228,9 @@
     function failure(error) {
       if (error.stale) return;
       if (error.status === 409) { conflict = true; status = "conflict"; message = "This draft changed on another device. Reload the saved version before continuing; no wallet action was sent."; }
-      else { status = "local"; message = "Saved on this device only. Account sync is unavailable; keep this tab open and retry."; }
+      else if (error.status === 401) { status = "local"; message = "Your sign-in expired. Sign in again to save this draft; this device still has your copy."; }
+      else if (error.status === 403) { status = "local"; message = "This account could not save the draft. Open your account and sign in again, then return to this saved operation."; }
+      else { status = "local"; message = "The account draft service could not be reached. Your draft is saved on this device. Keep this tab and retry saving."; }
       notify();
     }
     function flush(options = {}) {
@@ -237,6 +261,14 @@
       checkEpoch(expectedEpoch);
       if (initialJourney !== stable(client.load()) || initialRecovery !== stable(read(JOURNAL))) throw conflictError("This device changed while verifying the saved draft. Your local changes were preserved.");
       const old = client.load();
+      if (value.retired_operation_id) {
+        const recorded = read(JOURNAL);
+        if (!UUID.test(value.retired_operation_id) || value.retired_operation_id === value.operation_id
+          || recorded && (old?.id !== value.retired_operation_id || recorded.continuation_hash !== value.retired_continuation_hash)) throw conflictError("The retired authorization does not match this device. Preserve it and reconcile before switching drafts.");
+        if (recorded) win.sessionStorage.setItem(`${JOURNAL}.retired`,JSON.stringify({operation:recorded,replacement_operation_id:value.operation_id}));
+        win.sessionStorage.removeItem(JOURNAL); win.sessionStorage.removeItem(CONTINUATION); win.sessionStorage.removeItem(APPROVAL);
+        const url = new URL(win.location.href); url.searchParams.set("operation_id",value.operation_id); win.history?.replaceState(null,"",url.href);
+      }
       const recovery = mergeRecovery(read(JOURNAL), value.recovery_state, old?.id === value.operation_id);
       adopting = true;
       try {
@@ -272,6 +304,10 @@
       try {
         const value = await request("GET", id, undefined, expectedEpoch);
         if (before !== stable(envelope(client.load() || { id })) || localJournal !== stable(read(JOURNAL))) throw conflictError("This device changed while the saved draft was loading. Your local changes were preserved.");
+        // A stale marker is derived UI state. Reconcile only if every actual
+        // draft/brief field equals the integrity-checked server copy.
+        if (journey?.draft_stale && value.draft?.draft_stale === false
+          && stable({ ...envelope(journey), draft_stale: false }) === stable(value.draft)) return await adopt(value);
         const sync = read(SYNC);
         if (journey?.id === id && journey.draft && sync?.owner === owner && sync.operation_id === id) {
           const localHash = await digest(win, envelope(journey)); checkEpoch(expectedEpoch);
@@ -298,7 +334,7 @@
       const expectedEpoch = epoch, before = stable(envelope(current)), localJournal = stable(read(JOURNAL)), startRevision = revision;
       try {
         const value = await request("GET", remoteId, undefined, expectedEpoch);
-        if (value.revision <= revision) return;
+        if (value.revision <= revision && !value.retired_operation_id) return;
         if (revision !== startRevision || before !== stable(envelope(client.load())) || localJournal !== stable(read(JOURNAL))) throw conflictError("This device changed while account progress was loading. Your local changes were preserved.");
         await adopt(value);
       } catch (error) { failure(error); if (!error.stale) throw error; }
@@ -338,8 +374,8 @@
     }
     function canContinue() {
       const operation = read(JOURNAL), saved = read(CONTINUATION);
-      return Boolean(authenticated && !conflict && operation?.phase === "authorized" && operation.authorizationIssued
-        && operation.continuation_hash && !operation.submission_attempt_id && !operation.transactions?.length
+      return Boolean(authenticated && !conflict && ["authorized", "sending"].includes(operation?.phase) && operation.authorizationIssued
+        && operation.continuation_hash && (!operation.submission_attempt_id || operation.wallet_method === "hosted_creation_relay") && !operation.transactions?.length
         && saved?.owner === owner && saved.operation_id === remoteId && saved.bounty_id === operation.bounty_id);
     }
     async function saveContinuation(request) {
@@ -372,6 +408,24 @@
       // A unique attempt makes concurrent POSTs different. The database CAS
       // permits only one; even an uncertain save response must not invoke CDP.
       await flush({ requireServer: true });
+    }
+    async function renewExpiredAuthorization() {
+      if (!authenticated || conflict || !remoteId || !revision) throw new Error("Sign in to the original account and reconcile the saved draft first.");
+      const operation = read(JOURNAL), saved = read(CONTINUATION), expectedEpoch = epoch;
+      if (!operation?.continuation_hash || !saved || saved.owner !== owner || saved.operation_id !== remoteId
+        || `0x${await digest(win, saved)}` !== operation.continuation_hash) throw new Error("Return to the original signing tab to recover this exact authorization.");
+      const oldId = remoteId;
+      const value = await request("POST", `${oldId}/renew`, { expected_revision: revision, saved_request: saved }, expectedEpoch);
+      if (!UUID.test(value.operation_id) || value.operation_id === oldId || value.approved_draft_hash || Object.keys(value.recovery_state || {}).length
+        || value.draft?.id !== value.operation_id || await digest(win, value.draft) !== value.draft_hash) throw new Error("Recovery returned an invalid replacement. The original authorization stays saved.");
+      checkEpoch(expectedEpoch);
+      win.sessionStorage.setItem(`${JOURNAL}.retired`, JSON.stringify({ operation, replacement_operation_id: value.operation_id }));
+      win.sessionStorage.removeItem(JOURNAL); win.sessionStorage.removeItem(CONTINUATION); win.sessionStorage.removeItem(APPROVAL);
+      await adopt(value);
+      const url = new URL(win.location.href); url.searchParams.set("operation_id",value.operation_id); url.hash = "bounty-preview";
+      win.history?.replaceState(null,"",url.href);
+      message = "The old authorization can no longer create or fund its bounty. Review this preserved draft before signing a new authorization."; notify();
+      return value;
     }
     async function beginAfterArchive(archived, options = {}, existingJourney = null) {
       if (!authenticated) throw new Error("Sign in before starting the next posting operation.");
@@ -415,7 +469,7 @@
     }
     win.addEventListener?.("agent-bounties:journey", schedule);
     win.addEventListener?.("agent-bounties:posting-journal", schedule);
-    const api = { snapshot, approved, approve, invalidate, hydrate, refresh, flush, reconcile, canContinue, saveContinuation, loadContinuation, reserveSubmission, beginAfterArchive, reload: async () => { try { return await adopt(await request("GET", remoteId)); } catch (error) { failure(error); throw error; } } };
+    const api = { snapshot, approvalChanges, approved, approve, invalidate, hydrate, refresh, flush, reconcile, canContinue, saveContinuation, loadContinuation, reserveSubmission, renewExpiredAuthorization, beginAfterArchive, reload: async () => { try { return await adopt(await request("GET", remoteId)); } catch (error) { failure(error); throw error; } } };
     sessions.set(win, api);
     return api;
   }

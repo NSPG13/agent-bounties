@@ -29,6 +29,23 @@
     window.addEventListener("resize", measureActions);
     measureActions();
   }
+  // Pricing is an explicit planning assumption; settled micro-bounties are not
+  // represented as market-clearing prices for unrelated professional work.
+  if (budgetSummary) {
+    const estimator = document.createElement("details");
+    const title = document.createElement("summary"); title.textContent = "Estimate a starting budget";
+    const inputs = [ ["Estimated work hours", "hours", "2"], ["USDC per hour", "rate", "20"], ["Review reserve in USDC", "reserve", "1"] ].map(([label, name, value]) => {
+      const row = document.createElement("label"); row.textContent = label;
+      const field = document.createElement("input"); field.type = "number"; field.min = "0.01"; field.step = "0.01"; field.value = value; field.name = `budget-estimate-${name}`;
+      row.append(field); return { row, field };
+    });
+    const result = document.createElement("p"); result.setAttribute("aria-live", "polite");
+    const note = document.createElement("p"); note.textContent = "This is hours × your chosen rate, plus the review reserve. It is a planning estimate, not a prediction of bids. Consider specialist access, tools and external expenses.";
+    const comparable = document.createElement("a"); comparable.href = "/metrics.html"; comparable.textContent = "Compare dated, confirmed payouts";
+    const update = () => { const estimate = helper.estimateBudget(...inputs.map(({ field }) => field.value)); result.textContent = estimate ? `${estimate.total} USDC total: ${estimate.solver} for the work + ${estimate.reserve} review reserve. Update your brief if you want this budget.` : "Enter positive hours, rate and review reserve within the supported range."; };
+    for (const { field } of inputs) field.addEventListener("input", update);
+    estimator.append(title, ...inputs.map(({ row }) => row), result, note, comparable); budgetSummary.after(estimator); update();
+  }
   function render() {
     const result = helper.resolveDeadline(deadline.value, timezone.value.trim());
     const journey = client.load();
@@ -40,12 +57,15 @@
     if (deadlineSummary) deadlineSummary.textContent = result.error || (result.iso ? `${deadline.value.replace("T", " ")} (${timezone.value.trim()}) · ${result.iso} · ${helper.countdown(result.iso)}` : "Choose the exact calendar deadline; the clock continues during wallet setup.");
     const draft = journey?.draft_stale ? null : journey?.draft;
     if (budgetSummary) {
-      const split = helper.proposedSplit(budget.value);
-      const matching = draft && helper.cents(draft.solver_reward_usdc) + helper.cents(draft.verifier_reward_usdc) === helper.cents(budget.value);
-      budgetSummary.textContent = matching ? (draft.review_mode === "creator" ? `Your proposal: ${draft.solver_reward_usdc} USDC to the solver + ${draft.verifier_reward_usdc} USDC creator-review reserve. You receive the review amount after either confirmed verdict. You confirm the verdict.` : `Your proposal: ${draft.solver_reward_usdc} USDC to the solver + ${draft.verifier_reward_usdc} USDC verifier reward.`) : (split ? `For creator review, suggested split: ${split.solver} USDC to the solver + ${split.reserve} USDC creator-review reserve (90% / 10%, rounded to cents). You receive the review amount after either confirmed verdict. Your AI will propose the review method; you approve the final amounts.` : "Enter the combined solver and review budget. Both rewards must be positive.");
+      const staged = journey?.draft;
+      budgetSummary.textContent = staged
+        ? `Proposal split: ${staged.solver_reward_usdc} USDC for the worker + ${staged.verifier_reward_usdc} USDC ${staged.review_mode === "creator" ? "creator-review reserve" : "verifier reward"}.${journey.draft_stale ? " Your brief changed; ask your AI to update this proposal before approving." : " These are the amounts on the review card."}`
+        : "Enter the combined worker and review budget. Your AI will propose an explicit split for you to review.";
     }
     if (warningList) {
       warningList.replaceChildren();
+      const changes = window.AgentBountiesPostingSession?.create(window).approvalChanges() || [];
+      if (changes.length) { const item = document.createElement("li"); item.textContent = `Changed since approval: ${changes.join("; ")}. Review the updated card and approve these changes.`; warningList.append(item); }
       for (const warning of helper.warnings({ goal: goal.value, budget: budget.value, deadline: result.iso, draft })) {
         const item = document.createElement("li"); item.textContent = warning; warningList.append(item);
       }

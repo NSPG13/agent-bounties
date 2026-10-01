@@ -6,8 +6,11 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 const { webcrypto } = require("node:crypto");
 const flow = require("../site/marketplace-workflow.js");
+test("browser and remote MCP publish the same posting choices", () => {
+  assert.deepEqual(flow.POSTING_OPTIONS, JSON.parse(fs.readFileSync(require.resolve("../site/posting-options.json"), "utf8")));
+});
 const market = require("../site/marketplace.js");
-const { validateCalls, recoveryStatus, start: startParticipant } = require("../site/participate.js");
+const { validateCalls, recoveryStatus, verifierReviewState, start: startParticipant } = require("../site/participate.js");
 const contract = "0x" + "11".repeat(20), wallet = "0x" + "22".repeat(20);
 const intentId = "10000000-0000-4000-8000-000000000001";
 const amount = (n) => ({ amount: String(n), unit: "base_units", decimals: 6, currency: "USDC" });
@@ -156,11 +159,22 @@ test("reloading a meta-child review restores its draft and solver without borrow
   assert.equal(review.explicitly_approved, false);
   assert.equal(env.requests.some(r => r.method === "POST"), false);
 });
-test("unsupported browser preserves ordinary navigation without registering tools", () => {
-  const env = environment(); delete env.document.modelContext;
-  env.elements.set("[data-agent-guidance]", env.el()); env.register();
+test("browsers without native WebMCP expose the same validated fallback", async () => {
+  const env = environment(); delete env.document.modelContext; env.register();
   assert.equal(env.tools.size, 0);
-  assert.match(env.elements.get("[data-agent-guidance]").textContent, /WebMCP support/);
+  const fallback = env.window.AgentBountiesWebMCP;
+  assert.ok(fallback.list().some(tool => tool.name === "agent_bounties_list_ready_work"));
+  assert.ok(fallback.list().every(tool => !tool.execute));
+  const result = await fallback.call("agent_bounties_list_ready_work", { search: "test" });
+  assert.equal(result.total_ready, 1);
+  await assert.rejects(fallback.call("eth_sendTransaction"), /Unknown/);
+  await assert.rejects(fallback.call("agent_bounties_start_journey", {}), /required/);
+  await assert.rejects(fallback.call("agent_bounties_list_ready_work", { search: "ok", approve: true }), /not supported/);
+});
+test("navigator WebMCP receives tools when document modelContext is absent", () => {
+  const env = environment(); env.window.navigator = { modelContext: env.document.modelContext };
+  delete env.document.modelContext; env.register();
+  assert.ok(env.tools.has("agent_bounties_get_posting_options"));
 });
 test("UI and WebMCP share funding and verification readiness", async () => {
   const invalid = [item({ verification_ready: false }), item({ funded_amount: amount(100) }), item({ payment_committed: false }), item({ network: "base-sepolia" }), item({ source_id: "not-an-address" })];
@@ -275,12 +289,20 @@ async function participantFixture(action = "solve") {
   const source = fs.readFileSync(require.resolve("../site/participate.js"), "utf8");
   for (const match of source.matchAll(/\[data-[a-z-]+\]/g)) env.elements.set(match[0], env.el());
   vm.runInNewContext(fs.readFileSync(require.resolve("../site/evm.js"), "utf8"), { window: env.window, TextEncoder, crypto: webcrypto });
-  const evm = env.window.AgentBountiesEvm, sent = [], observations = [], publications = [];
+  const evm = env.window.AgentBountiesEvm, sent = [], signatures = [], relayed = [], observations = [], publications = [];
   const selector = (s) => evm.keccak256Hex(evm.textHex(s)).slice(0, 10);
-  const hash = "0x" + "ab".repeat(32), hash2 = "0x" + "cd".repeat(32), bountyId = "test-bounty";
+  const hash = "0x" + "ab".repeat(32), hash2 = "0x" + "cd".repeat(32), bountyId = ("0x" + "ef".repeat(32));
   const details = { artifact_reference: "https://example.com/result", evidence: { tests_passed: true } };
   const submission = { network: { chain_id: 8453 }, bounty_contract: contract, solver: wallet, bounty_id: bountyId, round: 2,
     submission_hash: hash, evidence_hash: hash2, evidence_publication: { network: "base-mainnet", bounty_contract: contract, solver_wallet: wallet, bounty_id: bountyId, round: 2, ...details } };
+  submission.policy_hash = "0x" + "12".repeat(32);
+  submission.authorization_deadline = Math.floor(Date.now() / 1000) + 600;
+  submission.claim_expires_at = submission.authorization_deadline + 3600;
+  const fields = pairs => pairs.map(([name, type]) => ({ name, type }));
+  submission.signing_payload = { primaryType: "Submit", domain: { name: "Agent Bounties", version: "1", chainId: 8453, verifyingContract: contract }, types: {
+    EIP712Domain: fields([["name","string"],["version","string"],["chainId","uint256"],["verifyingContract","address"]]),
+    Submit: fields([["bounty","address"],["bountyId","bytes32"],["solver","address"],["round","uint64"],["submissionHash","bytes32"],["evidenceHash","bytes32"],["policyHash","bytes32"],["deadline","uint256"]]),
+  }, message: { bounty: contract, bountyId, solver: wallet, round: "2", submissionHash: hash, evidenceHash: hash2, policyHash: submission.policy_hash, deadline: String(submission.authorization_deadline) } };
   const calls = action === "complete" ? [{ from: wallet, to: contract, value_wei: 0, data: selector("submit(bytes32,bytes32)") + evm.bytes32Word(hash) + evm.bytes32Word(hash2) }]
     : [{ from: wallet, to: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", value_wei: 0, data: selector("approve(address,uint256)") + evm.addressWord(contract) + evm.uint256Word(10000) }, { from: wallet, to: contract, value_wei: 0, data: action === "fund" ? selector("fund(uint256)") + evm.uint256Word(10000) : selector("claim()") }];
   const state = { mined: true, account: wallet, dropObservation: false, dropWallet: false,
@@ -290,6 +312,7 @@ async function participantFixture(action = "solve") {
     if (method === "eth_accounts" || method === "eth_requestAccounts") return [state.account];
     if (method === "eth_chainId") return "0x2105";
     if (method === "eth_getTransactionReceipt") return state.mined ? { status: "0x1" } : null;
+    if (method === "eth_signTypedData_v4") { signatures.push(JSON.parse(params[1])); return state.walletSignature || "0x" + "11".repeat(65); }
     if (method === "eth_sendTransaction") { sent.push(params[0]); if (state.dropWallet) throw new Error("wallet response lost"); return sent.length === 1 ? hash : hash2; }
     throw new Error(`Unexpected wallet method ${method}`);
   } };
@@ -303,10 +326,34 @@ async function participantFixture(action = "solve") {
       if (state.dropObservation) { state.dropObservation = false; throw new Error("observation response lost"); }
       state.intent.transaction_hash = observations.at(-1).transaction_hash; state.intent.status = "pending_confirmation";
       payload = state.intent;
-    } else if (url.endsWith("/claim-plan")) payload = { network: { chain_id: 8453 }, bounty_contract: contract, claim_bond: "10000", wallet_calls: calls };
-    else if (url.endsWith("/contribution-plan")) {
-      const input = JSON.parse(options.body); assert.deepEqual(input, { network: "base-mainnet", contribution: { bounty_contract: contract, contributor: wallet, amount: { amount: 10000, currency: "usdc" } } });
-      payload = { network: { chain_id: 8453 }, wallet_calls: calls };
+    } else if (url.endsWith("/gas-sponsorship")) payload = Object.fromEntries(["submission", "contribution", "claim"].map(key => [key, { available: !state.sponsorOutage, customer_gas_wei: "0" }]));
+    else if (url.endsWith("/submission-relay")) {
+      const body = JSON.parse(options.body); relayed.push(body);
+      if (state.dropRelay) { state.dropRelay = false; throw new Error("relay response lost"); }
+      payload = { schema: "agent-bounties/sponsored-submission-v1", network: "base-mainnet", ...body.submission, customer_gas_wei: "0", solver_paid: false, confirmed: true, transaction_hash: hash2 };
+      if (state.wrongRelay) payload.bounty_contract = wallet;
+    } else if (url.endsWith("/claims")) {
+      const body = JSON.parse(options.body);
+      const typed = { primaryType: "TransferWithAuthorization", types: evm.transferWithAuthorizationTypes(),
+        domain: { name: "USD Coin", version: "2", chainId: 8453, verifyingContract: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" },
+        message: { from: wallet, to: contract, value: "10000", validAfter: "0", validBefore: String(Math.floor(Date.now()/1000)+1800), nonce: "0x"+"34".repeat(32) } };
+      payload = { schema_version: "agent-bounties/agent-native-claim-v1", candidate: { network: "base-mainnet", bounty_contract: contract, solver_wallet: wallet }, claim_bond: "10000", signing_payload: typed };
+      if (state.wrongAmount) typed.message.value = "100000000000";
+      if (body.wallet_signature) {
+        relayed.push(body);
+        if (state.dropRelay) { state.dropRelay = false; throw new Error("relay response lost"); }
+        if (!state.relayPending) payload.claim_transaction_hash = hash2;
+      }
+    } else if (url.endsWith("/contribution-plan")) {
+      const input = JSON.parse(options.body), c = input.contribution;
+      assert.equal(c.amount.amount,10000); assert.equal(c.contributor,wallet); assert.equal(c.bounty_contract,contract);
+      payload = { network: { chain_id: 8453 }, eip3009_authorization: { primaryType: "TransferWithAuthorization", types: evm.transferWithAuthorizationTypes(),
+        domain: { name: "USD Coin", version: "2", chainId: 8453, verifyingContract: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" },
+        message: { from: wallet, to: contract, value: String(c.amount.amount), validAfter: "0", validBefore: String(c.authorization_valid_before), nonce: c.authorization_nonce } } };
+    } else if (url.endsWith("/contribution-relay")) {
+      const body = JSON.parse(options.body); relayed.push(body);
+      if (state.dropRelay) { state.dropRelay = false; throw new Error("relay response lost"); }
+      payload = { schema: "agent-bounties/sponsored-contribution-v1", customer_gas_wei: "0", solver_paid: false, relay: { network: "base-mainnet", bountyContract: contract, contributor: wallet, amount: 10000, transaction: hash2 } };
     } else if (url.endsWith("/submission-preparation")) payload = submission;
     else if (url.endsWith("/submission-plan")) payload = calls[0];
     else if (url.endsWith("/submission-evidence")) { publications.push(JSON.parse(options.body)); payload = { status: "published" }; }
@@ -316,8 +363,46 @@ async function participantFixture(action = "solve") {
   };
   await startParticipant(env.window, env.document);
   const click = (selector, trusted = true) => env.elements.get(selector).listeners.get("click")({ isTrusted: trusted });
-  return { ...env, state, sent, observations, publications, submission, click, reload: () => startParticipant(env.window, env.document) };
+  return { ...env, state, sent, signatures, relayed, observations, publications, submission, click, reload: () => startParticipant(env.window, env.document) };
 }
+
+test("email review guidance uses the current submission expiry, without a delivery deadline or creator role", () => {
+  const submission = { id: "submission", block_number: 11, log_index: 0, bounty_id: "bounty", contract_address: contract, kind: "submission_added", data: { round: 2, verification_expires_at: 200 } };
+  const base = { bounty_contract: contract, bounty_id: "bounty", status: "submitted", terms_valid: true, verification_ready: false, events: [submission] };
+  assert.equal(verifierReviewState(base, 100).title, "Review the solution");
+  assert.match(verifierReviewState(base, 100).summary, /Only the chosen review wallet/);
+  assert.match(verifierReviewState(base, 100).deadline, /This date is for your review/);
+  assert.equal(verifierReviewState(base, 200).title, "The review deadline has passed");
+  assert.equal(verifierReviewState({ ...base, status: "paid" }, 100).deadline, "");
+  for (const invalid of [{ contract_address: wallet }, { bounty_id: "other" }, { id: null }, { data: { round: 2 } }]) {
+    assert.equal(verifierReviewState({ ...base, events: [{ ...submission, ...invalid }] }, 100).title, "Refresh review details");
+  }
+  const newer = { ...submission, block_number: 12, data: { round: 3, verification_expires_at: 300 } };
+  assert.equal(verifierReviewState({ ...base, events: [submission, newer] }, 201).title, "Review the solution");
+});
+
+test("email review visit opens evidence, refreshes deadlines and never starts a wallet action", async () => {
+  const env = await participantFixture();
+  env.window.location.search = `?bountyContract=${contract}&network=base-mainnet&role=verifier`;
+  let poll;
+  env.window.setInterval = (fn) => { poll = fn; };
+  env.elements.get("[data-work-evidence]").parentElement = { open: false };
+  env.state.feed.status = "submitted";
+  env.state.feed.terms.document.verification_policy = { mechanism: "signed_quorum", verifiers: [wallet] };
+  const now = Math.floor(Date.now() / 1000);
+  env.state.feed.events = [{ id: "submission", block_number: 12, log_index: 0, bounty_id: env.state.feed.bounty_id, contract_address: contract, kind: "submission_added", data: { round: 2, verification_expires_at: now + 600 } }];
+  await env.reload();
+  assert.equal(env.elements.get("[data-step-title]").textContent, "Review the solution");
+  assert.equal(env.elements.get("[data-work-evidence]").parentElement.open, true);
+  assert.equal(env.elements.get("[data-work-prepare]").hidden, true);
+  assert.deepEqual(env.sent, []);
+  env.state.feed.status = "paid";
+  poll();
+  await new Promise(setImmediate);
+  assert.equal(env.elements.get("[data-step-title]").textContent, "Check the current bounty");
+  assert.equal(env.elements.get("[data-work-deadline]").textContent, "");
+  assert.deepEqual(env.sent, []);
+});
 
 test("expired work takes precedence over verifier outages and does not imply recovery executed", () => {
   const claim = { id: "claim", block_number: 10, log_index: 0, bounty_id: "bounty", contract_address: contract, kind: "bounty_claimed", data: { round: 2, solver: wallet, claim_expires_at: 100 } };
@@ -343,7 +428,7 @@ test("workspace and WebMCP expose a bounded timeout plan without wallet or relay
   const env = await participantFixture();
   env.state.feed.status = "claimed";
   env.state.feed.verification_ready = false;
-  env.state.feed.events = [{ id: "claim", block_number: 10, log_index: 0, bounty_id: "test-bounty", contract_address: contract, kind: "bounty_claimed", data: { round: 2, solver: wallet, claim_expires_at: 100 } }];
+  env.state.feed.events = [{ id: "claim", block_number: 10, log_index: 0, bounty_id: ("0x" + "ef".repeat(32)), contract_address: contract, kind: "bounty_claimed", data: { round: 2, solver: wallet, claim_expires_at: 100 } }];
   const request = env.window.fetch;
   let altered = false, prepared = 0;
   env.window.fetch = async (url, options) => {
@@ -369,41 +454,42 @@ test("workspace and WebMCP expose a bounded timeout plan without wallet or relay
   assert.equal(prepared, 2); assert.equal(env.sent.length, 0);
 });
 
-test("one human confirmation completes ordered claim calls and retries cannot repeat payment", async () => {
+test("one human confirmation signs a claim and the platform pays all gas", async () => {
   const env = await participantFixture();
-  await env.click("[data-wallet-connect]", false);
-  await env.click("[data-wallet-confirm]", false);
-  assert.equal(env.sent.length, 0);
+  await env.click("[data-wallet-connect]", false); await env.click("[data-wallet-confirm]", false);
+  assert.equal(env.signatures.length, 0);
   await env.click("[data-wallet-connect]"); await env.click("[data-wallet-confirm]");
-  assert.equal(env.sent.length, 2); assert.equal(env.observations.length, 1);
+  assert.equal(env.sent.length, 0); assert.equal(env.signatures.length, 1); assert.equal(env.observations.length, 1);
   await env.click("[data-wallet-confirm]"); await env.reload(); await env.click("[data-wallet-connect]");
-  assert.equal(env.sent.length, 2);
+  assert.equal(env.signatures.length, 1); assert.equal(env.relayed.length, 1);
 });
-test("pending approval survives reload and resumes without a second approval transaction", async () => {
-  const env = await participantFixture(); env.state.mined = false;
+test("pending claim relay survives reload and a spent allowance without another signature", async () => {
+  const env = await participantFixture(); env.state.relayPending = true;
   await env.click("[data-wallet-connect]"); await env.click("[data-wallet-confirm]");
-  assert.equal(env.sent.length, 1);
+  assert.equal(env.signatures.length, 1); assert.equal(env.observations.length, 0);
+  env.state.sponsorOutage = true;
   await env.reload(); await env.click("[data-wallet-connect]"); await env.click("[data-wallet-confirm]");
-  assert.equal(env.sent.length, 1);
-  env.state.mined = true; await env.click("[data-wallet-confirm]");
-  assert.equal(env.sent.length, 2);
+  assert.equal(env.signatures.length, 1); assert.deepEqual(env.relayed[0],env.relayed[1]);
+  env.state.relayPending = false; await env.click("[data-wallet-confirm]");
+  assert.equal(env.sent.length, 0); assert.equal(env.observations.length, 1);
 });
-test("changed accounts and uncertain wallet responses stop further signing", async () => {
+test("changed accounts stop signing and an uncertain claim relay reuses its authorization", async () => {
   const env = await participantFixture();
   await env.click("[data-wallet-connect]"); env.state.account = contract; await env.click("[data-wallet-confirm]");
-  assert.equal(env.sent.length, 0);
-  env.state.account = wallet; env.state.dropWallet = true; await env.click("[data-wallet-confirm]");
-  assert.equal(env.sent.length, 1);
+  assert.equal(env.signatures.length, 0);
+  env.state.account = wallet; env.state.dropRelay = true; await env.click("[data-wallet-confirm]");
+  assert.equal(env.signatures.length, 1);
   await env.reload(); await env.click("[data-wallet-connect]"); await env.click("[data-wallet-confirm]");
-  assert.equal(env.sent.length, 1);
+  assert.equal(env.signatures.length, 1); assert.equal(env.sent.length, 0);
+  assert.deepEqual(env.relayed[0],env.relayed[1]);
 });
 test("lost observation recovers with the same hash and never resends the submission", async () => {
   const env = await participantFixture("complete"); env.state.dropObservation = true;
   await env.click("[data-wallet-connect]"); await env.click("[data-wallet-confirm]");
-  assert.equal(env.sent.length, 1);
+  assert.equal(env.sent.length, 0); assert.equal(env.signatures.length, 1);
   await env.reload(); assert.equal(env.observations.length, 2);
   assert.deepEqual(env.observations[0], env.observations[1]);
-  await env.click("[data-wallet-confirm]"); assert.equal(env.sent.length, 1);
+  await env.click("[data-wallet-confirm]"); assert.equal(env.sent.length, 0); assert.equal(env.signatures.length, 1);
 });
 test("confirmed publication reuses frozen consent and payment requires the same solver, round and hashes", async () => {
   const env = await participantFixture("complete");
@@ -412,7 +498,7 @@ test("confirmed publication reuses frozen consent and payment requires the same 
   Object.assign(env.state.intent, { status: "confirmed", canonical_event_id: intentId, canonical_event_kind: "submission_added", confirmed_block: 8 });
   await env.window.AgentBountiesParticipation.publishEvidence(); await env.window.AgentBountiesParticipation.publishEvidence();
   assert.equal(env.publications.length, 1); assert.deepEqual(env.publications[0], env.submission.evidence_publication);
-  const event = { id: "paid", kind: "bounty_settled", block_number: 9, contract_address: contract, bounty_id: "test-bounty", data: { solver: wallet, round: 2, submission_hash: env.submission.submission_hash, evidence_hash: env.submission.evidence_hash, solver_payout: 2010000 } };
+  const event = { id: "paid", kind: "bounty_settled", block_number: 9, contract_address: contract, bounty_id: ("0x" + "ef".repeat(32)), data: { solver: wallet, round: 2, submission_hash: env.submission.submission_hash, evidence_hash: env.submission.evidence_hash, solver_payout: 2010000 } };
   env.state.feed.events = [{ ...event, data: { ...event.data, round: 1 } }];
   assert.equal((await env.window.AgentBountiesParticipation.refresh()).paid, false);
   env.state.feed.events = [{ ...event, data: { ...event.data, solver: contract } }];
@@ -620,14 +706,16 @@ test("phone WebMCP tools open a review and restore status without signing or exp
   assert.equal(env.tools.get("agent_bounties_get_page_context").execute().phone_wallet, snapshot);
   assert.ok(![...env.tools.keys()].some((name) => /wallet_(sign|pay|approve)/.test(name)));
 });
-test("a contribution uses the exact reviewed amount and recorded transaction", async () => {
-  const env = await participantFixture("fund");
+test("a contribution signs only the reviewed USDC and never pays gas", async () => {
+  const env = await participantFixture("fund"); env.state.dropRelay = true;
   await env.click("[data-wallet-connect]"); await env.click("[data-wallet-confirm]");
-  assert.equal(env.sent.length, 2); assert.equal(env.observations.length, 1);
-  const last = env.sent[1]; assert.equal(last.to, contract);
-  assert.equal(BigInt(`0x${last.data.slice(-64)}`), 10000n);
-  await env.reload(); await env.click("[data-wallet-confirm]"); assert.equal(env.sent.length, 2);
+  assert.equal(env.sent.length, 0); assert.equal(env.signatures.length, 1);
+  assert.equal(env.signatures[0].message.value,"10000"); assert.equal(env.signatures[0].message.to,contract);
+  await env.reload(); await env.click("[data-wallet-connect]"); await env.click("[data-wallet-confirm]");
+  assert.equal(env.signatures.length, 1); assert.deepEqual(env.relayed[0],env.relayed[1]);
+  assert.equal(env.observations.length, 1);
 });
+
 test("reordering identical evidence fields reuses the existing submission review", async () => {
   const env = environment(), original = env.window.fetch; let savedIntent;
   env.window.fetch = async (url, options) => {
@@ -670,4 +758,63 @@ test("progress recognizes the exact review already open without redirecting or g
   assert.equal(env.navigations.length, 0);
   env.window.location.search = `?bountyContract=${contract}&network=base-mainnet&intent=10000000-0000-4000-8000-000000000002`;
   assert.equal((await env.tools.get("agent_bounties_check_progress").execute({intent_id:intentId})).review_page_open, false);
+});
+
+test("submission relay retries the same authorization after lost reply and budget exhaustion", async () => {
+  const env = await participantFixture("complete"); env.state.dropRelay = true;
+  await env.click("[data-wallet-connect]"); await env.click("[data-wallet-confirm]");
+  assert.equal(env.sent.length, 0); assert.equal(env.signatures.length, 1); assert.equal(env.relayed.length, 1);
+  env.state.sponsorOutage = true;
+  await env.reload(); await env.click("[data-wallet-connect]"); await env.click("[data-wallet-confirm]");
+  assert.equal(env.sent.length, 0); assert.equal(env.signatures.length, 1);
+  assert.deepEqual(env.relayed[0],env.relayed[1]);
+});
+test("unavailable sponsor, altered typed authority and foreign relay reply never send wallet transactions", async () => {
+  const outage = await participantFixture("complete"); outage.state.sponsorOutage = true;
+  await outage.click("[data-wallet-connect]"); await outage.click("[data-wallet-confirm]");
+  assert.equal(outage.signatures.length, 0); assert.equal(outage.sent.length, 0);
+  const changed = await participantFixture("complete"); changed.submission.signing_payload.domain.verifyingContract = wallet;
+  await changed.click("[data-wallet-connect]"); await changed.click("[data-wallet-confirm]");
+  assert.equal(changed.signatures.length, 0); assert.equal(changed.sent.length, 0);
+  const wrong = await participantFixture("complete"); wrong.state.wrongRelay = true;
+  await wrong.click("[data-wallet-connect]"); await wrong.click("[data-wallet-confirm]");
+  assert.equal(wrong.observations.length, 0); assert.equal(wrong.sent.length, 0);
+  assert.match(wrong.elements.get("[data-work-status]").textContent,/different submission/);
+});
+
+test("a malicious claim amount and a changed review cannot reach signing", async () => {
+  const env = await participantFixture(); env.state.wrongAmount = true;
+  await env.click("[data-wallet-connect]"); await env.click("[data-wallet-confirm]");
+  assert.equal(env.signatures.length,0); assert.equal(env.sent.length,0);
+  const changed = await participantFixture("complete");
+  await changed.click("[data-wallet-connect]"); changed.state.intent.details = { artifact_reference: "https://example.com/unapproved", evidence:{} };
+  await changed.click("[data-wallet-confirm]"); assert.equal(changed.signatures.length,0);
+});
+
+test("private claim authentication preserves the exact bond and uses a separate wallet login", async () => {
+  const env = await participantFixture("solve"), originalFetch = env.window.fetch, seen = [];
+  const token = "abws_" + "12".repeat(32); let logins = 0;
+  env.window.AgentBountiesWalletSession = { clear() {}, async authenticate(_win, provider, address) {
+    logins++; assert.equal(provider,env.window.ethereum); assert.equal(address,wallet); return token;
+  } };
+  env.window.fetch = async (url, options) => {
+    if (url.endsWith("/claims")) {
+      seen.push(options);
+      if (options.headers.Authorization !== `Bearer ${token}`) return {ok:false,status:401,json:async()=>({message:"Wallet login required"})};
+    }
+    return originalFetch(url,options);
+  };
+  await env.click("[data-wallet-connect]"); await env.click("[data-wallet-confirm]");
+  assert.equal(logins,1); assert.equal(seen[0].credentials,"include");
+  assert.equal(seen.at(-1).headers.Authorization,`Bearer ${token}`);
+  assert.equal(env.signatures.length,1); assert.equal(env.signatures[0].message.value,"10000");
+  assert.equal(env.sent.length,0); assert.equal(env.relayed.length,1);
+});
+
+test("submission relay preserves bounded contract signatures and refuses oversized ones",async()=>{
+  const env=await participantFixture("complete");env.state.walletSignature="0x7f"+"11".repeat(65);
+  await env.click("[data-wallet-connect]");await env.click("[data-wallet-confirm]");
+  assert.equal(env.sent.length,0);assert.equal(env.relayed.length,1);assert.equal(env.relayed[0].signature,env.state.walletSignature);
+  const invalid=await participantFixture("complete");invalid.state.walletSignature="0x"+"11".repeat(4097);
+  await invalid.click("[data-wallet-connect]");await invalid.click("[data-wallet-confirm]");assert.equal(invalid.relayed.length,0);assert.equal(invalid.sent.length,0);
 });

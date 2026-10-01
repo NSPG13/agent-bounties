@@ -8,10 +8,10 @@
   function render(s = snapshot) {
     if (!s) return;
     snapshot = s;
-    if (s.account !== lastAccount) { view = "method"; selectedBrand = null; lastAccount = s.account; }
+    if (s.account !== lastAccount) { view = new URLSearchParams(window.location.search).get("source") === "moonpay" ? "moonpay" : "method"; selectedBrand = null; lastAccount = s.account; }
     const units = value => window.AgentBountiesFundingReadiness.formatUnits(value);
     const short = s.usdc === null ? null : s.required > s.usdc ? s.required - s.usdc : 0n;
-    const ready = s.fresh && short === 0n && (s.existingBounty || s.eth > 0n);
+    const ready = s.fresh && short === 0n;
     // Wallet liquidity and provider-order completion are different facts.
     // Keep the uncertain order recorded, but do not trap an adequately funded wallet.
     const active = !s.account ? "wallet" : ready ? "ready" : view === "moonpay" ? "moonpay" : s.pending ? "pending" : view;
@@ -29,7 +29,7 @@
     $(".topup-guide").setAttribute("aria-busy", String(s.busy));
     text("#onramp-title", copy[0]); text("[data-topup-instruction]", copy[1]);
     for (const panel of document.querySelectorAll("[data-topup-panel]")) panel.hidden = panel.dataset.topupPanel !== active;
-    const need = short === null || !s.fresh ? "Checking your Base balance…" : short > 0n ? `${units(short)} USDC still needed` : "ETH needed for the network fee";
+    const need = short === null || !s.fresh ? "Checking your Base balance…" : short > 0n ? `${units(short)} USDC still needed` : "Base USDC available for bounty review";
     text("[data-topup-needed]", s.error ? "Balance unavailable" : need);
     text("[data-topup-wallet-detail]", buying === "USDC" ? need : "ETH on Base · for the network fee");
     text("[data-topup-card-asset]", `${buying} on Base`);
@@ -38,9 +38,9 @@
     text("[data-topup-brand-instruction]", selectedBrand === "moonpay"
       ? "MoonPay wallet cannot approve this bounty here yet. Do not buy more there for this bounty."
       : `In ${selectedBrand === "coinbase" ? "your Base app (Coinbase Wallet)" : "MetaMask"}, tap Buy. Choose ${buying} on Base. Use the address above. Return here when it arrives.`);
-    text("[data-topup-transfer-amount]", !s.fresh || short === null ? "Check your balance for the amount." : short > 0n ? `Send ${units(short)} USDC on Base` : "Enough USDC · ETH needed for the fee");
+    text("[data-topup-transfer-amount]", !s.fresh || short === null ? "Check your balance for the amount." : short > 0n ? `Send ${units(short)} USDC on Base` : "Enough Base USDC to return to your bounty");
     text("[data-topup-transfer-instruction]", s.fresh && short === 0n
-      ? "Your bounty wallet has enough USDC. Add a little ETH on Base for its payment fee. Your wallet shows the fee before you pay."
+      ? "Your bounty wallet has enough USDC. Return to the saved bounty to check gas sponsorship and sign the exact funding request."
       : "In the MoonPay phone app, tap Send. Choose USDC on Base. Paste the wallet address above.");
     $("[data-topup-wallet]").hidden = !s.account;
     text("[data-topup-address]", s.account || "");
@@ -61,10 +61,6 @@
   }
   function show(method) {
     if (!["method", "wallet", "card", "moonpay"].includes(method)) throw new Error("Choose wallet or card.");
-    if (snapshot && snapshot.fresh && snapshot.usdc >= snapshot.required && snapshot.eth === 0n && !snapshot.existingBounty) {
-      $("[data-onramp-asset]").value = "eth";
-      $("[data-onramp-asset]").dispatchEvent(new Event("change"));
-    }
     view = method === "wallet" ? "wallet-buy" : method;
     feedback("", ""); render();
     // User navigation starts the new screen at its wallet/heading, even when

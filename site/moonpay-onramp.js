@@ -336,20 +336,13 @@
     if (state.usdcBalance === null || state.ethBalance === null) {
       guidance.textContent = state.bountyContract
         ? "This existing-bounty flow may use gas sponsorship; verify the final wallet request before signing."
-        : "New-bounty creation is not gas-sponsored. Add a small amount of Base ETH to the same wallet as the planned USDC.";
+        : "Signed creation uses platform-paid gas. Return to your saved bounty to check sponsor availability; no ETH purchase is required.";
       return;
     }
     const enoughUsdc = state.usdcBalance >= state.requiredUsdc;
-    const hasGas = state.ethBalance > 0n;
     const messages = [
-      enoughUsdc
-        ? "This wallet already holds at least the planned USDC contribution."
-        : `USDC shortfall: ${formatUnits(state.requiredUsdc - state.usdcBalance, 6, 6)} USDC.`,
-      state.bountyContract
-        ? "Existing-bounty funding may use gas sponsorship; the final wallet path determines whether ETH is needed."
-        : (hasGas
-          ? "Base ETH is available. Whether it covers gas remains unknown until the exact transaction is estimated at bounty review."
-          : "No Base ETH is visible. New-bounty creation cannot proceed until the same wallet has a small Base ETH balance; choose Base ETH above to review a separate purchase."),
+      enoughUsdc ? "This wallet holds the planned Base USDC amount." : `USDC shortfall: ${formatUnits(state.requiredUsdc - state.usdcBalance, 6, 6)} USDC.`,
+      "Return to the saved bounty to check gas sponsorship and review the exact funding request. Adding funds to a wallet does not fund a bounty.",
     ];
     guidance.textContent = messages.join(" ");
     guidance.dataset.tone = enoughUsdc ? "success" : "pending";
@@ -601,7 +594,7 @@
       eth_balance: fresh ? formatUnits(state.ethBalance, 18, 18) : null,
       received_usdc_since_first_check: fresh ? formatUnits(state.receivedUsdc, 6, 6) : null,
       observed_at: state.observedAt, block_number: state.blockNumber, balance_error: state.balanceError,
-      ready_for_bounty_review: fresh && shortfall === 0n && (Boolean(state.bountyContract) || state.ethBalance > 0n),
+      ready_for_bounty_review: fresh && shortfall === 0n,
       provider_order_status: currentAttempt() ? "unverified" : "not_recorded", purchase_opened: Boolean(currentAttempt()),
       bounty_funded: false, payment_authorized: false, return_url: safeReturnUrl().href, poll_after_ms: 5000,
       next_action: fresh && shortfall === 0n ? "Return to the saved bounty review to check fees and approve funding." : currentAttempt() ? "Wait for the existing purchase; do not buy again." : "Choose wallet or card. The person confirms any purchase with the provider." };

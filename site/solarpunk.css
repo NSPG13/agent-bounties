@@ -2468,6 +2468,16 @@ html[data-scene-ready="false"] .scene-plate {
   }
 }
 
+/* Account review email preferences. */
+body .account-review-emails { padding: 18px; border: 1px solid var(--ab-line); border-radius: 16px; background: var(--ab-bg); }
+body .account-review-emails h3 { margin: 0 0 12px; color: var(--ab-ink); font-family: var(--ab-display); font-weight: 400; }
+body .account-review-emails label { display: flex; align-items: flex-start; gap: 10px; color: var(--ab-ink); font: 400 14px/1.5 var(--ab-body); cursor: pointer; }
+body .account-review-emails input { width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--ab-ink); flex-shrink: 0; }
+body .account-review-emails p { margin: 10px 0 0; color: var(--ab-muted); font: 400 12px/1.5 var(--ab-body); overflow-wrap: anywhere; }
+body .review-email-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+body .review-email-actions:has(button:not([hidden])) { min-height: 40px; }
+body .review-email-actions button { padding: 8px 14px; border: 1px solid var(--ab-line); border-radius: 999px; background: var(--ab-soft); color: var(--ab-ink); cursor: pointer; }
+
 /* Account continuations stay usable before a wallet is linked. */
 .account-inbox { margin: 20px 0; min-width: 0; }
 .account-inbox h3, .account-inbox h4, .account-inbox summary { color: var(--ab-ink, #e9eee3); margin: 14px 0 8px; }
@@ -2477,4 +2487,3 @@ html[data-scene-ready="false"] .scene-plate {
 .account-inbox strong { color: var(--ab-ink, #e9eee3); font-size: .85rem; }
 .account-inbox p, .account-inbox small { margin: 0; color: var(--ab-muted, #b8c6b4); line-height: 1.5; }
 .account-inbox button { margin-top: 12px; padding: 10px 14px; }
-

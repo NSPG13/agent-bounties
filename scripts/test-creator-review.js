@@ -4,7 +4,8 @@ const review = require("../site/creator-review.js"), workspace = require("../sit
 const contract = "0x" + "22".repeat(20), creator = "0x" + "11".repeat(20), solver = "0x" + "33".repeat(20);
 const hash = (byte) => "0x" + byte.repeat(32);
 function environment(options = {}) {
-  const elements = new Map(), records = new Map(), requests = [], savedReports = [];
+  const elements = new Map(), records = new Map(), requests = [], relays = [], savedReports = [];
+  let rejected = false;
   const element = () => ({ hidden: true, disabled: true, textContent: "", children: [], handlers: {}, addEventListener(name, fn) { this.handlers[name] = fn; }, replaceChildren() { this.children = []; }, append(child) { this.children.push(child); } });
   const root = element(); root.querySelector = (name) => { if (!elements.has(name)) elements.set(name, element()); return elements.get(name); };
   const win = { location: { search: `?bountyContract=${contract}` }, document: { querySelector: () => root, createElement: element }, sessionStorage: { getItem: (key) => records.get(key) || null, setItem: (key, value) => records.set(key, value), removeItem: (key) => records.delete(key) } };
@@ -14,10 +15,17 @@ function environment(options = {}) {
   const submitted = { kind: "submission_added", id: "submission", contract_address: contract, bounty_id: job.bounty_id, block_number: 1, log_index: 0, data: { round: 1, solver, submission_hash: hash("dd"), evidence_hash: hash("ee") } };
   const item = { status: "submitted", bounty_contract: contract, bounty_id: job.bounty_id, creator, terms_valid: true, terms_hash: terms.terms_hash, terms, events: [submitted] };
   win.AgentBountiesWorkflow = { apiBase: () => "https://api.example.test", createClient: () => ({ async request(path, body) {
+    if (path === "/v1/base/gas-sponsorship") return { schema: "agent-bounties/gas-sponsorship-v1", creator_verdict: { available: !options.unavailable, customer_gas_wei: "0" } };
     if (path.includes("/feed?")) return [item];
     if (path.includes("/verification-jobs?")) return [job];
     if (path.endsWith("verification-attestation-plan")) { const plan = workspace.typedData(body.attestation); if (options.alteredSignature) plan.message.verifier = solver; return plan; }
     if (path.endsWith("attestation-settlement-plan")) return { from: creator, to: options.alteredTransaction ? solver : contract, value_wei: "0", data: workspace.settlementData(body.attestations[0], win.AgentBountiesEvm) };
+    if (path.endsWith("creator-verdict-relay")) {
+      relays.push(body);
+      if (options.rejectOnce && !rejected) { rejected = true; throw new Error("Sponsor capacity temporarily unavailable"); }
+      if (options.lostResponse) throw new Error("Connection lost after relay");
+      return { schema: "agent-bounties/sponsored-verdict-v1", network: "base-mainnet", bounty_contract: options.wrongRelay ? solver : contract, round: 1, customer_gas_wei: "0", transaction_hash: hash("ff") };
+    }
     throw new Error(`Unexpected endpoint ${path}`);
   } }) };
   win.fetch = async (url, init) => {
@@ -26,25 +34,20 @@ function environment(options = {}) {
     if (options.storageFails) return {ok:false,status:503};
     return {ok:true,json:async()=>({id:'00000000-0000-4000-8000-000000000001',...body})};
   };
-  let rejected = false;
   win.ethereum = { async request({ method }) {
     requests.push(method);
     if (method === "eth_accounts" || method === "eth_requestAccounts") return [options.foreignWallet ? solver : creator];
     if (method === "eth_chainId") return "0x2105";
     if (method === "eth_signTypedData_v4") {
       assert.ok(savedReports.some(r => r.url.endsWith('/reviews') && r.body.assessment.checks.length === 2), 'the complete explanation is saved before signing');
-      return "0x" + "ab".repeat(65);
+      return options.signature || "0x" + "ab".repeat(65);
     }
-    if (method === "eth_sendTransaction") {
-      if (options.rejectOnce && !rejected) { rejected = true; throw Object.assign(new Error("Rejected"), { code: 4001 }); }
-      if (options.lostResponse) throw new Error("Connection lost after sending");
-      return hash("ff");
-    }
+    if (method === "eth_sendTransaction") throw new Error("Creator must never pay verdict gas");
     throw new Error(method);
   } };
   workspace.start(win);
   const checks = terms.document.acceptance_criteria.map((criterion) => ({ criterion, passed: true, reason: "Verified in the supplied artifact" }));
-  return { win, item, job, checks, requests, records, elements, stage: () => win.AgentBountiesCreatorReviewWorkspace.stage({ checks }), click: () => elements.get("button").handlers.click({ isTrusted: true }), refresh: () => win.AgentBountiesCreatorReviewWorkspace.refresh() };
+  return { win, item, job, checks, requests, relays, savedReports, records, elements, stage: () => win.AgentBountiesCreatorReviewWorkspace.stage({ checks }), click: () => elements.get("button").handlers.click({ isTrusted: true }), refresh: () => win.AgentBountiesCreatorReviewWorkspace.refresh() };
 }
 test("creator review is explicit, binds a calendar deadline, and cannot replace meta verification", () => {
   const draft = { review_mode: "creator", delivery_deadline: new Date(Date.now() + 7 * 86400000).toISOString() };
@@ -72,20 +75,33 @@ test("staging cannot sign and changed signature or transaction scopes cannot rea
     if (option !== "alteredTransaction") assert.equal(env.requests.includes("eth_signTypedData_v4"), false);
   }
 });
-test("a lost send response is not payment and cannot send again", async () => {
+test("a lost relay response retries only the same signed verdict and is not payment", async () => {
   const env = environment({ lostResponse: true }); await env.stage(); await env.click(); await env.click();
-  assert.equal(env.requests.filter((method) => method === "eth_sendTransaction").length, 1);
+  assert.equal(env.requests.filter((method) => method === "eth_sendTransaction").length, 0);
+  assert.equal(env.requests.filter((method) => method === "eth_signTypedData_v4").length, 1);
+  assert.equal(env.relays.length, 2); assert.deepEqual(env.relays[0], env.relays[1]);
+  assert.equal(env.savedReports.filter(r => r.url.endsWith("/reviews")).length, 1, "relay retries retain one saved report");
+  assert.equal(JSON.parse([...env.records.values()][0]).report_id, "00000000-0000-4000-8000-000000000001");
   assert.equal((await env.refresh()).paid, false);
   await assert.rejects(env.stage(), /recorded verdict/);
   const event = { ...env.item.events[0], kind: "bounty_settled", id: "settled", block_number: 2, data: { ...env.item.events[0].data, round: 2 } };
   env.item.events.push(event); assert.equal((await env.refresh()).paid, false);
   event.data.round = 1; assert.equal((await env.refresh()).paid, true);
 });
-test("explicitly rejected transaction resumes the same signed verdict", async () => {
+test("sponsor outage resumes the same verdict without a second signature or customer gas", async () => {
   const env = environment({ rejectOnce: true }); await env.stage(); await env.click(); await env.click();
   assert.equal(env.requests.filter((method) => method === "eth_signTypedData_v4").length, 1);
-  assert.equal(env.requests.filter((method) => method === "eth_sendTransaction").length, 2);
+  assert.equal(env.requests.filter((method) => method === "eth_sendTransaction").length, 0);
+  assert.equal(env.relays.length, 2); assert.deepEqual(env.relays[0], env.relays[1]);
   assert.equal((await env.refresh()).status, "pending_confirmation");
+});
+
+test("unavailable sponsorship stops before signing and a mismatched relay cannot supply a receipt", async () => {
+  const unavailable = environment({ unavailable: true }); await unavailable.stage(); await unavailable.click();
+  assert.equal(unavailable.requests.includes("eth_signTypedData_v4"), false);
+  const wrong = environment({ wrongRelay: true }); await wrong.stage(); await wrong.click();
+  assert.equal((await wrong.refresh()).operation.phase, "relay_pending");
+  assert.equal((await wrong.refresh()).operation.transaction_hash, null);
 });
 
 test("saved brief edits reach the shared journey and invalidate an older funding proposal", () => {
@@ -124,6 +140,11 @@ test("saved brief edits reach the shared journey and invalidate an older funding
   document.activeElement = timezone; timezone.value = "CST"; timezone.handlers.input();
   assert.equal(client.load().brief.deadline_at, null, "ambiguous zones cannot stage a guessed deadline");
   assert.match(deadline.validationMessage, /ambiguous/);
+});
+
+test("contract-wallet verdict preserves a wider signature through review and relay",async()=>{
+ const signature="0x7f"+"ab".repeat(65);const env=environment({signature});await env.stage();await env.click();
+ assert.equal(env.relays.length,1);assert.equal(env.relays[0].signature,signature);assert.equal(env.requests.includes("eth_sendTransaction"),false);
 });
 
 test("unavailable durable review storage prevents signatures and payments", async () => {

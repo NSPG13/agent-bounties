@@ -149,7 +149,7 @@
           <output data-onramp-output aria-live="off"></output>
           <div data-return-status hidden><p data-return-status-copy></p></div>
           <p>Public checkout cannot prefill or cryptographically bind your wallet, so we do not open it. Direct MoonPay checkout requires a live signed link for your chosen wallet and Base asset.</p>
-          <p>Buying crypto does not fund the bounty. New-bounty creation is not gas-sponsored. Only the matching confirmed <code>FundingAdded</code> event proves bounty funding.</p>
+          <p>Buying crypto does not fund the bounty. Signed new-bounty creation uses platform-paid gas when the live sponsor is available. Only the matching confirmed <code>FundingAdded</code> event proves bounty funding.</p>
         </details>
       </section>
     </main>
@@ -168,13 +168,13 @@
 <!-- shared-footer:end -->
     <script src="phone-wallet-config.js?v=1"></script>
     <script src="phone-wallet.js?v=8"></script>
-    <script src="marketplace-workflow.js?v=9"></script>
+    <script src="marketplace-workflow.js?v=11"></script>
     <script src="analytics-config.js?v=11"></script>
     <script src="analytics.js?v=4"></script>
     <script src="guild-shell.js?v=4"></script>
     <script src="funding-readiness.js?v=1"></script>
-    <script src="topup-guide.js?v=5"></script>
-    <script src="moonpay-onramp.js?v=6"></script>
+    <script src="topup-guide.js?v=6"></script>
+    <script src="moonpay-onramp.js?v=7"></script>
     <script src="moonpay-direct-fallback.js?v=5"></script>
   </body>
 </html>
