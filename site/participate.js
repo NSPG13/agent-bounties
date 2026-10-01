@@ -52,14 +52,27 @@
       instructions: item.verification_readiness_reason || "Restore the exact committed verifier or prepare an owner-authorized cancellation when the contract allows it. Do not claim, fund a child, or replace immutable verifier authority.", confirmed: false };
     return null;
   }
-  function validateSubmission(submission, details, contract, wallet, bountyId) {
+  function validateSubmission(submission, details, contract, wallet, bountyId, requireFileCheck = false) {
     const evidence = submission?.evidence_publication;
+    let expectedEvidence = details.evidence;
+    const checked = submission?.checked_artifact;
+    if (requireFileCheck && !checked) throw new Error("The files have not been checked yet. Try again before signing.");
+    if (checked) {
+      if (checked.artifact_reference !== details.artifact_reference
+        || checked.source_subdirectory !== (details.evidence.source_subdirectory ?? ".")
+        || !/^sha256:[0-9a-f]{64}$/.test(checked.source_snapshot_digest)
+        || !Number.isSafeInteger(checked.file_count) || checked.file_count < 1
+        || !Number.isSafeInteger(checked.total_bytes) || checked.total_bytes < 0
+        || evidence?.evidence?.source_snapshot_digest !== checked.source_snapshot_digest
+        || (details.evidence.source_snapshot_digest != null && details.evidence.source_snapshot_digest !== checked.source_snapshot_digest)) throw new Error("The checked files differ from the work you chose. Do not sign.");
+      expectedEvidence = { ...details.evidence, source_snapshot_digest: checked.source_snapshot_digest };
+    }
     if (submission?.network?.chain_id !== 8453 || lower(submission.bounty_contract) !== contract || lower(submission.solver) !== wallet
       || submission.bounty_id !== bountyId || !Number.isSafeInteger(submission.round) || submission.round <= 0
       || !HASH.test(submission.submission_hash) || !HASH.test(submission.evidence_hash)
       || evidence?.network !== "base-mainnet" || lower(evidence.bounty_contract) !== contract || lower(evidence.solver_wallet) !== wallet
       || evidence.bounty_id !== bountyId || evidence.round !== submission.round
-      || evidence.artifact_reference !== details.artifact_reference || stable(evidence.evidence) !== stable(details.evidence)) throw new Error("The prepared submission differs from the exact public evidence you reviewed.");
+      || evidence.artifact_reference !== details.artifact_reference || stable(evidence.evidence) !== stable(expectedEvidence)) throw new Error("The prepared submission differs from the exact public evidence you reviewed.");
   }
   function validateCalls(calls, { action, contract, wallet, amount, submission }, evm) {
     const selector = (signature) => evm.keccak256Hex(evm.textHex(signature)).slice(0, 10);
@@ -193,7 +206,7 @@
         find("[data-work-prepare]").hidden = true;
         find("[data-work-evidence]").parentElement.open = true;
       }
-      put("[data-work-evidence]", JSON.stringify({ verification: terms.verification_policy, benchmark: terms.benchmark, evidence_schema: terms.evidence_schema, events, jobs }, null, 2));
+      put("[data-work-evidence]", JSON.stringify({ verification_readiness: item.verification_details || { ready: item.verification_ready, reason: item.verification_readiness_reason }, verification: terms.verification_policy, benchmark: terms.benchmark, evidence_schema: terms.evidence_schema, events, jobs }, null, 2));
       const next = paidEvent ? null
         : item.status === "paid" ? { action: "show_canonical_result", instructions: "Show the recorded settlement and its actual recipient. This is not a claim that the current person earned money unless their wallet and submission are matched." }
         : item.status === "cancelled" ? { action: "review_contributor_refunds", instructions: "The bounty was cancelled. Each contributor must reconcile their own RefundWithdrawn event; cancellation alone is not a refund." }
@@ -276,13 +289,17 @@
         record.sponsoredRequest = { action: "fund", body: { network, contribution }, typed: plan.eip3009_authorization };
       } else if (intent.action === "complete") {
         submission = await client.request("/v1/base/autonomous-bounties/submission-preparation", { network, bounty_contract: contract, solver_wallet: wallet, ...intent.details });
-        validateSubmission(submission, intent.details, contract, wallet, item.bounty_id);
+        validateSubmission(submission, intent.details, contract, wallet, item.bounty_id, item.terms?.document?.benchmark?.engine === "sandboxed_regression_v1");
+        if (submission.checked_artifact) {
+          put("[data-work-evidence]", JSON.stringify({ files_checked: submission.checked_artifact, evidence_to_sign: submission.evidence_publication.evidence }, null, 2));
+          find("[data-work-evidence]").parentElement.open = true;
+        }
         validateSubmissionSignature(submission, contract, wallet);
       } else throw new Error("The committed verifier handles this step. Refresh verification status.");
       calls = []; record.calls = []; record.wallet = wallet; record.submission = submission;
       record.reviewedIntent = { action: intent.action, network, bounty_contract: contract, details: intent.details, amount_base_units: intent.amount_base_units };
       saveRecord();
-      put("[data-wallet-status]", "Sign the exact action once. Agent Bounties pays the network fee.");
+      put("[data-wallet-status]", submission?.checked_artifact ? "Your files were checked. Review the file hash below, then sign. This does not mean the work passed its tests." : "Sign the exact action once. Agent Bounties pays the network fee.");
       find("[data-wallet-confirm]").disabled = false;
     }
     const providers = [];

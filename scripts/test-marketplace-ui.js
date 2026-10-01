@@ -250,3 +250,93 @@ test("unverified competitions provide only read-only waiting guidance", () => {
     assert.match(manifest.current_next_action.instructions, /Do not fund/);
   }
 });
+
+test("competition details retain closed work and its later proof deadline without reopening actions", async () => {
+  const contract = "0x1111111111111111111111111111111111111111";
+  const item = v2Opportunity({
+    opportunity_id: `open-competition-v2:base-mainnet:${contract}`,
+    source_type: "canonical_base", verification_ready: false, work_state: "closed_to_new_work",
+  });
+  item.evidence_requirements.timeline = {
+    work_scoring_cutoff: ENDS_AT,
+    proof_submission_deadline: 1793577600,
+    refund_available: false,
+    refund_condition: "Confirm expiry before contributor refunds. A hosted outage alone does not permit cancellation.",
+  };
+  const nodes = new Map();
+  const doc = { querySelector(selector) {
+    if (!nodes.has(selector)) nodes.set(selector, { dataset: {}, textContent: "", hidden: false, setAttribute() {}, removeAttribute(key) { delete this[key]; } });
+    return nodes.get(selector);
+  } };
+  const win = {
+    location: new URL(`https://agentbounties.app/competition.html?bountyContract=${contract}&network=base-mainnet`),
+    async fetch(url, options) {
+      const query = new URL(url).searchParams;
+      assert.equal(query.get("view"), "recent");
+      assert.equal(query.get("opportunity_id"), item.opportunity_id);
+      assert.equal(options.cache, "no-store");
+      return { ok: true, json: async () => ({ schema_version: "agent-bounties/opportunity-projection-v1", network: "base-mainnet", applied_view: "recent", degraded: false, source_statuses: [{ source_type: "canonical_base", available: true }], items: [item] }) };
+    },
+  };
+  await competition.start(win, doc);
+  assert.equal(nodes.get("[data-competition-phase]").textContent, "Closed to new work");
+  assert.match(nodes.get("[data-fact-window]").textContent, /Work\/scoring cutoff:.*Proof submission deadline:/);
+  assert.match(nodes.get("[data-competition-status]").textContent, /later proof deadline only covers work completed in the original period/);
+  assert.match(nodes.get("[data-competition-status]").textContent, /Confirm expiry before contributor refunds/);
+  assert.equal(nodes.get("[data-child-post-started]").hidden, true);
+  assert.equal(nodes.get("[data-competition-app] .competition-workspace").hidden, true);
+  assert.equal(nodes.get("[data-competition-app]").dataset.state, "unavailable");
+});
+
+test("paid and closed history never offers child funding or proof purchases even with a ready verifier", async () => {
+  for (const fields of [
+    { source_status: "settled", work_state: "completed", payment_state: "paid" },
+    { source_status: "expired" }, { source_status: "cancelled" },
+    { source_status: "active", evidence_requirements: { timeline: { proof_window_open: false } } },
+  ]) {
+    const item = v2Opportunity({ ...fields, verification_ready: true, funded_amount: amount(0) });
+    item.opportunity_id = `open-competition-v2:base-mainnet:${item.source_id}`;
+    const manifest = competition.participationManifest(item, marketplace.timingState(item));
+    assert.equal(manifest.phase, "closed");
+    assert.deepEqual(manifest.browser_workflow, {});
+    assert.equal(manifest.hosted_proof_quote, null);
+    assert.equal(manifest.child_bounty_template, null);
+    assert.equal(manifest.current_next_action.action, "view_canonical_history");
+    assert.equal(competition.childPostUrl(item), null);
+    assert.doesNotMatch(competition.childTemplate(item), /Fully fund/);
+    const nodes = new Map();
+    const doc = { querySelector(selector) {
+      if (!nodes.has(selector)) nodes.set(selector, { dataset: {}, textContent: "", hidden: false, setAttribute() {}, removeAttribute(key) { delete this[key]; } });
+      return nodes.get(selector);
+    } };
+    const win = { location: new URL(`https://agentbounties.app/competition.html?bountyContract=${item.source_id}`),
+      async fetch() { return { ok: true, json: async () => ({ schema_version: "agent-bounties/opportunity-projection-v1", network: "base-mainnet", applied_view: "recent", degraded: false, source_statuses: [{ source_type: "canonical_base", available: true }], items: [item] }) }; } };
+    await competition.start(win, doc);
+    assert.equal(nodes.get("[data-competition-app]").dataset.state, "unavailable");
+    assert.equal(nodes.get("[data-child-post-started]").hidden, true);
+    assert.equal(nodes.get("[data-competition-app] .competition-workspace").hidden, true);
+    assert.match(nodes.get("[data-competition-status]").textContent, /competition is closed/);
+  }
+});
+
+test("closed scoring preserves valid historical proof steps but never requests new child funding", () => {
+  const item = v2Opportunity({ work_state: "closed_to_new_work" });
+  item.evidence_requirements.timeline = { proof_window_open: true };
+  const manifest = competition.participationManifest(item, marketplace.timingState(item));
+  assert.ok(manifest.hosted_proof_quote);
+  assert.equal(manifest.child_bounty_template, null);
+  assert.equal(competition.childPostUrl(item), null);
+  assert.doesNotMatch(competition.childTemplate(item), /Fully fund/);
+});
+
+test("a proof window that has not opened does not label funding as completed", () => {
+  const item = v2Opportunity({ source_status: "funding", work_state: "open", payment_state: "seeking_funding", verification_ready: false });
+  item.evidence_requirements.timeline = { proof_window_open: false, refund_available: false };
+  const manifest = competition.participationManifest(item, marketplace.timingState(item));
+  assert.equal(manifest.phase, "blocked");
+  assert.equal(manifest.current_next_action.action, "wait_for_verification");
+  assert.doesNotMatch(manifest.current_next_action.instructions, /competition is closed|refund/);
+  assert.doesNotMatch(competition.childTemplate(item), /competition is closed|refund/);
+  assert.equal(manifest.hosted_proof_quote, null);
+  assert.deepEqual(manifest.browser_workflow, {});
+});

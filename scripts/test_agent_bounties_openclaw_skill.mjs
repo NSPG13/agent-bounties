@@ -433,8 +433,10 @@ test("portable skill metadata and install contracts remain publishable", async (
     "fixtures/terms/219.json",
     "fixtures/terms/220.json",
     "fixtures/verified-claimable.json",
+    "fixtures/routed-v3-release.json",
     "references/payment-truth.md",
     "scripts/check-in.mjs",
+    "scripts/routed-inventory.mjs",
   ];
   for (const path of bundleFiles) {
     await access(new URL(`../skills/agent-bounties/${path}`, import.meta.url));
@@ -575,7 +577,7 @@ test("direct safe-chain verifier excludes one bounty with altered terms", async 
   assert.deepEqual(report.excluded.map((item) => item.id), [manifest.bounties[0].bounty_id]);
 });
 
-test("direct safe-chain inventory marks only the exact canonical child verifier as meta", async () => {
+test("direct safe-chain inventory cannot bypass hosted child verifier health", async () => {
   const manifest = await permissionlessDirectManifest();
   const bounty = manifest.bounties[0];
   bounty.verifier_module = STANDING_META_BOUNTY.verifierModule;
@@ -587,14 +589,9 @@ test("direct safe-chain inventory marks only the exact canonical child verifier 
     rpcTransport: directTransport(manifest),
   });
 
-  assert.equal(report.verified.length, manifest.bounties.length);
-  const marked = report.verified.filter((item) => item.standing_meta_bounty);
-  assert.equal(marked.length, 1);
-  assert.equal(
-    marked[0].standing_meta_bounty.inventory_class,
-    STANDING_META_BOUNTY.inventoryClass,
-  );
-  assert.equal(marked[0].standing_meta_bounty.requires_different_solver_wallet, true);
+  assert.equal(report.verified.length, manifest.bounties.length - 1);
+  assert.equal(report.verified.some((item) => item.standing_meta_bounty), false);
+  assert.deepEqual(report.excluded.map(({id, reason})=>({id,reason})), [{id:bounty.bounty_id,reason:"parent_child_verifier_health_unavailable"}]);
 });
 
 test("direct safe-chain inventory rejects deterministic verifier bytecode drift", async () => {

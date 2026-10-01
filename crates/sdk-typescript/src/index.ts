@@ -644,6 +644,7 @@ export type OpportunityWorkState =
   | "claimable"
   | "in_progress"
   | "submitted"
+  | "closed_to_new_work"
   | "completed";
 export type OpportunityPaymentState = "none" | "seeking_funding" | "escrowed" | "paid";
 export type OpportunitySourceType = "unfunded_offchain" | "legacy_bounty" | "canonical_base";
@@ -2101,6 +2102,10 @@ export class AgentBountiesClient {
     );
   }
 
+  /** Returns readiness details unchanged, including blocker codes, release/profile
+   * and last-check time. Gate new hosted work on verification_ready; component
+   * health alone does not approve terms, submissions or payment. Pending jobs
+   * remain available from the separate verification-jobs operation. */
   async listAutonomousBounties(
     network?: string | null,
     claimableOnly?: boolean | null,
@@ -2347,6 +2352,9 @@ export class AgentBountiesClient {
     });
   }
 
+  /** Check parent eligibility or exact regression files before signing. checked_artifact is not a verdict.
+   * Omit evidence.source_snapshot_digest to calculate it; supplied mismatches fail.
+   */
   async prepareAutonomousBountySubmission(request: {
     network?: string | null;
     bounty_contract: string;

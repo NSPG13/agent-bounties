@@ -49,6 +49,7 @@ ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
 BYTES32 = re.compile(r"^0x[0-9a-fA-F]{64}$")
 CLAIMABLE_EVIDENCE = "confirmed_canonical_autonomous_bounty"
 MAX_REPORT_AGE_SECONDS = 900
+ROUTED_V3 = json.loads((Path(__file__).resolve().parents[1] / "skills/agent-bounties/fixtures/routed-v3-release.json").read_text(encoding="utf-8"))
 STANDING_META_SCHEMA = "agent-bounties/standing-meta-bounty-v2"
 STANDING_META_CLASS = "post_bounty_third_party_completion"
 STANDING_META_PROTOCOL = "agent-bounties/independent-child-v2"
@@ -517,33 +518,54 @@ def standing_meta_entries(
     for item in claimable:
         descriptor = item.get("standing_meta_bounty")
         if descriptor is None:
+            if str(item.get("verifier_module", "")).lower() == ROUTED_V3["router"]:
+                return [], False
             continue
         if not isinstance(descriptor, dict):
             return [], False
         block_number = descriptor.get("observed_block_number")
         block_hash = str(descriptor.get("observed_block_hash") or "").lower()
+        routed = descriptor.get("schema_version") == ROUTED_V3["schema_version"]
+        verifier = ROUTED_V3["router"] if routed else STANDING_META_VERIFIER
+        code_hash = ROUTED_V3["router_code_hash"] if routed else STANDING_META_VERIFIER_CODE_HASH
+        acceptance_hash = ROUTED_V3["acceptance_hash"] if routed else STANDING_META_ACCEPTANCE_HASH
         valid = (
-            descriptor.get("schema_version") == STANDING_META_SCHEMA
+            descriptor.get("schema_version") == (ROUTED_V3["schema_version"] if routed else STANDING_META_SCHEMA)
             and descriptor.get("inventory_class") == STANDING_META_CLASS
-            and descriptor.get("verifier_protocol") == STANDING_META_PROTOCOL
+            and descriptor.get("verifier_protocol") == (ROUTED_V3["verifier_protocol"] if routed else STANDING_META_PROTOCOL)
             and str(descriptor.get("verifier_module") or "").lower()
-            == STANDING_META_VERIFIER
+            == verifier
             and str(descriptor.get("verifier_runtime_code_hash") or "").lower()
-            == STANDING_META_VERIFIER_CODE_HASH
+            == code_hash
             and str(descriptor.get("acceptance_criteria_hash") or "").lower()
-            == STANDING_META_ACCEPTANCE_HASH
+            == acceptance_hash
             and descriptor.get("requires_funded_canonical_child") is True
             and descriptor.get("requires_different_solver_wallet") is True
             and descriptor.get("required_child_status") == "settled"
             and item.get("verification_mode") == "deterministic_module"
             and str(item.get("verifier_module") or "").lower()
-            == STANDING_META_VERIFIER
+            == verifier
             and item.get("verification_ready") is True
             and isinstance(block_number, int)
             and not isinstance(block_number, bool)
             and block_number > 0
             and BYTES32.fullmatch(block_hash)
         )
+        if routed:
+            try:
+                last_check = datetime.fromisoformat(str(descriptor.get("last_check_at", "")).replace("Z", "+00:00"))
+                age = (datetime.now(timezone.utc) - last_check).total_seconds()
+            except (ValueError, TypeError):
+                age = float("inf")
+            valid = valid and (
+                descriptor.get("adapter") == ROUTED_V3["adapter"]
+                and descriptor.get("adapter_runtime_code_hash") == ROUTED_V3["adapter_code_hash"]
+                and descriptor.get("policy_hash") == ROUTED_V3["policy_hash"]
+                and descriptor.get("required_child_quorum") == ROUTED_V3["child_threshold"]
+                and re.fullmatch(r"sha256:[0-9a-f]{64}", str(descriptor.get("release_id", ""))) is not None
+                and -30 <= age <= 2700
+                and direct is None
+            )
         if direct is not None:
             valid = valid and (
                 block_number == direct.get("number")

@@ -10,7 +10,7 @@ test("browser and remote MCP publish the same posting choices", () => {
   assert.deepEqual(flow.POSTING_OPTIONS, JSON.parse(fs.readFileSync(require.resolve("../site/posting-options.json"), "utf8")));
 });
 const market = require("../site/marketplace.js");
-const { validateCalls, recoveryStatus, verifierReviewState, start: startParticipant } = require("../site/participate.js");
+const { validateCalls, validateSubmission, recoveryStatus, verifierReviewState, start: startParticipant } = require("../site/participate.js");
 const contract = "0x" + "11".repeat(20), wallet = "0x" + "22".repeat(20);
 const intentId = "10000000-0000-4000-8000-000000000001";
 const amount = (n) => ({ amount: String(n), unit: "base_units", decimals: 6, currency: "USDC" });
@@ -817,4 +817,23 @@ test("submission relay preserves bounded contract signatures and refuses oversiz
   assert.equal(env.sent.length,0);assert.equal(env.relayed.length,1);assert.equal(env.relayed[0].signature,env.state.walletSignature);
   const invalid=await participantFixture("complete");invalid.state.walletSignature="0x"+"11".repeat(4097);
   await invalid.click("[data-wallet-connect]");await invalid.click("[data-wallet-confirm]");assert.equal(invalid.relayed.length,0);assert.equal(invalid.sent.length,0);
+});
+
+
+test("file preflight adds only the inspected digest and cannot replace reviewed evidence", () => {
+  const contract = "0x" + "1".repeat(40), wallet = "0x" + "2".repeat(40), bountyId = "0x" + "3".repeat(64);
+  const details = { artifact_reference: "https://github.com/owner/repo/commit/" + "a".repeat(40), evidence: { source_subdirectory: "work", notes: "chosen work" } };
+  const digest = "sha256:" + "b".repeat(64);
+  const value = { network: { chain_id: 8453 }, bounty_contract: contract, solver: wallet, bounty_id: bountyId, round: 1,
+    submission_hash: "0x" + "4".repeat(64), evidence_hash: "0x" + "5".repeat(64),
+    checked_artifact: { artifact_reference: details.artifact_reference, source_subdirectory: "work", source_snapshot_digest: digest, file_count: 2, total_bytes: 10 },
+    evidence_publication: { network: "base-mainnet", bounty_contract: contract, solver_wallet: wallet, bounty_id: bountyId, round: 1, artifact_reference: details.artifact_reference, evidence: { ...details.evidence, source_snapshot_digest: digest } } };
+  assert.doesNotThrow(() => validateSubmission(value, details, contract, wallet, bountyId, true));
+  const missing = structuredClone(value); delete missing.checked_artifact;
+  assert.throws(() => validateSubmission(missing, details, contract, wallet, bountyId, true), /not been checked/);
+  const changed = structuredClone(value); changed.evidence_publication.evidence.notes = "other work";
+  assert.throws(() => validateSubmission(changed, details, contract, wallet, bountyId, true), /differs/);
+  const wrong = structuredClone(value); wrong.checked_artifact.source_subdirectory = "another-folder";
+  assert.throws(() => validateSubmission(wrong, details, contract, wallet, bountyId, true), /differ/);
+  assert.throws(() => validateSubmission(value, { ...details, evidence: { ...details.evidence, source_snapshot_digest: "sha256:" + "c".repeat(64) } }, contract, wallet, bountyId, true), /differ/);
 });
