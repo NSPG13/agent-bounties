@@ -36,7 +36,7 @@ WORKFLOWS = (
 FLAGS_OFF = {
     'ENABLE_BASE_TX_BROADCAST': 'false', 'ENABLE_X402_HOSTED_RELAY': 'false',
     'ENABLE_SPONSORED_BOUNTY_CREATION': 'false', 'ENABLE_SPONSORED_SETUP': 'false',
-    'ENABLE_CREATOR_OPEN': 'false', 'VERIFIER_EMAIL_ENABLED': 'false',
+    'ENABLE_CREATOR_OPEN_SPONSORSHIP': 'false', 'VERIFIER_EMAIL_ENABLED': 'false',
     'POSTING_CREATOR_INDEXER_ENABLED': 'false',
 }
 
@@ -143,6 +143,7 @@ def run(phase):
     output = Path('posting-cutover-evidence.json')
     evidence = snapshot()
     output.write_text(json.dumps(evidence, indent=2) + '\n')
+    print(json.dumps(evidence, sort_keys=True), flush=True)
     if phase == 'inventory':
         return
     require(all(not item['active_runs'] for item in evidence['workflows'].values()),
