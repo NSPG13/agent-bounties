@@ -9,6 +9,7 @@ settlement remains limited to allowlisted deterministic verifier modules.
 
 from __future__ import annotations
 
+import gas_sponsorship_budget
 import argparse
 import json
 import os
@@ -428,20 +429,35 @@ class CastClient:
         signature: str,
         *args: str,
     ) -> dict[str, Any]:
-        output = self.run(
-            "send",
-            contract,
-            signature,
-            *args,
-            "--private-key",
-            private_key,
-            "--gas-limit",
-            str(gas_limit),
-            "--rpc-url",
-            self.rpc_url,
-            "--json",
-            retry=False,
-        )
+        try:
+            fee_cap, nonce = gas_sponsorship_budget.reserve(self, private_key, gas_limit, contract, signature, args)
+        except gas_sponsorship_budget.BudgetUnavailable as error:
+            raise RelayError(str(error), code="gas_budget_unavailable", retryable=True) from None
+        # The budget ticket holds the shared sender lease for at least another
+        # 15 seconds beyond its start deadline. Never let cast outlive that lock.
+        previous_timeout = self.command_timeout_seconds
+        self.command_timeout_seconds = min(previous_timeout, 10)
+        try:
+            output = self.run(
+                "send",
+                contract,
+                signature,
+                *args,
+                "--private-key",
+                private_key,
+                "--gas-limit",
+                str(gas_limit),
+                "--gas-price",
+                str(fee_cap),
+                "--nonce",
+                str(nonce),
+                "--rpc-url",
+                self.rpc_url,
+                "--json",
+                retry=False,
+            )
+        finally:
+            self.command_timeout_seconds = previous_timeout
         start = output.find("{")
         if start < 0:
             raise RelayError("cast send did not return a JSON receipt")

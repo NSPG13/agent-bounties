@@ -176,14 +176,18 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
             events.append("pre-send-nonce")
             return 7
 
-        def fake_run(command: list[str], *, env=None) -> str:
+        def fake_run(command: list[str], *, env=None, timeout=None) -> str:
             self.assertNotIn("BASE_KEEPER_PRIVATE_KEY", env)
             self.assertIn("preflight", events)
+            if command[1] == "chain-id": return "8453"
+            if command[1] == "call": return "0x"
+            if command[1] == "estimate": return "400000"
             if command[1:3] == ["wallet", "address"]:
                 events.append("key-address")
                 return keeper
             if command[1] == "send":
                 events.append("send")
+                self.assertEqual(timeout, 10)
                 self.assertIn("--chain", command)
                 self.assertEqual(command[command.index("--chain") + 1], "8453")
                 self.assertEqual(command[command.index("--nonce") + 1], "7")
@@ -193,14 +197,14 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     command[command.index("--gas-price") + 1],
-                    str(pipeline.RELAY_MAX_FEE_PER_GAS),
+                    "100000000",
                 )
                 return '{"transactionHash":"0x' + "6" * 64 + '","status":"0x1"}'
             self.fail(f"unexpected command: {command}")
 
         with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(
             os.environ,
-            {"BASE_KEEPER_PRIVATE_KEY": "test-secret"},
+            {"BASE_KEEPER_PRIVATE_KEY": "test-secret", "GAS_SPONSOR_BUDGET_TOKEN": "fixture-token-"*4},
             clear=False,
         ):
             root = Path(temporary)
@@ -266,10 +270,10 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
                 pipeline, "keeper_nonce_preflight", side_effect=fake_immediate_nonce
             ), mock.patch.object(
                 pipeline, "run", side_effect=fake_run
-            ):
+            ), mock.patch.object(pipeline.gas_sponsorship_budget, "reserve", side_effect=lambda *a: (events.append("reserve") or (100_000_000, 7))):
                 pipeline.command_relay(args)
 
-        self.assertEqual(events, ["preflight", "key-address", "pre-send-nonce", "send"])
+        self.assertEqual(events, ["preflight", "key-address", "pre-send-nonce", "key-address", "reserve", "send"])
 
     def test_relay_rpc_preflight_rejects_unbounded_gas_before_key_use(self) -> None:
         commands: list[list[str]] = []

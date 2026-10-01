@@ -26,6 +26,7 @@ jobs:
       - name: Validate keeper signer, chain, and gas reserve
         env:
           BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+          GAS_SPONSOR_BUDGET_TOKEN: ${{ secrets.GAS_SPONSOR_BUDGET_TOKEN }}
           BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
         run: python scripts/relay_autonomous_action.py --health-check
 
@@ -60,6 +61,7 @@ jobs:
       - name: Validate, simulate, and relay the bounded action
         env:
           BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+          GAS_SPONSOR_BUDGET_TOKEN: ${{ secrets.GAS_SPONSOR_BUDGET_TOKEN }}
           BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
           BASE_RELAY_STATE_WAIT_SECONDS: "120"
           BASE_RELAY_STATE_POLL_SECONDS: "3"

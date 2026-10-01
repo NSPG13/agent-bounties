@@ -200,10 +200,12 @@ class RegisterParticipantTests(unittest.TestCase):
         chain_commands: list[list[str]] = []
         broadcast_sent = False
 
-        def fake_run(command: list[str]) -> str:
+        def fake_run(command: list[str], *, timeout=None) -> str:
             nonlocal broadcast_sent
             if "--rpc-url" in command:
                 chain_commands.append(command)
+            if command[1] == "estimate": return "200000"
+            if command[1] == "call" and "register(address,bytes32,bytes32,uint64,bytes)" in command: return "0x"
             if command[1] == "chain-id":
                 return registration.BASE_CHAIN_ID
             if command[1:3] == ["wallet", "address"]:
@@ -211,6 +213,9 @@ class RegisterParticipantTests(unittest.TestCase):
             if command[1] == "keccak":
                 return participant_id if "github-user-v1" in command[2] else source_hash
             if command[1] == "send":
+                self.assertEqual(timeout, 10)
+                self.assertEqual(command[command.index("--nonce")+1], "7")
+                self.assertEqual(command[command.index("--gas-price")+1], "100000000")
                 broadcast_sent = True
                 return '{"transactionHash":"' + transaction_hash + '","status":"0x1"}'
             if command[1] == "wallet" and command[2] == "sign":
@@ -266,10 +271,12 @@ class RegisterParticipantTests(unittest.TestCase):
                 {
                     "PARTICIPANT_ATTESTER_PRIVATE_KEY": "attester-key",
                     "BASE_KEEPER_PRIVATE_KEY": "keeper-key",
+                    "GAS_SPONSOR_BUDGET_TOKEN": "fixture-token-"*4,
                 },
             ),
             patch.object(registration, "run", side_effect=fake_run),
             patch.object(registration.time, "time", return_value=now),
+            patch.object(registration.gas_sponsorship_budget, "reserve", return_value=(100_000_000, 7)),
         ):
             result = registration.register(args, request)
 

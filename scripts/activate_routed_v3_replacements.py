@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import gas_sponsorship_budget
 import json
 import os
 from pathlib import Path
@@ -74,6 +75,7 @@ def run(command: Sequence[str], *, cwd: Path = ROOT, timeout: int = 300) -> str:
         errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        env={k:v for k,v in os.environ.items() if k != "GAS_SPONSOR_BUDGET_TOKEN"},
         timeout=timeout,
         check=False,
     )
@@ -159,9 +161,13 @@ class Cast:
         return parse_uint(self.rpc("chain-id"), "chain id")
 
     def send_data(self, target: str, data: str, private_key: str) -> dict[str, Any]:
-        raw = self.rpc(
-            "send", target, "--data", data, "--private-key", private_key, "--json", timeout=180
-        )
+        try:
+            raw = gas_sponsorship_budget.send_cast(
+                run, self.executable, self.rpc_url, private_key, 1_500_000,
+                target, None, calldata=data,
+            )
+        except gas_sponsorship_budget.BudgetUnavailable as error:
+            raise ActivationError(str(error)) from None
         try:
             result = json.loads(raw)
         except json.JSONDecodeError as error:
