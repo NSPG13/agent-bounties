@@ -67,6 +67,9 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
                 commands = []
                 def fake_run(command, *, env=None):
                     commands.append(command)
+                    if command[0] == "git":
+                        self.assertEqual(command[-2:], ["rev-parse", "HEAD"])
+                        return "c" * 40
                     if command[1] == "--stage-github-snapshot":
                         self.assertFalse(set(("GITHUB_TOKEN", "GH_TOKEN", "BASE_KEEPER_PRIVATE_KEY")) & set(env))
                         kind = command[2]
@@ -78,7 +81,7 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
                         return json.dumps({"snapshot": {"digest": digest}})
                     self.assertEqual(command[1], "--run-regression")
                     return json.dumps({"verdict": "passed"})
-                with mock.patch.object(pipeline, "pull_pinned_image"), mock.patch.object(pipeline, "run", side_effect=fake_run), mock.patch.dict(os.environ, {"GH_TOKEN": "not-a-real-secret"}):
+                with mock.patch.object(pipeline, "pull_pinned_image"), mock.patch.object(pipeline, "run", side_effect=fake_run), mock.patch.dict(os.environ, {"GH_TOKEN": "not-a-real-secret", "GITHUB_SHA": "d" * 40}):
                     if mismatch:
                         with self.assertRaises(pipeline.PipelineError):
                             pipeline.run_job(root / "worker", root / "staging", job, root)
@@ -86,7 +89,15 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
                     else:
                         result = pipeline.run_job(root / "worker", root / "staging", job, root)
                         self.assertEqual(result["outcome"]["verdict"], "passed")
-                        self.assertEqual([c[2] for c in commands[:2]], ["source", "benchmark"])
+                        self.assertEqual([c[2] for c in commands if c[1] == "--stage-github-snapshot"], ["source", "benchmark"])
+                        self.assertEqual(result["runner_revision"], "c" * 40)
+
+    def test_execution_requires_a_real_checkout_revision(self) -> None:
+        for revision in ("local", "", "d" * 39):
+            with self.subTest(revision=revision), mock.patch.object(pipeline, "run", return_value=revision) as invoked:
+                with self.assertRaisesRegex(pipeline.PipelineError, "checkout revision"):
+                    pipeline.run_job(Path("worker"), Path("staging"), {}, Path("scratch"))
+                invoked.assert_called_once()
 
     def test_manifest_files_are_exact_content_addressed_basenames(self) -> None:
         job_id = "base-mainnet:test:1"

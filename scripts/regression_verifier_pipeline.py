@@ -406,6 +406,11 @@ def stage(
 
 
 def run_job(worker: Path, staging: Path, job: dict[str, Any], scratch: Path) -> dict[str, Any]:
+    # Scheduled GITHUB_SHA names the triggering default-branch revision, which
+    # can differ from the reviewed release checked out by this workflow.
+    runner_revision = run(["git", "-C", str(Path(__file__).resolve().parents[1]), "rev-parse", "HEAD"])
+    if not SHA.fullmatch(runner_revision):
+        raise PipelineError("runner checkout revision is unavailable")
     require_reconciled_regression_benchmark(job)
     manifest = runner_manifest(job)
     docker_binary = os.environ.get("REGRESSION_SANDBOX_DOCKER_BINARY", "docker")
@@ -453,7 +458,7 @@ def run_job(worker: Path, staging: Path, job: dict[str, Any], scratch: Path) -> 
         "schema": CANDIDATE_SCHEMA,
         "job": job,
         "outcome": outcome,
-        "runner_revision": os.environ.get("GITHUB_SHA", "local"),
+        "runner_revision": runner_revision,
     }
 
 
