@@ -37,7 +37,9 @@ self.addEventListener("push",event=>{
   const deadline=typeof data.deadline==="string"&&/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC$/.test(data.deadline)?data.deadline:null;
   if(stage!=="initial"&&!deadline)return;
   const body=stage==="overdue"?`Review deadline passed: ${deadline}. Open the site for current status and recovery steps.`:deadline?`${data.kind==="claim"?"Claim expires":"Review by"} ${deadline}. Open the site for current status.`:"Open Agent Bounties to check the latest work and deadline.";
-  event.waitUntil(self.registration.showNotification(title,{body,tag:`ab-${data.id}`,renotify:false,data:{url}}));
+  // Each deadline stage alerts once; a duplicate of the same stage only replaces it.
+  const tag=stage==="initial"?`ab-${data.id}`:`ab-${data.id}-${stage}`;
+  event.waitUntil(self.registration.showNotification(title,{body,tag,renotify:false,data:{url}}));
 });
 self.addEventListener("notificationclick",event=>{
   event.notification.close();

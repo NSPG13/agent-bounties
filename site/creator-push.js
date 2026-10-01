@@ -1,6 +1,7 @@
 (function(root,factory){const api=factory();if(typeof module==="object"&&module.exports)module.exports=api;if(root)root.AgentBountiesCreatorPush=api;})(typeof window!=="undefined"?window:globalThis,function(){
   "use strict";
   const STORAGE="ab.creator-push-device.v1";
+  const CLEANUP="ab.creator-push-cleanup.v1";
   const SCOPE="/notifications/";
   const SCRIPT="/creator-push-sw.js";
   function publicKey(value,win){
@@ -10,11 +11,24 @@
     return Uint8Array.from(raw,c=>c.charCodeAt(0));
   }
   function create(win,endpoint,render){
-    let account=null,version=0,configuration=null,busy=false;
-    const bounded=async(promise)=>{
-      let timeout;
-      try{return await Promise.race([promise,new Promise((_,reject)=>{timeout=win.setTimeout(()=>reject(new Error("Browser push setup timed out. Check your browser notification settings, then try again.")),20000);})]);}
-      finally{win.clearTimeout(timeout);}
+    let account=null,version=0,configuration=null,busy=false,setupRunning=false,pendingSetup=0;
+    const bounded=(promise,onLate)=>{
+      let settled=false;
+      if(onLate)pendingSetup++;
+      return new Promise((resolve,reject)=>{
+        const timeout=win.setTimeout(()=>{settled=true;reject(new Error("Browser push setup timed out. Pending setup will be cleaned up before another attempt."));},20000);
+        Promise.resolve(promise).then(async value=>{
+          if(settled){if(onLate)await onLate(value);return;}
+          settled=true;win.clearTimeout(timeout);resolve(value);
+        },error=>{if(!settled){settled=true;win.clearTimeout(timeout);reject(error);}})
+          .catch(()=>{}).finally(()=>{if(onLate)pendingSetup--;});
+      });
+    };
+    const cleanupQueue=()=>{try{const values=JSON.parse(win.localStorage.getItem(CLEANUP)||"[]");return Array.isArray(values)?values.filter(v=>typeof v?.account==="string"&&/^[0-9a-f-]{36}$/i.test(v?.id||"")):[];}catch{return [];}};
+    const queueCleanup=(owner,id)=>{
+      if(!/^[0-9a-f-]{36}$/i.test(id||""))return;
+      const values=cleanupQueue();if(!values.some(v=>v.account===owner&&v.id===id))values.push({account:owner,id});
+      win.localStorage.setItem(CLEANUP,JSON.stringify(values));
     };
     const supported=()=>Boolean(win.isSecureContext&&win.navigator?.serviceWorker&&win.PushManager&&win.Notification);
     const saved=()=>{try{return JSON.parse(win.localStorage.getItem(STORAGE)||"null");}catch{return null;}};
@@ -25,6 +39,14 @@
       if(!response.ok)throw new Error(response.status===401?"Sign in to manage notifications.":response.status===429?"Please wait before sending another test. You can send one per minute, up to five per hour.":response.status===409?"This device could not be linked. Turn notifications off, then enable them again.":"Notification settings are unavailable. Try again.");
       return response.json();
     };
+    async function reconcileCleanup(owner){
+      for(const device of cleanupQueue().filter(v=>v.account===owner)){
+        if(account!==owner)return;
+        await bounded(request({action:"unsubscribe",id:device.id}));
+        win.localStorage.setItem(CLEANUP,JSON.stringify(cleanupQueue().filter(v=>v.account!==owner||v.id!==device.id)));
+        const local=saved();if(local?.account===owner&&local.id===device.id)win.localStorage.removeItem(STORAGE);
+      }
+    }
     async function registration(){
       const value=await win.navigator.serviceWorker.getRegistration(SCOPE);
       const script=value?.active?.scriptURL||value?.waiting?.scriptURL||value?.installing?.scriptURL;
@@ -34,7 +56,7 @@
       const current=version;if(!account){configuration=null;notify("Sign in to manage browser notifications.");return;}
       if(!supported()){notify("This browser cannot receive push notifications here. Email alerts are also available.");return;}
       busy=true;notify("Checking browser notifications…");
-      try{const result=await request();if(current!==version)return;configuration=result;
+      try{await reconcileCleanup(account);const result=await request();if(current!==version)return;configuration=result;
         const device=saved();const reg=await registration();const subscription=reg?await reg.pushManager.getSubscription():null;
         if(device?.account===account&&!subscription)win.localStorage.removeItem(STORAGE);
         notify(result.configured?"Notifications cover claims and submissions. Delivery may be delayed; check the current deadline on the site.":"Browser push delivery is not enabled yet.");
@@ -42,31 +64,45 @@
     }
     async function enable(){
       if(busy||!account||!supported()||configuration?.configured!==true)return false;
-      const current=version,owner=account;busy=true;notify("Waiting for browser permission…");let subscription;
+      if(setupRunning||pendingSetup){notify("A previous browser setup is still finishing its cleanup. Please wait before trying again.");return false;}
+      const current=version,owner=account;busy=true;setupRunning=true;notify("Waiting for browser permission…");let subscription,serverDeviceId;
+      const currentAccount=()=>{if(current!==version)throw new Error("Account changed. Enable notifications again from your account.");};
       try{
+        await reconcileCleanup(owner);currentAccount();
         // Called only by the visible Enable button; never prompt on page load.
         const permission=await win.Notification.requestPermission();if(permission!=="granted")throw new Error("Browser permission was not granted. You can keep using email alerts.");
-        if(current!==version)throw new Error("Account changed. Enable notifications again from your account.");
+        currentAccount();
         notify("Preparing this browser for notifications…");
         const reg=await bounded(win.navigator.serviceWorker.register(SCRIPT,{scope:SCOPE}));
+        currentAccount();
         if(!reg.active)await new Promise((resolve,reject)=>{
           const worker=reg.installing||reg.waiting;if(!worker){reject(new Error("Notification worker did not start."));return;}
           const timeout=win.setTimeout(()=>reject(new Error("Notification worker did not start.")),10000);
           const check=()=>{if(worker.state==="activated"){win.clearTimeout(timeout);resolve();}else if(worker.state==="redundant"){win.clearTimeout(timeout);reject(new Error("Notification worker did not start."));}};
           worker.addEventListener("statechange",check);check();
         });
+        currentAccount();
         notify("Connecting to this browser’s push service…");
         subscription=await bounded(reg.pushManager.getSubscription());
-        if(subscription&&saved()?.account!==owner){await bounded(subscription.unsubscribe());subscription=null;}
-        subscription=subscription||await bounded(reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:publicKey(configuration.public_key,win)}));
-        if(current!==version)throw new Error("Account changed. Enable notifications again from your account.");
+        currentAccount();
+        if(subscription&&saved()?.account!==owner){if(!await bounded(subscription.unsubscribe()))throw new Error("The previous browser subscription could not be removed. Try again.");subscription=null;}
+        currentAccount();
+        subscription=subscription||await bounded(reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:publicKey(configuration.public_key,win)}),late=>late.unsubscribe());
+        currentAccount();
         notify("Saving this device’s notification preferences…");
-        const result=await bounded(request({action:"subscribe",consent:true,subscription:subscription.toJSON()}));
-        if(current!==version)throw new Error("Account changed. Enable notifications again from your account.");
+        const result=await bounded(request({action:"subscribe",consent:true,subscription:subscription.toJSON()}),async late=>{
+          queueCleanup(owner,late?.id);if(account===owner)await reconcileCleanup(owner);
+        });
+        serverDeviceId=result?.id;currentAccount();
         if(result.subscribed!==true||typeof result.id!=="string"||!/^[0-9a-f-]{36}$/i.test(result.id))throw new Error("Notification settings could not be confirmed.");
         win.localStorage.setItem(STORAGE,JSON.stringify({id:result.id,account:owner}));notify("Browser notifications are enabled for this device.");return true;
-      }catch(error){if(subscription)await bounded(subscription.unsubscribe()).catch(()=>{});notify(error.message);return false;}
-      finally{if(current===version){busy=false;notify();}}
+      }catch(error){
+        if(subscription)await bounded(subscription.unsubscribe()).catch(()=>{});
+        queueCleanup(owner,serverDeviceId);
+        if(account===owner)await reconcileCleanup(owner).catch(()=>{});
+        if(current===version)notify(error.message);return false;
+      }
+      finally{setupRunning=false;if(current===version){busy=false;notify();}}
     }
     async function disable(){
       if(!supported())return true;const device=saved();busy=true;notify("Turning off this device…");
