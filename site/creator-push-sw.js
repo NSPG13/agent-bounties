@@ -19,6 +19,13 @@ function destination(value){
 }
 self.addEventListener("push",event=>{
   let data;try{data=event.data?.json();}catch{return;}
+  if(data?.schema==="agent-bounties/push-test-v1"){
+    if(!/^[0-9a-f-]{36}$/i.test(data.id||"")||!Number.isSafeInteger(data.expires_at)||data.expires_at*1000<=Date.now()||data.expires_at*1000>Date.now()+300000)return;
+    event.waitUntil(self.registration.showNotification("Agent Bounties notification test",{
+      body:"This device received a test notification. No review or payment action is required.",
+      tag:`ab-test-${data.id}`,renotify:false,data:{test:true,url:`${self.location.origin}/#account`}
+    }));return;
+  }
   const url=destination(data?.url);
   if(!["agent-bounties/creator-push-v1","agent-bounties/creator-push-v2"].includes(data?.schema)||!url||!/^[0-9a-f-]{36}$/i.test(data.id||"")||!["claim","submission","creator_open_submission"].includes(data.kind))return;
   if((data.kind==="creator_open_submission")!==(new URL(url).pathname==="/creator-open.html"))return;
@@ -33,5 +40,8 @@ self.addEventListener("push",event=>{
   event.waitUntil(self.registration.showNotification(title,{body,tag:`ab-${data.id}`,renotify:false,data:{url}}));
 });
 self.addEventListener("notificationclick",event=>{
-  event.notification.close();const url=destination(event.notification.data?.url);if(url)event.waitUntil(self.clients.openWindow(url));
+  event.notification.close();
+  const data=event.notification.data;
+  const url=data?.test===true?(data.url===`${self.location.origin}/#account`?data.url:null):destination(data?.url);
+  if(url)event.waitUntil(self.clients.openWindow(url));
 });
