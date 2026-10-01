@@ -1396,6 +1396,12 @@ class AgentBountiesClient:
     def list_autonomous_bounties(
         self, network: str | None = None, claimable_only: bool | None = None
     ):
+        """Keep verification_details (blocker codes, release/profile and last check).
+
+        Only verification_ready allows new hosted work; component health alone
+        never approves terms, a submission or payment. Use the unfiltered feed
+        for existing history and the verification-jobs endpoint for pending work.
+        """
         return self._request(
             "GET",
             "/v1/base/autonomous-bounties/feed",
@@ -1740,6 +1746,11 @@ class AgentBountiesClient:
         evidence: dict,
         network: str | None = None,
     ):
+        """Check parent eligibility or exact regression files before signing; checked_artifact is not a verdict.
+
+        Omit source_snapshot_digest to calculate it. A supplied digest or commit
+        that differs from the inspected bytes is rejected, without signing data.
+        """
         return self._request(
             "POST",
             "/v1/base/autonomous-bounties/submission-preparation",

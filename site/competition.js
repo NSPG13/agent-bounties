@@ -39,8 +39,20 @@
   }
 
   const HOLD = "Verification is not ready. Do not fund child work or pay for a proof. Check back for a verified update.";
+  const CLOSED = "This competition is closed. Review its canonical result and any available refunds. Do not fund child work or buy a proof for it.";
+  function participationClosed(item) {
+    return ["settled", "cancelled", "expired", "refunded"].includes(item?.source_status)
+      || item?.work_state === "completed" || item?.payment_state === "paid"
+      || item?.evidence_requirements?.timeline?.proof_window_open === false;
+  }
+  function childWorkOpen(item) {
+    return item?.verification_ready === true && !participationClosed(item)
+      && item.work_state !== "closed_to_new_work";
+  }
 
   function childTemplate(item) {
+    if (participationClosed(item)) return CLOSED;
+    if (item?.work_state === "closed_to_new_work") return "The work period has ended. Only existing work from the original period can be considered. Do not fund new child work for this competition.";
     if (item?.verification_ready !== true) return HOLD;
     const window = marketplace.scoringWindow(item);
     const windowText = window ? `${window.startsIso} through ${window.endsIso}` : "the committed scoring window";
@@ -82,7 +94,7 @@ Safety:
   }
 
   function childPostUrl(item) {
-    if (item?.verification_ready !== true) return null;
+    if (!childWorkOpen(item)) return null;
     const contract = String(item?.source_id || "").toLowerCase();
     const network = String(item?.network || "base-mainnet").toLowerCase();
     if (!/^0x[0-9a-f]{40}$/.test(contract) || network !== "base-mainnet") return null;
@@ -93,11 +105,12 @@ Safety:
     const base = marketplace.apiBase(typeof window !== "undefined" ? window.location : null);
     const profile = item.evidence_requirements?.program_profile;
     const forward = profile === "forward-canonical-gmv-attribution-metric-v2";
-    if (item.verification_ready !== true) return {
+    const closed = participationClosed(item);
+    if (closed || item.verification_ready !== true) return {
       schema_version: "agent-bounties/competition-participation-manifest-v1",
       network: item.network, competition_contract: item.source_id, opportunity_id: item.opportunity_id,
-      verification_ready: false, phase: "blocked", browser_workflow: {},
-      current_next_action: { action: "wait_for_verification", method: "GET", url: marketplace.opportunityFeedUrl(typeof window !== "undefined" ? window.location : null), instructions: HOLD },
+      verification_ready: item.verification_ready === true, phase: closed ? "closed" : "blocked", browser_workflow: {},
+      current_next_action: { action: closed ? "view_canonical_history" : "wait_for_verification", method: "GET", url: marketplace.opportunityFeedUrl(typeof window !== "undefined" ? window.location : null), instructions: closed ? CLOSED : HOLD },
       hosted_proof_quote: null, child_bounty_template: null, proof_snapshot_url: null,
       evidence_boundary: item.evidence_boundary,
     };
@@ -140,7 +153,7 @@ Safety:
         derived_binding: forward ? "artifact_hash is omitted for this profile; the API validates the attested snapshot and derives the solver-specific submission hash" : "The browser derives the domain-bound structured-artifact hash. Public-vector input requires its canonical artifact hash. The API validates exact immutable policy and program scope before quoting.",
       },
       payment_evidence: "CompetitionSettledV2",
-      child_bounty_template: forward ? childTemplate(item) : null,
+      child_bounty_template: forward && childWorkOpen(item) ? childTemplate(item) : null,
       evidence_boundary: item.evidence_boundary,
     };
   }
@@ -218,13 +231,21 @@ Safety:
     setText(doc, "[data-fact-entries]", Number.isInteger(item.entry_count) ? String(item.entry_count) : "—");
     setText(doc, "[data-fact-window]", window ? marketplace.windowLabel(window) : "Canonical deadline applies");
     setText(doc, "[data-fact-contract]", contract);
-    if (item.verification_ready !== true) {
+    const terminal = participationClosed(item);
+    if (terminal || item.verification_ready !== true) {
       const child = doc.querySelector("[data-child-post-started]");
       if (child) { child.hidden = true; child.removeAttribute("href"); }
       const workspace = doc.querySelector("[data-competition-app] .competition-workspace");
       if (workspace) workspace.hidden = true;
-      setText(doc, "[data-competition-phase]", "Verification unavailable");
-      setText(doc, "[data-competition-status]", `${HOLD} Canonical state: ${item.source_status}; escrow: ${marketplace.formatUsdc(item.funded_amount)}.`);
+      const closed = item.work_state === "closed_to_new_work";
+      const timeline = item.evidence_requirements?.timeline;
+      const scoringEnd = timeline?.work_scoring_cutoff ? new Date(timeline.work_scoring_cutoff).toLocaleString() : null;
+      const proofEnd = Number.isSafeInteger(timeline?.proof_submission_deadline) ? new Date(timeline.proof_submission_deadline * 1000).toLocaleString() : null;
+      setText(doc, "[data-competition-phase]", terminal ? (item.payment_state === "paid" ? "Completed · paid" : "Closed") : closed ? "Closed to new work" : "Verification unavailable");
+      setText(doc, "[data-fact-window]", [scoringEnd && `Work/scoring cutoff: ${scoringEnd}`, proofEnd && `Proof submission deadline: ${proofEnd}`].filter(Boolean).join(". ") || (window ? marketplace.windowLabel(window) : "Canonical deadline applies"));
+      const explanation = closed ? "The work period has ended. The later proof deadline only covers work completed in the original period. " : "";
+      setText(doc, "[data-competition-status]", `${terminal ? CLOSED : explanation + (closed ? "Do not start new work or buy a proof after its deadline." : HOLD)} ${timeline?.refund_condition || ""} Canonical state: ${item.source_status}; escrow: ${marketplace.formatUsdc(item.funded_amount)}.`);
+      setText(doc, "[data-machine-request]", JSON.stringify(participationManifest(item, timing), null, 2));
       doc.querySelector("[data-competition-facts]")?.setAttribute("aria-busy", "false");
       doc.querySelector("[data-competition-app]").dataset.state = "unavailable";
       return;
@@ -363,9 +384,23 @@ Safety:
       return;
     }
     try {
-      const { items } = await marketplace.loadOpportunities(win);
-      const item = items.find((candidate) => marketplace.isV2(candidate) && String(candidate.source_id).toLowerCase() === contract);
-      if (!item) throw new Error("This contract is not currently verification-ready in the unified earning projection");
+      // A detail page must retain blocked and closed records. The earning
+      // board keeps its separate strict ready-to-earn filter.
+      const network = params.get("network") || "base-mainnet";
+      if (network !== "base-mainnet") throw new Error("Unsupported competition network");
+      const id = `open-competition-v2:${network}:${contract}`;
+      const url = `${marketplace.apiBase(win.location)}/v1/opportunities?network=${network}&view=recent&source_type=canonical_base&opportunity_id=${encodeURIComponent(id)}&limit=1`;
+      const response = await win.fetch(url, { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer", headers: { Accept: "application/json" } });
+      if (!response.ok) throw new Error(`Competition status request failed (${response.status})`);
+      const payload = await response.json();
+      if (payload?.schema_version !== "agent-bounties/opportunity-projection-v1" || payload.network !== network
+        || payload.applied_view !== "recent" || payload.degraded !== false || !Array.isArray(payload.items)
+        || payload.source_statuses?.find?.((source) => source?.source_type === "canonical_base")?.available !== true) {
+        throw new Error("Canonical competition status is unavailable");
+      }
+      const item = payload.items.find((candidate) => candidate.opportunity_id === id && candidate.network === network
+        && candidate.source_type === "canonical_base" && marketplace.isV2(candidate) && String(candidate.source_id).toLowerCase() === contract);
+      if (!item) throw new Error("This competition has no available public canonical record");
       render(item, win, doc);
     } catch (error) {
       app.dataset.state = "unavailable";

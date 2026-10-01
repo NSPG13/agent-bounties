@@ -148,6 +148,27 @@ def open_competition_v2_report(*, count: int = 5) -> Path:
 
 
 class BountyInventoryGuardTests(unittest.TestCase):
+    def test_routed_v3_requires_its_own_complete_descriptor_and_fresh_health(self):
+        value = json.loads(standing_meta_report().read_text())["verified_claimable_bounties"][0]
+        release = GUARD.ROUTED_V3
+        value["verifier_module"] = release["router"]
+        descriptor = value["standing_meta_bounty"]
+        descriptor.update({
+            "schema_version": release["schema_version"], "verifier_protocol": release["verifier_protocol"],
+            "verifier_module": release["router"], "verifier_runtime_code_hash": release["router_code_hash"],
+            "acceptance_criteria_hash": release["acceptance_hash"], "adapter": release["adapter"],
+            "adapter_runtime_code_hash": release["adapter_code_hash"], "policy_hash": release["policy_hash"],
+            "required_child_quorum": 2, "release_id": "sha256:" + "a" * 64,
+            "last_check_at": datetime.now(timezone.utc).isoformat(),
+        })
+        self.assertEqual(GUARD.standing_meta_entries([value]), ([value], True))
+        for field in ("adapter", "adapter_runtime_code_hash", "policy_hash", "required_child_quorum", "release_id", "last_check_at"):
+            changed = json.loads(json.dumps(value)); changed["standing_meta_bounty"][field] = None
+            self.assertEqual(GUARD.standing_meta_entries([changed]), ([], False), field)
+        changed = json.loads(json.dumps(value)); del changed["standing_meta_bounty"]
+        self.assertEqual(GUARD.standing_meta_entries([changed]), ([], False))
+        self.assertEqual(GUARD.standing_meta_entries([value], direct_block={"number":descriptor["observed_block_number"], "hash":descriptor["observed_block_hash"]}), ([], False))
+
     def test_gmv_review_evidence_matches_release_and_replenisher(self) -> None:
         expected = GUARD.REQUIRED_GMV_PROFILE["review_evidence_hash"]
         replenisher = (SCRIPT.parent / "plan_open_competition_v2_replenishment.py").read_text(

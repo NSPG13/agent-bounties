@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { readFile } from "node:fs/promises";
+import { attestRoutedV3, routedV3Candidate, ROUTED_V3 } from "./routed-inventory.mjs";
 import { pathToFileURL } from "node:url";
 
 export const DEFAULT_API_BASE_URL = "https://api.agentbounties.app";
@@ -840,6 +841,10 @@ export async function verifyDirectChainInventory({
           });
           continue;
         }
+        if ([STANDING_META_BOUNTY.verifierModule, ROUTED_V3.router].includes(String(bounty.verifier_module).toLowerCase())) {
+          excluded.push({ id: bounty.bounty_id.toLowerCase(), reason: "parent_child_verifier_health_unavailable", detail: "Parent completion requires its hosted child quorum. Chain state alone does not establish that service's availability." });
+          continue;
+        }
         const solverBalance = solver
           ? decodedUint(results.get(`${prefix}_solver_balance`), "solver USDC balance")
           : 0n;
@@ -1426,7 +1431,13 @@ export async function collectInventory({
     ? await attestStandingMetaVerifier(baseRpcUrl, rpcTransport)
     : null;
   for (const item of hostedVerified) {
-    verified.push(normalizedBounty(item, api, standingMetaAttestation));
+    if (routedV3Candidate(item)) {
+      const attestation = await attestRoutedV3(item, normalizeRpcUrl(baseRpcUrl.split(",")[0]), rpcTransport);
+      if (!attestation.ready) { excluded.push({id:item.bounty_id,reason:attestation.reason}); continue; }
+      verified.push({...normalizedBounty(item, api), standing_meta_bounty:attestation.descriptor});
+    } else {
+      verified.push(normalizedBounty(item, api, standingMetaAttestation));
+    }
   }
 
   let direct = {

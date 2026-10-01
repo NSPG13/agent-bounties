@@ -1,0 +1,18 @@
+{
+  "schema_version": "agent-bounties/standing-meta-bounty-v3-routed",
+  "verifier_protocol": "agent-bounties/independent-child-v3-routed",
+  "router": "0x380c1af742593dd88b6f20387e9ee693a0536731",
+  "router_code_hash": "0x56fd0a99db7b5bff177c4aad7596445570b3e78e3d53e61e26a65a803a66a796",
+  "adapter": "0x1518ccd19002ca3b69dc33aa4ade349f70be6446",
+  "adapter_code_hash": "0x145262c4880e3298aabdc83a3eff5d1df0a894a51e9146ab8791363dca943014",
+  "policy_hash": "0x8d8e5cca196fcc8ba123d6ffdbb4659c014d82d27cfe1f587f9d031059e23e58",
+  "acceptance_hash": "0xba3b04ab970dfd91f5ccf1b7eda6670b5a38a854bca16dc980ec8362ed2bcaf9",
+  "factory": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+  "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+  "participant_registry": "0x9875dcaf570bde8ff1aa62275d3c8985f4fd1294",
+  "participant_registry_code_hash": "0xd27541b8cfc1c154ae21b333917b12e0a40a6828d399a9f4be4e334a64c22854",
+  "terms_registry": "0x35e5d49c12b75c119d33951c2c4f054c5732208c",
+  "terms_registry_code_hash": "0x8ad0be03fbb3256947625bec6e6499bb47c00e77836e4627b02abbc6f614efa0",
+  "child_quorum_hash": "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd",
+  "child_threshold": 2
+}
