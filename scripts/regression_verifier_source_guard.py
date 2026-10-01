@@ -41,6 +41,8 @@ RUST_RAW_STRING_START = re.compile(r'r(#{0,255})"')
 BUILD_ROOTS = ("Cargo.toml", "Cargo.lock", ".cargo", "crates")
 OPTIONAL_BUILD_ROOTS = ("rust-toolchain", "rust-toolchain.toml")
 RUNTIME_FILES = (
+    "scripts/gas_sponsorship_budget.py",
+    "scripts/test_gas_sponsorship_budget.py",
     "scripts/regression_verifier_pipeline.py",
     "scripts/test_regression_verifier_pipeline.py",
     "scripts/regression_verifier_source_guard.py",

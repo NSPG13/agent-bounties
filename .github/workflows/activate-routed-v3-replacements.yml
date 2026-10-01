@@ -3,6 +3,8 @@ name: Activate routed V3 replacements
 on:
   pull_request:
     paths:
+      - "scripts/gas_sponsorship_budget.py"
+      - "scripts/test_gas_sponsorship_budget.py"
       - ".github/workflows/activate-routed-v3-replacements.yml"
       - "scripts/activate_routed_v3_dynamic.py"
       - "scripts/activate_routed_v3_replacements.py"
@@ -35,6 +37,7 @@ jobs:
 
       - name: Validate activation code
         run: |
+          python scripts/test_gas_sponsorship_budget.py -v
           python scripts/test_shared_rpc.py -v
           WORKSPACE_ROOT=. python benchmarks/direct-inventory-v1/rpc-failover/check.py
           python -m unittest scripts.test_activate_routed_v3_replacements -v
@@ -68,6 +71,7 @@ jobs:
       cancel-in-progress: false
     env:
       BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+      GAS_SPONSOR_BUDGET_TOKEN: ${{ secrets.GAS_SPONSOR_BUDGET_TOKEN }}
       BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
       AGENT_BOUNTIES_API_URL: https://api.agentbounties.app
       GH_TOKEN: ${{ github.token }}

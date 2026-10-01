@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import gas_sponsorship_budget
 import json
 import os
 import re
@@ -74,8 +75,9 @@ def parse_event(value: object, expected_repository: str) -> RegistrationRequest:
     )
 
 
-def run(command: list[str]) -> str:
-    completed = subprocess.run(command, capture_output=True, text=True, timeout=120, check=False)
+def run(command: list[str], *, timeout: int = 120) -> str:
+    completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False,
+                               env={k:v for k,v in os.environ.items() if k != "GAS_SPONSOR_BUDGET_TOKEN"})
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout).strip()[:600]
         secrets = {
@@ -308,26 +310,11 @@ def register(args: argparse.Namespace, request: RegistrationRequest) -> dict[str
     signature = run(
         [cast, "wallet", "sign", "--no-hash", "--private-key", attester_key, digest]
     ).lower()
-    receipt = json.loads(
-        run(
-            [
-                cast,
-                "send",
-                "--json",
-                "--rpc-url",
-                rpc_url,
-                "--private-key",
-                keeper_key,
-                registry,
-                "register(address,bytes32,bytes32,uint64,bytes)",
-                request.wallet,
-                participant_id,
-                source_hash,
-                str(valid_until),
-                signature,
-            ]
-        )
-    )
+    receipt = json.loads(gas_sponsorship_budget.send_cast(
+        run, cast, rpc_url, keeper_key, 300_000, registry,
+        "register(address,bytes32,bytes32,uint64,bytes)",
+        request.wallet, participant_id, source_hash, str(valid_until), signature,
+    ))
     transaction_hash = str(receipt.get("transactionHash", "")).lower()
     if not HASH.fullmatch(transaction_hash) or str(receipt.get("status", "")) not in {"1", "0x1"}:
         raise RegistrationError("participant registration did not return a successful receipt")
@@ -439,7 +426,7 @@ def main() -> int:
     try:
         request = parse_event(json.loads(args.event.read_text(encoding="utf-8")), args.repository)
         evidence = register(args, request)
-    except (RegistrationError, OSError, ValueError, json.JSONDecodeError) as error:
+    except (gas_sponsorship_budget.BudgetUnavailable, RegistrationError, OSError, ValueError, json.JSONDecodeError) as error:
         if isinstance(error, RegistrationError):
             evidence.update(error.evidence)
         evidence["error"] = str(error)[:600]

@@ -3,6 +3,8 @@ name: Leaderboard Reward Signer
 on:
   pull_request:
     paths:
+      - "scripts/gas_sponsorship_budget.py"
+      - "scripts/test_gas_sponsorship_budget.py"
       - ".github/workflows/leaderboard-reward-*.yml"
       - "scripts/leaderboard_reward_pipeline.py"
       - "scripts/test_leaderboard_reward_pipeline.py"
@@ -24,6 +26,7 @@ jobs:
       - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
+      - run: python scripts/test_gas_sponsorship_budget.py -v
       - run: python scripts/test_leaderboard_reward_pipeline.py -v
 
   authorize-run:
@@ -100,6 +103,7 @@ jobs:
       API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL || 'https://api.agentbounties.app' }}
       BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
       BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+      GAS_SPONSOR_BUDGET_TOKEN: ${{ secrets.GAS_SPONSOR_BUDGET_TOKEN }}
       LEADERBOARD_REWARD_CONTRACT: ${{ vars.BASE_MAINNET_LEADERBOARD_REWARD_CONTRACT }}
       SIGNER_ONE: ${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}
       SIGNER_TWO: ${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}

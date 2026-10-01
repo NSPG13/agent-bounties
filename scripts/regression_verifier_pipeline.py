@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import gas_sponsorship_budget
 import hashlib
 import io
 import json
@@ -39,8 +40,6 @@ MAX_GITHUB_BENCHMARK_ARCHIVE_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
 MAX_GITHUB_ARCHIVE_ENTRIES = 100_000
 BASE_MAINNET_CHAIN_ID = 8453
 RELAY_GAS_LIMIT = 500_000
-RELAY_MAX_FEE_PER_GAS = 500_000_000
-RELAY_PRIORITY_FEE_PER_GAS = 1_000_000
 KEEPER_NONCE_CONFIRMATION_RPCS = (
     "https://mainnet.base.org",
     "https://base-rpc.publicnode.com",
@@ -130,14 +129,14 @@ def normalize_address(value: object, field: str) -> str:
     return normalized
 
 
-def run(command: list[str], *, env: dict[str, str] | None = None) -> str:
+def run(command: list[str], *, env: dict[str, str] | None = None, timeout: int = 900) -> str:
     completed = subprocess.run(
         command,
         check=False,
         capture_output=True,
         text=True,
         env=env,
-        timeout=900,
+        timeout=timeout,
     )
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout).strip()[:800]
@@ -147,7 +146,7 @@ def run(command: list[str], *, env: dict[str, str] | None = None) -> str:
 
 def environment_without(*names: str) -> dict[str, str]:
     environment = os.environ.copy()
-    for name in names:
+    for name in (*names, "GAS_SPONSOR_BUDGET_TOKEN"):
         environment.pop(name, None)
     return environment
 
@@ -557,7 +556,7 @@ def command_run(args: argparse.Namespace) -> None:
                     args.worker.resolve(), args.staging.resolve(), job, Path(temporary)
                 )
             name = content_addressed_name("candidate", job_id)
-        except (PipelineError, OSError, ValueError, TypeError, KeyError,
+        except (gas_sponsorship_budget.BudgetUnavailable, PipelineError, OSError, ValueError, TypeError, KeyError,
                 AttributeError, subprocess.TimeoutExpired, tarfile.TarError, EOFError) as error:
             # This boundary handles malformed remote jobs and expected execution
             # failures. Output persistence and process-control failures stay fatal.
@@ -1184,30 +1183,11 @@ def command_relay(args: argparse.Namespace) -> None:
         )
         if immediate_nonce != expected_nonce:
             raise PipelineError("keeper nonce changed immediately before settlement send")
-        transaction = run(
-            [
-                str(args.cast),
-                "send",
-                "--json",
-                "--rpc-url",
-                args.rpc_url,
-                "--chain",
-                str(BASE_MAINNET_CHAIN_ID),
-                "--nonce",
-                str(expected_nonce),
-                "--gas-limit",
-                str(RELAY_GAS_LIMIT),
-                "--gas-price",
-                str(RELAY_MAX_FEE_PER_GAS),
-                "--priority-gas-price",
-                str(RELAY_PRIORITY_FEE_PER_GAS),
-                "--private-key",
-                keeper,
-                plan["bounty"],
-                "settleWithAttestations((address,bool,bytes32,uint256,bytes)[])",
-                plan["attestations"],
-            ],
-            env=secret_free_environment,
+        transaction = gas_sponsorship_budget.send_cast(
+            lambda command, timeout: run(command, env=secret_free_environment, timeout=timeout),
+            args.cast, args.rpc_url, keeper, RELAY_GAS_LIMIT, plan["bounty"],
+            "settleWithAttestations((address,bool,bytes32,uint256,bytes)[])",
+            plan["attestations"], expected_nonce=expected_nonce,
         )
         receipt = json.loads(transaction)
         transaction_hash = str(receipt.get("transactionHash", "")).lower()
@@ -1262,7 +1242,7 @@ def main() -> int:
     try:
         args = parser().parse_args()
         args.handler(args)
-    except (PipelineError, OSError, ValueError, json.JSONDecodeError) as error:
+    except (gas_sponsorship_budget.BudgetUnavailable, PipelineError, OSError, ValueError, json.JSONDecodeError) as error:
         print(f"regression verifier pipeline failed: {error}", file=os.sys.stderr)
         return 1
     return 0

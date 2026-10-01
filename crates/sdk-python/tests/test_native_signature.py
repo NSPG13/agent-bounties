@@ -3,6 +3,8 @@ import inspect
 import json
 from pathlib import Path
 import unittest
+import types
+import typing
 from unittest.mock import patch
 
 import agent_bounties
@@ -24,13 +26,36 @@ class StubAgentBountiesClient(AgentBountiesClient):
         return self.responses.pop(0)
 
 
+def canonical_signature(member):
+    # Python 3.12 renders Callable | None as Optional[Callable], while 3.14
+    # uses the union spelling. Compare the same annotations across runtimes.
+    class UnionAnnotation:
+        def __init__(self, annotation):
+            self.annotation = annotation
+
+        def __repr__(self):
+            return " | ".join(
+                "None" if arg is type(None) else inspect.formatannotation(arg)
+                for arg in typing.get_args(self.annotation)
+            )
+
+    signature = inspect.signature(member)
+    parameters = [
+        parameter.replace(annotation=UnionAnnotation(parameter.annotation))
+        if typing.get_origin(parameter.annotation) in (typing.Union, types.UnionType)
+        else parameter
+        for parameter in signature.parameters.values()
+    ]
+    return str(signature.replace(parameters=parameters))
+
+
 class NativeSignatureTests(unittest.TestCase):
     def test_public_api_matches_compatibility_fixture(self):
         fixture = json.loads(
             (Path(__file__).parents[1] / "fixtures/public-api.json").read_text(encoding="utf-8")
         )
         public_methods = {
-            name: str(inspect.signature(member))
+            name: canonical_signature(member)
             for name, member in inspect.getmembers(AgentBountiesClient, inspect.isfunction)
             if not name.startswith("_")
         }

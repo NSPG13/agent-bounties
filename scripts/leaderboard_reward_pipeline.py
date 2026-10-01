@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import gas_sponsorship_budget
 import hashlib
 import json
 import os
@@ -80,14 +81,14 @@ def parse_utc(value: object, field: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
-def run(command: list[str], *, env: dict[str, str] | None = None) -> str:
+def run(command: list[str], *, env: dict[str, str] | None = None, timeout: int = 300) -> str:
     completed = subprocess.run(
         command,
         check=False,
         capture_output=True,
         text=True,
-        env=env,
-        timeout=300,
+        env={k:v for k,v in (env if env is not None else os.environ).items() if k != "GAS_SPONSOR_BUDGET_TOKEN"},
+        timeout=timeout,
     )
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout).strip()[:800]
@@ -627,28 +628,13 @@ def command_relay(args: argparse.Namespace) -> None:
         if paid != ZERO_ADDRESS:
             raise PipelineError("award is already paid to a different wallet")
 
-        receipt = json.loads(
-            run(
-                [
-                    str(args.cast),
-                    "send",
-                    "--json",
-                    "--rpc-url",
-                    args.rpc_url,
-                    "--private-key",
-                    keeper,
-                    args.contract,
-                    "pay(uint8,uint64,address,uint32,bytes32,bytes,bytes)",
-                    str(candidate["period_kind"]),
-                    str(candidate["starts_at"]),
-                    candidate["winner"],
-                    str(candidate["eligible_completions"]),
-                    candidate["evidence_hash"],
-                    signed[0],
-                    signed[1],
-                ]
-            )
-        )
+        receipt = json.loads(gas_sponsorship_budget.send_cast(
+            lambda command, timeout: run(command, timeout=timeout),
+            args.cast, args.rpc_url, keeper, 500_000, args.contract,
+            "pay(uint8,uint64,address,uint32,bytes32,bytes,bytes)",
+            str(candidate["period_kind"]), str(candidate["starts_at"]), candidate["winner"],
+            str(candidate["eligible_completions"]), candidate["evidence_hash"], signed[0], signed[1],
+        ))
         tx_hash = normalize_hash(receipt.get("transactionHash"), "transaction hash")
         if str(receipt.get("status", "")) not in {"0x1", "1"}:
             raise PipelineError("reward relay did not return a successful receipt")
@@ -708,7 +694,7 @@ def main() -> int:
         args = parser().parse_args()
         args.contract = normalize_address(args.contract, "reward contract")
         args.handler(args)
-    except (PipelineError, NoCandidate, OSError, ValueError, KeyError, json.JSONDecodeError) as error:
+    except (gas_sponsorship_budget.BudgetUnavailable, PipelineError, NoCandidate, OSError, ValueError, KeyError, json.JSONDecodeError) as error:
         print(f"leaderboard reward pipeline failed: {error}", file=os.sys.stderr)
         return 1
     return 0

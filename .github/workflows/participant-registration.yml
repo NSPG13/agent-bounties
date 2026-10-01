@@ -3,6 +3,8 @@ name: Participant Registration
 on:
   pull_request:
     paths:
+      - "scripts/gas_sponsorship_budget.py"
+      - "scripts/test_gas_sponsorship_budget.py"
       - ".github/workflows/participant-registration.yml"
       - "scripts/register_participant.py"
       - "scripts/test_register_participant.py"
@@ -22,6 +24,7 @@ jobs:
       - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
+      - run: python scripts/test_gas_sponsorship_budget.py -v
       - run: python scripts/test_register_participant.py -v
 
   register:
@@ -39,6 +42,7 @@ jobs:
       cancel-in-progress: false
     env:
       BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+      GAS_SPONSOR_BUDGET_TOKEN: ${{ secrets.GAS_SPONSOR_BUDGET_TOKEN }}
       PARTICIPANT_ATTESTER_PRIVATE_KEY: ${{ secrets.PARTICIPANT_ATTESTER_PRIVATE_KEY }}
       PARTICIPANT_REGISTRY: ${{ vars.BASE_MAINNET_PARTICIPANT_REGISTRY }}
       BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}

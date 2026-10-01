@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tempfile
+import json
 import unittest
 from argparse import Namespace
 from datetime import datetime, timezone
@@ -10,6 +11,45 @@ from pathlib import Path
 from unittest.mock import patch
 
 import leaderboard_reward_pipeline as pipeline
+
+
+class RewardBudgetBoundaryTests(unittest.TestCase):
+    def test_reward_requires_budget_and_paid_reward_does_not_reserve_again(self):
+        signers=["0x"+"a"*40,"0x"+"b"*40]
+        candidate={"candidate_id":"fixture", "period_kind":0, "starts_at":100,
+                   "winner":"0x"+"2"*40,"eligible_completions":3,"evidence_hash":"0x"+"c"*64}
+        digest="0x"+"d"*64
+        args=Namespace(keeper_key_env="BASE_KEEPER_PRIVATE_KEY", expected_signer=signers,
+                       candidates=Path("candidate"),attestations=[Path("one"),Path("two")],
+                       cast=Path("cast"),rpc_url="https://fixture.invalid",contract="0x"+"1"*40)
+        def read(path):
+            if path==Path("candidate/manifest.json"):return {"candidates":[{"file":"fixture.json"}]}
+            if path==Path("candidate/fixture.json"):return candidate
+            signer=signers[0 if path.parts[0]=="one" else 1]
+            if path.name=="manifest.json":return {"signer":signer,"attestations":[{"candidate_id":"fixture","file":"signature.json"}]}
+            return {"schema":pipeline.ATTESTATION_SCHEMA,"candidate_id":"fixture","signer":signer,
+                    "digest":digest,"signature":"0x"+"e"*130}
+        for mode in ("allowed","exhausted","already_paid"):
+            def contract_call(_args, signature, *_values):
+                if signature.startswith("awardId"):return "0x"+"f"*64
+                return candidate["winner"] if mode=="already_paid" or sender.called else pipeline.ZERO_ADDRESS
+            with patch.dict(pipeline.os.environ,{"BASE_KEEPER_PRIVATE_KEY":"fixture-key"}), \
+                 patch.object(pipeline,"validate_contract",return_value=set(signers)), \
+                 patch.object(pipeline,"read_json",side_effect=read), \
+                 patch.object(pipeline,"current_candidate",return_value=candidate), \
+                 patch.object(pipeline,"assert_candidate_unchanged"), \
+                 patch.object(pipeline,"award_digest",return_value=digest), \
+                 patch.object(pipeline,"contract_call",side_effect=contract_call), \
+                 patch.object(pipeline,"run") as raw, \
+                 patch.object(pipeline.gas_sponsorship_budget,"send_cast",return_value=json.dumps({"transactionHash":"0x"+"9"*64,"status":"0x1"})) as sender:
+                if mode=="exhausted":
+                    sender.side_effect=pipeline.gas_sponsorship_budget.BudgetUnavailable("exhausted")
+                    with self.assertRaises(pipeline.gas_sponsorship_budget.BudgetUnavailable):pipeline.command_relay(args)
+                else:pipeline.command_relay(args)
+                raw.assert_not_called()
+                self.assertEqual(sender.call_count,0 if mode=="already_paid" else 1)
+                if mode!="already_paid":
+                    self.assertEqual(sender.call_args.args[4:7],(500_000,args.contract,"pay(uint8,uint64,address,uint32,bytes32,bytes,bytes)"))
 
 
 CONTRACT = "0x1111111111111111111111111111111111111111"
