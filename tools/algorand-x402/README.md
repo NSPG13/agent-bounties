@@ -52,6 +52,13 @@ before any manual recovery. Then fund the canary payer with **0.01 Algorand
 USDC (ASA 31566704)** and execute one paid request. Do not send Base USDC to an
 Algorand address. GoPlausible advertises sponsored x402 transaction fees.
 
+`node scripts/canary.mjs https://agent-bounties-algorand-x402.onrender.com`
+previews the exact one-cent payment without signing. After explicit approval,
+append `--execute-once`. It pins the deployed origin, receiver, network, asset,
+price, tag and fee payer, independently decodes the signed transfer, journals
+before submission, and verifies the paid response, confirmation and recipient
+balance. The exclusive journal prevents repeating an uncertain charge.
+
 Reconcile all three pieces: paid HTTP response, successful facilitator receipt,
 and confirmed Algorand ASA transfer to the merchant, followed by catalog and
 challenge-filtered leaderboard visibility. A 402, a test double, a configured

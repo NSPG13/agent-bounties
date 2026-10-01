@@ -1,0 +1,65 @@
+import algosdk from 'algosdk';
+import { readFile, open, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { createHash } from 'node:crypto';
+import { x402Client } from '@x402/core/client';
+import { decodePaymentRequiredHeader, encodePaymentSignatureHeader, decodePaymentResponseHeader } from '@x402/core/http';
+import { toClientAvmSigner, ExactAvmScheme } from '@x402/avm';
+import { FACILITATOR, NETWORKS, TAG } from '../config.mjs';
+
+const [origin, action] = process.argv.slice(2);
+if(origin!=='https://agent-bounties-algorand-x402.onrender.com'||![undefined,'--execute-once'].includes(action))throw new Error('Usage: node scripts/canary.mjs https://agent-bounties-algorand-x402.onrender.com [--execute-once]');
+const directory=`${homedir()}/.config/agent-bounties/algorand-challenge`;
+const merchant=JSON.parse(await readFile(`${directory}/merchant.json`,'utf8'));
+const payer=JSON.parse(await readFile(`${directory}/canary-payer.json`,'utf8'));
+const network=NETWORKS.mainnet;
+const endpoint=`${origin}/v1/opportunity-report`;
+async function get(url) {const r=await fetch(url,{signal:AbortSignal.timeout(20000),redirect:'error'});if(!r.ok)throw new Error(`Read failed: ${r.status}`);return r.json();}
+const r=await fetch(endpoint,{signal:AbortSignal.timeout(30000),redirect:'error'});
+if(r.status!==402)throw new Error('Expected an unpaid 402 challenge');
+const challenge=decodePaymentRequiredHeader(r.headers.get('payment-required'));
+const accepted=challenge.accepts;
+if(challenge.x402Version!==2||challenge.resource?.url!==endpoint||accepted.length!==1||!challenge.extensions?.bazaar)throw new Error('Unexpected resource/discovery contract');
+const req=accepted[0];
+if(req.scheme!=='exact'||req.network!==network.network||req.asset!==network.asset||req.amount!=='10000'||req.payTo!==merchant.address||req.extra?.tag!==TAG||req.maxTimeoutSeconds>120)throw new Error('Payment exceeds or changes the approved one-cent contract');
+const supported=await get(`${FACILITATOR}/supported`);
+const kind=supported.kinds.find(k=>k.network===network.network&&k.scheme==='exact');
+if(!kind||req.extra?.feePayer!==kind.extra?.feePayer)throw new Error('Fee payer differs from GoPlausible');
+const [m,p]=await Promise.all([get(`${network.algod}/v2/accounts/${merchant.address}`),get(`${network.algod}/v2/accounts/${payer.address}`)]);
+const holding=a=>a.assets?.find(x=>String(x['asset-id'])===network.asset);
+const plan={endpoint,payTo:merchant.address,payer:payer.address,asset:network.asset,network:network.network,amountMicroUSDC:10000,merchantOptedIn:!!holding(m),payerOptedIn:!!holding(p),payerMicroUSDC:holding(p)?.amount??0,feePayer:req.extra.feePayer,classification:'one operator canary; not customer volume'};
+console.log(JSON.stringify(plan,null,2));
+if(!action)process.exit(0);
+if(!holding(m)||!holding(p)||(holding(p)?.amount??0)<10000)throw new Error('Fund and opt in both wallets first; nothing signed');
+const journal=`${directory}/mainnet-canary.json`;
+const file=await open(journal,'wx',0o600);
+let state={...plan,status:'preparing',startedAt:new Date().toISOString()};
+await file.writeFile(JSON.stringify(state,null,2));await file.close();
+async function record(patch){state={...state,...patch};await writeFile(journal,JSON.stringify(state,null,2)+'\n',{mode:0o600});}
+const account=algosdk.mnemonicToSecretKey(payer.mnemonic);
+if(account.addr.toString()!==payer.address)throw new Error('Wallet backup mismatch');
+const client=new x402Client().register(network.network,new ExactAvmScheme(toClientAvmSigner(Buffer.from(account.sk).toString('base64')),{algodUrl:network.algod}));
+const payload=await client.createPaymentPayload(challenge);
+// Independently bind the locally signed payment to this exact intent before
+// releasing it to the resource server. Never print or persist signed payloads.
+if(payload.payload.paymentGroup.length!==2||payload.payload.paymentIndex!==1)throw new Error('Unexpected transaction group');
+const sponsored=algosdk.decodeUnsignedTransaction(Buffer.from(payload.payload.paymentGroup[0],'base64'));
+if(sponsored.sender.toString()!==req.extra.feePayer||!sponsored.payment||sponsored.payment.receiver.toString()!==req.extra.feePayer||sponsored.payment.amount!==0n||sponsored.payment.closeRemainderTo||sponsored.rekeyTo)throw new Error('Unexpected facilitator transaction');
+const payment=algosdk.decodeSignedTransaction(Buffer.from(payload.payload.paymentGroup[payload.payload.paymentIndex],'base64')).txn;
+const transfer=payment.assetTransfer;
+if(payment.sender.toString()!==payer.address||!transfer||transfer.receiver.toString()!==merchant.address||transfer.amount!==10000n||String(transfer.assetIndex)!==network.asset||transfer.closeRemainderTo||transfer.assetSender||payment.rekeyTo||payment.fee!==0n||`algorand:${Buffer.from(payment.genesisHash).toString('base64')}`!==network.network)throw new Error('Signed transaction does not match the approved gasless payment');
+const txId=payment.txID();
+await record({status:'sending_or_unknown_do_not_retry',txId});
+const paid=await fetch(endpoint,{headers:{'PAYMENT-SIGNATURE':encodePaymentSignatureHeader(payload)},signal:AbortSignal.timeout(60000),redirect:'error'});
+const body=await paid.text();
+const header=paid.headers.get('payment-response');
+const settlement=header?decodePaymentResponseHeader(header):null;
+await record({httpStatus:paid.status,settlement,bodySha256:createHash('sha256').update(body).digest('hex'),body});
+if(!paid.ok||!settlement?.success||settlement.transaction!==txId||settlement.network!==network.network||JSON.parse(body).schema!=='agent-bounties/opportunity-report-v1')throw new Error('Paid response unproven; inspect journal and chain, do not repeat payment');
+const algod=new algosdk.Algodv2('',network.algod,'');
+const confirmed=await algosdk.waitForConfirmation(algod,txId,8);
+if(!confirmed.confirmedRound||confirmed.poolError)throw new Error('No confirmed payment');
+const after=await get(`${network.algod}/v2/accounts/${merchant.address}`);
+if((holding(after)?.amount??0)<(holding(m)?.amount??0)+10000)throw new Error('Recipient balance increase unproven');
+await record({status:'paid_response_and_mainnet_confirmation_verified',confirmedRound:String(confirmed.confirmedRound),recipientMicroUSDCBefore:holding(m).amount,recipientMicroUSDCAfter:holding(after).amount,completedAt:new Date().toISOString()});
+console.log(JSON.stringify({status:state.status,txId,confirmedRound:state.confirmedRound,evidencePath:journal}));
