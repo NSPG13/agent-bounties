@@ -41,6 +41,13 @@ async function auditJourney(browser, origin, width) {
       if (mode === "future") payload.items[7].evidence_requirements.scoring_window.starts_at = "2026-09-18T00:00:00Z";
       if (mode === "degraded") { payload.items = []; payload.degraded = true; }
       if (mode === "empty") payload.items = [];
+      if (url.searchParams.get("view") === "recent") {
+        assert.equal(url.searchParams.get("limit"), "1");
+        const opportunityId = url.searchParams.get("opportunity_id");
+        assert.ok(opportunityId, "competition detail requests its exact canonical record");
+        payload.applied_view = "recent";
+        payload.items = payload.items.filter(item => item.opportunity_id === opportunityId);
+      }
       return route.fulfill({ json: payload, status: mode === "offline" ? 503 : 200 });
     }
     if (url.pathname === "/v1/metrics/platform") return route.fulfill({ json: { marketplace_payout_volume: { lifetime: { usdc: "23.75" }, lifetime_settled_rounds: 12 }, daily: [] } });
