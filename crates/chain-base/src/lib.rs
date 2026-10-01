@@ -2631,6 +2631,25 @@ impl Default for ReqwestJsonRpcTransport {
 }
 
 impl ReqwestJsonRpcTransport {
+    async fn post_with_read_retry<T: Serialize + ?Sized>(
+        &self,
+        rpc_url: &str,
+        request: &T,
+        read_only: bool,
+    ) -> Result<Value, ChainBaseError> {
+        for attempt in 0..3 {
+            match self.post_json_request(rpc_url, request).await {
+                Err(ChainBaseError::RpcHttpStatus(429 | 502 | 503 | 504))
+                    if read_only && attempt < 2 =>
+                {
+                    tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
+                }
+                result => return result,
+            }
+        }
+        unreachable!("the third attempt always returns")
+    }
+
     async fn post_json_request<T: Serialize + ?Sized>(
         &self,
         rpc_url: &str,
@@ -2665,6 +2684,33 @@ impl ReqwestJsonRpcTransport {
     }
 }
 
+// A positive allowlist is essential: an unfamiliar method or a mixed batch may
+// submit a transaction. Never retry those, even after an HTTP error. JSON-RPC
+// errors, invalid responses and lost connections also retain their old behavior.
+fn retry_safe_rpc_read(request: &Value) -> bool {
+    matches!(
+        request.get("method").and_then(Value::as_str),
+        Some(
+            "eth_chainId"
+                | "eth_blockNumber"
+                | "eth_getBlockByNumber"
+                | "eth_getBlockByHash"
+                | "eth_getCode"
+                | "eth_getBalance"
+                | "eth_getTransactionCount"
+                | "eth_getTransactionReceipt"
+                | "eth_getTransactionByHash"
+                | "eth_getLogs"
+                | "eth_getProof"
+                | "eth_call"
+                | "eth_estimateGas"
+                | "eth_feeHistory"
+                | "eth_gasPrice"
+                | "eth_maxPriorityFeePerGas"
+        )
+    )
+}
+
 #[async_trait::async_trait]
 impl JsonRpcTransport for ReqwestJsonRpcTransport {
     async fn post_json_value(
@@ -2672,7 +2718,8 @@ impl JsonRpcTransport for ReqwestJsonRpcTransport {
         rpc_url: &str,
         request: &Value,
     ) -> Result<Value, ChainBaseError> {
-        self.post_json_request(rpc_url, request).await
+        self.post_with_read_retry(rpc_url, request, retry_safe_rpc_read(request))
+            .await
     }
 
     async fn post_json_values(
@@ -2680,7 +2727,13 @@ impl JsonRpcTransport for ReqwestJsonRpcTransport {
         rpc_url: &str,
         requests: &[Value],
     ) -> Result<Vec<Value>, ChainBaseError> {
-        let response = self.post_json_request(rpc_url, requests).await?;
+        let response = self
+            .post_with_read_retry(
+                rpc_url,
+                requests,
+                !requests.is_empty() && requests.iter().all(retry_safe_rpc_read),
+            )
+            .await?;
         response.as_array().cloned().ok_or_else(|| {
             ChainBaseError::InvalidRpcResponse(
                 "JSON-RPC batch response is not an array".to_string(),
