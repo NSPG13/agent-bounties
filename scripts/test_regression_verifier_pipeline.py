@@ -53,6 +53,41 @@ def archive(entries: list[tuple[str, bytes | None, str]]) -> bytes:
 
 
 class RegressionVerifierPipelineTests(unittest.TestCase):
+    def test_execution_uses_shared_staging_and_rejects_changed_bytes_before_running(self) -> None:
+        profile = next(p for p in pipeline._PROFILE_REGISTRY["profiles"] if p["status"] == "approved")
+        benchmark = {"engine": "sandboxed_regression_v1", "source": profile["sources"][0],
+                     "runner_manifest": profile["runner_manifest"]}
+        source_digest = "sha256:" + "a" * 64
+        job = {"terms": {"document": {"benchmark": benchmark}}, "submission_evidence": {
+            "artifact_reference": "https://github.com/owner/repo/commit/" + "b" * 40,
+            "evidence": {"source_subdirectory": "work", "source_snapshot_digest": source_digest}}}
+        for mismatch in (None, "source", "benchmark"):
+            with self.subTest(mismatch=mismatch), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                commands = []
+                def fake_run(command, *, env=None):
+                    commands.append(command)
+                    if command[1] == "--stage-github-snapshot":
+                        self.assertFalse(set(("GITHUB_TOKEN", "GH_TOKEN", "BASE_KEEPER_PRIVATE_KEY")) & set(env))
+                        kind = command[2]
+                        expected = source_digest if kind == "source" else profile["runner_manifest"]["benchmark_digest"]
+                        self.assertEqual(command[-1], expected)
+                        if kind == "source":
+                            self.assertEqual(command[3:5], [job["submission_evidence"]["artifact_reference"], "work"])
+                        digest = "sha256:" + "0" * 64 if mismatch == kind else expected
+                        return json.dumps({"snapshot": {"digest": digest}})
+                    self.assertEqual(command[1], "--run-regression")
+                    return json.dumps({"verdict": "passed"})
+                with mock.patch.object(pipeline, "pull_pinned_image"), mock.patch.object(pipeline, "run", side_effect=fake_run), mock.patch.dict(os.environ, {"GH_TOKEN": "not-a-real-secret"}):
+                    if mismatch:
+                        with self.assertRaises(pipeline.PipelineError):
+                            pipeline.run_job(root / "worker", root / "staging", job, root)
+                        self.assertFalse(any(c[1] == "--run-regression" for c in commands))
+                    else:
+                        result = pipeline.run_job(root / "worker", root / "staging", job, root)
+                        self.assertEqual(result["outcome"]["verdict"], "passed")
+                        self.assertEqual([c[2] for c in commands[:2]], ["source", "benchmark"])
+
     def test_manifest_files_are_exact_content_addressed_basenames(self) -> None:
         job_id = "base-mainnet:test:1"
         candidate = pipeline.content_addressed_name("candidate", job_id)
@@ -724,12 +759,13 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
                 self.assertIn("vars.REGRESSION_VERIFIER_RPC_URL", workflow)
                 self.assertNotIn("vars.BASE_MAINNET_RPC_URL", workflow)
 
-    def test_stale_runner_revision_skips_every_signing_job(self) -> None:
+    def test_reviewed_release_authorization_gates_every_signing_job(self) -> None:
         workflow = (
             SCRIPT.parent.parent / ".github" / "workflows" / "regression-verifier-signer.yml"
         ).read_text(encoding="utf-8")
-        self.assertIn('echo "authorized=false" >> "$GITHUB_OUTPUT"', workflow)
-        self.assertIn('echo "authorized=true" >> "$GITHUB_OUTPUT"', workflow)
+        self.assertIn("scripts/verifier_release.py authorize", workflow)
+        self.assertIn("fromJSON(vars.REGRESSION_VERIFIER_RELEASE_JSON).source_revision", workflow)
+        self.assertNotIn("cargo build --release -p worker", workflow)
         self.assertEqual(
             workflow.count("if: needs.authorize-run.outputs.authorized == 'true'"),
             3,

@@ -27,5 +27,8 @@ verifier-sdk = { path = "../verifier-sdk" }
 web-public = { path = "../web-public" }
 uuid.workspace = true
 
+tempfile = "3"
+zip = { version = "4", default-features = false, features = ["deflate"] }
+
 [dev-dependencies]
 sqlx.workspace = true

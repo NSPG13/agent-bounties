@@ -420,44 +420,21 @@ def run_job(worker: Path, staging: Path, job: dict[str, Any], scratch: Path) -> 
         validate_subdirectory(source_subdir)
     benchmark_repo, benchmark_commit, benchmark_subdir = benchmark_source(job)
 
-    source_dir = scratch / "source"
-    benchmark_dir = scratch / "benchmark"
-    source_dir.mkdir()
-    benchmark_dir.mkdir()
     source_bytes = int(manifest["max_source_bytes"])
     source_files = int(manifest["max_source_files"])
     benchmark_bytes = int(manifest["max_benchmark_bytes"])
     benchmark_files = int(manifest["max_benchmark_files"])
-    source_archive = download_archive(
-        source_repo,
-        source_commit,
-        MAX_GITHUB_SOURCE_ARCHIVE_BYTES,
-    )
-    benchmark_archive = download_archive(
-        benchmark_repo,
-        benchmark_commit,
-        MAX_GITHUB_BENCHMARK_ARCHIVE_BYTES,
-    )
-    extract_snapshot(
-        source_archive,
-        source_dir,
-        subdirectory=None if source_subdir == "." else source_subdir,
-        max_bytes=source_bytes,
-        max_files=source_files,
-        max_archive_bytes=MAX_GITHUB_SOURCE_ARCHIVE_UNCOMPRESSED_BYTES,
-    )
-    extract_snapshot(
-        benchmark_archive,
-        benchmark_dir,
-        subdirectory=benchmark_subdir,
-        max_bytes=benchmark_bytes,
-        max_files=benchmark_files,
-        max_archive_bytes=MAX_GITHUB_BENCHMARK_ARCHIVE_UNCOMPRESSED_BYTES,
-    )
-    staged_source = stage(worker, "source", source_dir, staging, source_bytes, source_files)
-    staged_benchmark = stage(
-        worker, "benchmark", benchmark_dir, staging, benchmark_bytes, benchmark_files
-    )
+    def stage_commit(kind: str, repository: str, commit: str, subdirectory: str, maximum_bytes: int, maximum_files: int, expected: str) -> dict[str, Any]:
+        value = json.loads(run([str(worker.resolve()), "--stage-github-snapshot", kind,
+            f"https://github.com/{repository}/commit/{commit}", subdirectory, str(staging.resolve()),
+            str(maximum_bytes), str(maximum_files), expected], env=environment_without("GITHUB_TOKEN", "GH_TOKEN", "BASE_KEEPER_PRIVATE_KEY")))
+        if not isinstance(value, dict) or not str(value.get("snapshot", {}).get("digest", "")).startswith("sha256:"):
+            raise PipelineError("worker returned invalid immutable snapshot evidence")
+        return value
+    staged_source = stage_commit("source", source_repo, source_commit, source_subdir, source_bytes, source_files,
+        str(job.get("submission_evidence", {}).get("evidence", {}).get("source_snapshot_digest", "")))
+    staged_benchmark = stage_commit("benchmark", benchmark_repo, benchmark_commit, benchmark_subdir,
+        benchmark_bytes, benchmark_files, manifest["benchmark_digest"])
     expected_source = str(
         job.get("submission_evidence", {}).get("evidence", {}).get("source_snapshot_digest", "")
     )

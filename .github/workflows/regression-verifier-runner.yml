@@ -3,6 +3,8 @@ name: Regression Verifier Runner
 on:
   pull_request:
     paths:
+      - "scripts/verifier_release.py"
+      - "scripts/test_verifier_release.py"
       - "scripts/gas_sponsorship_budget.py"
       - "scripts/test_gas_sponsorship_budget.py"
       - ".cargo/**"
@@ -36,6 +38,7 @@ concurrency:
 
 jobs:
   contract:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -48,14 +51,11 @@ jobs:
       - run: |
           python scripts/test_regression_verifier_pipeline.py -v
           python scripts/test_regression_verifier_source_guard.py -v
-          python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 5398679f9cd92780412327f2a3612a42b62c63242776ae464ae4264f84314a7c
-          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 7872c03b51d129564a016c7ff2bc02cd4b1328a88c4c75ddc27acba95ff5540d
           python -m py_compile scripts/regression_verifier_pipeline.py
           cargo test -p verifier-sdk -p worker
 
   run-no-secrets:
-    if: github.event_name == 'schedule'
-    needs: contract
+    if: github.event_name == 'schedule' && vars.REGRESSION_VERIFIER_RELEASE_JSON != '' && vars.REGRESSION_WORKER_URL != ''
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -64,25 +64,36 @@ jobs:
       VERIFIER_TWO: ${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+        with:
+          ref: ${{ fromJSON(vars.REGRESSION_VERIFIER_RELEASE_JSON).source_revision }}
       - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
-      - uses: dtolnay/rust-toolchain@1.88.0
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Verify reviewed worker build inputs
-        run: >-
-          python scripts/regression_verifier_source_guard.py
-          --scope worker-build
-          --expected-sha256 5398679f9cd92780412327f2a3612a42b62c63242776ae464ae4264f84314a7c
-
-      - name: Build isolated regression worker
-        run: cargo build --release -p worker
-
-      - name: Revalidate reviewed runtime after build
+      - name: Load approved release identity
+        env:
+          REGRESSION_VERIFIER_RELEASE_JSON: ${{ vars.REGRESSION_VERIFIER_RELEASE_JSON }}
         run: |
-          python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 5398679f9cd92780412327f2a3612a42b62c63242776ae464ae4264f84314a7c
-          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 7872c03b51d129564a016c7ff2bc02cd4b1328a88c4c75ddc27acba95ff5540d
+          mkdir -p target
+          python -c 'import os,pathlib; pathlib.Path("target/verifier-release.json").write_text(os.environ["REGRESSION_VERIFIER_RELEASE_JSON"])'
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: target/release/worker
+          key: reviewed-verifier-${{ runner.os }}-${{ runner.arch }}-${{ fromJSON(vars.REGRESSION_VERIFIER_RELEASE_JSON).worker_binary_digest }}
+      - name: Verify exact reviewed source and cached or downloaded binary
+        env:
+          REGRESSION_WORKER_URL: ${{ vars.REGRESSION_WORKER_URL }}
+        run: >-
+          python scripts/verifier_release.py fetch
+          --manifest target/verifier-release.json
+          --worker target/release/worker
+          --download-url "$REGRESSION_WORKER_URL"
+      - name: Check runner availability
+        env:
+          REGRESSION_CHECKPOINT_TOKEN: ${{ secrets.REGRESSION_RUNNER_CHECKPOINT_TOKEN }}
+        run: >-
+          python scripts/verifier_release.py diagnose --manifest target/verifier-release.json
+          --worker target/release/worker --component runner --api-base "$API_BASE_URL"
+          --health-result target/runner-health.json
 
       - name: Run canonical jobs without signing secrets
         run: >-
@@ -96,6 +107,9 @@ jobs:
           --output target/regression-candidates
           --max-jobs 5
           --max-scan 100
+
+      - name: Bind candidates to the reviewed release
+        run: cp target/verifier-release.json target/regression-candidates/release.json
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()

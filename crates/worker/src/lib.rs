@@ -1,3 +1,4 @@
+pub mod github_snapshot;
 use anyhow::{anyhow, Context};
 use app::BountyNetwork;
 use chain_base::{
