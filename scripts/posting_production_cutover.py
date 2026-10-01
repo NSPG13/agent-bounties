@@ -10,6 +10,8 @@ import urllib.request
 BRANCH = 'codex/posting-production-cutover-20261001'
 PRIVATE_BRANCH = 'codex/posting-private-full-coverage-20260929'
 PRIVATE_REVISION = 'e6bd24bac27c8fb5e77fad3fe91fdb3283d4288e'
+SPENDER_REVISION = '8eb7e912fe1f9e4585af0efa2c7a332c756357dd'
+CANARY_MCP = 'srv-dau3p1favr4c73fij9jg'
 WORKSPACE = 'tea-d4tk87f5r7bs73au55lg'
 PUBLIC_REPO = 'https://github.com/NSPG13/agent-bounties'
 PRIVATE_REPO = 'https://github.com/NSPG13/AB-PRIVATE'
@@ -137,7 +139,7 @@ def run(phase):
             os.environ.get('GITHUB_REF') == 'refs/heads/' + BRANCH and
             os.environ.get('GITHUB_EVENT_NAME') == 'workflow_dispatch',
             'Only attended dispatch on the exact control branch is permitted')
-    require(phase in ('inventory', 'pause-and-api', 'workers', 'mainnet-preflight'), 'Unknown cutover phase')
+    require(phase in ('inventory', 'pause-and-api', 'workers', 'mainnet-preflight', 'resume-probe', 'hold-spenders'), 'Unknown cutover phase')
     require(len(os.environ.get('GAS_SPONSOR_BUDGET_TOKEN', '')) >= 32,
             'Dedicated reservation credential missing')
     output = Path('posting-cutover-evidence.json')
@@ -148,6 +150,38 @@ def run(phase):
         return
     require(all(not item['active_runs'] for item in evidence['workflows'].values()),
             'A spending workflow still has an active run')
+    if phase == 'resume-probe':
+        value = api('render', '/services/' + CANARY_MCP)
+        require(value['ownerId'] == WORKSPACE and value['name'] == 'agent-bounties-posting-mcp-canary'
+                and value['serviceDetails']['plan'] == 'free' and value['autoDeploy'] == 'no'
+                and value['repo'].removesuffix('.git') == PRIVATE_REPO, 'Unexpected isolated canary')
+        for flag in ('ENABLE_X402_HOSTED_RELAY', 'ENABLE_BASE_TX_BROADCAST', 'ENABLE_CREATOR_OPEN_SPONSORSHIP'):
+            setting = api('render', '/services/' + CANARY_MCP + '/env-vars/' + flag)
+            require(setting.get('value', setting.get('envVar', {}).get('value')) == 'false', 'Canary signing not disabled')
+        api('render', '/services/' + CANARY_MCP + '/suspend', 'POST')
+        require(api('render', '/services/' + CANARY_MCP)['suspended'] == 'suspended', 'Canary not suspended')
+        api('render', '/services/' + CANARY_MCP, 'PATCH', {'branch': PRIVATE_BRANCH, 'autoDeployTrigger': 'off'})
+        api('render', '/services/' + CANARY_MCP + '/env-vars/POSTING_RESUME_PROBE', 'PUT', {'value': SPENDER_REVISION})
+        api('render', '/services/' + CANARY_MCP + '/resume', 'POST')
+        evidence['resume_probe'] = api('render', '/services/' + CANARY_MCP + '/deploys?limit=2')
+        output.write_text(json.dumps(evidence, indent=2) + '\n')
+        print(json.dumps({'resume_probe': evidence['resume_probe']}), flush=True)
+        return
+    if phase == 'hold-spenders':
+        require(all(item['state'] == 'disabled_manually' for item in evidence['workflows'].values()),
+                'Spending workflows must remain paused')
+        for role in ('keeper', 'broker'):
+            require(service(role)['suspended'] == 'suspended', 'Spending worker must remain suspended until staged')
+            set_env(role, 'POSTING_SENDS_PAUSED', 'true')
+            set_env(role, 'BASE_INDEXER_PROTOCOL', 'posting-cutover-paused')
+            api('render', '/services/' + SERVICES[role], 'PATCH', {
+                'repo': PRIVATE_REPO, 'branch': PRIVATE_BRANCH, 'autoDeployTrigger': 'off',
+                'serviceDetails': {'envSpecificDetails': {'dockerfilePath': './Dockerfile.posting-spenders'}}})
+            observed = service(role)
+            require(observed['repo'].removesuffix('.git') == PRIVATE_REPO and observed['branch'] == PRIVATE_BRANCH
+                    and observed['serviceDetails']['envSpecificDetails']['dockerfilePath'] == './Dockerfile.posting-spenders',
+                    'Paused image configuration differs')
+        return
     if phase == 'mainnet-preflight':
         require(all(item['state'] == 'disabled_manually' for item in evidence['workflows'].values()), 'Spending workflows must remain paused')
         for role in ('keeper', 'broker'):
