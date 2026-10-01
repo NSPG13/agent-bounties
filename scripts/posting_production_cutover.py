@@ -128,8 +128,23 @@ def rebind(role):
 
 
 def deploy(role, revision=PRIVATE_REVISION):
+    path = '/services/' + SERVICES[role] + '/deploys'
+    before = {row['deploy']['id'] for row in api('render', path + '?limit=10')}
     value = api('render', '/services/' + SERVICES[role] + '/deploys',
                 'POST', {'commitId': revision, 'clearCache': 'do_not_clear'})
+    # Render can accept the request with an empty 202 body. Reconcile against
+    # the before-snapshot and the API trigger instead of sending another POST.
+    if value is None:
+        for _ in range(20):
+            rows = api('render', path + '?limit=10')
+            candidates = [row['deploy'] for row in rows
+                          if row['deploy']['id'] not in before
+                          and row['deploy'].get('trigger') == 'api']
+            require(len(candidates) <= 1, 'Ambiguous deployment acknowledgement')
+            if candidates:
+                value = candidates[0]
+                break
+            time.sleep(1)
     require(isinstance(value, dict) and str(value.get('id', '')).startswith('dep-'),
             'Provider did not acknowledge a deployment ID')
     # A newly queued deployment may have commit:null until the source resolves.

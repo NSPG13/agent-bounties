@@ -45,29 +45,39 @@ class CutoverTests(unittest.TestCase):
                 controller.set_env('api', 'ENABLE_CREATOR_OPEN', 'false')
 
     def test_deployment_must_acknowledge_exact_revision(self):
-        with patch.object(controller, 'api', return_value={'id': 'dep-fixture',
-                'status': 'created', 'commit': {'id': 'unreviewed'}}):
+        with patch.object(controller, 'api', side_effect=[[], {'id': 'dep-fixture',
+                'status': 'created', 'commit': {'id': 'unreviewed'}}]):
             with self.assertRaisesRegex(RuntimeError, 'exact deployment revision'):
                 controller.deploy('api')
 
     def test_queued_deploy_resolves_commit_without_resubmission(self):
-        with patch.object(controller, 'api', side_effect=[
+        with patch.object(controller, 'api', side_effect=[[],
                 {'id': 'dep-fixture', 'status': 'created', 'commit': None},
                 {'id': 'dep-fixture', 'status': 'build_in_progress',
                  'commit': {'id': controller.SPENDER_REVISION}}]) as api, \
                 patch.object(controller.time, 'sleep'):
             result = controller.deploy('keeper', controller.SPENDER_REVISION)
             self.assertEqual(result['commit'], controller.SPENDER_REVISION)
-            self.assertEqual(api.call_count, 2)
-            self.assertEqual(api.call_args_list[1].args,
+            self.assertEqual(api.call_count, 3)
+            self.assertEqual(api.call_args_list[2].args,
                 ('render', '/services/' + controller.SERVICES['keeper'] + '/deploys/dep-fixture'))
 
     def test_unresolved_deploy_fails_closed_without_resubmission(self):
-        with patch.object(controller, 'api', return_value={
-                'id': 'dep-fixture', 'status': 'created', 'commit': None}) as api, \
+        with patch.object(controller, 'api', side_effect=[[]] + [{
+                'id': 'dep-fixture', 'status': 'created', 'commit': None}] * 21) as api, \
                 patch.object(controller.time, 'sleep'):
             with self.assertRaisesRegex(RuntimeError, 'exact deployment revision'):
                 controller.deploy('keeper', controller.SPENDER_REVISION)
+            self.assertEqual(sum(len(call.args) > 2 and call.args[2] == 'POST'
+                                 for call in api.call_args_list), 1)
+
+    def test_empty_accepted_response_reconciles_unique_new_api_deploy(self):
+        old = {'deploy': {'id': 'dep-old', 'trigger': 'api'}}
+        new = {'deploy': {'id': 'dep-new', 'trigger': 'api', 'status': 'created',
+                         'commit': {'id': controller.SPENDER_REVISION}}}
+        with patch.object(controller, 'api', side_effect=[[old], None, [new, old]]) as api:
+            result = controller.deploy('keeper', controller.SPENDER_REVISION)
+            self.assertEqual(result['id'], 'dep-new')
             self.assertEqual(sum(len(call.args) > 2 and call.args[2] == 'POST'
                                  for call in api.call_args_list), 1)
 
