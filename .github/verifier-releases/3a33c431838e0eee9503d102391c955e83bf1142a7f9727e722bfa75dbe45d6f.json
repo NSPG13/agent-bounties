@@ -1,0 +1,14 @@
+{
+  "schema": "agent-bounties/verifier-release-v1",
+  "source_revision": "1ebe67e3e71799b795364f8f7725ef670f0f6c66",
+  "network": "base-mainnet",
+  "worker_build_digest": "sha256:c870c80615800be27961a2b9b6a1158a2332912d37fddcd2b69c935ae4829b92",
+  "worker_binary_digest": "sha256:ba87a45936651471d79a4afeac6c40b474a2b41a67654f8fc92d42187e0b8d92",
+  "signing_runtime_digest": "sha256:cbcdd53eda0a2d74d6a0b4c8f1052c7c9a336ad8d365669eb14bc6c389e950de",
+  "profile_registry_digest": "sha256:0ebdb5adf731e8a2ecea2af7d847ba762acb8388a3a040861727a4b29785b64f",
+  "signers": [
+    "0xbe6292b9e465f549e2363b918d6dd9187038431e",
+    "0xb7c2ce6430b66fb986e27b6140b29309550d487a"
+  ],
+  "release_id": "sha256:3a33c431838e0eee9503d102391c955e83bf1142a7f9727e722bfa75dbe45d6f"
+}

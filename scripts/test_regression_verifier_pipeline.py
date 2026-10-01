@@ -775,7 +775,14 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
             SCRIPT.parent.parent / ".github" / "workflows" / "regression-verifier-signer.yml"
         ).read_text(encoding="utf-8")
         self.assertIn("scripts/verifier_release.py authorize", workflow)
-        self.assertIn("fromJSON(vars.REGRESSION_VERIFIER_RELEASE_JSON).source_revision", workflow)
+        self.assertNotIn("fromJSON(vars.REGRESSION_VERIFIER_RELEASE_JSON).source_revision", workflow)
+        for job in ("authorize-run", "relay"):
+            section = workflow.split(f"\n  {job}:\n", 1)[1]
+            protected = section.index("ref: ${{ github.workflow_sha }}")
+            authorize = section.index("run: python3 -I scripts/verifier_release_provenance.py")
+            selected = section.index("ref: ${{ steps.provenance.outputs.revision }}")
+            self.assertLess(protected, authorize)
+            self.assertLess(authorize, selected)
         self.assertNotIn("cargo build --release -p worker", workflow)
         self.assertEqual(
             workflow.count("if: needs.authorize-run.outputs.authorized == 'true'"),
