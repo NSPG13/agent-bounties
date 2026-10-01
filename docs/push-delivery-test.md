@@ -18,25 +18,13 @@ ID never sends again, including after a restart or interrupted provider request.
 No provider URL, encryption key or arbitrary message can be supplied to the test
 action. Existing subscribe/unsubscribe clients remain compatible.
 
-The existing private endpoint `POST /v1/site-auth/push-notifications` accepts
-`{"action":"test","id":"<owned-device-uuid>","request_id":"<fresh-uuid>","consent":true}`.
-Its no-store response includes `request_id` and `status`: `accepted` means provider
-acceptance; `attempting`/`unknown` do not establish receipt; `failed`/`cancelled`
-are not retried. The browser checks its own service worker for the exact test
-tag before displaying receipt confirmation. A test UUID is correlation only,
-never authorization. Account changes cancel the page's pending receipt check.
+The hosted service reserves each test before delivery. Opted-out, expired or
+renewed subscriptions cannot be used by an old pending test. Tests expire after
+60 seconds; older service workers discard them. The page waits for its
+service-worker update before sending the test.
 
-The additive `0057_push_delivery_tests.sql` migration stores the bounded attempt
-and subscription generation separately from real review notifications. The
-account lock serializes admissions with subscription renewal; send-time checks
-reject opted-out, expired, renewed or old reservations. A late rejection cannot
-disable a newer subscription. Ambiguous sends remain consumed. Test payloads
-expire after 60 seconds and use a separate schema; older workers discard them.
-The page waits for a service-worker update before sending its test.
-
-Rollback: retain the additive table and revert the application or website
-revision. Disable `CREATOR_PUSH_ENABLED` if the provider or consent boundary
-fails. No wallet key, contract, funded term or gas-budget change is involved.
+Operators can roll back the website and disable push delivery independently.
+This check does not change wallet keys, contracts, funded terms or gas budgets.
 
 Validation: database fixtures cover ownership, concurrent duplicate requests,
 restart replay, account quotas, opt-out, renewal and delayed provider failure.
