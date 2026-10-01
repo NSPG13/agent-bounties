@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -10,7 +11,7 @@ import urllib.request
 BRANCH = 'codex/posting-production-cutover-20261001'
 PRIVATE_BRANCH = 'codex/posting-private-full-coverage-20260929'
 PRIVATE_REVISION = 'e6bd24bac27c8fb5e77fad3fe91fdb3283d4288e'
-SPENDER_REVISION = '8eb7e912fe1f9e4585af0efa2c7a332c756357dd'
+SPENDER_REVISION = '6786110f4ea241c08f8d8b51eb2e039e87aa5d98'
 CANARY_MCP = 'srv-dau3p1favr4c73fij9jg'
 WORKSPACE = 'tea-d4tk87f5r7bs73au55lg'
 PUBLIC_REPO = 'https://github.com/NSPG13/agent-bounties'
@@ -139,7 +140,7 @@ def run(phase):
             os.environ.get('GITHUB_REF') == 'refs/heads/' + BRANCH and
             os.environ.get('GITHUB_EVENT_NAME') == 'workflow_dispatch',
             'Only attended dispatch on the exact control branch is permitted')
-    require(phase in ('inventory', 'pause-and-api', 'workers', 'mainnet-preflight', 'resume-probe', 'hold-spenders'), 'Unknown cutover phase')
+    require(phase in ('inventory', 'pause-and-api', 'workers', 'mainnet-preflight', 'resume-probe', 'hold-spenders', 'upgrade-held-spenders'), 'Unknown cutover phase')
     require(len(os.environ.get('GAS_SPONSOR_BUDGET_TOKEN', '')) >= 32,
             'Dedicated reservation credential missing')
     output = Path('posting-cutover-evidence.json')
@@ -167,7 +168,7 @@ def run(phase):
         output.write_text(json.dumps(evidence, indent=2) + '\n')
         print(json.dumps({'resume_probe': evidence['resume_probe']}), flush=True)
         return
-    if phase == 'hold-spenders':
+    if phase in ('hold-spenders', 'upgrade-held-spenders'):
         require(all(item['state'] == 'disabled_manually' for item in evidence['workflows'].values()),
                 'Spending workflows must remain paused')
         for role in ('keeper', 'broker'):
@@ -181,6 +182,41 @@ def run(phase):
             require(observed['repo'].removesuffix('.git') == PRIVATE_REPO and observed['branch'] == PRIVATE_BRANCH
                     and observed['serviceDetails']['envSpecificDetails']['dockerfilePath'] == './Dockerfile.posting-spenders',
                     'Paused image configuration differs')
+        if phase == 'upgrade-held-spenders':
+            # Attended handoff only: a separate production SQL session holds
+            # migration advisory lock 4270265017 before this phase is dispatched.
+            # Both exact legacy worker revisions acquire it before initializing
+            # their protocols or signers. Keep that session until old waiters
+            # disappear and both replacement images report the paused entrypoint.
+            evidence['startup_guard'] = 'production migration advisory lock 4270265017 held by attended SQL session'
+            evidence['started_deploys'] = {}
+            try:
+                for role in ('keeper', 'broker'):
+                    api('render', '/services/' + SERVICES[role] + '/resume', 'POST')
+                    deployed = api('render', '/services/' + SERVICES[role] + '/deploys',
+                                   'POST', {'commitId': SPENDER_REVISION, 'clearCache': 'do_not_clear'})
+                    require(deployed.get('commit', {}).get('id') == SPENDER_REVISION,
+                            'Paused spender deployment revision differs')
+                    evidence['started_deploys'][role] = {
+                        'id': deployed['id'], 'commit': SPENDER_REVISION, 'status': deployed['status']}
+                    output.write_text(json.dumps(evidence, indent=2) + '\n')
+                deadline = time.monotonic() + 600
+                while time.monotonic() < deadline:
+                    for role, deployed in evidence['started_deploys'].items():
+                        current = api('render', '/services/' + SERVICES[role] + '/deploys/' + deployed['id'])
+                        deployed['status'] = current['status']
+                        require(current['status'] not in ('build_failed', 'update_failed', 'canceled'),
+                                'Paused spender build failed')
+                    if all(d['status'] == 'live' for d in evidence['started_deploys'].values()):
+                        output.write_text(json.dumps(evidence, indent=2) + '\n')
+                        print(json.dumps({'paused_spender_deploys': evidence['started_deploys']}), flush=True)
+                        return
+                    time.sleep(5)
+                raise RuntimeError('Paused spender deployment timed out')
+            except Exception:
+                for role in ('keeper', 'broker'):
+                    api('render', '/services/' + SERVICES[role] + '/suspend', 'POST')
+                raise
         return
     if phase == 'mainnet-preflight':
         require(all(item['state'] == 'disabled_manually' for item in evidence['workflows'].values()), 'Spending workflows must remain paused')

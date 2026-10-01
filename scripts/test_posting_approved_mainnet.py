@@ -80,6 +80,15 @@ class ApprovedMainnetTests(unittest.TestCase):
                     mainnet.prepare()
                 key.assert_not_called()
 
+    def test_receipt_waits_for_its_block_without_resending(self):
+        journal = {'record': self.record()}
+        receipt = {'blockNumber': '0x123', 'blockHash': '0x' + 'ab' * 32}
+        with patch.object(mainnet.Account, 'recover_transaction', return_value=mainnet.SENDER), \
+                patch.object(mainnet, 'rpc', side_effect=[receipt, None]) as rpc:
+            self.assertFalse(mainnet.reconcile(journal, self.action))
+            self.assertEqual([call.args[0] for call in rpc.call_args_list],
+                             ['eth_getTransactionReceipt', 'eth_getBlockByNumber'])
+
     def test_unknown_send_never_retries(self):
         journal = {'review_sha256': mainnet.REVIEW_SHA, 'run_id': 'fixture-run',
                    'record': self.record(), 'broadcast_attempted': True}

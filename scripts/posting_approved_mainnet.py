@@ -226,7 +226,11 @@ def reconcile(journal, action):
     receipt = rpc('eth_getTransactionReceipt', [record['hash']])
     if receipt is None:
         return False
+    if not receipt.get('blockNumber') or not receipt.get('blockHash'):
+        return False
     block = rpc('eth_getBlockByNumber', [receipt['blockNumber'], False])
+    if block is None:
+        return False
     require(block['hash'].lower() == receipt['blockHash'].lower() and receipt['status'] == '0x1'
             and receipt['from'].lower() == SENDER and receipt['to'].lower() == TARGET
             and receipt['transactionHash'].lower() == record['hash'], 'Receipt is not the approved successful transaction')
