@@ -2126,6 +2126,7 @@
       await postingSession.flush({ requireServer: true });
       await assertPostingBinding();
       await refreshWalletReadiness();
+      if (state.metaParent) throw new Error("Sponsored child creation still needs a caller-preserving wallet path. Your draft is saved; no gas will be charged.");
       if (state.balances.usdc < state.balances.required || !state.gasSponsored) throw new Error("The wallet is not ready to fund this bounty.");
       if (!window.AgentBountiesLegal) throw new Error("The legal agreement could not be loaded. Reload before using the wallet.");
       const agreement = await postingLegalAcceptance();
@@ -2134,7 +2135,6 @@
       const api = String(protocol.api_base_url).replace(/\/$/, "");
       const rewards = currentRewardSplit();
       let create, plan, childPlan = null, authorizationValidBefore;
-      if (state.metaParent) throw new Error("Sponsored child creation still needs a caller-preserving wallet path. Your draft is saved; no gas will be charged.");
       if (state.metaParent) {
         const parent = await metaChild.resolve(state.metaParent, window.AgentBountiesWorkflow.createClient(window));
         if (parent.terms_hash !== state.metaParent.terms_hash) throw new Error("The parent terms changed. Review the child again.");
