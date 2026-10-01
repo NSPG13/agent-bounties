@@ -65,10 +65,14 @@ function fixture(){
   finishPost({ok:true,json:async()=>({subscribed:true,id})});await new Promise(resolve=>setImmediate(resolve));
   assert.deepEqual(latePost.calls.find(v=>v[0]==="cleanup")[1],{action:"unsubscribe",id});
   assert.equal(await latePost.controller.enable(),false,"new setup waits for late server cleanup too");
+  await new Promise(resolve=>setTimeout(resolve,10));
+  assert.equal(await latePost.controller.enable(),false,"a timed-out cleanup is still a barrier until its original request settles");
+  assert.equal(latePost.calls.filter(v=>v[0]==="cleanup").length,1,"retry cannot race an older unsubscribe request");
   finishCleanup({ok:true,json:async()=>({subscribed:false})});await new Promise(resolve=>setImmediate(resolve));
-  assert.deepEqual(JSON.parse(latePost.win.localStorage.getItem("ab.creator-push-cleanup.v1")),[]);
+  assert.deepEqual(JSON.parse(latePost.win.localStorage.getItem("ab.creator-push-cleanup.v1")),[{account:"account-1",id}],"uncertain cleanup keeps a reconciliation record");
   assert.equal(latePost.messages.at(-1).enabled,false);
   latePost.win.fetch=postFetch;assert.equal(await latePost.controller.enable(),true,"setup recovers after confirmed cleanup");
+  assert.deepEqual(JSON.parse(latePost.win.localStorage.getItem("ab.creator-push-cleanup.v1")),[]);
   const switched=fixture();switched.controller.setAccount("account-1");await switched.controller.load();
   const switchedFetch=switched.win.fetch;let finishOldAccount;
   switched.win.fetch=async(url,options)=>options.body&&JSON.parse(options.body).action==="subscribe"?new Promise(resolve=>finishOldAccount=resolve):switchedFetch(url,options);
