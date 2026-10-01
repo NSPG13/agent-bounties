@@ -16,3 +16,6 @@ domain = { path = "../domain" }
 eval-harness = { path = "../eval-harness" }
 ledger = { path = "../ledger" }
 uuid.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

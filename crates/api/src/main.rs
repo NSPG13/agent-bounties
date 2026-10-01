@@ -10207,6 +10207,10 @@ async fn x402_base_bounty_funding(
     if !state.x402_relayer.enabled {
         return x402_self_relay_response(&authorization, plan);
     }
+    service_runtime::verifier_readiness::require_available(
+        item.terms.as_ref().ok_or(StatusCode::CONFLICT)?,
+    )
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     validate_hosted_x402_intent(
         &plan.relay_transaction,
         relayer.as_deref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?,
@@ -11181,6 +11185,7 @@ async fn indexed_autonomous_bounty(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let mut feed = build_autonomous_bounty_feed(events, terms, false)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    service_runtime::verifier_readiness::apply(&mut feed);
     state.recovery_reservations.apply(&mut feed, false);
     feed.into_iter()
         .find(|item| item.bounty_contract.eq_ignore_ascii_case(bounty_contract))
@@ -11301,6 +11306,8 @@ async fn plan_autonomous_bounty_creation(
 ) -> Result<Json<AutonomousBountyCreationPlan>, StatusCode> {
     let network = request.network.as_deref().unwrap_or("base-mainnet");
     let terms = require_autonomous_creation_terms(&state, network, &request.create).await?;
+    service_runtime::verifier_readiness::require_available(&terms)
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let plan = configured_autonomous_planner(network)?
         .plan_creation(network, &request.create)
         .map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -11315,6 +11322,8 @@ async fn plan_autonomous_bounty_authorized_creation(
 ) -> Result<Json<AutonomousBountyAuthorizedCreationPlan>, StatusCode> {
     let network = request.network.as_deref().unwrap_or("base-mainnet");
     let terms = require_autonomous_creation_terms(&state, network, &request.create).await?;
+    service_runtime::verifier_readiness::require_available(&terms)
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let plan = configured_autonomous_planner(network)?
         .plan_authorized_creation(
             network,
@@ -14538,6 +14547,7 @@ async fn load_scoped_autonomous_bounty_feed(
     let mut feed = build_autonomous_bounty_feed(events, terms, false)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     feed.retain(|item| item.bounty_contract.eq_ignore_ascii_case(contract));
+    service_runtime::verifier_readiness::apply(&mut feed);
     state.recovery_reservations.apply(&mut feed, claimable_only);
     Ok(feed)
 }
@@ -14561,6 +14571,7 @@ async fn load_autonomous_bounty_feed(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let mut feed = build_autonomous_bounty_feed(events, terms, false)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    service_runtime::verifier_readiness::apply(&mut feed);
     state.recovery_reservations.apply(&mut feed, claimable_only);
     Ok(feed)
 }
@@ -14584,6 +14595,7 @@ async fn load_verified_autonomous_bounty_feed(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let mut feed = build_autonomous_bounty_feed(events, terms, false)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    service_runtime::verifier_readiness::apply(&mut feed);
     state.recovery_reservations.apply(&mut feed, claimable_only);
     Ok(feed)
 }
@@ -17085,6 +17097,7 @@ async fn load_objective_canonical_evidence(
             .map_err(map_objective_db_error)?;
         let mut feed = build_autonomous_bounty_feed(events, terms.clone(), false)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        service_runtime::verifier_readiness::apply(&mut feed);
         state.recovery_reservations.apply(&mut feed, false);
         state
             .recovery_reservations

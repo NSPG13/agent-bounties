@@ -18,15 +18,18 @@ else:
 
 
 SCRIPT = Path(__file__).with_name("regression_verifier_pipeline.py")
-SPEC = importlib.util.spec_from_file_location("regression_verifier_pipeline", SCRIPT)
-assert SPEC and SPEC.loader
-pipeline = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = pipeline
-SPEC.loader.exec_module(pipeline)
+if __package__:
+    from . import regression_verifier_pipeline as pipeline
+else:
+    SPEC = importlib.util.spec_from_file_location("regression_verifier_pipeline", SCRIPT)
+    assert SPEC and SPEC.loader
+    pipeline = importlib.util.module_from_spec(SPEC)
+    sys.modules[SPEC.name] = pipeline
+    SPEC.loader.exec_module(pipeline)
 
 
 def approved_benchmark_source() -> tuple[str, tuple[str, str, str]]:
-    digest = sorted(pipeline.RECONCILED_REGRESSION_BENCHMARK_SOURCES)[0]
+    digest = next(p["runner_manifest"]["benchmark_digest"] for p in pipeline._PROFILE_REGISTRY["profiles"] if p["status"] == "approved")
     return digest, pipeline.RECONCILED_REGRESSION_BENCHMARK_SOURCES[digest]
 
 
@@ -461,9 +464,7 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
                             "commit": commit,
                             "subdirectory": subdirectory,
                         },
-                        "runner_manifest": {
-                            "benchmark_digest": digest
-                        },
+                        "runner_manifest": next(p["runner_manifest"] for p in pipeline._PROFILE_REGISTRY["profiles"] if p["runner_manifest"]["benchmark_digest"] == digest),
                     }
                 }
             }
@@ -937,6 +938,7 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
                 "subdirectory": subdirectory,
             }
         )
+        approved["terms"]["document"]["benchmark"]["runner_manifest"] = next(p["runner_manifest"] for p in pipeline._PROFILE_REGISTRY["profiles"] if p["runner_manifest"]["benchmark_digest"] == digest)
         pipeline.require_reconciled_regression_benchmark(approved)
 
         unsupported = json.loads(json.dumps(approved))
@@ -953,10 +955,11 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
             with self.assertRaisesRegex(pipeline.PipelineError, "immutable source tuple"):
                 pipeline.require_reconciled_regression_benchmark(mismatched)
 
-    def test_original_openhands_terms_use_only_the_exact_reconciled_alias(self) -> None:
+    def test_original_openhands_terms_stay_readable_but_unsupported_environment_is_held(self) -> None:
         fixture = SCRIPT.parent.parent / "crates/chain-base/tests/fixtures/legacy-openhands-terms.json"
         job = {"terms": json.loads(fixture.read_text(encoding="utf-8"))}
-        pipeline.require_reconciled_regression_benchmark(job)
+        with self.assertRaisesRegex(pipeline.PipelineError, "verification_profile_unapproved"):
+            pipeline.require_reconciled_regression_benchmark(job)
         benchmark = job["terms"]["document"]["benchmark"]
         self.assertEqual(
             benchmark["runner_manifest"]["benchmark_digest"],
@@ -997,7 +1000,8 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
                 }
             }
         }
-        pipeline.require_reconciled_regression_benchmark(job)
+        with self.assertRaisesRegex(pipeline.PipelineError, "verification_profile_unapproved"):
+            pipeline.require_reconciled_regression_benchmark(job)
         for key, value in (
             ("repository", "relocated/repository"),
             ("commit", pipeline.RECONCILED_REGRESSION_BENCHMARK_COMMIT),

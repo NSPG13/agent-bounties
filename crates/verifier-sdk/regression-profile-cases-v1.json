@@ -1,0 +1,221 @@
+[
+  {
+    "name": "approved",
+    "changes": {},
+    "approved": true
+  },
+  {
+    "name": "repository-case",
+    "changes": {
+      "/source/repository": "NSPG13/agent-bounties"
+    },
+    "approved": true
+  },
+  {
+    "name": "no-op-command",
+    "changes": {
+      "/runner_manifest/command": [
+        "true"
+      ]
+    },
+    "approved": false
+  },
+  {
+    "name": "inline-python",
+    "changes": {
+      "/runner_manifest/command": [
+        "python",
+        "-c",
+        "exit(0)"
+      ]
+    },
+    "approved": false
+  },
+  {
+    "name": "solver-controlled-command",
+    "changes": {
+      "/runner_manifest/command": [
+        "python",
+        "/workspace/check.py"
+      ]
+    },
+    "approved": false
+  },
+  {
+    "name": "image",
+    "changes": {
+      "/runner_manifest/image": "docker.io/library/alpine@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "approved": false
+  },
+  {
+    "name": "workdir",
+    "changes": {
+      "/runner_manifest/workdir": "/benchmark"
+    },
+    "approved": false
+  },
+  {
+    "name": "timeout",
+    "changes": {
+      "/runner_manifest/timeout_seconds": 119
+    },
+    "approved": false
+  },
+  {
+    "name": "cpu",
+    "changes": {
+      "/runner_manifest/cpu_millis": 999
+    },
+    "approved": false
+  },
+  {
+    "name": "memory",
+    "changes": {
+      "/runner_manifest/memory_bytes": 268435457
+    },
+    "approved": false
+  },
+  {
+    "name": "pids",
+    "changes": {
+      "/runner_manifest/pids_limit": 63
+    },
+    "approved": false
+  },
+  {
+    "name": "output",
+    "changes": {
+      "/runner_manifest/max_output_bytes": 1048575
+    },
+    "approved": false
+  },
+  {
+    "name": "tmpfs",
+    "changes": {
+      "/runner_manifest/tmpfs_bytes": 134217727
+    },
+    "approved": false
+  },
+  {
+    "name": "source-bytes",
+    "changes": {
+      "/runner_manifest/max_source_bytes": 536870911
+    },
+    "approved": false
+  },
+  {
+    "name": "source-files",
+    "changes": {
+      "/runner_manifest/max_source_files": 49999
+    },
+    "approved": false
+  },
+  {
+    "name": "benchmark-bytes",
+    "changes": {
+      "/runner_manifest/max_benchmark_bytes": 1048575
+    },
+    "approved": false
+  },
+  {
+    "name": "benchmark-files",
+    "changes": {
+      "/runner_manifest/max_benchmark_files": 99
+    },
+    "approved": false
+  },
+  {
+    "name": "platform",
+    "changes": {
+      "/runner_manifest/platform": "linux/arm64"
+    },
+    "approved": false
+  },
+  {
+    "name": "seed",
+    "changes": {
+      "/runner_manifest/test_seed": 2
+    },
+    "approved": false
+  },
+  {
+    "name": "digest",
+    "changes": {
+      "/runner_manifest/benchmark_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "approved": false
+  },
+  {
+    "name": "source",
+    "changes": {
+      "/source/repository": "other/copied-benchmark"
+    },
+    "approved": false
+  },
+  {
+    "name": "commit",
+    "changes": {
+      "/source/commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "approved": false
+  },
+  {
+    "name": "path",
+    "changes": {
+      "/source/subdirectory": "copied-location"
+    },
+    "approved": false
+  },
+  {
+    "name": "kind",
+    "changes": {
+      "/source/kind": "url"
+    },
+    "approved": false
+  },
+  {
+    "name": "source-extra",
+    "changes": {
+      "/source/extra": "ignored?"
+    },
+    "approved": false
+  },
+  {
+    "name": "runner-extra",
+    "changes": {
+      "/runner_manifest/env": {
+        "DISABLE_TESTS": "true"
+      }
+    },
+    "approved": false
+  },
+  {
+    "name": "float-timeout",
+    "changes": {
+      "/runner_manifest/timeout_seconds": 120.0
+    },
+    "approved": false
+  },
+  {
+    "name": "boolean-seed",
+    "changes": {
+      "/runner_manifest/test_seed": true
+    },
+    "approved": false
+  },
+  {
+    "name": "engine",
+    "changes": {
+      "/engine": "github_ci"
+    },
+    "approved": false
+  },
+  {
+    "name": "missing-command",
+    "changes": {
+      "/runner_manifest/command": null
+    },
+    "approved": false
+  }
+]

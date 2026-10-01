@@ -10,6 +10,9 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
 
+mod regression_profiles;
+pub use regression_profiles::*;
+
 #[derive(Debug, Error)]
 pub enum VerifierError {
     #[error("invalid verifier input: {0}")]
@@ -317,14 +320,14 @@ impl RegressionSandboxExecution {
     fn validate(&self, policy: &RegressionSandboxPolicy) -> VerifierResultType<()> {
         validate_sha256_digest("stdout_sha256", &self.stdout_sha256)?;
         validate_sha256_digest("stderr_sha256", &self.stderr_sha256)?;
-        if !(0..=124).contains(&self.exit_code)
+        if !matches!(self.exit_code, 0 | 1)
             || self
                 .stdout_bytes
                 .checked_add(self.stderr_bytes)
                 .is_none_or(|bytes| bytes > policy.max_output_bytes)
         {
             return Err(VerifierError::Failed(
-                "sandbox reported a runtime-reserved exit or output above the committed limit; no verdict was produced"
+                "sandbox reported an unclassified exit or output above the committed limit; no verdict was produced"
                     .to_string(),
             ));
         }

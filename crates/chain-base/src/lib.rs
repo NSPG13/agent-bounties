@@ -441,16 +441,21 @@ const RECONCILED_REGRESSION_BENCHMARK_DIGESTS: &[&str] = &[
     "sha256:a14e53feada2f49b646d340a494c822ec3112a2a6c468ce1cdb21fd7ee23a3d7",
     "sha256:eed1340e372c85f87f8718696c03973748fb3fbaec7b4e90041d77d3513f9656",
 ];
+#[cfg(test)]
 const RECONCILED_REGRESSION_BENCHMARK_COMMIT: &str = "fa946859a3379b8c9128183e20dedb3b8319a646";
 // Keep the paid-rail canary bound to the independently rehearsed historical tree.
+#[cfg(test)]
 const RECONCILED_GLAMA_CANARY_COMMIT: &str = "0fae18cf9be464132cde52dfb9d464d836e8f024";
+#[cfg(test)]
 const RECONCILED_GLAMA_CANARY_DIGEST: &str =
     "sha256:eed1340e372c85f87f8718696c03973748fb3fbaec7b4e90041d77d3513f9656";
 // This older immutable tuple contains exactly the reviewed OpenHands tree.
 // Keep the alias scoped to that digest/path; it is not approval of the whole commit.
+#[cfg(test)]
 const RECONCILED_OPENHANDS_ORIGINAL_COMMIT: &str = "aa28ec742efd4063260653510ba324e291267515";
 const RECONCILED_OPENHANDS_ORIGINAL_TERMS: &str =
     "0x29c3a5f5be3e506ead7e8cd02fd6c78e823e8d22fe18b3a15d79f53703688dbb";
+#[cfg(test)]
 const RECONCILED_REGRESSION_BENCHMARK_SOURCES: &[(&str, &str)] = &[
     (
         "sha256:b61a96a7d07ca01337ea3576de734f5b62ccab966a6d0da42a8736cfc0287ce6",
@@ -4278,7 +4283,7 @@ fn regression_quorum_readiness(
     if validate_reconciled_regression_benchmark(&terms.document).is_err() {
         return (
             false,
-            "regression benchmark digest and immutable source are not approved",
+            "verification_profile_unapproved: Verification unavailable; exact source and runner profile are not approved",
         );
     }
     // The original funded terms require the snapshot digest but predate the
@@ -5549,6 +5554,12 @@ pub fn sha256_canonical_json(value: &Value) -> Result<String, ChainBaseError> {
     Ok(format!("0x{}", hex::encode(Sha256::digest(bytes))))
 }
 
+pub fn validate_regression_profile(benchmark: &Value) -> Result<(), ChainBaseError> {
+    verifier_sdk::approved_regression_profile(benchmark)
+        .map(|_| ())
+        .map_err(|error| ChainBaseError::InvalidTermsDocument(error.to_string()))
+}
+
 fn validate_reconciled_regression_benchmark(
     document: &AutonomousBountyTermsDocument,
 ) -> Result<(), ChainBaseError> {
@@ -5557,48 +5568,9 @@ fn validate_reconciled_regression_benchmark(
     {
         return Ok(());
     }
-    let benchmark_digest = document
-        .benchmark
-        .get("runner_manifest")
-        .and_then(|runner| runner.get("benchmark_digest"))
-        .and_then(Value::as_str);
-    let approved_subdirectory = benchmark_digest.and_then(|digest| {
-        RECONCILED_REGRESSION_BENCHMARK_SOURCES.iter().find_map(
-            |(approved_digest, subdirectory)| (*approved_digest == digest).then_some(*subdirectory),
-        )
-    });
-    let source = document.benchmark.get("source");
-    let source_matches = approved_subdirectory.is_some_and(|subdirectory| {
-        source
-            .and_then(|value| value.get("kind"))
-            .and_then(Value::as_str)
-            == Some("github_commit")
-            && source
-                .and_then(|value| value.get("repository"))
-                .and_then(Value::as_str)
-                .is_some_and(|repository| repository.eq_ignore_ascii_case("NSPG13/agent-bounties"))
-            && source
-                .and_then(|value| value.get("commit"))
-                .and_then(Value::as_str)
-                .is_some_and(|commit| {
-                    (commit.eq_ignore_ascii_case(RECONCILED_REGRESSION_BENCHMARK_COMMIT)
-                        && benchmark_digest != Some(RECONCILED_GLAMA_CANARY_DIGEST))
-                        || (commit.eq_ignore_ascii_case(RECONCILED_OPENHANDS_ORIGINAL_COMMIT)
-                            && subdirectory == "benchmarks/direct-growth-v2/openhands-integration")
-                        || (commit.eq_ignore_ascii_case(RECONCILED_GLAMA_CANARY_COMMIT)
-                            && benchmark_digest == Some(RECONCILED_GLAMA_CANARY_DIGEST))
-                })
-            && source
-                .and_then(|value| value.get("subdirectory"))
-                .and_then(Value::as_str)
-                == Some(subdirectory)
-    });
-    if !source_matches {
-        return Err(ChainBaseError::InvalidTermsDocument(
-            "sandboxed regression benchmark exact digest and immutable source tuple must be independently reconciled and approved before funding or verifier signing".to_string(),
-        ));
-    }
-    Ok(())
+    verifier_sdk::approved_regression_profile(&document.benchmark)
+        .map(|_| ())
+        .map_err(|error| ChainBaseError::InvalidTermsDocument(error.to_string()))
 }
 
 fn validate_regression_evidence_schema(evidence_schema: &Value) -> Result<(), ChainBaseError> {
@@ -7562,25 +7534,14 @@ mod tests {
                 commit: RECONCILED_REGRESSION_BENCHMARK_COMMIT.to_string(),
                 subdirectory: RECONCILED_REGRESSION_BENCHMARK_SOURCES[0].1.to_string(),
             },
-            runner_manifest: RegressionSandboxPolicy {
-                schema_version: "agent-bounties/regression-sandbox-v1".to_string(),
-                image: format!("docker.io/library/alpine@sha256:{}", "b".repeat(64)),
-                command: vec!["true".to_string()],
-                workdir: "/workspace".to_string(),
-                benchmark_digest: RECONCILED_REGRESSION_BENCHMARK_DIGESTS[0].to_string(),
-                timeout_seconds: 30,
-                cpu_millis: 500,
-                memory_bytes: 128 * 1024 * 1024,
-                pids_limit: 32,
-                max_output_bytes: 64 * 1024,
-                tmpfs_bytes: 64 * 1024 * 1024,
-                max_source_bytes: 1024 * 1024,
-                max_source_files: 100,
-                max_benchmark_bytes: 1024 * 1024,
-                max_benchmark_files: 100,
-                platform: "linux/amd64".to_string(),
-                test_seed: 7,
-            },
+            runner_manifest: serde_json::from_value(
+                verifier_sdk::regression_profile_registry()
+                    .unwrap()
+                    .profiles[0]
+                    .runner_manifest
+                    .clone(),
+            )
+            .unwrap(),
             evidence_schema: None,
             verifier_reward: None,
             funding_deadline: None,
@@ -7704,25 +7665,14 @@ mod tests {
                 commit: RECONCILED_REGRESSION_BENCHMARK_COMMIT.to_string(),
                 subdirectory: RECONCILED_REGRESSION_BENCHMARK_SOURCES[0].1.to_string(),
             },
-            runner_manifest: RegressionSandboxPolicy {
-                schema_version: "agent-bounties/regression-sandbox-v1".to_string(),
-                image: "docker.io/library/alpine:latest".to_string(),
-                command: vec!["true".to_string()],
-                workdir: "/workspace".to_string(),
-                benchmark_digest: format!("sha256:{}", "c".repeat(64)),
-                timeout_seconds: 30,
-                cpu_millis: 500,
-                memory_bytes: 128 * 1024 * 1024,
-                pids_limit: 32,
-                max_output_bytes: 64 * 1024,
-                tmpfs_bytes: 64 * 1024 * 1024,
-                max_source_bytes: 1024 * 1024,
-                max_source_files: 100,
-                max_benchmark_bytes: 1024 * 1024,
-                max_benchmark_files: 100,
-                platform: "linux/amd64".to_string(),
-                test_seed: 7,
-            },
+            runner_manifest: serde_json::from_value(
+                verifier_sdk::regression_profile_registry()
+                    .unwrap()
+                    .profiles[0]
+                    .runner_manifest
+                    .clone(),
+            )
+            .unwrap(),
             evidence_schema: None,
             verifier_reward: None,
             funding_deadline: None,
@@ -7744,13 +7694,20 @@ mod tests {
             funding_deadline: 1_791_676_800,
         };
 
+        request.runner_manifest.image = "docker.io/library/python:latest".to_string();
         assert!(planner
             .plan_standing_meta_v2_child(&request, &parent, created_at)
             .unwrap_err()
             .to_string()
             .contains("runner manifest"));
-        request.runner_manifest.image =
-            format!("docker.io/library/alpine@sha256:{}", "b".repeat(64));
+        request.runner_manifest = serde_json::from_value(
+            verifier_sdk::regression_profile_registry()
+                .unwrap()
+                .profiles[0]
+                .runner_manifest
+                .clone(),
+        )
+        .unwrap();
         request.intended_child_solver = "0x2222222222222222222222222222222222222222".to_string();
         request.benchmark_source.subdirectory = ".".to_string();
         assert!(planner
@@ -8464,27 +8421,29 @@ mod tests {
     }
 
     #[test]
-    fn original_openhands_terms_retain_verifier_readiness_without_weakening_new_funding() {
+    fn original_openhands_terms_remain_readable_while_execution_profile_is_held() {
         let terms: AutonomousBountyTermsRecord = serde_json::from_str(include_str!(
             "../tests/fixtures/legacy-openhands-terms.json"
         ))
         .unwrap();
-        let rebuilt = build_autonomous_bounty_terms_record(
+        assert_eq!(terms.terms_hash, RECONCILED_OPENHANDS_ORIGINAL_TERMS);
+        assert_eq!(
+            keccak256_canonical_json(&serde_json::to_value(&terms.document).unwrap()).unwrap(),
+            terms.terms_hash
+        );
+        assert_eq!(
+            keccak256_canonical_json(&terms.document.benchmark).unwrap(),
+            terms.benchmark_hash
+        );
+        assert!(build_autonomous_bounty_terms_record(
             &terms.creator_wallet,
             terms.document.clone(),
-            terms.created_at,
+            terms.created_at
         )
-        .unwrap();
-        assert_eq!(rebuilt.terms_hash, RECONCILED_OPENHANDS_ORIGINAL_TERMS);
-        assert_eq!(rebuilt.benchmark_hash, terms.benchmark_hash);
-        assert_eq!(rebuilt.evidence_schema_hash, terms.evidence_schema_hash);
+        .is_err());
         let quorum = json!({ "threshold": 1, "verifier_set_hash": BASE_MAINNET_DEFAULT_REGRESSION_VERIFIER_SET_HASH });
-        assert!(regression_quorum_readiness(&quorum, Some(&terms)).0);
-        let create = autonomous_bounty_create_from_terms(&terms).unwrap();
-        assert!(
-            validate_autonomous_creation_for_public_earning("base-mainnet", &create, &terms)
-                .is_err()
-        );
+        assert!(!regression_quorum_readiness(&quorum, Some(&terms)).0);
+        assert!(autonomous_bounty_create_from_terms(&terms).is_err());
         for pointer in [
             "/evidence_schema/required",
             "/title",
@@ -8660,6 +8619,12 @@ mod tests {
                 "test_seed": 1
             }
         });
+        supported_document.benchmark["runner_manifest"] =
+            verifier_sdk::regression_profile_registry()
+                .unwrap()
+                .profiles[0]
+                .runner_manifest
+                .clone();
         supported_document.evidence_schema = json!({
             "type": "object",
             "required": ["source_snapshot_digest"],
@@ -8690,7 +8655,7 @@ mod tests {
                     now
                 ),
                 Err(ChainBaseError::InvalidTermsDocument(message))
-                    if message.contains("immutable source tuple")
+                    if message.contains("verification_profile_unapproved")
             ));
         }
         let mut copied_unreconciled_document = supported_document.clone();
@@ -8729,12 +8694,15 @@ mod tests {
             json!("benchmarks/distribution-v1/glama-onboarding-audit");
         glama_canary_document.benchmark["runner_manifest"]["benchmark_digest"] =
             json!(RECONCILED_GLAMA_CANARY_DIGEST);
-        assert!(build_autonomous_bounty_terms_record(
-            &record.creator_wallet,
-            glama_canary_document.clone(),
-            now,
-        )
-        .is_ok());
+        assert!(
+            build_autonomous_bounty_terms_record(
+                &record.creator_wallet,
+                glama_canary_document.clone(),
+                now,
+            )
+            .is_err(),
+            "unreviewed historical execution settings stay held"
+        );
         for (field, value) in [
             ("commit", json!(RECONCILED_REGRESSION_BENCHMARK_COMMIT)),
             ("subdirectory", json!("benchmarks/copied-location")),
@@ -8744,7 +8712,7 @@ mod tests {
             assert!(matches!(
                 build_autonomous_bounty_terms_record(&record.creator_wallet, altered, now),
                 Err(ChainBaseError::InvalidTermsDocument(message))
-                    if message.contains("immutable source tuple")
+                    if message.contains("verification_profile_unapproved")
             ));
         }
         let supported_record =
@@ -8823,7 +8791,7 @@ mod tests {
                 Some(&legacy_unreconciled_record),
             )
             .1,
-            "regression benchmark digest and immutable source are not approved"
+            "verification_profile_unapproved: Verification unavailable; exact source and runner profile are not approved"
         );
         assert!(matches!(
             validate_autonomous_creation_for_public_earning(
@@ -8845,7 +8813,7 @@ mod tests {
             json!(RECONCILED_REGRESSION_BENCHMARK_SOURCES[2].1);
         original_openhands.document.benchmark["runner_manifest"]["benchmark_digest"] =
             json!(RECONCILED_REGRESSION_BENCHMARK_SOURCES[2].0);
-        assert!(regression_quorum_readiness(&healthy_quorum, Some(&original_openhands)).0);
+        assert!(!regression_quorum_readiness(&healthy_quorum, Some(&original_openhands)).0);
         for (pointer, value) in [
             ("/source/commit", json!("main")),
             ("/source/commit", json!("a".repeat(40))),

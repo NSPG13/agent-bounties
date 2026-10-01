@@ -317,7 +317,10 @@ impl RegressionSandboxExecutor for DockerCliRegressionExecutor {
                 let code = status
                     .code()
                     .ok_or(RegressionSandboxExecutorError::ResourceLimitExceeded)?;
-                if matches!(code, 125..=127) {
+                if !matches!(code, 0 | 1) && code < 128
+                    || stdout.runtime_error
+                    || stderr.runtime_error
+                {
                     return Err(RegressionSandboxExecutorError::FailedClosed);
                 }
                 if code >= 128 {
@@ -340,6 +343,7 @@ impl RegressionSandboxExecutor for DockerCliRegressionExecutor {
 struct StreamDigest {
     digest: String,
     bytes: u64,
+    runtime_error: bool,
 }
 
 async fn hash_stream(
@@ -351,12 +355,23 @@ async fn hash_stream(
     let mut hasher = Sha256::new();
     let mut bytes = 0u64;
     let mut buffer = [0u8; 8 * 1024];
+    let mut tail = Vec::new();
+    let mut runtime_error = false;
     loop {
         let read = stream.read(&mut buffer).await?;
         if read == 0 {
             break;
         }
         hasher.update(&buffer[..read]);
+        // Reviewed Python profiles use SystemExit(1) for failed checks. A traceback
+        // (including nested checker timeouts or missing dependencies) is not a verdict.
+        tail.extend_from_slice(&buffer[..read]);
+        runtime_error |= tail
+            .windows(b"Traceback (most recent call last):".len())
+            .any(|window| window == b"Traceback (most recent call last):");
+        if tail.len() > 64 {
+            tail.drain(..tail.len() - 64);
+        }
         bytes = bytes.saturating_add(read as u64);
         let previous_total = total_bytes.fetch_add(read as u64, Ordering::AcqRel);
         if previous_total
@@ -369,6 +384,7 @@ async fn hash_stream(
     Ok(StreamDigest {
         digest: format!("sha256:{}", hex::encode(hasher.finalize())),
         bytes,
+        runtime_error,
     })
 }
 
@@ -497,6 +513,7 @@ pub fn prepare_regression_run(
     )
     .context("benchmark runner_manifest is invalid")?;
     policy.validate()?;
+    verifier_sdk::approved_regression_profile(&job.terms.document.benchmark)?;
     let source_digest = evidence
         .evidence
         .get("source_snapshot_digest")
@@ -992,6 +1009,29 @@ mod tests {
     use domain::{AutonomousBountyTermsDocument, AutonomousSubmissionEvidenceRecord};
     use serde_json::json;
 
+    #[tokio::test]
+    async fn checker_runtime_failures_are_detected_without_retaining_output() {
+        let stream = &b"Traceback (most recent call last):\nModuleNotFoundError"[..];
+        let result = hash_stream(
+            stream,
+            1024,
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
+        .unwrap();
+        assert!(result.runtime_error);
+        let result = hash_stream(
+            &b"missing required file: report.json"[..],
+            1024,
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
+        .unwrap();
+        assert!(!result.runtime_error);
+    }
+
     #[test]
     fn directory_snapshot_is_stable_and_content_addressed() {
         let root = temp_directory("snapshot");
@@ -1114,6 +1154,22 @@ mod tests {
     }
 
     #[test]
+    fn well_formed_legacy_commitment_cannot_approve_a_substituted_command() {
+        let mut job = verification_job();
+        job.terms.document.benchmark["runner_manifest"]["command"] = json!(["true"]);
+        // Model an authentic old commitment, not a corrupt hash. Reading it is valid;
+        // platform approval of its no-op command is not.
+        job.terms.terms_hash =
+            keccak256_canonical_json(&serde_json::to_value(&job.terms.document).unwrap()).unwrap();
+        job.terms.benchmark_hash = keccak256_canonical_json(&job.terms.document.benchmark).unwrap();
+        validate_terms_hashes(&job).unwrap();
+        let error = prepare_regression_run(job, 1_800_000_000, Path::new(".")).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("verification_profile_unapproved"));
+    }
+
+    #[test]
     fn autonomous_job_adapter_rejects_weak_or_wrong_verification_policy() {
         let staging = temp_directory("policy-adapter");
         let mut threshold_zero = verification_job();
@@ -1192,10 +1248,12 @@ mod tests {
             100,
         )
         .unwrap();
-        let observed = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
+        let mut task = prepare_regression_run(verification_job(), 1_800_000_000, &staging)
             .unwrap()
-            .as_secs();
+            .task;
+        task.source_digest = good.snapshot.digest.clone();
+        let executor =
+            || DockerCliRegressionExecutor::new("docker", &good.path, &benchmark.path).unwrap();
         let mut policy = regression_policy(&benchmark.snapshot.digest);
         policy.image = pinned_alpine_image();
         policy.command = vec![
@@ -1204,24 +1262,23 @@ mod tests {
             "/benchmark/expected.txt".to_string(),
         ];
 
-        let passed = run_regression_sandbox_request(
-            RegressionSandboxRunRequest {
-                job: verification_job_with(observed, &good.snapshot.digest, policy.clone()),
-            },
-            &staging,
-            "docker",
-        )
+        let passed = SandboxedRegressionVerifier {
+            executor: executor(),
+            policy: policy.clone(),
+        }
+        .verify(task.clone())
         .await
         .unwrap();
         assert_eq!(passed.verdict, verifier_sdk::RegressionVerdict::Passed);
 
-        let failed = run_regression_sandbox_request(
-            RegressionSandboxRunRequest {
-                job: verification_job_with(observed, &bad.snapshot.digest, policy.clone()),
-            },
-            &staging,
-            "docker",
-        )
+        let mut bad_task = task.clone();
+        bad_task.source_digest = bad.snapshot.digest.clone();
+        let failed = SandboxedRegressionVerifier {
+            executor: DockerCliRegressionExecutor::new("docker", &bad.path, &benchmark.path)
+                .unwrap(),
+            policy: policy.clone(),
+        }
+        .verify(bad_task)
         .await
         .unwrap();
         assert_eq!(failed.verdict, verifier_sdk::RegressionVerdict::Failed);
@@ -1229,13 +1286,11 @@ mod tests {
         let mut timeout_policy = policy.clone();
         timeout_policy.command = vec!["sleep".to_string(), "2".to_string()];
         timeout_policy.timeout_seconds = 1;
-        let timeout_error = run_regression_sandbox_request(
-            RegressionSandboxRunRequest {
-                job: verification_job_with(observed, &good.snapshot.digest, timeout_policy),
-            },
-            &staging,
-            "docker",
-        )
+        let timeout_error = SandboxedRegressionVerifier {
+            executor: executor(),
+            policy: timeout_policy,
+        }
+        .verify(task.clone())
         .await
         .unwrap_err();
         assert!(format!("{timeout_error:#}").contains("no verdict"));
@@ -1243,13 +1298,11 @@ mod tests {
         let mut output_policy = policy;
         output_policy.command = vec!["yes".to_string()];
         output_policy.max_output_bytes = 1_024;
-        let output_error = run_regression_sandbox_request(
-            RegressionSandboxRunRequest {
-                job: verification_job_with(observed, &good.snapshot.digest, output_policy),
-            },
-            &staging,
-            "docker",
-        )
+        let output_error = SandboxedRegressionVerifier {
+            executor: executor(),
+            policy: output_policy,
+        }
+        .verify(task.clone())
         .await
         .unwrap_err();
         assert!(format!("{output_error:#}").contains("no verdict"));
@@ -1282,7 +1335,14 @@ mod tests {
         verification_job_with(
             1_800_000_000,
             &source_digest(),
-            regression_policy(&benchmark_digest()),
+            serde_json::from_value(
+                verifier_sdk::regression_profile_registry()
+                    .unwrap()
+                    .profiles[0]
+                    .runner_manifest
+                    .clone(),
+            )
+            .unwrap(),
         )
     }
 
@@ -1404,10 +1464,6 @@ mod tests {
 
     fn source_digest() -> String {
         format!("sha256:{}", "c".repeat(64))
-    }
-
-    fn benchmark_digest() -> String {
-        "sha256:b61a96a7d07ca01337ea3576de734f5b62ccab966a6d0da42a8736cfc0287ce6".to_string()
     }
 
     fn pinned_alpine_image() -> String {

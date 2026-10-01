@@ -1,3 +1,4 @@
+pub mod verifier_readiness;
 use anyhow::Context;
 use app::{
     stripe_secret_key_mode_from_secret, AddFundingContributionRequest, AppResult,
