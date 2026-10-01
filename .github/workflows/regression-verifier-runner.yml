@@ -3,6 +3,9 @@ name: Regression Verifier Runner
 on:
   pull_request:
     paths:
+      - "scripts/verifier_release_provenance.py"
+      - "scripts/test_verifier_release_provenance.py"
+      - ".github/verifier-releases/**"
       - "scripts/verifier_release.py"
       - "scripts/test_verifier_release.py"
       - "scripts/gas_sponsorship_budget.py"
@@ -49,6 +52,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.88.0
       - uses: Swatinem/rust-cache@v2
       - run: |
+          python -m unittest scripts.test_verifier_release_provenance -v
           python scripts/test_regression_verifier_pipeline.py -v
           python scripts/test_regression_verifier_source_guard.py -v
           python -m py_compile scripts/regression_verifier_pipeline.py
@@ -63,9 +67,22 @@ jobs:
       VERIFIER_ONE: ${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}
       VERIFIER_TWO: ${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}
     steps:
+      # Only protected workflow code may decide which release code can run.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
-          ref: ${{ fromJSON(vars.REGRESSION_VERIFIER_RELEASE_JSON).source_revision }}
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: provenance
+        name: Authorize protected release before selected source or credentials
+        env:
+          REGRESSION_VERIFIER_RELEASE_JSON: ${{ vars.REGRESSION_VERIFIER_RELEASE_JSON }}
+          EXPECTED_RELEASE_REVISION: ""
+        run: python3 -I scripts/verifier_release_provenance.py
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+        with:
+          ref: ${{ steps.provenance.outputs.revision }}
+          persist-credentials: false
       - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
