@@ -15,11 +15,11 @@ from eth_utils import keccak
 from hexbytes import HexBytes
 
 ROOT = Path(__file__).resolve().parents[1]
-CALL_FILE = ROOT / 'ops/posting-approved-mainnet-call-20261001.json'
-CALL_SHA = 'ef19d8f52a35c9d51b7b68f9cbd466da89fc0ff3fb14353e4f6a02ce389e56e2'
-REVIEW_SHA = '7bd435d087309d9208fc9c529d279072ac821d995e2d52b1bdc12b58c2bc9dc8'
+CALL_FILE = ROOT / 'ops/posting-platform-mainnet-call-20261001.json'
+CALL_SHA = '8d9549148b65750bcdcaf7b4cb73de69def49d90468279a3eefc2d5a44b351e0'
+REVIEW_SHA = '924cbb8db12c05954a974d27aef31e0aa6bdac7beac31c39c3ceed92dd6a03d7'
 REVISION = 'e6bd24bac27c8fb5e77fad3fe91fdb3283d4288e'
-SENDER = '0x884834e884d6e93462655a2820140ad03e6747bc'
+SENDER = '0xc26a630e85134ed30968735c8e7de4576cfa5dbc'
 TARGET = '0x4e59b44847b379578588920ca78fbf26c0b4956c'
 RPC = 'https://mainnet.base.org'
 API = 'https://api.agentbounties.app'
@@ -85,7 +85,7 @@ def reviewed_call():
     bundle = json.loads(raw)
     action = bundle['unsigned_action']
     require(bundle['approved_review_sha256'] == REVIEW_SHA and bundle['chain_id'] == 8453
-            and bundle['expected_nonce'] == 82 and action['from'] == SENDER and action['to'] == TARGET
+            and bundle['expected_nonce'] == 153 and action['from'] == SENDER and action['to'] == TARGET
             and action['value_wei'] == '0' and action['gas_limit'] == 4_233_944
             and bundle['maximum_reservation_micro_usdc'] == 200_000, 'Approved scope changed')
     return bundle, action
@@ -150,7 +150,7 @@ def validate_record(record, action):
     require(digest(raw) == record['hash'] and Account.recover_transaction(raw).lower() == SENDER,
             'Saved signature differs')
     tx = TypedTransaction.from_bytes(raw).as_dict()
-    require(tx['chainId'] == 8453 and tx['nonce'] == 82 and tx['value'] == 0 and
+    require(tx['chainId'] == 8453 and tx['nonce'] == 153 and tx['value'] == 0 and
             tx['gas'] == action['gas_limit'] and tx['type'] == 2 and not tx['accessList'] and
             bytes(tx['to']).hex() == TARGET[2:] and bytes(tx['data']).hex() == action['data'][2:] and
             tx['maxFeePerGas'] == record['fee_cap'] and tx['maxPriorityFeePerGas'] == record['priority'] and
@@ -169,7 +169,7 @@ def prepare():
     head = fresh_head()
     dependencies(bundle, action, head)
     for kind in ('latest', 'pending'):
-        require(int(rpc('eth_getTransactionCount', [SENDER, kind]), 16) == 82, 'Sender nonce changed')
+        require(int(rpc('eth_getTransactionCount', [SENDER, kind]), 16) == 153, 'Sender nonce changed')
     call = {'from': SENDER, 'to': TARGET, 'data': action['data'], 'value': '0x0'}
     rpc('eth_call', [call, 'latest'])
     require(int(rpc('eth_estimateGas', [call]), 16) <= action['gas_limit'], 'Gas estimate exceeds approval')
@@ -182,7 +182,7 @@ def prepare():
     require(int(rpc('eth_getBalance', [SENDER, 'latest']), 16) >= maximum, 'Deployer balance too low')
     before = budget()
     require(before['remaining_micro_usdc'] >= 200_000, 'Insufficient shared daily capacity')
-    tx = {'chainId': 8453, 'nonce': 82, 'to': HexBytes(TARGET), 'data': action['data'],
+    tx = {'chainId': 8453, 'nonce': 153, 'to': HexBytes(TARGET), 'data': action['data'],
           'value': 0, 'gas': action['gas_limit'], 'type': 2, 'accessList': [],
           'maxFeePerGas': fee, 'maxPriorityFeePerGas': priority}
     scope = {**tx, 'to': TARGET}
@@ -197,7 +197,7 @@ def prepare():
                         os.environ['GAS_SPONSOR_BUDGET_TOKEN'])
     journal['reservation'] = ticket
     save(journal)
-    require(ticket.get('reserved') is True and ticket.get('sender_nonce') == 82 and
+    require(ticket.get('reserved') is True and ticket.get('sender_nonce') == 153 and
             all(ticket.get(k) == v for k, v in intent.items()) and ticket.get('shared_signer_lease') is True and
             ticket.get('carries_forward') is False and ticket.get('daily_limit_micro_usdc') == 1_000_000 and
             ticket.get('transaction_submitted') is False and
@@ -255,7 +255,7 @@ def broadcast():
         return
     require(not journal['broadcast_attempted'], 'Unknown prior send; reconcile without retry')
     head = fresh_head()
-    require(int(rpc('eth_getTransactionCount', [SENDER, 'pending']), 16) == 82, 'Reserved nonce changed')
+    require(int(rpc('eth_getTransactionCount', [SENDER, 'pending']), 16) == 153, 'Reserved nonce changed')
     execution = action['gas_limit'] * journal['record']['fee_cap']
     fresh_total = execution + (fee_bound(action, journal['record']['fee_cap'], head) - execution) // 2
     require(fresh_total <= journal['record']['reserved_wei']

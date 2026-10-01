@@ -62,7 +62,7 @@ jobs:
         env:
           BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
           GAS_SPONSOR_BUDGET_TOKEN: ${{ secrets.GAS_SPONSOR_BUDGET_TOKEN }}
-          POSTING_APPROVED_REVIEW_SHA256: 7bd435d087309d9208fc9c529d279072ac821d995e2d52b1bdc12b58c2bc9dc8
+          POSTING_APPROVED_REVIEW_SHA256: 924cbb8db12c05954a974d27aef31e0aa6bdac7beac31c39c3ceed92dd6a03d7
         run: python3 scripts/posting_approved_mainnet.py prepare
       - uses: actions/upload-artifact@v4
         id: durable

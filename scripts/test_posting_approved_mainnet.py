@@ -15,7 +15,7 @@ class ApprovedMainnetTests(unittest.TestCase):
         self.fixture = Account.from_key('0x' + '01' * 32)
 
     def record(self, **changes):
-        tx = {'chainId': 8453, 'nonce': 82, 'value': 0, 'gas': 4233944,
+        tx = {'chainId': 8453, 'nonce': 153, 'value': 0, 'gas': 4233944,
               'type': 2, 'accessList': [], 'maxFeePerGas': 2_000_000,
               'maxPriorityFeePerGas': 1_000_000,
               'to': HexBytes(mainnet.TARGET), 'data': self.action['data']}
@@ -36,7 +36,7 @@ class ApprovedMainnetTests(unittest.TestCase):
     def test_signed_scope_changes_fail_closed(self):
         with patch.object(mainnet.Account, 'recover_transaction', return_value=mainnet.SENDER):
             mainnet.validate_record(self.record(), self.action)
-            for mutation in ({'chainId': 84532}, {'nonce': 83}, {'value': 1}, {'gas': 4233945},
+            for mutation in ({'chainId': 84532}, {'nonce': 154}, {'value': 1}, {'gas': 4233945},
                              {'data': '0xabcd'}, {'to': HexBytes('0x' + '12' * 20)},
                              {'maxFeePerGas': 3_000_000}, {'maxPriorityFeePerGas': 2_000_000}):
                 with self.subTest(mutation=mutation), self.assertRaisesRegex(RuntimeError, 'scope'):
