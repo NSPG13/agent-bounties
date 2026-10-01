@@ -12,6 +12,7 @@ BRANCH = 'codex/posting-production-cutover-20261001'
 PRIVATE_BRANCH = 'codex/posting-private-full-coverage-20260929'
 PRIVATE_REVISION = 'e6bd24bac27c8fb5e77fad3fe91fdb3283d4288e'
 SPENDER_REVISION = '6786110f4ea241c08f8d8b51eb2e039e87aa5d98'
+ACTIVE_REVISION = 'dab255f22ae7c2436f44715a4be3dc85fb20872f'
 CANARY_MCP = 'srv-dau3p1favr4c73fij9jg'
 WORKSPACE = 'tea-d4tk87f5r7bs73au55lg'
 PUBLIC_REPO = 'https://github.com/NSPG13/agent-bounties'
@@ -166,7 +167,7 @@ def run(phase):
             os.environ.get('GITHUB_REF') == 'refs/heads/' + BRANCH and
             os.environ.get('GITHUB_EVENT_NAME') == 'workflow_dispatch',
             'Only attended dispatch on the exact control branch is permitted')
-    require(phase in ('inventory', 'pause-and-api', 'workers', 'mainnet-preflight', 'resume-probe', 'hold-spenders', 'upgrade-held-spenders', 'upgrade-runtime'), 'Unknown cutover phase')
+    require(phase in ('inventory', 'pause-and-api', 'workers', 'mainnet-preflight', 'resume-probe', 'hold-spenders', 'upgrade-held-spenders', 'upgrade-runtime', 'activate-posting', 'resume-budgeted-workers'), 'Unknown cutover phase')
     require(len(os.environ.get('GAS_SPONSOR_BUDGET_TOKEN', '')) >= 32,
             'Dedicated reservation credential missing')
     output = Path('posting-cutover-evidence.json')
@@ -238,6 +239,39 @@ def run(phase):
                 for role in ('keeper', 'broker'):
                     api('render', '/services/' + SERVICES[role] + '/suspend', 'POST')
                 raise
+        return
+    if phase in ('activate-posting', 'resume-budgeted-workers'):
+        require(all(item['state'] == 'disabled_manually' for item in evidence['workflows'].values()),
+                'Spending workflows must remain paused during service activation')
+        for role in SERVICES:
+            expected = ACTIVE_REVISION if phase == 'resume-budgeted-workers' and role in ('api', 'mcp') else SPENDER_REVISION
+            require(any(d['status'] == 'live' and d['commit'] == expected
+                        for d in evidence['services'][role]['deploys']), 'Reviewed runtime must be live: ' + role)
+        for role in ('keeper', 'broker'):
+            setting = api('render', '/services/' + SERVICES[role] + '/env-vars/POSTING_SENDS_PAUSED')
+            require(setting.get('value', setting.get('envVar', {}).get('value')) == 'true',
+                    'Worker must remain paused until the reviewed handoff')
+        evidence['started_deploys'] = {}
+        if phase == 'activate-posting':
+            for role in ('api', 'mcp'):
+                for key, value in {
+                    'ENABLE_BASE_TX_BROADCAST': 'false', 'ENABLE_X402_HOSTED_RELAY': 'true',
+                    'ENABLE_SPONSORED_BOUNTY_CREATION': 'true', 'ENABLE_SPONSORED_SETUP': 'true',
+                    'ENABLE_CREATOR_OPEN_SPONSORSHIP': 'true', 'VERIFIER_EMAIL_ENABLED': 'false',
+                }.items():
+                    set_env(role, key, value)
+                evidence['started_deploys'][role] = deploy(role, ACTIVE_REVISION)
+                output.write_text(json.dumps(evidence, indent=2) + '\n')
+        else:
+            # Existing paid services only. Both binaries attach the same Postgres
+            # budget before their keeper/broker is constructed; no principal top-up.
+            for role, protocol in [('keeper', 'open-competition-v2-keeper'),
+                                   ('broker', 'open-competition-v2-broker')]:
+                set_env(role, 'BASE_INDEXER_PROTOCOL', protocol)
+                set_env(role, 'POSTING_SENDS_PAUSED', 'false')
+                evidence['started_deploys'][role] = deploy(role, SPENDER_REVISION)
+                output.write_text(json.dumps(evidence, indent=2) + '\n')
+        print(json.dumps({'started_deploys': evidence['started_deploys']}), flush=True)
         return
     if phase == 'upgrade-runtime':
         require(all(item['state'] == 'disabled_manually' for item in evidence['workflows'].values()),
