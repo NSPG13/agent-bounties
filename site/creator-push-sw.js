@@ -20,11 +20,16 @@ function destination(value){
 self.addEventListener("push",event=>{
   let data;try{data=event.data?.json();}catch{return;}
   const url=destination(data?.url);
-  if(data?.schema!=="agent-bounties/creator-push-v1"||!url||!/^[0-9a-f-]{36}$/i.test(data.id||"")||!["claim","submission","creator_open_submission"].includes(data.kind))return;
+  if(!["agent-bounties/creator-push-v1","agent-bounties/creator-push-v2"].includes(data?.schema)||!url||!/^[0-9a-f-]{36}$/i.test(data.id||"")||!["claim","submission","creator_open_submission"].includes(data.kind))return;
   if((data.kind==="creator_open_submission")!==(new URL(url).pathname==="/creator-open.html"))return;
-  const title=data.kind==="claim"?"Work has started on your bounty":"A solution is ready for your review";
+  const stage=data.stage??"initial";
+  if(!["initial","remaining_24h","remaining_6h","remaining_1h","overdue"].includes(stage)||(data.kind==="claim"&&stage!=="initial"))return;
+  if((data.schema==="agent-bounties/creator-push-v1")!==(stage==="initial"))return;
+  if(stage!=="initial"&&(!Number.isSafeInteger(data.expires_at)||data.expires_at*1000<=Date.now()))return;
+  const title=stage==="overdue"?"A review deadline was missed":stage!=="initial"?"Your review deadline is approaching":data.kind==="claim"?"Work has started on your bounty":"A solution is ready for your review";
   const deadline=typeof data.deadline==="string"&&/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC$/.test(data.deadline)?data.deadline:null;
-  const body=deadline?`${data.kind==="claim"?"Claim expires":"Review by"} ${deadline}. Open the site for current status.`:"Open Agent Bounties to check the latest work and deadline.";
+  if(stage!=="initial"&&!deadline)return;
+  const body=stage==="overdue"?`Review deadline passed: ${deadline}. Open the site for current status and recovery steps.`:deadline?`${data.kind==="claim"?"Claim expires":"Review by"} ${deadline}. Open the site for current status.`:"Open Agent Bounties to check the latest work and deadline.";
   event.waitUntil(self.registration.showNotification(title,{body,tag:`ab-${data.id}`,renotify:false,data:{url}}));
 });
 self.addEventListener("notificationclick",event=>{

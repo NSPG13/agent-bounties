@@ -43,6 +43,17 @@ function fixture(){
   events.push({data:{json:()=>creator},waitUntil:p=>pending=p});await pending;assert.equal(notifications.length,2);
   events.notificationclick({notification:{close:()=>{},data:notifications[1][1].data},waitUntil:p=>pending=p});await pending;assert.match(opened[1],/creator-open.html\?network=base-mainnet&bounty=0x[0-9a-f]{40}&entry=3$/);
   for(const invalid of [{...creator,kind:"claim"},{...creator,url:creator.url.replace("entry=3","entry=-1")},{...creator,url:creator.url.replace("base-mainnet","base-sepolia")}])events.push({data:{json:()=>invalid},waitUntil:()=>{throw Error("invalid creator notification");}});
+  for(const stage of ["remaining_24h","remaining_6h","remaining_1h","overdue"]){
+    for(const source of [data,creator]){
+      events.push({data:{json:()=>({...source,schema:"agent-bounties/creator-push-v2",stage,expires_at:Math.floor(Date.now()/1000)+60})},waitUntil:p=>pending=p});await pending;
+      const latest=notifications.at(-1);
+      assert.equal(latest[0],stage==="overdue"?"A review deadline was missed":"Your review deadline is approaching");
+      if(stage==="overdue"){assert.match(latest[1].body,/deadline passed/);assert.doesNotMatch(latest[1].body,/Review by/);}
+    }
+  }
+  for(const invalid of [{...data,stage:"invented"},{...data,stage:"overdue",deadline:null},{...data,stage:"remaining_1h",kind:"claim"}])events.push({data:{json:()=>invalid},waitUntil:()=>{throw Error("invalid deadline notification");}});
+  const reminder={...data,schema:"agent-bounties/creator-push-v2",stage:"remaining_1h",expires_at:Math.floor(Date.now()/1000)+60};
+  for(const invalid of [{...reminder,expires_at:Math.floor(Date.now()/1000)-1},{...reminder,expires_at:null},{...reminder,schema:"agent-bounties/creator-push-v1"},{...reminder,stage:"initial"}])events.push({data:{json:()=>invalid},waitUntil:()=>{throw Error("expired or mismatched deadline notification");}});
   const calendar=require("../site/review-deadline.js"),deadline=Math.floor(Date.now()/1000)+3600;
   const ics=calendar.calendar({protocol:"creator-open-v1",network:"base-sepolia",bounty_contract:"0x"+"11".repeat(20),round:3,verification_expires_at:deadline}).replace(/\r\n /g,"");
   assert.match(ics,/creator-open.html\?network=base-sepolia&bounty=0x[0-9a-f]{40}&entry=3/);assert.match(ics,/UID:creator-open-v1-base-sepolia-/);
