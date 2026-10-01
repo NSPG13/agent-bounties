@@ -37,6 +37,12 @@ WORKFLOWS = (
     'leaderboard-reward-runner.yml', 'regression-verifier-runner.yml',
     'synthetic-paid-loop-canary.yml',
 )
+PUBLIC_RESTORATION_REVISION = 'd1ca9a3f30091a0dceb92e438026dc9b52fa0eb7'
+HELD_WORKFLOWS = frozenset({
+    'regression-verifier-runner.yml', 'regression-verifier-signer.yml',
+    'regression-verifier-signing-reusable.yml', 'synthetic-paid-loop-canary.yml',
+    'activate-routed-v3-replacements.yml',
+})
 FLAGS_OFF = {
     'ENABLE_BASE_TX_BROADCAST': 'false', 'ENABLE_X402_HOSTED_RELAY': 'false',
     'ENABLE_SPONSORED_BOUNTY_CREATION': 'false', 'ENABLE_SPONSORED_SETUP': 'false',
@@ -162,12 +168,43 @@ def deploy(role, revision=PRIVATE_REVISION):
     return {'id': value['id'], 'status': value['status'], 'commit': revision}
 
 
+
+def restore_workflows(evidence):
+    require(api('github', '/git/ref/heads/main')['object']['sha'] == PUBLIC_RESTORATION_REVISION,
+            'Public main changed from the reviewed budget and containment release')
+    require(all(item['state'] == 'disabled_manually' and not item['active_runs']
+                for item in evidence['workflows'].values()), 'Workflows must start paused')
+    for role in SERVICES:
+        expected = ACTIVE_REVISION if role in ('api', 'mcp') else SPENDER_REVISION
+        live = [d for d in evidence['services'][role]['deploys'] if d['status'] == 'live']
+        require(len(live) == 1 and live[0]['commit'] == expected,
+                'Exact reviewed runtime must be live: ' + role)
+    for role in ('keeper', 'broker'):
+        setting = api('render', '/services/' + SERVICES[role] + '/env-vars/POSTING_SENDS_PAUSED')
+        require(setting.get('value', setting.get('envVar', {}).get('value')) == 'false',
+                'Budgeted worker has not resumed')
+    evidence['restored_workflows'] = {}
+    for workflow in WORKFLOWS:
+        if workflow not in HELD_WORKFLOWS:
+            api('github', '/actions/workflows/' + workflow + '/enable', 'PUT')
+        state = api('github', '/actions/workflows/' + workflow)['state']
+        require(state == ('disabled_manually' if workflow in HELD_WORKFLOWS else 'active'),
+                'Workflow state differs: ' + workflow)
+        evidence['restored_workflows'][workflow] = state
+    # This last mutation closes the attended deployment window. Existing
+    # environment/approval gates remain unchanged; no workflow is dispatched.
+    api('github', '/actions/workflows/render-deploy-recovery.yml/disable', 'PUT')
+    require(api('github', '/actions/workflows/render-deploy-recovery.yml')['state'] == 'disabled_manually',
+            'Attended controller did not return to its disabled state')
+    evidence['controller_state'] = 'disabled_manually'
+
+
 def run(phase):
     require(os.environ.get('GITHUB_REPOSITORY') == 'NSPG13/agent-bounties' and
             os.environ.get('GITHUB_REF') == 'refs/heads/' + BRANCH and
             os.environ.get('GITHUB_EVENT_NAME') == 'workflow_dispatch',
             'Only attended dispatch on the exact control branch is permitted')
-    require(phase in ('inventory', 'pause-and-api', 'workers', 'mainnet-preflight', 'resume-probe', 'hold-spenders', 'upgrade-held-spenders', 'upgrade-runtime', 'activate-posting', 'resume-budgeted-workers'), 'Unknown cutover phase')
+    require(phase in ('inventory', 'pause-and-api', 'workers', 'mainnet-preflight', 'resume-probe', 'hold-spenders', 'upgrade-held-spenders', 'upgrade-runtime', 'activate-posting', 'resume-budgeted-workers', 'restore-workflows'), 'Unknown cutover phase')
     require(len(os.environ.get('GAS_SPONSOR_BUDGET_TOKEN', '')) >= 32,
             'Dedicated reservation credential missing')
     output = Path('posting-cutover-evidence.json')
@@ -178,6 +215,12 @@ def run(phase):
         return
     require(all(not item['active_runs'] for item in evidence['workflows'].values()),
             'A spending workflow still has an active run')
+    if phase == 'restore-workflows':
+        restore_workflows(evidence)
+        output.write_text(json.dumps(evidence, indent=2) + '\n')
+        print(json.dumps({'restored_workflows': evidence['restored_workflows'],
+                          'controller_state': evidence['controller_state']}), flush=True)
+        return
     if phase == 'resume-probe':
         value = api('render', '/services/' + CANARY_MCP)
         require(value['ownerId'] == WORKSPACE and value['name'] == 'agent-bounties-posting-mcp-canary'
