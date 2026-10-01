@@ -42,7 +42,9 @@
     async function reconcileCleanup(owner){
       for(const device of cleanupQueue().filter(v=>v.account===owner)){
         if(account!==owner)return;
-        await bounded(request({action:"unsubscribe",id:device.id}));
+        // A timed-out cleanup request can still reach the server. Keep it in the
+        // setup barrier until it settles so it cannot revoke a later renewal.
+        await bounded(request({action:"unsubscribe",id:device.id}),()=>{});
         win.localStorage.setItem(CLEANUP,JSON.stringify(cleanupQueue().filter(v=>v.account!==owner||v.id!==device.id)));
         const local=saved();if(local?.account===owner&&local.id===device.id)win.localStorage.removeItem(STORAGE);
       }
@@ -97,7 +99,7 @@
         if(result.subscribed!==true||typeof result.id!=="string"||!/^[0-9a-f-]{36}$/i.test(result.id))throw new Error("Notification settings could not be confirmed.");
         win.localStorage.setItem(STORAGE,JSON.stringify({id:result.id,account:owner}));notify("Browser notifications are enabled for this device.");return true;
       }catch(error){
-        if(subscription)await bounded(subscription.unsubscribe()).catch(()=>{});
+        if(subscription)await bounded(subscription.unsubscribe(),()=>{}).catch(()=>{});
         queueCleanup(owner,serverDeviceId);
         if(account===owner)await reconcileCleanup(owner).catch(()=>{});
         if(current===version)notify(error.message);return false;
