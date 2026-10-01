@@ -4159,6 +4159,7 @@ dependencies = [
  "domain",
  "eval-harness",
  "ledger",
+ "serde_json",
  "uuid",
 ]
 

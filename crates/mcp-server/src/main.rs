@@ -5757,6 +5757,7 @@ async fn indexed_autonomous_bounty(
         .map_err(|error| error.to_string())?;
     let mut feed =
         build_autonomous_bounty_feed(events, terms, false).map_err(|error| error.to_string())?;
+    service_runtime::verifier_readiness::apply(&mut feed);
     state.recovery_reservations.apply(&mut feed, false);
     feed.into_iter()
         .find(|item| item.bounty_contract.eq_ignore_ascii_case(bounty_contract))
@@ -5869,6 +5870,7 @@ async fn require_autonomous_creation_terms(
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "published autonomous bounty terms are unavailable".to_string())?;
+    service_runtime::verifier_readiness::require_available(&terms).map_err(str::to_owned)?;
     validate_autonomous_creation_for_public_earning(network, create, &terms)
         .map_err(|error| error.to_string())
 }
@@ -7314,6 +7316,7 @@ async fn list_autonomous_bounties(
         Ok(feed) => feed,
         Err(error) => return mcp_error(error),
     };
+    service_runtime::verifier_readiness::apply(&mut feed);
     state
         .recovery_reservations
         .apply(&mut feed, args.claimable_only.unwrap_or(false));
@@ -9315,6 +9318,7 @@ async fn load_objective_canonical_evidence(
             .map_err(|error| error.to_string())?;
         let mut feed = build_autonomous_bounty_feed(events, terms.clone(), false)
             .map_err(|error| error.to_string())?;
+        service_runtime::verifier_readiness::apply(&mut feed);
         state.recovery_reservations.apply(&mut feed, false);
         state
             .recovery_reservations

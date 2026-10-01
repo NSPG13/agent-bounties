@@ -94,6 +94,9 @@ def compile_python(platform: str) -> None:
         "scripts/test_direct_flagship_verifier_watchdog.py",
         "scripts/rehearse_immutable_watchdog.py",
         "scripts/regression_verifier_source_guard.py",
+        "scripts/regression_profiles.py",
+        "scripts/test_regression_profiles.py",
+        "scripts/regression_verifier_pipeline.py", "scripts/test_regression_verifier_pipeline.py",
         "scripts/test_regression_verifier_source_guard.py",
         "benchmarks/direct-flagship-v1/verifier-settlement-watchdog/check.py",
         "benchmarks/direct-flagship-v1/verifier-settlement-watchdog/rehearse.py",
@@ -159,6 +162,8 @@ scripts/activate_direct_growth_v2.py scripts/test_activate_direct_growth_v2.py
 scripts/test_activate_direct_inventory_v1.py
 scripts/test_direct_flagship_verifier_watchdog.py
 scripts/regression_verifier_source_guard.py scripts/test_regression_verifier_source_guard.py
+scripts/regression_profiles.py scripts/test_regression_profiles.py
+scripts/regression_verifier_pipeline.py scripts/test_regression_verifier_pipeline.py
 benchmarks/direct-flagship-v1/verifier-settlement-watchdog/check.py
 benchmarks/direct-flagship-v1/verifier-settlement-watchdog/rehearse.py
 scripts/direct_recovery_689.py scripts/test_direct_recovery_689.py
@@ -277,6 +282,7 @@ def main() -> int:
         "scripts.test_activate_direct_inventory_v1",
         "scripts.test_direct_flagship_verifier_watchdog",
         "scripts.test_regression_verifier_source_guard",
+        "scripts.test_regression_profiles", "scripts.test_regression_verifier_pipeline",
         "-v",
     )
     py("scripts/rehearse_immutable_watchdog.py")
