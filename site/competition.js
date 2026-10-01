@@ -43,7 +43,7 @@
   function participationClosed(item) {
     return ["settled", "cancelled", "expired", "refunded"].includes(item?.source_status)
       || item?.work_state === "completed" || item?.payment_state === "paid"
-      || item?.evidence_requirements?.timeline?.proof_window_open === false;
+      || (item?.source_status === "active" && item?.evidence_requirements?.timeline?.proof_window_open === false);
   }
   function childWorkOpen(item) {
     return item?.verification_ready === true && !participationClosed(item)

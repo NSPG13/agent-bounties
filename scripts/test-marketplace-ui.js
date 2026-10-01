@@ -328,3 +328,15 @@ test("closed scoring preserves valid historical proof steps but never requests n
   assert.equal(competition.childPostUrl(item), null);
   assert.doesNotMatch(competition.childTemplate(item), /Fully fund/);
 });
+
+test("a proof window that has not opened does not label funding as completed", () => {
+  const item = v2Opportunity({ source_status: "funding", work_state: "open", payment_state: "seeking_funding", verification_ready: false });
+  item.evidence_requirements.timeline = { proof_window_open: false, refund_available: false };
+  const manifest = competition.participationManifest(item, marketplace.timingState(item));
+  assert.equal(manifest.phase, "blocked");
+  assert.equal(manifest.current_next_action.action, "wait_for_verification");
+  assert.doesNotMatch(manifest.current_next_action.instructions, /competition is closed|refund/);
+  assert.doesNotMatch(competition.childTemplate(item), /competition is closed|refund/);
+  assert.equal(manifest.hosted_proof_quote, null);
+  assert.deepEqual(manifest.browser_workflow, {});
+});
