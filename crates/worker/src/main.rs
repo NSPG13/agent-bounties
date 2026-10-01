@@ -27,6 +27,33 @@ async fn main() -> anyhow::Result<()> {
     let arguments = env::args().skip(1).collect::<Vec<_>>();
     if arguments
         .first()
+        .is_some_and(|value| value == "--check-regression-signer-health")
+    {
+        if arguments.len() != 3 {
+            anyhow::bail!(
+                "usage: worker --check-regression-signer-health <expected-address> <release-id>"
+            );
+        }
+        let key = env::var("REGRESSION_VERIFIER_PRIVATE_KEY")
+            .map_err(|_| anyhow::anyhow!("signer credential unavailable"))?;
+        chain_base::check_regression_signer_health(&key, &arguments[1], &arguments[2])?;
+        println!("{{\"healthy\":true}}");
+        return Ok(());
+    }
+    if arguments
+        .first()
+        .is_some_and(|value| value == "--check-regression-runner-health")
+    {
+        if arguments.len() != 1 {
+            anyhow::bail!("usage: worker --check-regression-runner-health");
+        }
+        worker::check_regression_runner_health().await?;
+        println!("{{\"healthy\":true}}");
+        return Ok(());
+    }
+
+    if arguments
+        .first()
         .is_some_and(|value| value == "--snapshot-directory")
     {
         if arguments.len() != 4 {
@@ -60,6 +87,31 @@ async fn main() -> anyhow::Result<()> {
         let outcome =
             run_regression_sandbox_request(request, staging_root.as_ref(), docker_binary).await?;
         println!("{}", serde_json::to_string_pretty(&outcome)?);
+        return Ok(());
+    }
+    if arguments
+        .first()
+        .is_some_and(|value| value == "--stage-github-snapshot")
+    {
+        if arguments.len() != 8 {
+            anyhow::bail!("usage: worker --stage-github-snapshot <source|benchmark> <commit-url> <subdirectory> <staging-root> <max-bytes> <max-files> <expected-digest-or-dash>");
+        }
+        let reference = worker::github_snapshot::GithubSnapshotReference::from_commit_url(
+            &arguments[2],
+            &arguments[3],
+        )?;
+        let staged = worker::github_snapshot::stage_github_snapshot(
+            &reference,
+            arguments[4].as_ref(),
+            RegressionInputKind::parse(&arguments[1])?,
+            arguments[5].parse()?,
+            arguments[6].parse()?,
+        )
+        .await?;
+        if arguments[7] != "-" && staged.snapshot.digest != arguments[7] {
+            anyhow::bail!("artifact_digest_mismatch: independently downloaded bytes differ from the committed digest; no verdict");
+        }
+        println!("{}", serde_json::to_string_pretty(&staged)?);
         return Ok(());
     }
     if arguments

@@ -18,6 +18,8 @@ on:
     secrets:
       verifier_private_key:
         required: true
+      checkpoint_token:
+        required: true
 
 permissions:
   actions: read
@@ -37,8 +39,6 @@ jobs:
       - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
-      - uses: dtolnay/rust-toolchain@1.88.0
-      - uses: Swatinem/rust-cache@v2
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
       - uses: actions/download-artifact@v8
         with:
@@ -46,16 +46,36 @@ jobs:
           path: target/regression-candidates
           github-token: ${{ github.token }}
           run-id: ${{ inputs.candidate_run_id }}
-      - name: Verify reviewed worker build inputs
-        run: >-
-          python scripts/regression_verifier_source_guard.py
-          --scope worker-build
-          --expected-sha256 5398679f9cd92780412327f2a3612a42b62c63242776ae464ae4264f84314a7c
-      - run: cargo build --release -p worker
-      - name: Revalidate reviewed runtime after build
+      - name: Load approved release identity
+        env:
+          REGRESSION_VERIFIER_RELEASE_JSON: ${{ vars.REGRESSION_VERIFIER_RELEASE_JSON }}
         run: |
-          python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 5398679f9cd92780412327f2a3612a42b62c63242776ae464ae4264f84314a7c
-          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 7872c03b51d129564a016c7ff2bc02cd4b1328a88c4c75ddc27acba95ff5540d
+          mkdir -p target
+          python -c 'import os,pathlib; pathlib.Path("target/verifier-release.json").write_text(os.environ["REGRESSION_VERIFIER_RELEASE_JSON"])'
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: target/release/worker
+          key: reviewed-verifier-${{ runner.os }}-${{ runner.arch }}-${{ fromJSON(vars.REGRESSION_VERIFIER_RELEASE_JSON).worker_binary_digest }}
+      - name: Verify exact reviewed source and cached or downloaded binary
+        env:
+          REGRESSION_WORKER_URL: ${{ vars.REGRESSION_WORKER_URL }}
+        run: >-
+          python scripts/verifier_release.py fetch
+          --manifest target/verifier-release.json
+          --worker target/release/worker
+          --download-url "$REGRESSION_WORKER_URL"
+      - name: Bind candidate release before granting signer access
+        run: >-
+          python scripts/verifier_release.py authorize --manifest target/verifier-release.json
+          --candidates target/regression-candidates --run-id "${{ inputs.candidate_run_id }}"
+      - name: Check this isolated signer
+        env:
+          REGRESSION_VERIFIER_PRIVATE_KEY: ${{ secrets.verifier_private_key }}
+          REGRESSION_CHECKPOINT_TOKEN: ${{ secrets.checkpoint_token }}
+        run: >-
+          python scripts/verifier_release.py diagnose --manifest target/verifier-release.json
+          --worker target/release/worker --component "signer:${{ inputs.expected_signer }}"
+          --api-base "$API_BASE_URL" --health-result target/signer-health.json
       - name: Re-fetch state and sign one exact candidate set
         env:
           REGRESSION_VERIFIER_PRIVATE_KEY: ${{ secrets.verifier_private_key }}

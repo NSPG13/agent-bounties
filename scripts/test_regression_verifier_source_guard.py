@@ -139,11 +139,11 @@ class RegressionVerifierSourceGuardTests(unittest.TestCase):
             REPOSITORY / ".github/workflows/regression-verifier-signing-reusable.yml"
         ).read_text(encoding="utf-8")
         secret = "${{ secrets.verifier_private_key }}"
-        self.assertEqual(reusable.count(secret), 1)
-        self.assertGreater(
-            reusable.index(secret),
-            reusable.index("Re-fetch state and sign one exact candidate set"),
-        )
+        self.assertEqual(reusable.count(secret), 2)
+        self.assertGreater(reusable.index(secret), reusable.index("Bind candidate release before granting signer access"))
+        for block in reusable.split("      - name: ")[1:]:
+            if secret in block:
+                self.assertTrue(block.startswith("Check this isolated signer") or block.startswith("Re-fetch state and sign one exact candidate set"))
         compile_time_inputs = GUARD._compile_time_inputs(
             REPOSITORY,
             set(GUARD._guarded_files(REPOSITORY, "worker-build")),

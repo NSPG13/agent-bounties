@@ -282,6 +282,7 @@ def main() -> int:
         "scripts.test_activate_direct_inventory_v1",
         "scripts.test_direct_flagship_verifier_watchdog",
         "scripts.test_regression_verifier_source_guard",
+        "scripts.test_verifier_release",
         "scripts.test_regression_profiles", "scripts.test_regression_verifier_pipeline",
         "-v",
     )
