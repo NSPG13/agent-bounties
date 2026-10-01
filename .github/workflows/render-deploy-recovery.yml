@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       revision:
-        description: "Attended posting phase: inventory, pause-and-api, or workers"
+        description: "Attended posting phase: inventory, pause-and-api, workers, or deploy-approved-mainnet"
         required: true
         default: inventory
         type: string
@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   attended-posting-cutover:
-    if: github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/codex/posting-production-cutover-20261001'
+    if: github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/codex/posting-production-cutover-20261001' && inputs.revision != 'deploy-approved-mainnet'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -38,3 +38,49 @@ jobs:
           path: posting-cutover-evidence.json
           if-no-files-found: ignore
           retention-days: 30
+
+  approved-mainnet-deployment:
+    if: github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/codex/posting-production-cutover-20261001' && inputs.revision == 'deploy-approved-mainnet'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install the reviewed signing library
+        run: python3 -m pip install eth-account==0.13.7
+      - name: Test exact deployment scope and failure boundaries
+        run: python3 scripts/test_posting_approved_mainnet.py
+      - name: Verify other spenders remain paused
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          GAS_SPONSOR_BUDGET_TOKEN: ${{ secrets.GAS_SPONSOR_BUDGET_TOKEN }}
+        run: python3 scripts/posting_production_cutover.py mainnet-preflight
+      - name: Reserve within the shared allowance and prepare exact signed bytes
+        id: prepare
+        env:
+          BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+          GAS_SPONSOR_BUDGET_TOKEN: ${{ secrets.GAS_SPONSOR_BUDGET_TOKEN }}
+          POSTING_APPROVED_REVIEW_SHA256: 7bd435d087309d9208fc9c529d279072ac821d995e2d52b1bdc12b58c2bc9dc8
+        run: python3 scripts/posting_approved_mainnet.py prepare
+      - uses: actions/upload-artifact@v4
+        id: durable
+        if: always()
+        with:
+          name: posting-mainnet-outbox-${{ github.run_id }}
+          path: posting-mainnet-outbox.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Submit once and reconcile canonical runtime
+        if: success() && steps.prepare.outcome == 'success'
+        env:
+          POSTING_DURABLE_ARTIFACT_ID: ${{ steps.durable.outputs.artifact-id }}
+        run: python3 scripts/posting_approved_mainnet.py broadcast
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: posting-mainnet-outcome-${{ github.run_id }}
+          path: posting-mainnet-outbox.json
+          if-no-files-found: ignore
+          retention-days: 90

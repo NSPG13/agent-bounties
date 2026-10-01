@@ -137,7 +137,7 @@ def run(phase):
             os.environ.get('GITHUB_REF') == 'refs/heads/' + BRANCH and
             os.environ.get('GITHUB_EVENT_NAME') == 'workflow_dispatch',
             'Only attended dispatch on the exact control branch is permitted')
-    require(phase in ('inventory', 'pause-and-api', 'workers'), 'Unknown cutover phase')
+    require(phase in ('inventory', 'pause-and-api', 'workers', 'mainnet-preflight'), 'Unknown cutover phase')
     require(len(os.environ.get('GAS_SPONSOR_BUDGET_TOKEN', '')) >= 32,
             'Dedicated reservation credential missing')
     output = Path('posting-cutover-evidence.json')
@@ -148,6 +148,11 @@ def run(phase):
         return
     require(all(not item['active_runs'] for item in evidence['workflows'].values()),
             'A spending workflow still has an active run')
+    if phase == 'mainnet-preflight':
+        require(all(item['state'] == 'disabled_manually' for item in evidence['workflows'].values()), 'Spending workflows must remain paused')
+        for role in ('keeper', 'broker'):
+            require(service(role)['suspended'] == 'suspended', 'Spending worker must remain paused')
+        return
     if phase == 'pause-and-api':
         for workflow in WORKFLOWS:
             api('github', '/actions/workflows/' + workflow + '/disable', 'PUT')
