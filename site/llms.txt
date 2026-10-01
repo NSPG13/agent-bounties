@@ -136,4 +136,4 @@ cancelled. Follow the live OpenAPI cancel and refund operations and confirm
     cargo run -p cli -- docs-contract-check
     python scripts/check-mcp-protocol-eras.py --endpoint https://mcp.agentbounties.app/mcp --expect dual
 Full quickstart: https://github.com/NSPG13/agent-bounties/blob/main/docs/agent-quickstart.md
-Broad verification: use https://agentbounties.app/check-work.html for available versioned checkers, exact saved artifacts and review questions. Discover current hosted API routes from https://api.agentbounties.app/openapi.json. Have the creator approve what each required check means before funding. Check results do not authorize payment.
+Broad verification: use https://agentbounties.app/check-work.html for available versioned checkers, exact saved artifacts and review questions. Discover current hosted API routes from https://api.agentbounties.app/api-docs/openapi.json. Have the creator approve what each required check means before funding. Check results do not authorize payment.
