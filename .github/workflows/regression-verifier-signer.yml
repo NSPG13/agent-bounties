@@ -3,6 +3,8 @@ name: Regression Verifier Signer
 on:
   pull_request:
     paths:
+      - "scripts/verifier_release.py"
+      - "scripts/test_verifier_release.py"
       - "scripts/gas_sponsorship_budget.py"
       - "scripts/test_gas_sponsorship_budget.py"
       - ".cargo/**"
@@ -36,6 +38,7 @@ permissions:
 
 jobs:
   contract:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -46,8 +49,6 @@ jobs:
       - run: python scripts/test_gas_sponsorship_budget.py -v
       - run: python scripts/test_regression_verifier_pipeline.py -v
       - run: python scripts/test_regression_verifier_source_guard.py -v
-      - run: python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 5398679f9cd92780412327f2a3612a42b62c63242776ae464ae4264f84314a7c
-      - run: python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 7872c03b51d129564a016c7ff2bc02cd4b1328a88c4c75ddc27acba95ff5540d
 
   authorize-run:
     if: >-
@@ -55,8 +56,8 @@ jobs:
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'schedule' &&
       github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.head_repository.full_name == github.repository
-    needs: contract
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      vars.REGRESSION_VERIFIER_RELEASE_JSON != '' && vars.REGRESSION_WORKER_URL != ''
     runs-on: ubuntu-latest
     outputs:
       authorized: ${{ steps.main.outputs.authorized }}
@@ -65,29 +66,25 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
-          fetch-depth: 0
+          ref: ${{ fromJSON(vars.REGRESSION_VERIFIER_RELEASE_JSON).source_revision }}
+      - name: Load approved release identity
+        env:
+          REGRESSION_VERIFIER_RELEASE_JSON: ${{ vars.REGRESSION_VERIFIER_RELEASE_JSON }}
+        run: |
+          mkdir -p target
+          python -c 'import os,pathlib; pathlib.Path("target/verifier-release.json").write_text(os.environ["REGRESSION_VERIFIER_RELEASE_JSON"])'
+      - uses: actions/download-artifact@v8
+        with:
+          name: regression-candidates-${{ github.event.workflow_run.id }}
+          path: target/regression-candidates
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
       - id: main
         env:
-          CANDIDATE_REVISION: ${{ github.event.workflow_run.head_sha }}
           CANDIDATE_RUN_ID: ${{ github.event.workflow_run.id }}
-        run: |
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          current_main="$(git rev-parse refs/remotes/origin/main)"
-          if [[ "$CANDIDATE_REVISION" != "$current_main" ]]; then
-            echo "authorized=false" >> "$GITHUB_OUTPUT"
-            echo "::warning title=Stale regression candidate skipped::Runner revision $CANDIDATE_REVISION is not current main $current_main; no signer or relay job will run."
-            {
-              echo "## Stale regression candidate skipped"
-              echo
-              echo "- candidate: \`$CANDIDATE_REVISION\`"
-              echo "- current main: \`$current_main\`"
-              echo "- effect: both signers and the relay are skipped"
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          echo "authorized=true" >> "$GITHUB_OUTPUT"
-          echo "revision=$CANDIDATE_REVISION" >> "$GITHUB_OUTPUT"
-          echo "run_id=$CANDIDATE_RUN_ID" >> "$GITHUB_OUTPUT"
+        run: >-
+          python scripts/verifier_release.py authorize --manifest target/verifier-release.json
+          --candidates target/regression-candidates --run-id "$CANDIDATE_RUN_ID"
 
   sign-one:
     if: needs.authorize-run.outputs.authorized == 'true'
@@ -100,6 +97,7 @@ jobs:
       expected_signer: ${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}
     secrets:
       verifier_private_key: ${{ secrets.REGRESSION_VERIFIER_ONE_PRIVATE_KEY }}
+      checkpoint_token: ${{ secrets.REGRESSION_SIGNER_ONE_CHECKPOINT_TOKEN }}
 
   sign-two:
     if: needs.authorize-run.outputs.authorized == 'true'
@@ -112,6 +110,7 @@ jobs:
       expected_signer: ${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}
     secrets:
       verifier_private_key: ${{ secrets.REGRESSION_VERIFIER_TWO_PRIVATE_KEY }}
+      checkpoint_token: ${{ secrets.REGRESSION_SIGNER_TWO_CHECKPOINT_TOKEN }}
 
   relay:
     if: needs.authorize-run.outputs.authorized == 'true'
@@ -134,8 +133,6 @@ jobs:
       - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
-      - uses: dtolnay/rust-toolchain@1.88.0
-      - uses: Swatinem/rust-cache@v2
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
       - uses: actions/download-artifact@v8
         with:
@@ -151,16 +148,28 @@ jobs:
         with:
           name: regression-attestations-two
           path: target/attestations-two
-      - name: Verify reviewed worker build inputs
-        run: >-
-          python scripts/regression_verifier_source_guard.py
-          --scope worker-build
-          --expected-sha256 5398679f9cd92780412327f2a3612a42b62c63242776ae464ae4264f84314a7c
-      - run: cargo build --release -p worker
-      - name: Revalidate reviewed runtime after build
+      - name: Load approved release identity
+        env:
+          REGRESSION_VERIFIER_RELEASE_JSON: ${{ vars.REGRESSION_VERIFIER_RELEASE_JSON }}
         run: |
-          python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 5398679f9cd92780412327f2a3612a42b62c63242776ae464ae4264f84314a7c
-          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 7872c03b51d129564a016c7ff2bc02cd4b1328a88c4c75ddc27acba95ff5540d
+          mkdir -p target
+          python -c 'import os,pathlib; pathlib.Path("target/verifier-release.json").write_text(os.environ["REGRESSION_VERIFIER_RELEASE_JSON"])'
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: target/release/worker
+          key: reviewed-verifier-${{ runner.os }}-${{ runner.arch }}-${{ fromJSON(vars.REGRESSION_VERIFIER_RELEASE_JSON).worker_binary_digest }}
+      - name: Verify exact reviewed source and cached or downloaded binary
+        env:
+          REGRESSION_WORKER_URL: ${{ vars.REGRESSION_WORKER_URL }}
+        run: >-
+          python scripts/verifier_release.py fetch
+          --manifest target/verifier-release.json
+          --worker target/release/worker
+          --download-url "$REGRESSION_WORKER_URL"
+      - name: Check candidate release before keeper access
+        run: >-
+          python scripts/verifier_release.py authorize --manifest target/verifier-release.json
+          --candidates target/regression-candidates --run-id "${{ needs.authorize-run.outputs.run_id }}"
       - name: Revalidate and relay exact quorum
         env:
           BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}

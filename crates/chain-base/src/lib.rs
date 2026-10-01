@@ -1,3 +1,4 @@
+mod verifier_health;
 use alloy::{
     network::TransactionBuilder,
     primitives::{Address, Bytes, B256, U256},
@@ -20,6 +21,7 @@ use std::{
 };
 use thiserror::Error;
 use uuid::Uuid;
+pub use verifier_health::*;
 use verifier_sdk::RegressionSandboxPolicy;
 
 mod agent_wallet_readiness;
