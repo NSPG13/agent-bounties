@@ -896,14 +896,17 @@ ${competitionChildBrief(item)}`;
       const selectedProviders = new Map();
       const pushEnable=dialog.querySelector("[data-push-enable]");
       const pushDisable=dialog.querySelector("[data-push-disable]");
+      const pushTest=dialog.querySelector("[data-push-test]");
       const pushStatus=dialog.querySelector("[data-push-status]");
       const push=win.AgentBountiesCreatorPush?.create(win,authApiPath("/push-notifications",win.location),(state)=>{
         if(pushEnable){pushEnable.disabled=state.busy||!state.supported||!state.configured||state.enabled;pushEnable.hidden=state.enabled;}
         if(pushDisable){pushDisable.hidden=!state.enabled;pushDisable.disabled=state.busy;}
+        if(pushTest){pushTest.hidden=!state.enabled;pushTest.disabled=state.busy||!state.configured;}
         if(pushStatus&&state.message)pushStatus.textContent=state.message;
       });
       pushEnable?.addEventListener("click",()=>push?.enable());
       pushDisable?.addEventListener("click",()=>push?.disable());
+      pushTest?.addEventListener("click",()=>push?.test());
       const reviewEmails = createReviewNotificationController(win, ({ payload, loading, error }) => {
         const view = reviewNotificationView(payload, currentUser?.provider);
         reviewEmailSettings?.setAttribute("aria-busy", String(loading));
