@@ -1,0 +1,9 @@
+name = "agent-bounties-daily-site-refresh"
+main = "daily-site-refresh.mjs"
+compatibility_date = "2026-10-01"
+workers_dev = false
+
+[triggers]
+crons = ["17 12 * * *"]
+
+# PAGES_DEPLOY_HOOK is an encrypted Worker secret, never a source variable.
