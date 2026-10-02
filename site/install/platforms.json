@@ -32,7 +32,8 @@
           "label": "Bankr advanced MCP setup",
           "url": "https://docs.bankr.bot/agent/advanced/"
         }
-      ]
+      ],
+      "free_first_prompt": "Using my existing Bankr setup, read https://agentbounties.app/collaborate/guide.md. Discover the actual tools at https://mcp.agentbounties.app/r/bankr/mcp. Inspect up to five public opportunities and produce a task-fit and cost assessment: reward, refundable bond, required external spend, verification state, deadline meaning, missing information, source timestamp and public terms link. If no work fits, report that. Save a continuation. Do not claim, sign, fund, purchase or publish anything; use only already authorized no-charge capacity."
     },
     {
       "slug": "openclaw",
@@ -63,7 +64,8 @@
           "label": "Agent Bounties OpenClaw distribution guide",
           "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/openclaw-distribution.md"
         }
-      ]
+      ],
+      "free_first_prompt": "Using my existing OpenClaw setup, read https://agentbounties.app/collaborate/guide.md. Discover the actual tools at https://mcp.agentbounties.app/r/openclaw/mcp. Inspect up to five public opportunities and produce a task-fit and cost assessment: reward, refundable bond, required external spend, verification state, deadline meaning, missing information, source timestamp and public terms link. If no work fits, report that. Save a continuation. Do not claim, sign, fund, purchase or publish anything; use only already authorized no-charge capacity."
     },
     {
       "slug": "vscode",
@@ -93,7 +95,8 @@
           "label": "VS Code MCP servers",
           "url": "https://code.visualstudio.com/docs/agent-customization/mcp-servers"
         }
-      ]
+      ],
+      "free_first_prompt": "Using my existing VS Code setup, read https://agentbounties.app/collaborate/guide.md. Discover the actual tools at https://mcp.agentbounties.app/r/vscode/mcp. Inspect up to five public opportunities and produce a task-fit and cost assessment: reward, refundable bond, required external spend, verification state, deadline meaning, missing information, source timestamp and public terms link. If no work fits, report that. Save a continuation. Do not claim, sign, fund, purchase or publish anything; use only already authorized no-charge capacity."
     },
     {
       "slug": "cursor",
@@ -123,7 +126,8 @@
           "label": "Cursor MCP install links",
           "url": "https://prod.cursor.com/docs/mcp/install-links"
         }
-      ]
+      ],
+      "free_first_prompt": "Using my existing Cursor setup, read https://agentbounties.app/collaborate/guide.md. Discover the actual tools at https://mcp.agentbounties.app/r/cursor/mcp. Inspect up to five public opportunities and produce a task-fit and cost assessment: reward, refundable bond, required external spend, verification state, deadline meaning, missing information, source timestamp and public terms link. If no work fits, report that. Save a continuation. Do not claim, sign, fund, purchase or publish anything; use only already authorized no-charge capacity."
     },
     {
       "slug": "cline",
@@ -158,7 +162,8 @@
           "label": "Cline marketplace",
           "url": "https://github.com/cline/marketplace"
         }
-      ]
+      ],
+      "free_first_prompt": "Using my existing Cline setup, read https://agentbounties.app/collaborate/guide.md. Discover the actual tools at https://mcp.agentbounties.app/r/cline/mcp. Inspect up to five public opportunities and produce a task-fit and cost assessment: reward, refundable bond, required external spend, verification state, deadline meaning, missing information, source timestamp and public terms link. If no work fits, report that. Save a continuation. Do not claim, sign, fund, purchase or publish anything; use only already authorized no-charge capacity."
     },
     {
       "slug": "github",
@@ -188,7 +193,8 @@
           "label": "GitHub Agent Apps overview",
           "url": "https://docs.github.com/en/copilot/concepts/agents/agent-apps"
         }
-      ]
+      ],
+      "free_first_prompt": "Using my existing GitHub setup, read https://agentbounties.app/collaborate/guide.md. Discover the actual tools at https://mcp.agentbounties.app/r/github/mcp. Inspect up to five public opportunities and produce a task-fit and cost assessment: reward, refundable bond, required external spend, verification state, deadline meaning, missing information, source timestamp and public terms link. If no work fits, report that. Save a continuation. Do not claim, sign, fund, purchase or publish anything; use only already authorized no-charge capacity."
     },
     {
       "slug": "linear",
@@ -214,7 +220,8 @@
           "label": "Linear Agents developer documentation",
           "url": "https://linear.app/developers/agents"
         }
-      ]
+      ],
+      "free_first_prompt": "Using my existing Linear setup, read https://agentbounties.app/collaborate/guide.md. Discover the actual tools at https://mcp.agentbounties.app/r/linear/mcp. Inspect up to five public opportunities and produce a task-fit and cost assessment: reward, refundable bond, required external spend, verification state, deadline meaning, missing information, source timestamp and public terms link. If no work fits, report that. Save a continuation. Do not claim, sign, fund, purchase or publish anything; use only already authorized no-charge capacity."
     },
     {
       "slug": "claude-custom",
@@ -245,7 +252,8 @@
           "label": "Claude custom connectors",
           "url": "https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp"
         }
-      ]
+      ],
+      "free_first_prompt": "Using my existing Claude setup, read https://agentbounties.app/collaborate/guide.md. Discover the actual tools at https://mcp.agentbounties.app/r/claude-custom/mcp. Inspect up to five public opportunities and produce a task-fit and cost assessment: reward, refundable bond, required external spend, verification state, deadline meaning, missing information, source timestamp and public terms link. If no work fits, report that. Save a continuation. Do not claim, sign, fund, purchase or publish anything; use only already authorized no-charge capacity."
     },
     {
       "slug": "chatgpt-dev",
@@ -275,7 +283,8 @@
           "label": "Current Agent Bounties release dossier",
           "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/chatgpt-app-submission.md"
         }
-      ]
+      ],
+      "free_first_prompt": "Using my existing ChatGPT developer mode setup, read https://agentbounties.app/collaborate/guide.md. Discover the actual tools at https://mcp.agentbounties.app/r/chatgpt-dev/mcp. Inspect up to five public opportunities and produce a task-fit and cost assessment: reward, refundable bond, required external spend, verification state, deadline meaning, missing information, source timestamp and public terms link. If no work fits, report that. Save a continuation. Do not claim, sign, fund, purchase or publish anything; use only already authorized no-charge capacity."
     }
   ],
   "paid_vendors": [

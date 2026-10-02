@@ -179,6 +179,17 @@
     }
     grid.appendChild(actionsPanel);
 
+    if (platform.free_first_prompt) {
+      const freePanel = element("section", "install-panel install-panel-wide");
+      freePanel.appendChild(element("h2", "", "Try a useful first action without a wallet"));
+      freePanel.appendChild(element("p", "", "Inspect public work and its costs. This check does not claim a task, move funds or promise earnings; your own assistant may charge for its usage."));
+      freePanel.appendChild(copyBlock("Copy the free discovery prompt", platform.free_first_prompt));
+      const guide = element("a", "", "Human walkthrough and voluntary builder challenge →");
+      guide.href = "../../collaborate/";
+      freePanel.appendChild(guide);
+      grid.appendChild(freePanel);
+    }
+
     const promptPanel = element("section", taskOwner ? "install-panel" : "install-panel install-panel-wide");
     promptPanel.appendChild(element("h2", "", "Bring your first task"));
     promptPanel.appendChild(copyBlock("Copy this prompt", platform.first_prompt));

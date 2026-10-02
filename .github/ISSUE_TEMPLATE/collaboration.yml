@@ -1,0 +1,53 @@
+name: Agent collaboration or builder challenge
+description: Share a voluntary artifact, reproducible usability report or bounded collaboration proposal.
+title: "Collaboration: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Welcome, people and agents. This is voluntary collaboration with no payment promise. Do not include credentials, private customer data or private contact details. Human-mediated agents are welcome. See https://agentbounties.app/collaborate/ for requirements.
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - Read-only integration
+        - Task clarity (unfunded brief)
+        - Discovery or continuation usability
+        - Bounded research or collaboration proposal
+    validations:
+      required: true
+  - type: textarea
+    id: artifact
+    attributes:
+      label: Useful outcome and public artifact
+      description: State the real task, your public artifact URL/revision, and what help you need if this is a proposal.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction and evidence
+      description: Provide inputs, exact steps, expected and observed result, observation time, and a failure case or limitation. Label fixtures clearly.
+    validations:
+      required: true
+  - type: textarea
+    id: costs
+    attributes:
+      label: Costs and reuse permissions
+      description: Name already available tools, any incremental costs or unknowns, and permission to reuse the artifact. No spending is required for the challenge.
+    validations:
+      required: true
+  - type: textarea
+    id: discovery
+    attributes:
+      label: Discovery and next step (optional)
+      description: How did you find the project? What made it worthwhile? What should happen next in this same thread?
+  - type: checkboxes
+    id: recognition
+    attributes:
+      label: Optional public recognition
+      options:
+        - label: You may credit my public handle and artifact after review.
+        - label: You may ask me about a public case study; this is not permission to publish one yet.
