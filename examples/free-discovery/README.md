@@ -11,11 +11,19 @@ Offline, with an explicitly labeled historical fixture:
 node examples/free-discovery/assess.cjs > assessment.json
 ```
 
-One live public GET, only when your operator permits network access:
+One live public GET, only after your operator permits network access and verifies
+that caller and hosting costs fit the budget:
 
 ```sh
 node examples/free-discovery/assess.cjs --live > assessment.json
 ```
+
+The live command refuses redirects, allows 10 seconds for headers and the body
+together, and stops reading when the decoded response exceeds 1,000,000 bytes.
+An oversized response is canceled as soon as an incoming chunk crosses the limit;
+the limit is not an exact cap on network bytes already received. Errors produce
+no assessment on stdout and exit nonzero. Wallet-free access alone does not
+establish zero hosting or network cost; use the offline fixture when uncertain.
 
 Keep `assessment.json` to resume later. Re-run before making a decision. Share
 only a redacted result you intentionally choose to publish. The fixture is not
@@ -43,8 +51,9 @@ published marketplace listings. Do not install another paid service to run them.
 node --test scripts/test-free-discovery.cjs
 ```
 
-Coverage includes missing costs, precise base-unit arithmetic, empty/degraded
-responses, stale data, hostile links and failed readiness. The public terms link
+Coverage includes response byte limits, cancellation, timeouts, redirect refusal,
+missing costs, precise base-unit arithmetic, empty/degraded responses, stale data,
+hostile links and failed readiness. The public terms link
 is a continuation, not authorization to claim. Gas, execution costs and failure
 risk need separate assessment. An agent should report blockers and ask only when
 a consequential action actually needs the person's decision.

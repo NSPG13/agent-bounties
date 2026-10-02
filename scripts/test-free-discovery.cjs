@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { money, publicLink, assess } = require("../site/collaborate/assessment.js");
+const { MAX_FEED_BYTES, FETCH_TIMEOUT_MS, readLiveFeed } = require("../examples/free-discovery/assess.cjs");
 const fixture = () => JSON.parse(fs.readFileSync(path.join(__dirname, "../examples/free-discovery/fixture.json"), "utf8"));
 const now = "2026-10-01T00:01:00Z";
 
@@ -59,4 +60,88 @@ test("bounds the sample and rejects malformed response contracts", () => {
   const feed = fixture(); feed.items = Array(20).fill(feed.items[0]);
   assert.equal(assess(feed, now).items.length, 5);
   for (const invalid of [null, {}, { ...feed, network: "base-sepolia" }, { ...feed, schema_version: "old" }, { ...feed, items: [null] }]) assert.throws(() => assess(invalid, now));
+});
+
+test("offline command remains the default and does not call fetch", () => {
+  const { execFileSync } = require("node:child_process");
+  const cli = path.resolve(__dirname, "../examples/free-discovery/assess.cjs");
+  const actual = JSON.parse(execFileSync(process.execPath, [cli], { encoding: "utf8" }));
+  assert.equal(actual.source_kind, "offline_fixture_not_adoption");
+  const guarded = JSON.parse(execFileSync(process.execPath, ["-e", `global.fetch = () => { throw new Error('Network forbidden'); }; require(${JSON.stringify(cli)}).main([]);`], { encoding: "utf8" }));
+  assert.ok(Number.isFinite(Date.parse(actual.observed_at)));
+  assert.ok(Number.isFinite(Date.parse(guarded.observed_at)));
+  delete actual.observed_at;
+  delete guarded.observed_at;
+  assert.deepEqual(guarded, actual);
+});
+
+test("live reader accepts the exact byte boundary and returns the same assessment input", async () => {
+  const body = JSON.stringify(fixture());
+  const padded = body + " ".repeat(MAX_FEED_BYTES - Buffer.byteLength(body));
+  const result = await readLiveFeed({ fetchImpl: async () => new Response(padded) });
+  assert.deepEqual(result, fixture());
+  assert.equal(FETCH_TIMEOUT_MS, 10000);
+});
+
+test("oversized ASCII and multibyte responses stop before the remaining chunks", async () => {
+  for (const character of ["a", "é"]) {
+    const bytes = Buffer.from(JSON.stringify({ extra: character.repeat(1200000 / Buffer.byteLength(character)) }));
+    const chunks = [bytes.subarray(0, 600000), bytes.subarray(600000, 1200000), bytes.subarray(1200000)];
+    let reads = 0, canceled = false, signal;
+    const stream = new ReadableStream({
+      pull(controller) { controller.enqueue(chunks[reads++]); },
+      cancel() { canceled = true; }
+    }, { highWaterMark: 0 });
+    await assert.rejects(readLiveFeed({ fetchImpl: async (_url, options) => {
+      signal = options.signal;
+      return new Response(stream);
+    } }), /exceeds 1,000,000 bytes/);
+    assert.equal(reads, 2);
+    assert.equal(canceled, true);
+    assert.equal(signal.aborted, true);
+  }
+});
+
+test("HTTP failures, empty bodies and malformed JSON cannot produce an assessment", async () => {
+  let canceled = false;
+  const stream = new ReadableStream({ cancel() { canceled = true; } }, { highWaterMark: 0 });
+  await assert.rejects(readLiveFeed({ fetchImpl: async () => new Response(stream, { status: 503 }) }), /HTTP 503/);
+  assert.equal(canceled, true);
+  await assert.rejects(readLiveFeed({ fetchImpl: async () => new Response(null) }), /no response body/);
+  await assert.rejects(readLiveFeed({ fetchImpl: async () => new Response("{malformed") }), SyntaxError);
+});
+
+test("native fetch refuses redirects and times out during headers or body", async () => {
+  const http = require("node:http");
+  let redirectedRequests = 0;
+  const server = http.createServer((request, response) => {
+    if (request.url === "/redirect") { response.writeHead(302, { location: "/redirect-target" }); response.end(); }
+    else if (request.url === "/redirect-target") { redirectedRequests++; response.end("{}"); }
+    else if (request.url === "/stall-body") { response.writeHead(200); response.write("{"); }
+    // /stall-headers deliberately sends nothing until the caller aborts.
+  });
+  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const localFetch = route => (_url, options) => fetch(base + route, options);
+    await assert.rejects(readLiveFeed({ fetchImpl: localFetch("/redirect") }), /fetch failed/);
+    assert.equal(redirectedRequests, 0);
+    for (const route of ["/stall-headers", "/stall-body"]) {
+      await assert.rejects(readLiveFeed({ fetchImpl: localFetch(route), timeoutMs: 50 }), /timed out/);
+    }
+  } finally {
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test("live transport failure leaves stdout empty and exits nonzero", () => {
+  const { spawnSync } = require("node:child_process");
+  const cli = path.resolve(__dirname, "../examples/free-discovery/assess.cjs");
+  // Run the actual entry point with an injected local response and no network.
+  const script = `global.fetch = async () => new Response('unavailable', { status: 503 }); process.argv = [process.execPath, ${JSON.stringify(cli)}, '--live']; require('node:module').runMain();`;
+  const result = spawnSync(process.execPath, ["-e", script], { encoding: "utf8" });
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /HTTP 503/);
 });
