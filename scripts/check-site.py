@@ -12,6 +12,7 @@ from urllib.parse import urldefrag, urlparse
 
 
 CANONICAL_PAGES = {
+    "blog/check-agent-work-before-committing-funds.html": "https://agentbounties.app/blog/check-agent-work-before-committing-funds.html",
     "check-work.html": "https://agentbounties.app/check-work.html",
     "app-testing.html": "https://agentbounties.app/app-testing.html",
     "api-integration.html": "https://agentbounties.app/api-integration.html",
@@ -31,6 +32,7 @@ CANONICAL_PAGES = {
     "blog/agentic-economy-needs-a-market-for-work.html": "https://agentbounties.app/blog/agentic-economy-needs-a-market-for-work.html",
     "how-to-earn-money-with-my-ai-agent.html": "https://agentbounties.app/how-to-earn-money-with-my-ai-agent.html",
     "install/index.html": "https://agentbounties.app/install/",
+    "collaborate/index.html": "https://agentbounties.app/collaborate/",
     "install/bankr/index.html": "https://agentbounties.app/install/bankr/",
     "install/chatgpt-dev/index.html": "https://agentbounties.app/install/chatgpt-dev/",
     "install/claude-custom/index.html": "https://agentbounties.app/install/claude-custom/",
@@ -57,6 +59,8 @@ CANONICAL_PAGES = {
     "terms.html": "https://agentbounties.app/terms.html",
 }
 INDEXABLE_PAGES = {
+    "blog/check-agent-work-before-committing-funds.html",
+    "collaborate/index.html",
     "leaderboard.html",
     "app-testing.html",
     "api-integration.html",
@@ -85,6 +89,19 @@ INDEXABLE_PAGES = {
     "terms.html",
 }
 REQUIRED_FILES = {
+    "collaborate/index.html",
+    "collaborate/assessment.js",
+    "collaborate/collaborate.js",
+    "collaborate/collaborate.css",
+    "collaborate/guide.md",
+    "collaborate/challenge.json",
+    "collaborate/rubric.json",
+    "collaborate/review-template.json",
+    "collaborate/review.md",
+    "collaborate/recognition.json",
+    "collaborate/recognition.js",
+    "collaborate/recognition.md",
+    "collaborate/task-brief.md",
     "check-work.js",
     "check-work.css",
     "submissions-evidence.js",
@@ -216,6 +233,10 @@ REQUIRED_FILES = {
     "x402-test-vectors.json",
 }
 ALLOWED_UI_CODE = {
+    "collaborate/assessment.js",
+    "collaborate/collaborate.js",
+    "collaborate/collaborate.css",
+    "collaborate/recognition.js",
     "creator-open.css",
     "creator-awards.js",
     "creator-awards.css",
@@ -592,6 +613,7 @@ def check_blog(site_dir: Path) -> None:
     )
     posts = json_file(site_dir / "blog" / "posts.json")
     expected_urls = {
+        "https://agentbounties.app/blog/check-agent-work-before-committing-funds.html",
         "https://agentbounties.app/how-to-earn-money-with-my-ai-agent.html",
         "https://agentbounties.app/blog/agentic-economy-needs-a-market-for-work.html",
         "https://agentbounties.app/earn-money-using-ai.html",
@@ -1387,7 +1409,17 @@ def main() -> int:
     recovery_node = shutil.which("node")
     if not recovery_node:
         fail("Node.js is required for the recovery safety checks")
-    subprocess.run([recovery_node, "--test", str(repo_root / "scripts/test-bounty-recovery.cjs"), str(repo_root / "scripts/test-creator-awards.js"), str(repo_root / "scripts/test-sponsored-setup.cjs")], check=True)
+    subprocess.run([
+        recovery_node, "--test",
+        str(repo_root / "scripts/test-bounty-recovery.cjs"),
+        str(repo_root / "scripts/test-creator-awards.js"),
+        str(repo_root / "scripts/test-sponsored-setup.cjs"),
+        str(repo_root / "scripts/test-free-discovery.cjs"),
+        str(repo_root / "scripts/test-free-discovery-browser.cjs"),
+        str(repo_root / "scripts/test-contribution-recognition.cjs"),
+        str(repo_root / "scripts/test-builder-review.cjs"),
+        str(repo_root / "scripts/test-contribution-consumer.cjs"),
+    ], check=True)
     for relative in sorted(REQUIRED_FILES | EXPECTED_SCENE_ASSETS):
         if not (site_dir / relative).exists():
             fail(f"missing required site file: {relative}")

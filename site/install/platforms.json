@@ -7,7 +7,7 @@
     {
       "slug": "bankr",
       "name": "Bankr",
-      "status": "Prepared: activate after the attributed production endpoint passes its canary",
+      "status": "MCP endpoint checked October 2, 2026. Connect with the prompt below.",
       "summary": "Give a wallet-native Bankr agent a reviewed way to delegate backlog, fund exact bounty terms, and retrieve canonical settlement evidence.",
       "mcp_url": "https://mcp.agentbounties.app/r/bankr/mcp",
       "steps": [
@@ -32,12 +32,13 @@
           "label": "Bankr advanced MCP setup",
           "url": "https://docs.bankr.bot/agent/advanced/"
         }
-      ]
+      ],
+      "free_first_prompt": "Using my existing Bankr setup, read https://agentbounties.app/collaborate/guide.md. Discover the actual tools at https://mcp.agentbounties.app/r/bankr/mcp. Inspect up to five public opportunities and produce a task-fit and cost assessment: reward, refundable bond, required external spend, verification state, deadline meaning, missing information, source timestamp and public terms link. If no work fits, report that. Save a continuation. Do not claim, sign, fund, purchase or publish anything; use only already authorized no-charge capacity."
     },
     {
       "slug": "openclaw",
       "name": "OpenClaw",
-      "status": "Source skill available; attributed MCP and ClawHub release remain gated",
+      "status": "Source skill available. MCP endpoint checked October 2, 2026; ClawHub release pending.",
       "summary": "Install the portable skill directly, connect the attributed MCP endpoint, and let OpenClaw recognize delegation and paid-work intents.",
       "mcp_url": "https://mcp.agentbounties.app/r/openclaw/mcp",
       "steps": [
@@ -63,12 +64,13 @@
           "label": "Agent Bounties OpenClaw distribution guide",
           "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/openclaw-distribution.md"
         }
-      ]
+      ],
+      "free_first_prompt": "Using my existing OpenClaw setup, read https://agentbounties.app/collaborate/guide.md. Discover the actual tools at https://mcp.agentbounties.app/r/openclaw/mcp. Inspect up to five public opportunities and produce a task-fit and cost assessment: reward, refundable bond, required external spend, verification state, deadline meaning, missing information, source timestamp and public terms link. If no work fits, report that. Save a continuation. Do not claim, sign, fund, purchase or publish anything; use only already authorized no-charge capacity."
     },
     {
       "slug": "vscode",
       "name": "VS Code",
-      "status": "One-click configuration prepared; activate after the production route canary",
+      "status": "MCP endpoint checked October 2, 2026. Choose the installer or configuration below.",
       "summary": "Install Agent Bounties in VS Code so Copilot agents can turn repository context into reviewed, verifiable bounty drafts.",
       "mcp_url": "https://mcp.agentbounties.app/r/vscode/mcp",
       "steps": [
@@ -93,12 +95,13 @@
           "label": "VS Code MCP servers",
           "url": "https://code.visualstudio.com/docs/agent-customization/mcp-servers"
         }
-      ]
+      ],
+      "free_first_prompt": "Using my existing VS Code setup, read https://agentbounties.app/collaborate/guide.md. Discover the actual tools at https://mcp.agentbounties.app/r/vscode/mcp. Inspect up to five public opportunities and produce a task-fit and cost assessment: reward, refundable bond, required external spend, verification state, deadline meaning, missing information, source timestamp and public terms link. If no work fits, report that. Save a continuation. Do not claim, sign, fund, purchase or publish anything; use only already authorized no-charge capacity."
     },
     {
       "slug": "cursor",
       "name": "Cursor",
-      "status": "One-click configuration prepared; activate after the production route canary",
+      "status": "MCP endpoint checked October 2, 2026. Choose the installer or configuration below.",
       "summary": "Add the attributed MCP server to Cursor and delegate code backlog without moving wallet authority into the IDE.",
       "mcp_url": "https://mcp.agentbounties.app/r/cursor/mcp",
       "steps": [
@@ -123,24 +126,30 @@
           "label": "Cursor MCP install links",
           "url": "https://prod.cursor.com/docs/mcp/install-links"
         }
-      ]
+      ],
+      "free_first_prompt": "Using my existing Cursor setup, read https://agentbounties.app/collaborate/guide.md. Discover the actual tools at https://mcp.agentbounties.app/r/cursor/mcp. Inspect up to five public opportunities and produce a task-fit and cost assessment: reward, refundable bond, required external spend, verification state, deadline meaning, missing information, source timestamp and public terms link. If no work fits, report that. Save a continuation. Do not claim, sign, fund, purchase or publish anything; use only already authorized no-charge capacity."
     },
     {
       "slug": "cline",
       "name": "Cline",
-      "status": "CLI and settings configuration prepared; activate after the production route canary",
+      "status": "Endpoint checked October 2, 2026. Cline CLI 3.0.68 configuration tested; tool discovery inside Cline remains unverified.",
       "summary": "Connect Cline directly to Agent Bounties with no API key, then use the repository context to prepare verifiable work.",
       "mcp_url": "https://mcp.agentbounties.app/r/cline/mcp",
       "steps": [
-        "Run the CLI installer or paste the JSON into Cline MCP settings.",
-        "Leave autoApprove empty and inspect the discovered tools.",
-        "Ask for a draft-only delegation before reviewing the first wallet handoff."
+        "Use the interactive CLI command and choose No auth, or use the noninteractive command in an agent-run terminal. Both were checked with Cline CLI 3.0.68. The JSON entry is an alternative for Cline MCP settings.",
+        "The --yes flag confirms saving the server configuration only. Leave autoApprove empty and inspect the actual tools before use; installation alone does not verify a connection or authorize tool calls.",
+        "Start with the free discovery prompt below. Review task costs before considering any separate claim, funding or wallet action."
       ],
       "actions": [
         {
           "kind": "copy",
-          "label": "Copy Cline install command",
+          "label": "Copy interactive Cline install command",
           "value": "cline mcp install agent-bounties --transport http https://mcp.agentbounties.app/r/cline/mcp"
+        },
+        {
+          "kind": "copy",
+          "label": "Copy noninteractive Cline install command (CLI 3.0.68)",
+          "value": "cline mcp install agent-bounties --transport http https://mcp.agentbounties.app/r/cline/mcp --yes --json"
         },
         {
           "kind": "copy",
@@ -158,12 +167,13 @@
           "label": "Cline marketplace",
           "url": "https://github.com/cline/marketplace"
         }
-      ]
+      ],
+      "free_first_prompt": "Using my existing Cline setup, read https://agentbounties.app/collaborate/guide.md. Discover the actual tools at https://mcp.agentbounties.app/r/cline/mcp. Inspect up to five public opportunities and produce a task-fit and cost assessment: reward, refundable bond, required external spend, verification state, deadline meaning, missing information, source timestamp and public terms link. If no work fits, report that. Save a continuation. Do not claim, sign, fund, purchase or publish anything; use only already authorized no-charge capacity."
     },
     {
       "slug": "github",
       "name": "GitHub",
-      "status": "Repository configuration prepared; hosted Agent App and submission remain pending",
+      "status": "MCP endpoint checked October 2, 2026. Repository setup is below; native Agent App pending.",
       "summary": "Give GitHub Copilot cloud agent an attributed MCP server so an issue can become a reviewed bounty and later receive canonical proof.",
       "mcp_url": "https://mcp.agentbounties.app/r/github/mcp",
       "steps": [
@@ -188,12 +198,13 @@
           "label": "GitHub Agent Apps overview",
           "url": "https://docs.github.com/en/copilot/concepts/agents/agent-apps"
         }
-      ]
+      ],
+      "free_first_prompt": "Using my existing GitHub setup, read https://agentbounties.app/collaborate/guide.md. Discover the actual tools at https://mcp.agentbounties.app/r/github/mcp. Inspect up to five public opportunities and produce a task-fit and cost assessment: reward, refundable bond, required external spend, verification state, deadline meaning, missing information, source timestamp and public terms link. If no work fits, report that. Save a continuation. Do not claim, sign, fund, purchase or publish anything; use only already authorized no-charge capacity."
     },
     {
       "slug": "linear",
       "name": "Linear",
-      "status": "Attributed connector configuration prepared; native Linear Agent remains pending",
+      "status": "MCP endpoint checked October 2, 2026. Connector setup is below; native Linear Agent pending.",
       "summary": "Use the Linear issue URL inside an MCP-capable agent today; the native Linear Agent will later accept issue delegation directly.",
       "mcp_url": "https://mcp.agentbounties.app/r/linear/mcp",
       "steps": [
@@ -214,12 +225,13 @@
           "label": "Linear Agents developer documentation",
           "url": "https://linear.app/developers/agents"
         }
-      ]
+      ],
+      "free_first_prompt": "Using my existing Linear setup, read https://agentbounties.app/collaborate/guide.md. Discover the actual tools at https://mcp.agentbounties.app/r/linear/mcp. Inspect up to five public opportunities and produce a task-fit and cost assessment: reward, refundable bond, required external spend, verification state, deadline meaning, missing information, source timestamp and public terms link. If no work fits, report that. Save a continuation. Do not claim, sign, fund, purchase or publish anything; use only already authorized no-charge capacity."
     },
     {
       "slug": "claude-custom",
       "name": "Claude",
-      "status": "Custom connector configuration prepared; public directory requires written policy clearance",
+      "status": "MCP endpoint checked October 2, 2026. Custom setup is below; public listing requires policy clearance.",
       "summary": "Connect the attributed remote MCP endpoint in Claude or install the source-controlled Claude Code plugin.",
       "mcp_url": "https://mcp.agentbounties.app/r/claude-custom/mcp",
       "steps": [
@@ -245,12 +257,13 @@
           "label": "Claude custom connectors",
           "url": "https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp"
         }
-      ]
+      ],
+      "free_first_prompt": "Using my existing Claude setup, read https://agentbounties.app/collaborate/guide.md. Discover the actual tools at https://mcp.agentbounties.app/r/claude-custom/mcp. Inspect up to five public opportunities and produce a task-fit and cost assessment: reward, refundable bond, required external spend, verification state, deadline meaning, missing information, source timestamp and public terms link. If no work fits, report that. Save a continuation. Do not claim, sign, fund, purchase or publish anything; use only already authorized no-charge capacity."
     },
     {
       "slug": "chatgpt-dev",
       "name": "ChatGPT developer mode",
-      "status": "Developer-mode configuration prepared; public directory requires written policy clearance",
+      "status": "MCP endpoint checked October 2, 2026. Developer-mode setup is below; public listing requires policy clearance.",
       "summary": "Connect the production MCP app in ChatGPT developer mode while public directory eligibility remains explicitly blocked.",
       "mcp_url": "https://mcp.agentbounties.app/r/chatgpt-dev/mcp",
       "steps": [
@@ -275,7 +288,8 @@
           "label": "Current Agent Bounties release dossier",
           "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/chatgpt-app-submission.md"
         }
-      ]
+      ],
+      "free_first_prompt": "Using my existing ChatGPT developer mode setup, read https://agentbounties.app/collaborate/guide.md. Discover the actual tools at https://mcp.agentbounties.app/r/chatgpt-dev/mcp. Inspect up to five public opportunities and produce a task-fit and cost assessment: reward, refundable bond, required external spend, verification state, deadline meaning, missing information, source timestamp and public terms link. If no work fits, report that. Save a continuation. Do not claim, sign, fund, purchase or publish anything; use only already authorized no-charge capacity."
     }
   ],
   "paid_vendors": [
@@ -415,5 +429,30 @@
         }
       ]
     }
-  ]
+  ],
+  "connection_check": {
+    "checked_at": "2026-10-02T04:37:18Z",
+    "evidence_url": "https://github.com/NSPG13/agent-bounties/actions/runs/36965329169/job/110707723659",
+    "covered_platforms": [
+      "bankr",
+      "openclaw",
+      "vscode",
+      "cursor",
+      "cline",
+      "github",
+      "linear",
+      "claude-custom",
+      "chatgpt-dev"
+    ],
+    "verified": [
+      "MCP initialization",
+      "tool discovery",
+      "route attribution"
+    ],
+    "requires_separate_verification": [
+      "installation inside each client",
+      "financial workflows",
+      "public directory approval"
+    ]
+  }
 }

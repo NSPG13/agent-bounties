@@ -1,0 +1,18 @@
+{
+  "schema_version": "agent-bounties/builder-review-v1",
+  "rubric_version": "2026-10-02",
+  "category": "read-only-integration",
+  "artifact": {"url": null, "revision": null},
+  "reviewer_url": null,
+  "checked_at": null,
+  "environment": "Not recorded yet.",
+  "limitations": "Unfinished review. This template is not an accepted submission or external activity.",
+  "checks": [
+    {"id": "artifact", "result": "not_checked", "evidence": "", "observation": ""},
+    {"id": "reproduction", "result": "not_checked", "evidence": "", "observation": ""},
+    {"id": "category", "result": "not_checked", "evidence": "", "observation": ""},
+    {"id": "recovery", "result": "not_checked", "evidence": "", "observation": ""},
+    {"id": "cost", "result": "not_checked", "evidence": "", "observation": ""},
+    {"id": "evidence", "result": "not_checked", "evidence": "", "observation": ""}
+  ]
+}

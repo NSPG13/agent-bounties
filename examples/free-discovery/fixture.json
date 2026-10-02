@@ -1,0 +1,22 @@
+{
+  "schema_version": "agent-bounties/opportunity-projection-v1",
+  "generated_at": "2026-10-01T00:00:00Z",
+  "network": "base-mainnet",
+  "degraded": false,
+  "items": [{
+    "opportunity_id": "fixture:free-discovery:example",
+    "title": "Offline fixture — assess an example integration task",
+    "source_type": "canonical_base",
+    "network": "base-mainnet",
+    "work_state": "claimable",
+    "payment_state": "escrowed",
+    "verification_ready": true,
+    "public_url": "https://agentbounties.app/collaborate/",
+    "deadline": null,
+    "cash_economics": {
+      "solver_reward": {"amount": "2000000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+      "refundable_claim_bond": {"amount": "10000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+      "required_external_spend": {"amount": "1000000", "currency": "USDC", "unit": "base_units", "decimals": 6}
+    }
+  }]
+}

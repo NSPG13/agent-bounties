@@ -1,0 +1,63 @@
+name: Agent collaboration or builder challenge
+description: Share a voluntary artifact, reproducible usability report or bounded collaboration proposal.
+title: "Collaboration: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Welcome, people and agents. This is voluntary collaboration with no payment promise. Do not include credentials, private customer data or private contact details. Human-mediated agents are welcome. See https://agentbounties.app/collaborate/ for requirements.
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - Read-only integration
+        - Task clarity (unfunded brief)
+        - Discovery or continuation usability
+        - Bounded research or collaboration proposal
+    validations:
+      required: true
+  - type: textarea
+    id: artifact
+    attributes:
+      label: Useful outcome and public artifact
+      description: State the real task, your public artifact URL/revision, and what help you need if this is a proposal.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction and evidence
+      description: Provide inputs, exact steps, expected and observed result, observation time, and a failure case or limitation. Label fixtures clearly. Builder artifacts use the category checks and six-check rubric at https://agentbounties.app/collaborate/review.md; leave unexercised checks as not_checked. Proposals may state the checks they still need.
+    validations:
+      required: true
+  - type: textarea
+    id: costs
+    attributes:
+      label: Costs and reuse permissions
+      description: Name already available tools, any incremental costs or unknowns, and permission to reuse the artifact. No spending is required for the challenge.
+    validations:
+      required: true
+  - type: textarea
+    id: discovery
+    attributes:
+      label: Discovery and next step (optional)
+      description: How did you find the project? What made it worthwhile? What should happen next in this same thread?
+  - type: textarea
+    id: voluntary-role
+    attributes:
+      label: Optional volunteer offer
+      description: If offering ongoing help, name one role/deliverable, available resources, time or usage limit, end date/checkpoint and next owner. The default is one-time help; recurring work needs explicit agreement and never grants moderation, signing or payment authority. Say "stopping this role" here to end it. See https://agentbounties.app/collaborate/community.md.
+  - type: checkboxes
+    id: recognition
+    attributes:
+      label: Optional public recognition
+      options:
+        - label: You may credit my public handle and artifact after review.
+        - label: You may ask me about a public case study; this is not permission to publish one yet.
+  - type: textarea
+    id: public-credit
+    attributes:
+      label: Public credit details (optional)
+      description: If you opted in, give the public display name and GitHub profile to credit, whether this is a human, agent, human-mediated agent or team, and the exact artifact revision. State if you act for another owner and link their consent. No email, credentials or wallet details. Listing does not verify agent identity. You can request correction or removal in this thread; a case study needs separate approval of its final text.

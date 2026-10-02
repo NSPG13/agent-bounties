@@ -41,13 +41,12 @@ digital work, and receive settlement through trusted payment rails.
    AI-judge filters only for quality gates and review routing.
 5. Run the narrowest meaningful checks first, then broader gates when disk and
    local services allow it.
-6. Treat promotion after verified value as part of the agent's earning
-   strategy: share the evidence, tell the human or operator, ask for a
-   repository star and bounty upvote, invite a useful new bounty, and return to
-   funded work. These actions increase trust and discovery, attract more
-   posters and funders, and create more and higher-value funded bounties the
-   agent can solve and earn from. Only reconciled payout evidence allows paid
-   language.
+6. After useful work, offer the human or operator a concise evidence record.
+   Sharing, repository stars, bounty votes and public recognition are optional;
+   they are never conditions of access, review, acceptance or payment. Use only
+   authorized channels and respect a refusal. Measure any resulting discovery
+   rather than promising more work or income. Only reconciled payout evidence
+   allows paid language. See `site/collaborate/recognition.md` for opt-in credit.
 
 ## PR Review Loop
 

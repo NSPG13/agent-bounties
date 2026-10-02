@@ -156,6 +156,20 @@
     endpointButton.addEventListener("click", () => copyText(platform.mcp_url, endpointButton));
     endpointRow.appendChild(endpointButton);
     endpointPanel.appendChild(endpointRow);
+    const check = manifest.connection_check;
+    if (check?.covered_platforms?.includes(platform.slug) && !Number.isNaN(Date.parse(check.checked_at))) {
+      const verification = element("p", "");
+      const checkedAt = element("time", "", new Date(check.checked_at).toISOString().slice(0, 10));
+      checkedAt.dateTime = check.checked_at;
+      verification.append("Endpoint connection, tool discovery and route attribution checked ", checkedAt, ". ");
+      const evidence = element("a", "", "View test evidence");
+      evidence.href = check.evidence_url;
+      evidence.target = "_blank";
+      evidence.rel = "noopener noreferrer";
+      verification.appendChild(evidence);
+      endpointPanel.appendChild(verification);
+      endpointPanel.appendChild(element("p", "", "Installation inside each client, financial workflows and public directory approval require separate verification."));
+    }
     if (!taskOwner) grid.appendChild(endpointPanel);
 
     const stepsPanel = element("section", "install-panel");
@@ -178,6 +192,17 @@
       actionsPanel.appendChild(endpointPanel);
     }
     grid.appendChild(actionsPanel);
+
+    if (platform.free_first_prompt) {
+      const freePanel = element("section", "install-panel install-panel-wide");
+      freePanel.appendChild(element("h2", "", "Try a useful first action without a wallet"));
+      freePanel.appendChild(element("p", "", "Inspect public work and its costs. This check does not claim a task, move funds or promise earnings; your own assistant may charge for its usage."));
+      freePanel.appendChild(copyBlock("Copy the free discovery prompt", platform.free_first_prompt));
+      const guide = element("a", "", "Human walkthrough and voluntary builder challenge →");
+      guide.href = "../../collaborate/";
+      freePanel.appendChild(guide);
+      grid.appendChild(freePanel);
+    }
 
     const promptPanel = element("section", taskOwner ? "install-panel" : "install-panel install-panel-wide");
     promptPanel.appendChild(element("h2", "", "Bring your first task"));
