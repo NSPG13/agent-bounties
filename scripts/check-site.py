@@ -95,6 +95,9 @@ REQUIRED_FILES = {
     "collaborate/collaborate.css",
     "collaborate/guide.md",
     "collaborate/challenge.json",
+    "collaborate/recognition.json",
+    "collaborate/recognition.js",
+    "collaborate/recognition.md",
     "collaborate/task-brief.md",
     "check-work.js",
     "check-work.css",
@@ -230,6 +233,7 @@ ALLOWED_UI_CODE = {
     "collaborate/assessment.js",
     "collaborate/collaborate.js",
     "collaborate/collaborate.css",
+    "collaborate/recognition.js",
     "creator-open.css",
     "creator-awards.js",
     "creator-awards.css",
@@ -1409,6 +1413,7 @@ def main() -> int:
         str(repo_root / "scripts/test-sponsored-setup.cjs"),
         str(repo_root / "scripts/test-free-discovery.cjs"),
         str(repo_root / "scripts/test-free-discovery-browser.cjs"),
+        str(repo_root / "scripts/test-contribution-recognition.cjs"),
     ], check=True)
     for relative in sorted(REQUIRED_FILES | EXPECTED_SCENE_ASSETS):
         if not (site_dir / relative).exists():

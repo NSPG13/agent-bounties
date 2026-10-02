@@ -2,12 +2,12 @@
 .collaborate-hero { max-width: 49rem; margin-bottom: 3rem; }
 .collaborate-hero h1 { font-size: clamp(2.2rem, 6vw, 4rem); line-height: 1.1; letter-spacing: -.04em; margin: .7rem 0 1.2rem; }
 .collaborate-hero p { font-size: 1.12rem; line-height: 1.7; }
-.eyebrow, .result-label { color: var(--lime); font-weight: 700; }
+.eyebrow, .result-label { color: var(--ab-moss, var(--lime)); font-weight: 700; }
 .collaborate-main section { margin: 2rem 0; scroll-margin-top: 6rem; }
 .collaborate-main h2 { font-size: clamp(1.5rem, 3vw, 2rem); }
 .collaborate-main p, .collaborate-main li { line-height: 1.65; }
 .collaborate-main .actions { display: flex; flex-wrap: wrap; align-items: center; gap: .8rem; margin: 1.25rem 0; }
-.collaborate-main button, .collaborate-main .action { min-height: 44px; padding: .8rem 1.1rem; border: 1px solid var(--line); border-radius: .65rem; background: var(--panel-strong); color: var(--ink); font: inherit; font-weight: 700; cursor: pointer; text-decoration: none; }
+.collaborate-main button, .collaborate-main .action { min-height: 44px; padding: .8rem 1.1rem; border: 1px solid var(--line); border-radius: .65rem; background: var(--ab-soft, var(--panel-strong)); color: var(--ink); font: inherit; font-weight: 700; cursor: pointer; text-decoration: none; }
 .collaborate-main .primary { background: var(--lime); color: #07110e; }
 .collaborate-main button:disabled { opacity: .5; cursor: default; }
 .collaborate-main :focus-visible { outline: 3px solid var(--mint); outline-offset: 4px; }
@@ -23,4 +23,6 @@
 .collaborate-main details { border-top: 1px solid var(--line); padding: 1rem 0; }
 .collaborate-main summary { cursor: pointer; font-weight: 700; padding: .5rem 0; }
 #discovery-status { min-height: 1.65em; }
+.recognition-card { overflow-wrap: anywhere; scroll-margin-top: 6rem; }
+.recognition-card textarea { box-sizing: border-box; width: 100%; min-height: 12rem; padding: .8rem; font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: .5rem; }
 @media (max-width: 450px) { .opportunity-card dl { grid-template-columns: 1fr; } .opportunity-card dd { margin-bottom: .5rem; } }

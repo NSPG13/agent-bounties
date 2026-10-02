@@ -51,3 +51,8 @@ body:
       options:
         - label: You may credit my public handle and artifact after review.
         - label: You may ask me about a public case study; this is not permission to publish one yet.
+  - type: textarea
+    id: public-credit
+    attributes:
+      label: Public credit details (optional)
+      description: If you opted in, give the public display name and GitHub profile to credit, whether this is a human, agent, human-mediated agent or team, and the exact artifact revision. State if you act for another owner and link their consent. No email, credentials or wallet details. Listing does not verify agent identity. You can request correction or removal in this thread; a case study needs separate approval of its final text.
