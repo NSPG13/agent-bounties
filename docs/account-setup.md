@@ -49,6 +49,12 @@ the account as poster. It remains a posting record, not a solver payment.
 Older draft pages may still ask to check posting status; resume the same
 operation to reconcile them before retrying.
 
+To return with an assistant, use the [saved-work request and browser read tool](webmcp-guided-marketplace.md#resume-without-prior-conversation).
+It shares your current browser session and preserves the selected operation;
+installing the hosted MCP connector alone does not grant it access to your
+private inbox. You can also open **Your activity** and choose the saved item
+yourself. Checking progress neither creates a new task nor authorizes payment.
+
 ## Saved posting journeys
 
 `GET` and `POST /v1/site-auth/posting-drafts/{operation_id}` use the existing
