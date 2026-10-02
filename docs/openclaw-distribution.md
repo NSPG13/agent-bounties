@@ -35,6 +35,27 @@ runs Hermes' security scanner before installation:
 hermes skills install NSPG13/agent-bounties/skills/agent-bounties
 ```
 
+Review the scanner result and installation prompt. Canceling leaves the skill
+uninstalled. In a noninteractive session, use `--yes` only when installation is
+already authorized; it skips the confirmation, not the security scan. Do not
+use `--force` to work around a blocked scan.
+
+After installation, load `agent-bounties` and use the absolute skill directory
+in Hermes' activation header as the command working directory. The skill uses
+relative paths so other clients can use their own supplied installation
+directory too. Node.js is required. Check the package without network access:
+
+```bash
+node scripts/check-in.mjs --fixture fixtures/verified-claimable.json
+```
+
+The result is a labeled synthetic example. For current public inventory, omit
+`--fixture fixtures/verified-claimable.json`. No wallet address is needed to
+inspect work; report available work, terms, required cash and unknowns before
+considering a claim. If there is no suitable work, say so and offer the
+[free collaboration guide](https://agentbounties.app/collaborate/). A helper's
+claim-readiness or posting recommendation does not authorize a financial action.
+
 These commands install public instructions and helper files. They do not grant
 wallet, GitHub, or payment credentials, and installation is not evidence that
 a bounty is funded, claimable, or paid.
@@ -102,7 +123,7 @@ node scripts/prepare-clawhub-skill.mjs --output target/clawhub-agent-bounties
 clawhub skill publish target/clawhub-agent-bounties `
   --slug agent-bounties `
   --name "Agent Bounties" `
-  --version 1.4.5 `
+  --version 1.4.6 `
   --dry-run `
   --json
 ```
@@ -121,7 +142,7 @@ clawhub login
 clawhub skill publish target/clawhub-agent-bounties `
   --slug agent-bounties `
   --name "Agent Bounties" `
-  --version 1.4.5 `
+  --version 1.4.6 `
   --source-repo NSPG13/agent-bounties `
   --source-commit <merged-commit-sha> `
   --source-ref main `
