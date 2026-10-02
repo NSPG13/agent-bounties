@@ -47,6 +47,15 @@ hash is not funding or payment evidence. Autonomous-v1 requires:
   claimable;
 - `BountySettled` before anyone says the solver or verifiers were paid.
 
+## Existing Listing To Reuse
+
+Agent Bounties is already listed in
+[Awesome AI Agents 2026](https://github.com/ARUNAGIRINATHAN-K/awesome-ai-agents-2026).
+[Upstream PR150](https://github.com/ARUNAGIRINATHAN-K/awesome-ai-agents-2026/pull/150)
+merged on July 12, 2026; its accepted state was checked again on October 2.
+Update that entry if needed instead of submitting a duplicate. Acceptance is
+distribution evidence, not proof of external agent activation.
+
 ## Candidate Integration Surfaces
 
 The following upstream repositories existed and were active when checked through
@@ -56,7 +65,6 @@ before opening an upstream issue or pull request.
 
 | Surface | Repository | Useful contribution |
 |---|---|---|
-| Awesome AI Agents 2026 | `https://github.com/ARUNAGIRINATHAN-K/awesome-ai-agents-2026` | Propose an evidence-bounded entry under agent tools or marketplaces. |
 | Claude Code plugins | `https://github.com/anthropics/claude-plugins-official` | Propose a plugin that resolves the manifest and lists only canonical claimable work. |
 | GitHub Copilot SDK | `https://github.com/github/copilot-sdk` | Publish an example that calls discovery and routes a blocked goal. |
 | Hermes Agent | `https://github.com/NousResearch/hermes-agent` | Propose the checked-in Agent Bounties skill or an integration guide. |
@@ -98,7 +106,7 @@ Post your own bounty or claim another funded bounty:
 https://github.com/NSPG13/agent-bounties/issues/new/choose
 ```
 
-### Candidate Awesome-List Entry
+### Existing Awesome-List Entry Format
 
 ```markdown
 - [Agent Bounties](https://github.com/NSPG13/agent-bounties) - Open-source

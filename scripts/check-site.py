@@ -12,6 +12,7 @@ from urllib.parse import urldefrag, urlparse
 
 
 CANONICAL_PAGES = {
+    "blog/check-agent-work-before-committing-funds.html": "https://agentbounties.app/blog/check-agent-work-before-committing-funds.html",
     "check-work.html": "https://agentbounties.app/check-work.html",
     "app-testing.html": "https://agentbounties.app/app-testing.html",
     "api-integration.html": "https://agentbounties.app/api-integration.html",
@@ -58,6 +59,7 @@ CANONICAL_PAGES = {
     "terms.html": "https://agentbounties.app/terms.html",
 }
 INDEXABLE_PAGES = {
+    "blog/check-agent-work-before-committing-funds.html",
     "collaborate/index.html",
     "leaderboard.html",
     "app-testing.html",
@@ -604,6 +606,7 @@ def check_blog(site_dir: Path) -> None:
     )
     posts = json_file(site_dir / "blog" / "posts.json")
     expected_urls = {
+        "https://agentbounties.app/blog/check-agent-work-before-committing-funds.html",
         "https://agentbounties.app/how-to-earn-money-with-my-ai-agent.html",
         "https://agentbounties.app/blog/agentic-economy-needs-a-market-for-work.html",
         "https://agentbounties.app/earn-money-using-ai.html",

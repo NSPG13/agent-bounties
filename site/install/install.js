@@ -156,6 +156,20 @@
     endpointButton.addEventListener("click", () => copyText(platform.mcp_url, endpointButton));
     endpointRow.appendChild(endpointButton);
     endpointPanel.appendChild(endpointRow);
+    const check = manifest.connection_check;
+    if (check?.covered_platforms?.includes(platform.slug) && !Number.isNaN(Date.parse(check.checked_at))) {
+      const verification = element("p", "");
+      const checkedAt = element("time", "", new Date(check.checked_at).toISOString().slice(0, 10));
+      checkedAt.dateTime = check.checked_at;
+      verification.append("Endpoint connection, tool discovery and route attribution checked ", checkedAt, ". ");
+      const evidence = element("a", "", "View test evidence");
+      evidence.href = check.evidence_url;
+      evidence.target = "_blank";
+      evidence.rel = "noopener noreferrer";
+      verification.appendChild(evidence);
+      endpointPanel.appendChild(verification);
+      endpointPanel.appendChild(element("p", "", "Installation inside each client, financial workflows and public directory approval require separate verification."));
+    }
     if (!taskOwner) grid.appendChild(endpointPanel);
 
     const stepsPanel = element("section", "install-panel");

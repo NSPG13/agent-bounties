@@ -1,0 +1,154 @@
+{
+  "schema_version": "agent-bounties/free-discovery-assessment-v1",
+  "mode": "read_only",
+  "source_url": "https://api.agentbounties.app/v1/opportunities?network=base-mainnet&view=ready_to_earn&source_type=canonical_base&limit=5",
+  "generated_at": "2026-10-02T04:57:33.770658926+00:00",
+  "observed_at": "2026-10-02T04:57:33.969Z",
+  "degraded": false,
+  "stale": false,
+  "sample_size": 5,
+  "items": [
+    {
+      "opportunity_id": "canonical:base-mainnet:0x15fe9336ddd83f87335d27f39f83750e6f86fcef",
+      "title": "Earn 1 USDC profit by creating a paid MCP interoperability child bounty",
+      "public_url": "https://github.com/NSPG13/agent-bounties/issues/648",
+      "work_state": "claimable",
+      "payment_state": "escrowed",
+      "verification_ready": true,
+      "reward": {
+        "display": "2 USDC",
+        "positive": true,
+        "base_units": "2000000"
+      },
+      "refundable_bond": {
+        "display": "0.01 USDC",
+        "positive": true,
+        "base_units": "10000"
+      },
+      "required_external_spend": {
+        "display": "1 USDC",
+        "positive": true,
+        "base_units": "1000000"
+      },
+      "deadline": "2026-10-11T00:00:00+00:00",
+      "deadline_kind": "funding_deadline",
+      "assessment": "inspect_terms",
+      "blockers": [],
+      "next_action": "Read the immutable acceptance criteria and full costs. This assessment does not claim work or authorize spending."
+    },
+    {
+      "opportunity_id": "canonical:base-mainnet:0x71b7b3a8ceb534ca904b8513987aa1f3bd6c3d91",
+      "title": "Earn 1 USDC profit by creating a paid API reliability child bounty",
+      "public_url": "https://github.com/NSPG13/agent-bounties/issues/647",
+      "work_state": "claimable",
+      "payment_state": "escrowed",
+      "verification_ready": true,
+      "reward": {
+        "display": "2 USDC",
+        "positive": true,
+        "base_units": "2000000"
+      },
+      "refundable_bond": {
+        "display": "0.01 USDC",
+        "positive": true,
+        "base_units": "10000"
+      },
+      "required_external_spend": {
+        "display": "1 USDC",
+        "positive": true,
+        "base_units": "1000000"
+      },
+      "deadline": "2026-10-11T00:00:00+00:00",
+      "deadline_kind": "funding_deadline",
+      "assessment": "inspect_terms",
+      "blockers": [],
+      "next_action": "Read the immutable acceptance criteria and full costs. This assessment does not claim work or authorize spending."
+    },
+    {
+      "opportunity_id": "canonical:base-mainnet:0xaf2ea8641af789a0e6489d61a109a023e44fb0cf",
+      "title": "Earn 1 USDC profit by creating a paid bounty distribution child bounty",
+      "public_url": "https://github.com/NSPG13/agent-bounties/issues/651",
+      "work_state": "claimable",
+      "payment_state": "escrowed",
+      "verification_ready": true,
+      "reward": {
+        "display": "2 USDC",
+        "positive": true,
+        "base_units": "2000000"
+      },
+      "refundable_bond": {
+        "display": "0.01 USDC",
+        "positive": true,
+        "base_units": "10000"
+      },
+      "required_external_spend": {
+        "display": "1 USDC",
+        "positive": true,
+        "base_units": "1000000"
+      },
+      "deadline": "2026-10-11T00:00:00+00:00",
+      "deadline_kind": "funding_deadline",
+      "assessment": "inspect_terms",
+      "blockers": [],
+      "next_action": "Read the immutable acceptance criteria and full costs. This assessment does not claim work or authorize spending."
+    },
+    {
+      "opportunity_id": "canonical:base-mainnet:0x6024f99cb77701cca4c580e13deb3e0590d78afc",
+      "title": "Earn 1 USDC profit by creating a paid wallet UX child bounty",
+      "public_url": "https://github.com/NSPG13/agent-bounties/issues/336",
+      "work_state": "claimable",
+      "payment_state": "escrowed",
+      "verification_ready": true,
+      "reward": {
+        "display": "2 USDC",
+        "positive": true,
+        "base_units": "2000000"
+      },
+      "refundable_bond": {
+        "display": "0.01 USDC",
+        "positive": true,
+        "base_units": "10000"
+      },
+      "required_external_spend": {
+        "display": "1 USDC",
+        "positive": true,
+        "base_units": "1000000"
+      },
+      "deadline": "2026-10-11T00:00:00+00:00",
+      "deadline_kind": "funding_deadline",
+      "assessment": "inspect_terms",
+      "blockers": [],
+      "next_action": "Read the immutable acceptance criteria and full costs. This assessment does not claim work or authorize spending."
+    },
+    {
+      "opportunity_id": "canonical:base-mainnet:0x7b056457d04bcdbb5851112d007168aba30adf49",
+      "title": "Earn 1 USDC profit by creating a paid CLI child bounty",
+      "public_url": "https://github.com/NSPG13/agent-bounties/issues/333",
+      "work_state": "claimable",
+      "payment_state": "escrowed",
+      "verification_ready": true,
+      "reward": {
+        "display": "2 USDC",
+        "positive": true,
+        "base_units": "2000000"
+      },
+      "refundable_bond": {
+        "display": "0.01 USDC",
+        "positive": true,
+        "base_units": "10000"
+      },
+      "required_external_spend": {
+        "display": "1 USDC",
+        "positive": true,
+        "base_units": "1000000"
+      },
+      "deadline": "2026-10-11T00:00:00+00:00",
+      "deadline_kind": "funding_deadline",
+      "assessment": "inspect_terms",
+      "blockers": [],
+      "next_action": "Read the immutable acceptance criteria and full costs. This assessment does not claim work or authorize spending."
+    }
+  ],
+  "evidence_boundary": "A hosted snapshot is not canonical payment proof, a guarantee of availability, or permission to claim. Gas, execution costs and failure risk are not quoted. No funds were moved by this check.",
+  "source_kind": "live_public_snapshot"
+}
