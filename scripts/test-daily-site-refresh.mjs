@@ -15,7 +15,7 @@ test('only the scoped Cloudflare hook receives a scheduled POST', async () => {
     await worker.scheduled({}, {PAGES_DEPLOY_HOOK:'https://api.cloudflare.com/client/v4/pages/webhooks/deploy_hooks/fixture'});
     assert.equal(requests.length, 1);
     assert.equal(requests[0].options.method, 'POST');
-    assert.equal(requests[0].options.redirect, 'error');
+    assert.equal(requests[0].options.redirect, 'manual');
   } finally { globalThis.fetch = original; }
 });
 test('failed scheduled request remains a visible failure', async () => {
@@ -23,5 +23,19 @@ test('failed scheduled request remains a visible failure', async () => {
   globalThis.fetch = async () => ({ok:false});
   try {
     await assert.rejects(worker.scheduled({}, {PAGES_DEPLOY_HOOK:'https://api.cloudflare.com/client/v4/pages/webhooks/deploy_hooks/fixture'}));
+  } finally { globalThis.fetch = original; }
+});
+
+test('redirected hooks fail without following the new destination', async () => {
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async (_url, options) => {
+    calls += 1;
+    assert.equal(options.redirect, 'manual');
+    return new Response(null, {status:302,headers:{Location:'https://attacker.invalid/hook'}});
+  };
+  try {
+    await assert.rejects(worker.scheduled({}, {PAGES_DEPLOY_HOOK:'https://api.cloudflare.com/client/v4/pages/webhooks/deploy_hooks/fixture'}), /rebuild request failed/);
+    assert.equal(calls, 1);
   } finally { globalThis.fetch = original; }
 });

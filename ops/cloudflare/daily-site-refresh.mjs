@@ -11,7 +11,8 @@ export default {
       throw new Error("Invalid Pages rebuild hook configuration");
     }
     const response = await fetch(url, {
-      method: "POST", redirect: "error", signal: AbortSignal.timeout(10000),
+      // Workers supports manual redirects; non-2xx responses fail below.
+      method: "POST", redirect: "manual", signal: AbortSignal.timeout(10000),
     });
     if (!response.ok) throw new Error("Daily Pages rebuild request failed");
     console.log("daily_site_refresh_requested");
