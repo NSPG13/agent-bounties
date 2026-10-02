@@ -325,7 +325,7 @@ test("portable skill metadata and install contracts remain publishable", async (
   const activationItems = [...activation.bounties, ...standingMetaActivation.bounties];
 
   assert.match(skill, /^---\r?\nname: agent-bounties\r?\n/);
-  assert.match(skill, /\r?\nversion: 1\.4\.6\r?\n/);
+  assert.match(skill, /\r?\nversion: 1\.4\.7\r?\n/);
   assert.match(skill, /\r?\nauthor: Agent Bounties contributors\r?\n/);
   assert.match(skill, /\r?\n  hermes:\r?\n/);
   assert.match(skill, /\r?\n    category: agent-commerce\r?\n/);
@@ -340,7 +340,7 @@ test("portable skill metadata and install contracts remain publishable", async (
 
   assert.equal(plugin.name, "agent-bounties");
   assert.equal(plugin.displayName, "Agent Bounties");
-  assert.equal(plugin.version, "1.4.6");
+  assert.equal(plugin.version, "1.4.7");
   assert.equal(plugin.license, "MIT");
   assert.equal(plugin.repository, "https://github.com/NSPG13/agent-bounties");
   assert.equal(plugin.homepage, "https://agentbounties.app/");
@@ -979,9 +979,36 @@ test("unavailable hosted API cannot create imaginary inventory", async () => {
   assert.deepEqual(report.verified_claimable_bounties, []);
   assert.equal(report.recommended_action, "post_own_bounty");
   assert.equal(report.next_action.action, "post_own_bounty");
+  assert.equal(report.discovery_assessment.result, "no_verified_work_in_scope");
+  assert.equal(report.discovery_assessment.marketplace_coverage, "partial");
+  assert.equal(report.discovery_assessment.next_action.requires_wallet, false);
+  assert.equal(report.discovery_assessment.next_action.action, "summarize_read_only_assessment");
   assert.ok(report.warnings.includes("hosted_api_health_not_confirmed"));
   assert.ok(report.warnings.includes("autonomous_feed_unavailable"));
   assert.ok(report.warnings.includes("autonomous_protocol_not_active"));
+});
+
+test("discovery assessment keeps exclusions separate from broader marketplace availability", async () => {
+  const input = await fixture("verified-claimable.json");
+  const report = await collectInventory({ apiBaseUrl: "https://api.example.test", fixture: input });
+  assert.equal(report.discovery_assessment.source, "synthetic_fixture");
+  assert.equal(report.discovery_assessment.result, "verified_work_in_scope");
+  assert.equal(report.discovery_assessment.verified_opportunity_count, 1);
+  assert.equal(report.discovery_assessment.excluded_claimable_candidate_count, 1);
+  assert.equal(report.discovery_assessment.broader_discovery.status, "not_evaluated_by_this_helper");
+  assert.equal(new URL(report.discovery_assessment.broader_discovery.url).origin, "https://api.example.test");
+  assert.equal(report.next_action.action, "rerun_with_solver_wallet");
+
+  input.autonomous_feed.body = input.autonomous_feed.body.filter(
+    (item) => item.bounty_id !== report.verified_claimable_bounties[0].id,
+  );
+  const excludedOnly = await collectInventory({ apiBaseUrl: "https://api.example.test", fixture: input });
+  assert.equal(excludedOnly.discovery_assessment.result, "no_verified_work_in_scope");
+  assert.equal(excludedOnly.discovery_assessment.verified_opportunity_count, 0);
+  assert.equal(excludedOnly.discovery_assessment.excluded_claimable_candidate_count, 1);
+  assert.equal(excludedOnly.discovery_assessment.marketplace_coverage, "partial");
+  assert.deepEqual(excludedOnly.excluded_claimable_candidates, report.excluded_claimable_candidates);
+  assert.equal(excludedOnly.discovery_assessment.next_action.requires_wallet, false);
 });
 
 test("API URL rejects credentials and insecure remote HTTP", () => {
