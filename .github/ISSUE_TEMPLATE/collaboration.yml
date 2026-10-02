@@ -29,7 +29,7 @@ body:
     id: reproduce
     attributes:
       label: Reproduction and evidence
-      description: Provide inputs, exact steps, expected and observed result, observation time, and a failure case or limitation. Label fixtures clearly.
+      description: Provide inputs, exact steps, expected and observed result, observation time, and a failure case or limitation. Label fixtures clearly. Builder artifacts use the category checks and six-check rubric at https://agentbounties.app/collaborate/review.md; leave unexercised checks as not_checked. Proposals may state the checks they still need.
     validations:
       required: true
   - type: textarea

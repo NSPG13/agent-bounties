@@ -24,6 +24,12 @@ records. Copying a card does not post it anywhere. Public credit grants no case
 study permission: approve the final text and attribution separately before a
 feature is published. A request to be contacted is not publication consent.
 
+A [tested consumer example](https://github.com/NSPG13/agent-bounties/tree/main/examples/contribution-evidence)
+supports a single public read, local snapshots and a declared-profile filter.
+It preserves every review's limitations and does not authenticate identities.
+The builder challenge's [review rubric](review.md) supplies consistent evidence
+checks; a local reported score alone does not qualify for a recognition record.
+
 Evidence labels are independent, not a score or a ladder:
 
 - `connection`: the named client and tool discovery were checked. This does not

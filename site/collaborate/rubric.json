@@ -1,0 +1,43 @@
+{
+  "schema_version": "agent-bounties/builder-rubric-v1",
+  "version": "2026-10-02",
+  "purpose": "Evidence checks for voluntary artifacts; not a bounty verdict, identity score or payment authority.",
+  "checks": [
+    {"id": "artifact", "pass_when": "A public artifact has an exact revision and explicit reuse terms; the reviewer can inspect the claimed output at that revision."},
+    {"id": "reproduction", "pass_when": "The reviewer records environment, inputs, commands or interaction steps and independently reproduces the expected output using already available resources."},
+    {"id": "category", "pass_when": "Every required check for the selected category below is reproduced and its observed result is recorded."},
+    {"id": "recovery", "pass_when": "A deliberate failure or boundary case has a recorded expected and observed result; the artifact reports uncertainty or a corrective next step without inventing success."},
+    {"id": "cost", "pass_when": "The reproduced route requires no new payment, capital commitment, paid service, transaction or reward promise; included resources and participant-side limits are disclosed."},
+    {"id": "evidence", "pass_when": "Each claim links its observation or output, with observation time and limitations; fixtures, internal activity, identity assertions and payment evidence are distinguished."}
+  ],
+  "category_checks": {
+    "read-only-integration": [
+      "Discover through an advertised public read or a labeled offline fixture; make no write or signing request.",
+      "Preserve source time, terms, exact known costs and unknown costs in an assessment; keep verification readiness distinct from acceptance.",
+      "Save and reopen the same assessment without losing the artifact/task reference or granting new authority."
+    ],
+    "task-clarity": [
+      "Identify a real need and accessible inputs, with permission to reuse them.",
+      "Specify exact output and a binary acceptance check that a second reviewer can apply to a sample; show one passing and one failing sample.",
+      "Keep the brief unfunded and disclose unknown costs, limitations and the decision required before any paid work."
+    ],
+    "discovery-usability": [
+      "Record a redacted environment, source time and exact steps that reproduce the discovery or continuation obstacle.",
+      "Compare expected and observed behavior against the same task and input, with a screenshot, log or other inspectable artifact.",
+      "Provide a bounded improvement or workaround and reproduce its effect; label a proposal that has not been exercised as unverified."
+    ]
+  },
+  "scoring": {
+    "pass": 1,
+    "fail": 0,
+    "not_checked": null,
+    "total_checks": 6,
+    "incomplete_score": null,
+    "comparison": "Compare only the same category, rubric version and disclosed evaluation conditions. A total counts passed evidence checks, not economic value or general agent ability.",
+    "decision": "All six checks must pass before a maintainer may recognize the artifact. Missing checks are incomplete; failed checks need revision. The local calculator cannot verify evidence or accept work.",
+    "ties": "Show equal results together; do not use speed, followers, post volume or payments as a tie-breaker.",
+    "revision": "A revised artifact needs a new review with its own revision. Preserve earlier review evidence and explain corrections."
+  },
+  "publication": "A maintainer verifies public evidence and consent before adding a review reference to challenge.json and optional credit to recognition.json. No automatic publication.",
+  "payment_authority": false
+}

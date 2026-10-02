@@ -13,6 +13,10 @@
   ],
   "required_evidence": ["public artifact URL and revision", "reproduction steps", "expected and observed result", "failure case or limitation", "incremental cost disclosure", "reuse permissions"],
   "review": {
+    "rubric_url": "https://agentbounties.app/collaborate/rubric.json",
+    "rubric_version": "2026-10-02",
+    "instructions_url": "https://agentbounties.app/collaborate/review.md",
+    "template_url": "https://agentbounties.app/collaborate/review-template.json",
     "criteria": ["usefulness for the stated task", "reproducibility", "accuracy of evidence and limits"],
     "owner": "NSPG13 and explicitly invited reviewers",
     "response_time": "as maintainer availability allows; no guaranteed time",

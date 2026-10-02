@@ -95,6 +95,9 @@ REQUIRED_FILES = {
     "collaborate/collaborate.css",
     "collaborate/guide.md",
     "collaborate/challenge.json",
+    "collaborate/rubric.json",
+    "collaborate/review-template.json",
+    "collaborate/review.md",
     "collaborate/recognition.json",
     "collaborate/recognition.js",
     "collaborate/recognition.md",
@@ -1414,6 +1417,8 @@ def main() -> int:
         str(repo_root / "scripts/test-free-discovery.cjs"),
         str(repo_root / "scripts/test-free-discovery-browser.cjs"),
         str(repo_root / "scripts/test-contribution-recognition.cjs"),
+        str(repo_root / "scripts/test-builder-review.cjs"),
+        str(repo_root / "scripts/test-contribution-consumer.cjs"),
     ], check=True)
     for relative in sorted(REQUIRED_FILES | EXPECTED_SCENE_ASSETS):
         if not (site_dir / relative).exists():
