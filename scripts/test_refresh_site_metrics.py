@@ -38,6 +38,22 @@ class Tests(unittest.TestCase):
             metrics.Reader("fixture-token", opener).records("NSPG13/agent-bounties", "issues")
         self.assertEqual(opener.calls, 1)
 
+    def test_github_numeric_repository_pagination_is_scoped(self):
+        requests = []
+        next_url = metrics.PAGINATION_PREFIX + "issues?state=all&per_page=100&after=cursor&page=2"
+        responses = iter([Response([{"id": 1}], '<'+next_url+'>; rel="next"'), Response([{"id": 2}])])
+        class Opener:
+            def open(self, request, timeout):
+                requests.append(request.full_url)
+                return next(responses)
+        reader = metrics.Reader("fixture-token", Opener())
+        self.assertEqual(reader.records("NSPG13/agent-bounties", "issues"), [{"id": 1}, {"id": 2}])
+        self.assertEqual(requests, [metrics.PREFIX + "issues", next_url])
+        for url in ("https://api.github.com/repositories/1/issues", "https://api.github.com/repositories/12930306960/issues"):
+            with self.assertRaises(ValueError):
+                reader.page(url)
+        self.assertEqual(len(requests), 2)
+
     def test_failed_collection_preserves_previous_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "snapshot.json"

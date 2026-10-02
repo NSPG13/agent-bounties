@@ -18,6 +18,8 @@ import github_audience_audit as audit
 
 ROOT = Path(__file__).resolve().parents[1]
 PREFIX = "https://api.github.com/repos/NSPG13/agent-bounties/"
+# GitHub's Link header uses this repository's stable numeric ID for pagination.
+PAGINATION_PREFIX = "https://api.github.com/repositories/1293030696/"
 
 
 class NoRedirects(urllib.request.HTTPRedirectHandler):
@@ -31,7 +33,7 @@ class Reader:
         self.opener = opener or urllib.request.build_opener(NoRedirects())
 
     def page(self, url, accept=None):
-        if not url.startswith(PREFIX) or any(c in url for c in ("\r", "\n", "#", "\\")):
+        if not url.startswith((PREFIX, PAGINATION_PREFIX)) or any(c in url for c in ("\r", "\n", "#", "\\")):
             raise ValueError("Unexpected GitHub metrics URL")
         request = urllib.request.Request(url, headers={
             "Accept": accept or "application/vnd.github+json",
