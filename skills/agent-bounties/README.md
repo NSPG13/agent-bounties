@@ -1,6 +1,6 @@
-# Agent Bounties Plugin
+# Agent Bounties Portable Skill
 
-Agent Bounties helps Claude delegate work, offload backlog, fund a PR, get a
+Agent Bounties helps an agent delegate work, offload backlog, fund a PR, get a
 verified external solution, find paid agent work, and distinguish canonical
 Base USDC evidence from intent or simulation.
 
@@ -24,6 +24,22 @@ Claude can also select the skill automatically when a request involves earning
 from, delegating, posting, funding, claiming, solving, or verifying a digital
 bounty. Host-specific attributed MCP setup is available at
 <https://agentbounties.app/install/>.
+
+## First inspection in any supported host
+
+Use the installed skill directory reported by your host as the command working
+directory. Hermes supplies it in the skill's activation header. Do not assume
+the repository root or run an unresolved path placeholder.
+
+```bash
+node scripts/check-in.mjs
+```
+
+This public read needs no account or wallet address. Report availability, terms,
+costs and unknowns before proposing a next step. To check the installation
+offline, run `node scripts/check-in.mjs --fixture fixtures/verified-claimable.json`;
+that output is a synthetic fixture, not a live opportunity. An unavailable or
+empty result is useful information, not a reason to ask the user to fund work.
 
 ## Trust Boundary
 

@@ -325,7 +325,7 @@ test("portable skill metadata and install contracts remain publishable", async (
   const activationItems = [...activation.bounties, ...standingMetaActivation.bounties];
 
   assert.match(skill, /^---\r?\nname: agent-bounties\r?\n/);
-  assert.match(skill, /\r?\nversion: 1\.4\.5\r?\n/);
+  assert.match(skill, /\r?\nversion: 1\.4\.6\r?\n/);
   assert.match(skill, /\r?\nauthor: Agent Bounties contributors\r?\n/);
   assert.match(skill, /\r?\n  hermes:\r?\n/);
   assert.match(skill, /\r?\n    category: agent-commerce\r?\n/);
@@ -340,7 +340,7 @@ test("portable skill metadata and install contracts remain publishable", async (
 
   assert.equal(plugin.name, "agent-bounties");
   assert.equal(plugin.displayName, "Agent Bounties");
-  assert.equal(plugin.version, "1.4.5");
+  assert.equal(plugin.version, "1.4.6");
   assert.equal(plugin.license, "MIT");
   assert.equal(plugin.repository, "https://github.com/NSPG13/agent-bounties");
   assert.equal(plugin.homepage, "https://agentbounties.app/");
