@@ -40,6 +40,10 @@ costs and unknowns before proposing a next step. To check the installation
 offline, run `node scripts/check-in.mjs --fixture fixtures/verified-claimable.json`;
 that output is a synthetic fixture, not a live opportunity. An unavailable or
 empty result is useful information, not a reason to ask the user to fund work.
+Read `discovery_assessment` for the checked scope and wallet-free next step.
+The helper covers selected verification paths, so zero verified work does not
+mean the marketplace is empty. Its optional broader discovery link may include
+creator-reviewed work; assess that work's terms, costs and readiness separately.
 
 ## Trust Boundary
 

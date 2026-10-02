@@ -1486,8 +1486,28 @@ export async function collectInventory({
     item.claim_handoff = buildClaimHandoff(item, solver, api);
   }
 
+  const discoveryCount = verified.length + v2.verified.length;
   return {
     observed_at: new Date().toISOString(),
+    discovery_assessment: {
+      source: fixture ? "synthetic_fixture" : "live_reads",
+      scope: "helper_supported_verification_paths",
+      marketplace_coverage: "partial",
+      verified_opportunity_count: discoveryCount,
+      excluded_claimable_candidate_count: excluded.length,
+      result: discoveryCount ? "verified_work_in_scope" : "no_verified_work_in_scope",
+      interpretation: "This helper checks selected verification paths and bundled chain canaries. An empty result does not establish an empty marketplace; inspect exclusions and source warnings.",
+      next_action: {
+        action: "summarize_read_only_assessment",
+        requires_wallet: false,
+        instruction: "Report the checked scope, suitable work, costs and unknowns. Discovery is complete without registration, posting, funding or signing.",
+      },
+      broader_discovery: {
+        url: `${api}/v1/opportunities?network=base-mainnet&view=ready_to_earn&source_type=canonical_base&limit=300`,
+        status: "not_evaluated_by_this_helper",
+        instruction: "Optional read-only discovery may include other verification paths such as creator review. Inspect each item's terms, costs and readiness separately; listing is not this helper's verification or payment evidence.",
+      },
+    },
     api_base_url: api,
     protocol_url: protocolEndpoint,
     hosted_api_healthy: healthOk,
