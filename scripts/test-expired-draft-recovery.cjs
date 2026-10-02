@@ -140,6 +140,21 @@ function fixture(expired) {
           for (const [tool, message] of Object.entries(failures)) assert.match(message, expected, `${postPath} ${name}: ${tool}`);
           assert.deepEqual(await invalidPage.evaluate(() => window.__walletCalls), []);
           (output.invalid_cases ||= []).push({ postPath, name, failures, wallet_calls: 0 });
+          if (name === "mismatched-saved-policy") {
+            const journal = { phase: "submitted", bounty_contract: "0x" + "11".repeat(20), bounty_id: "0x" + "22".repeat(32), transactions: ["0x" + "33".repeat(32)], authorizationIssued: true };
+            const recovery = await invalidPage.evaluate(async journal => {
+              const key = "agent-bounties.posting-operation.v1";
+              sessionStorage.setItem(key, JSON.stringify(journal));
+              return { journey: await window.AgentBountiesWebMCP.call("agent_bounties_get_journey"), review: await window.AgentBountiesWebMCP.call("agent_bounties_get_bounty_review"), journal: JSON.parse(sessionStorage.getItem(key)), wallet_calls: window.__walletCalls };
+            }, journal);
+            assert.equal(recovery.journey.next_action.tool, "agent_bounties_get_posting_status");
+            assert.equal(recovery.review.funding_ready, false);
+            assert.match(recovery.review.blocker, /does not match/);
+            assert.match(recovery.review.next_action, /reconcile/);
+            assert.deepEqual(recovery.journal, journal);
+            assert.deepEqual(recovery.wallet_calls, []);
+            (output.pending_recovery ||= []).push({ postPath, malformed_policy: true, unchanged_journal: true, next_tool: recovery.journey.next_action.tool, wallet_calls: 0 });
+          }
           await invalidPage.close();
         }
       }

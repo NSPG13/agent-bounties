@@ -2479,7 +2479,7 @@
       if (state.postingAccountStatus === "unavailable" || saved.conflict || saved.status === "unavailable") {
         throw new Error("Account draft restoration is unavailable. Keep the same operation and retry; do not request approval again.");
       }
-      if (restorationError) throw restorationError;
+      if (restorationError && !postingJournal.load()) throw restorationError;
     },
     invalidate() {
       if (!state.draft || postingBusy || postingJournal.load()) return;
@@ -2497,8 +2497,8 @@
       return staging;
     },
     review() {
-      let blocker = null;
-      if (state.draft) { try { supportedVerificationPolicy(); } catch (error) { blocker = error.message; } }
+      let blocker = restorationError?.message || null;
+      if (state.draft && !blocker) { try { supportedVerificationPolicy(); } catch (error) { blocker = error.message; } }
       const expired = expiredDeliveryDeadline();
       if (expired) blocker = "The saved delivery deadline has passed. Agree a new deadline and review the updated terms before funding.";
       return {
@@ -2517,7 +2517,8 @@
         review_mode: state.draft?.benchmark?.engine === "creator_review_v1" ? "creator" : "automated",
         delivery_deadline: state.deliveryDeadline || null,
         saved_brief: window.AgentBountiesWorkflow.createClient(window).load()?.brief || null,
-        next_action: expired ? "Ask for a new agreed delivery deadline, then restage the same posting operation and review its updated terms. Preserve the outcome, criteria and reward split; do not invent a date or repeat a wallet operation."
+        next_action: postingJournal.load() ? "Use agent_bounties_get_posting_status to reconcile the recorded wallet operation. Preserve the journal; do not restage terms or repeat funding."
+          : expired ? "Ask for a new agreed delivery deadline, then restage the same posting operation and review its updated terms. Preserve the outcome, criteria and reward split; do not invent a date or repeat a wallet operation."
           : !state.draft || state.reviewStale ? "Prepare or update the proposal using saved_brief. Preserve its outcome, budget and deadline. Ask only for missing business decisions."
           : blocker ? "For non-software work, propose review_mode=creator with the agreed delivery_deadline and no automated benchmark, then stage it for the person’s review. Meta children still require their automated verifier. Never invent benchmark details."
           : "The person reviews the terms once, then uses the wallet confirmation. No separate approval in chat is needed.",
