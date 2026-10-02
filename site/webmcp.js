@@ -293,13 +293,11 @@
       if (raw) {
         window.sessionStorage.removeItem(PENDING_DRAFT_KEY);
         draft = JSON.parse(raw);
+        // The composer restores the same saved journey without re-preparing or
+        // rewriting it. Keep the legacy pending-only handoff as a fallback.
+        if (JSON.stringify(client.load()?.draft) === JSON.stringify(draft)) return;
       } else {
-        const journey = client.load();
-        if (journey?.draft_stale) return;
-        const saved = journey?.draft;
-        const parent = params.get("parentBounty");
-        if (!saved || (parent && saved.meta_child?.parent_bounty_contract !== parent.toLowerCase()) || flow.createPostingJournal(window).load()) return;
-        draft = saved;
+        return;
       }
     } catch (_error) {
       return;
@@ -515,6 +513,7 @@
       const journey = client.load() || client.start({ role: "post" });
       if (isPost) {
         const result = await stageOnPostPage(draft);
+        pendingStaging = Promise.resolve();
         // The composer persists the normalized review, including its actual
         // verification policy. Overwriting it with the raw tool input would
         // change the approval hash when the same draft is restored on reload.
@@ -682,9 +681,11 @@
   }
   function journeyResult(journey) {
     const posting = flow.createPostingJournal(window).load();
+    const review = isPost ? window.AgentBountiesComposer?.review?.() : null;
     const next = isCompetition ? { tool: "agent_bounties_get_proof_status", input: {} }
       : isParticipant ? { tool: "agent_bounties_get_work_status", input: {} }
       : posting ? { tool: "agent_bounties_get_posting_status", input: {} }
+      : review?.recovery_code === "delivery_deadline_expired" ? { tool: "agent_bounties_stage_funded_bounty", missing: review.next_action, posting_operation_id: journey?.id }
       : !journey ? { tool: "agent_bounties_start_journey", missing: "Does the person want work done, or want to earn? Infer this from their request when possible." }
       : journey.draft_stale ? { tool: "agent_bounties_stage_funded_bounty", missing: "The brief changed. Update the existing proposal from journey.brief and restage it; do not reuse the old draft amounts or deadline." }
       : journey.draft && isPost ? { tool: "agent_bounties_get_bounty_review", input: {} }

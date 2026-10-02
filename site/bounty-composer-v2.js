@@ -104,6 +104,7 @@
     mic: document.querySelector("[data-dictate]"),
     hint: document.querySelector("[data-composer-hint]"),
     status: document.querySelector("[data-composer-status]"),
+    recovery: document.querySelector("[data-draft-recovery]"),
     progress: Array.from(document.querySelectorAll("[data-progress-step]")),
     preview: document.getElementById("bounty-preview"),
     art: document.getElementById("bounty-card-art"),
@@ -294,6 +295,21 @@
 
   function syncPrimaryAction() {
     if (!state.approved) ui.fundNow.disabled = true;
+    const expired = expiredDeliveryDeadline();
+    if (ui.recovery) {
+      ui.recovery.hidden = !expired;
+      ui.recovery.textContent = expired ? "The delivery deadline has passed. Edit the brief and agree a new deadline with your AI, then review the updated proposal." : "";
+    }
+    ui.fund.textContent = expired ? "Update deadline first" : "Connect wallet";
+    if (expired) {
+      ui.approve.disabled = true; ui.fund.disabled = true; ui.fundNow.disabled = true;
+      ui.approve.dataset.approved = String(state.approved);
+      ui.approve.dataset.nextAction = "blocked";
+      ui.approve.textContent = "Update delivery deadline";
+      ui.confidence.textContent = "The saved delivery deadline has passed";
+      setStatus("Your draft is saved. Agree a new delivery deadline, then review the updated proposal before funding.", "pending");
+      return;
+    }
     if (!state.draft || !state.imageReady || state.reviewStale) {
       ui.approve.disabled = true; ui.fund.disabled = true;
       ui.approve.dataset.nextAction = "blocked";
@@ -608,7 +624,7 @@
     }));
   }
 
-  async function importPreparedDraft(value) {
+  async function importPreparedDraft(value, { restoring = false } = {}) {
     if (postingBusy) throw new Error("A wallet operation is in progress. Finish checking it before changing this draft.");
     let prepared = window.AgentBountyAI?.parseDraft
       ? window.AgentBountyAI.parseDraft(value)
@@ -616,7 +632,7 @@
     if (!prepared || typeof prepared !== "object") throw new Error("The prepared bounty draft is invalid.");
     prepared.reference_attachment ||= window.AgentBountiesWorkflow.createClient(window).load()?.reference_attachment || null;
 
-    prepared = window.AgentBountiesCreatorReview.prepare(prepared);
+    prepared = window.AgentBountiesCreatorReview[restoring ? "display" : "prepare"](prepared);
     if (prepared.reference_attachment) {
       prepared.reference_attachment = window.AgentBountiesPostingReference.validate(prepared.reference_attachment);
       prepared.evidence_schema = window.AgentBountiesPostingReference.withEvidence(prepared.evidence_schema || {}, prepared.reference_attachment);
@@ -678,7 +694,7 @@
     const client = window.AgentBountiesWorkflow.createClient(window);
     const journey = client.load() || client.start({ role: "post" });
     const operationId = prepared.posting_operation_id || new URLSearchParams(window.location.search).get("operation_id");
-    client.save({ ...journey, ...(operationId && window.AgentBountiesWorkflow.UUID.test(operationId) ? { id: operationId } : {}), role: "post", goal: prepared.goal, draft: prepared, draft_stale: false, reference_attachment: prepared.reference_attachment || null, brief: { ...journey.brief, goal: prepared.goal, budget_usdc: String(total), deadline_at: prepared.delivery_deadline || journey.brief?.deadline_at || null } });
+    if (!restoring) client.save({ ...journey, ...(operationId && window.AgentBountiesWorkflow.UUID.test(operationId) ? { id: operationId } : {}), role: "post", goal: prepared.goal, draft: prepared, draft_stale: false, reference_attachment: prepared.reference_attachment || null, brief: { ...journey.brief, goal: prepared.goal, budget_usdc: String(total), deadline_at: prepared.delivery_deadline || journey.brief?.deadline_at || null } });
     await renderPreview();
     state.approved = await postingSession.approved();
     syncPrimaryAction();
@@ -973,6 +989,7 @@
   }
 
   function riskSummary() {
+    if (expiredDeliveryDeadline()) return "The saved delivery deadline has passed";
     const risks = state.draft.risk_flags || [];
     return risks.length ? `${risks.length} item${risks.length === 1 ? "" : "s"} to review` : "Review required";
   }
@@ -1005,7 +1022,8 @@
       }
     }
     ui.risks.replaceChildren();
-    const risks = state.draft.risk_flags || [];
+    const risks = [...(state.draft.risk_flags || [])];
+    if (expiredDeliveryDeadline()) risks.unshift("Agree a new delivery deadline and review the updated terms before funding.");
     if (!risks.length) {
       const item = document.createElement("li");
       item.textContent = "No material blocker was identified by the drafting AI. The creator still accepts feasibility and verification risk.";
@@ -1610,7 +1628,7 @@
   }
 
   async function openFunding() {
-    if (!state.approved) return;
+    if (!state.approved || expiredDeliveryDeadline()) return;
     const attribution = state.distributionAttribution;
     if (attribution) {
       ui.fund.disabled = true;
@@ -2430,8 +2448,12 @@
   });
 
   // No approval or signing methods are exposed to the agent registry.
+  function expiredDeliveryDeadline() {
+    return state.draft?.benchmark?.engine === "creator_review_v1"
+      && Number.isFinite(Date.parse(state.deliveryDeadline)) && Date.parse(state.deliveryDeadline) <= Date.now();
+  }
   let staging = Promise.resolve();
-  let initialization = Promise.resolve(), restoration = Promise.resolve(), retryingRestoration = null;
+  let initialization = Promise.resolve(), restoration = Promise.resolve(), retryingRestoration = null, restorationError = null;
   let stagedFingerprint = null;
   window.AgentBountiesComposer = Object.freeze({
     prepareMetaParent,
@@ -2457,6 +2479,7 @@
       if (state.postingAccountStatus === "unavailable" || saved.conflict || saved.status === "unavailable") {
         throw new Error("Account draft restoration is unavailable. Keep the same operation and retry; do not request approval again.");
       }
+      if (restorationError && !postingJournal.load()) throw restorationError;
     },
     invalidate() {
       if (!state.draft || postingBusy || postingJournal.load()) return;
@@ -2469,18 +2492,22 @@
         if (postingBusy || state.bountyContract || postingJournal.load()) throw new Error("A posting operation is in progress or recorded. Check its canonical status before preparing another draft.");
         const fingerprint = JSON.stringify(value);
         if (stagedFingerprint === fingerprint && state.draft) return;
-        return importPreparedDraft(value).then((result) => { stagedFingerprint = fingerprint; return result; });
+        return importPreparedDraft(value).then((result) => { stagedFingerprint = fingerprint; restorationError = null; return result; });
       });
       return staging;
     },
     review() {
-      let blocker = null;
-      if (state.draft) { try { supportedVerificationPolicy(); } catch (error) { blocker = error.message; } }
+      let blocker = restorationError?.message || null;
+      if (state.draft && !blocker) { try { supportedVerificationPolicy(); } catch (error) { blocker = error.message; } }
+      const expired = expiredDeliveryDeadline();
+      if (expired) blocker = "The saved delivery deadline has passed. Agree a new deadline and review the updated terms before funding.";
       return {
         status: state.bountyContract ? "created_check_canonical_funding" : state.draft ? "staged" : "no_staged_bounty",
         explicitly_approved: state.approved === true,
         funding_ready: Boolean(state.draft && !blocker),
         blocker,
+        recovery_code: expired ? "delivery_deadline_expired" : null,
+        saved_draft: expired ? window.AgentBountiesWorkflow.createClient(window).load()?.draft || null : null,
         bounty_contract: state.bountyContract || postingJournal.load()?.bounty_contract || null,
         posting_operation: postingJournal.load(),
         saved_operation: postingSession.snapshot(),
@@ -2490,7 +2517,9 @@
         review_mode: state.draft?.benchmark?.engine === "creator_review_v1" ? "creator" : "automated",
         delivery_deadline: state.deliveryDeadline || null,
         saved_brief: window.AgentBountiesWorkflow.createClient(window).load()?.brief || null,
-        next_action: !state.draft || state.reviewStale ? "Prepare or update the proposal using saved_brief. Preserve its outcome, budget and deadline. Ask only for missing business decisions."
+        next_action: postingJournal.load() ? "Use agent_bounties_get_posting_status to reconcile the recorded wallet operation. Preserve the journal; do not restage terms or repeat funding."
+          : expired ? "Ask for a new agreed delivery deadline, then restage the same posting operation and review its updated terms. Preserve the outcome, criteria and reward split; do not invent a date or repeat a wallet operation."
+          : !state.draft || state.reviewStale ? "Prepare or update the proposal using saved_brief. Preserve its outcome, budget and deadline. Ask only for missing business decisions."
           : blocker ? "For non-software work, propose review_mode=creator with the agreed delivery_deadline and no automated benchmark, then stage it for the person’s review. Meta children still require their automated verifier. Never invent benchmark details."
           : "The person reviews the terms once, then uses the wallet confirmation. No separate approval in chat is needed.",
       };
@@ -2519,10 +2548,11 @@
     if (restoringPosting || postingBusy) return;
     restoringPosting = true;
     try {
+      restorationError = null;
       referenceUi?.update(journey?.reference_attachment || null);
       if (journey?.draft) {
         const stale = journey.draft_stale;
-        await importPreparedDraft(journey.draft);
+        await importPreparedDraft(journey.draft, { restoring: true });
         if (stale) window.AgentBountiesComposer.invalidate();
       } else {
         state.draft = null; state.initialDraft = null; state.approved = false; state.bountyImage = null; state.referenceAttachment = null;
@@ -2530,7 +2560,7 @@
         ui.preview.hidden = true; ui.readiness.hidden = true; ui.fund.disabled = true; ui.fundNow.disabled = true;
       }
       state.approved = await postingSession.approved(); syncPrimaryAction(); updatePostingTracker();
-    } catch (error) { setStatus(error.message, "error"); }
+    } catch (error) { restorationError = error; setStatus(error.message, "error"); }
     finally { restoringPosting = false; }
   }
   function queueRestoration(journey) {
