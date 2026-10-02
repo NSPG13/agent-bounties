@@ -25,7 +25,7 @@ function fixture(expired) {
 (async () => {
   const browser = await chromium.launch({ headless: true });
   try {
-    for (const expired of [true, false]) {
+    for (const postPath of ["/post.html", "/post"]) for (const expired of [true, false]) {
       const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
       const f = fixture(expired), requests = [], pageErrors = [];
       await context.route("**/*", async route => {
@@ -43,7 +43,7 @@ function fixture(expired) {
         }
         if (url.pathname === "/v1/base/gas-sponsorship") return route.fulfill({ json: { network: "base-mainnet", creation: { available: false } } });
         if (url.origin !== origin) return route.abort();
-        const file = path.resolve(site, "." + url.pathname);
+        const file = path.resolve(site, "." + (url.pathname === "/post" ? "/post.html" : url.pathname));
         if (!file.startsWith(site + path.sep)) return route.abort();
         try { return route.fulfill({ body: fs.readFileSync(file), contentType: mime[path.extname(file)] || "application/octet-stream" }); }
         catch { return route.fulfill({ status: 404, body: "Not found" }); }
@@ -54,7 +54,7 @@ function fixture(expired) {
       });
       const page = await context.newPage();
       page.on("pageerror", e => pageErrors.push(e.message));
-      await page.goto(origin + "/post.html?operation_id=" + operation + "&analytics=off" + (expired ? "&funding_review=1" : ""));
+      await page.goto(origin + postPath + "?operation_id=" + operation + "&analytics=off" + (expired ? "&funding_review=1" : ""));
       async function inspect(phase) {
         await page.waitForFunction(() => window.AgentBountiesWebMCP && window.AgentBountiesComposer);
         const value = await page.evaluate(async () => {
@@ -71,7 +71,7 @@ function fixture(expired) {
         assert.deepEqual(value.stored.draft, f.journey.draft);
         assert.deepEqual(value.stored.draft.acceptance_criteria, f.journey.draft.acceptance_criteria);
         assert.deepEqual(value.wallet_calls, []);
-        output.cases.push({ expired, phase, ...value, fixture_http_methods: [...requests], page_errors: [...pageErrors] });
+        output.cases.push({ postPath, expired, phase, ...value, fixture_http_methods: [...requests], page_errors: [...pageErrors] });
       }
       await inspect("cold-account-continuation");
       await page.reload();
@@ -79,7 +79,7 @@ function fixture(expired) {
       await inspect("repeated-read");
       assert.equal(requests.includes("POST"), false, "Recovery reads must not rewrite saved account terms");
       const originalHash = f.row.approved_draft_hash;
-      for (const record of output.cases.filter(c => c.expired === expired)) {
+      for (const record of output.cases.filter(c => c.postPath === postPath && c.expired === expired)) {
         const review = record.tools.agent_bounties_get_bounty_review.result;
         assert.ok(review, "Review must remain readable");
         assert.equal(review.review_mode, "creator");
@@ -117,6 +117,7 @@ function fixture(expired) {
         assert.equal(await page.evaluate(() => window.AgentBountiesPostingSession.create(window).approved()), false);
         assert.deepEqual(await page.evaluate(() => window.__walletCalls), []);
         output.correction = { same_operation: true, old_approval_invalidated: true, recovery_code: result.recovery_code, wallet_calls: 0 };
+        await page.close();
         for (const [name, change, expected] of [
           ["malformed-deadline", { delivery_deadline: "yesterday" }, /timestamp/],
           ["incompatible-benchmark", { benchmark: { engine: "sandboxed_regression_v1" } }, /replace/],
@@ -126,7 +127,7 @@ function fixture(expired) {
           const envelope = session.envelope(invalid), hash = createHash("sha256").update(session.stable(envelope)).digest("hex");
           f.row = { ...f.row, draft: envelope, draft_hash: hash, approved_draft_hash: hash };
           const invalidPage = await context.newPage();
-          await invalidPage.goto(origin + "/post.html?operation_id=" + operation + "&analytics=off");
+          await invalidPage.goto(origin + postPath + "?operation_id=" + operation + "&analytics=off");
           await invalidPage.waitForFunction(() => window.AgentBountiesWebMCP && window.AgentBountiesComposer);
           const failures = await invalidPage.evaluate(async () => {
             const result = {};
@@ -136,9 +137,9 @@ function fixture(expired) {
             }
             return result;
           });
-          for (const message of Object.values(failures)) assert.match(message, expected);
+          for (const [tool, message] of Object.entries(failures)) assert.match(message, expected, `${postPath} ${name}: ${tool}`);
           assert.deepEqual(await invalidPage.evaluate(() => window.__walletCalls), []);
-          (output.invalid_cases ||= []).push({ name, failures, wallet_calls: 0 });
+          (output.invalid_cases ||= []).push({ postPath, name, failures, wallet_calls: 0 });
           await invalidPage.close();
         }
       }

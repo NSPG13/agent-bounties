@@ -23,7 +23,7 @@ Creator review: add review_mode="creator", delivery_deadline with ISO offset; om
     if (!value) return null;
     try {
       const url = new URL(value);
-      if (url.origin !== "https://agentbounties.app" || url.pathname !== "/post.html"
+      if (url.origin !== "https://agentbounties.app" || !["/post", "/post.html"].includes(url.pathname)
           || url.username || url.password || url.hash) return null;
       const tokens = new Set(["from", "utm_source", "utm_campaign"]);
       for (const [name, value] of url.searchParams) {

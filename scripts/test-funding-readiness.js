@@ -353,7 +353,7 @@ test("changed EIP3009 identity, economics, expiry or exact types cannot request 
   assert.throws(() => api.validateFundingAuthorization(zero), /authorization does not match/);
 });
 
-async function onrampContext({ saved = new Map(), balance = "0x1e8480", contract = "", checkoutError = false } = {}) {
+async function onrampContext({ saved = new Map(), balance = "0x1e8480", contract = "", checkoutError = false, returnUrl = "https://agentbounties.app/post.html?journey=saved-123" } = {}) {
   const elements = new Map();
   const opened = [];
   const requests = [];
@@ -366,7 +366,7 @@ async function onrampContext({ saved = new Map(), balance = "0x1e8480", contract
     return elements.get(selector);
   };
   element("[data-onramp-asset]").value = "usdc";
-  const location = new URL(`https://agentbounties.app/onramp.html?amount=5&wallet=${wallet}&operation=posting-123${contract ? `&bountyContract=${contract}` : ""}&return=${encodeURIComponent("https://agentbounties.app/post.html?journey=saved-123")}`);
+  const location = new URL(`https://agentbounties.app/onramp.html?amount=5&wallet=${wallet}&operation=posting-123${contract ? `&bountyContract=${contract}` : ""}&return=${encodeURIComponent(returnUrl)}`);
   location.assign = () => {};
   const window = { handlers: {}, addEventListener(type, handler) { this.handlers[type] = handler; },
     dispatchEvent(event) { this.handlers[event.type]?.(event); },
@@ -449,4 +449,10 @@ test("generic MoonPay never opens or records a new purchase", async () => {
   assert.equal(app.opened.length, 0);
   assert.equal(app.context.window.AgentBountiesOnramp.hasPendingPurchase(), false);
   assert.equal(app.requests.filter(({url}) => String(url).includes("/checkout")).length, 0);
+});
+
+for (const path of ["/post", "/post.html", "/participate", "/competition"]) test(`funding continuation preserves ${path} and its review context`, async () => {
+  const returnUrl = `https://agentbounties.app${path}?operation_id=saved-123#bounty-preview`;
+  const { context } = await onrampContext({ returnUrl });
+  assert.equal(context.window.AgentBountiesOnramp.status().return_url, returnUrl);
 });

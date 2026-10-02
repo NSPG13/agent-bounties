@@ -711,7 +711,7 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
             'label: "LOG IN TO POST"',
             'credentials: "include"',
             'account_status === "ready" && payload.account_complete === true',
-            'target.pathname !== "/post.html"',
+            '!["/post", "/post.html"].includes(target.pathname)',
             'win.sessionStorage.setItem(INTENT_KEY',
             'win.location.replace(target)',
             'Returning to the prepared bounty',

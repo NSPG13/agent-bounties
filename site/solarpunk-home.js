@@ -391,7 +391,7 @@ ${competitionChildBrief(item)}`;
       try {
         const url = new URL(String(value), knownOrigin);
         return [knownOrigin, "https://agentbounties.app"].includes(url.origin)
-          && ["/post.html", "/participate.html", "/competition.html"].includes(url.pathname)
+          && ["/post", "/post.html", "/participate", "/participate.html", "/competition", "/competition.html"].includes(url.pathname)
           && !url.username && !url.password ? url.href : null;
       } catch (_) { return null; }
     };

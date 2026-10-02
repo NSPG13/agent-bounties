@@ -152,7 +152,7 @@ if (typeof document !== "undefined") {
     try {
       const candidate = win.agentBountiesAnalytics?.handoffUrl?.(WEBMCP_RETURN_URL) || WEBMCP_RETURN_URL;
       const url = new URL(candidate);
-      if (url.origin === "https://agentbounties.app" && url.pathname === "/post.html") return url.href;
+      if (url.origin === "https://agentbounties.app" && ["/post", "/post.html"].includes(url.pathname)) return url.href;
     } catch (_error) { /* The canonical first-party handoff remains available. */ }
     return WEBMCP_RETURN_URL;
   }
