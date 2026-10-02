@@ -3,7 +3,7 @@
 Pages builds `main` with `bash scripts/build-static-site.sh` and publishes `site`.
 The build verifies wallet assets and origin, prepares licensed fonts and schemas,
 refreshes privacy-safe public GitHub participation aggregates, and runs site tests.
-The manifest at `/.well-known/site-build.json` identifies the source revision and
+The static website manifest at [site-build.json](https://agentbounties.app/.well-known/site-build.json) identifies the source revision and
 metrics collection time. Only aggregate counts are published; raw identities and
 comment text are kept in memory during collection. Private repository traffic
 analytics remain explicitly unavailable without administration permissions.

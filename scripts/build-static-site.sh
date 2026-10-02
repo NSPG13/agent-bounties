@@ -14,6 +14,9 @@ python3 scripts/configure-phone-wallet.py
 python3 scripts/prepare-site-fonts.py
 mkdir -p site/schemas
 cp schemas/discovery-manifest.v2.json site/schemas/discovery-manifest.v2.json
+python3 scripts/test_refresh_site_metrics.py
+python3 scripts/test_github_audience_audit.py
+node --test scripts/test-daily-site-refresh.mjs
 python3 scripts/refresh_site_metrics.py
 python3 - <<'PY'
 import json, os, re, subprocess
