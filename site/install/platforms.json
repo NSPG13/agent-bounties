@@ -132,19 +132,24 @@
     {
       "slug": "cline",
       "name": "Cline",
-      "status": "MCP endpoint checked October 2, 2026. Choose the CLI or settings configuration below.",
+      "status": "Endpoint checked October 2, 2026. Cline CLI 3.0.68 configuration tested; tool discovery inside Cline remains unverified.",
       "summary": "Connect Cline directly to Agent Bounties with no API key, then use the repository context to prepare verifiable work.",
       "mcp_url": "https://mcp.agentbounties.app/r/cline/mcp",
       "steps": [
-        "Run the CLI installer or paste the JSON into Cline MCP settings.",
-        "Leave autoApprove empty and inspect the discovered tools.",
-        "Ask for a draft-only delegation before reviewing the first wallet handoff."
+        "Use the interactive CLI command and choose No auth, or use the noninteractive command in an agent-run terminal. Both were checked with Cline CLI 3.0.68. The JSON entry is an alternative for Cline MCP settings.",
+        "The --yes flag confirms saving the server configuration only. Leave autoApprove empty and inspect the actual tools before use; installation alone does not verify a connection or authorize tool calls.",
+        "Start with the free discovery prompt below. Review task costs before considering any separate claim, funding or wallet action."
       ],
       "actions": [
         {
           "kind": "copy",
-          "label": "Copy Cline install command",
+          "label": "Copy interactive Cline install command",
           "value": "cline mcp install agent-bounties --transport http https://mcp.agentbounties.app/r/cline/mcp"
+        },
+        {
+          "kind": "copy",
+          "label": "Copy noninteractive Cline install command (CLI 3.0.68)",
+          "value": "cline mcp install agent-bounties --transport http https://mcp.agentbounties.app/r/cline/mcp --yes --json"
         },
         {
           "kind": "copy",
