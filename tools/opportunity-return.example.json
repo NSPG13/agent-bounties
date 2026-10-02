@@ -1,0 +1,12 @@
+{
+  "schema_version": "agent-bounties/return-policy-v1",
+  "enabled": false,
+  "interval_minutes": 360,
+  "max_backoff_minutes": 1440,
+  "quiet_hours_utc": [22, 7],
+  "filters": {
+    "skills": [],
+    "categories": [],
+    "minimum_reward_base_units": null
+  }
+}
