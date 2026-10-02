@@ -21,7 +21,7 @@
     placeholder.hidden = ready;
     const fundStep = document.querySelector('[data-stage-target="fund"]');
     fundStep.disabled = !ready || funding.disabled || approve.dataset.approved !== "true";
-    stage(ready ? (approve.dataset.approved === "true" ? "fund" : "review") : "details");
+    stage(ready ? (fundStep.disabled ? "review" : "fund") : "details");
   }
   function useTask(value) {
     // Starting a journey emits a synchronous restore. Finish that before setting

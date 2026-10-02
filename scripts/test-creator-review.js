@@ -61,6 +61,26 @@ test("creator review is explicit, binds a calendar deadline, and cannot replace 
   assert.throws(() => review.prepare({ ...draft, delivery_deadline: "Sunday 6pm" }), /timestamp/);
   assert.throws(() => review.prepare({ ...draft, delivery_deadline: "2000-01-01T00:00:00Z" }), /future/);
 });
+test("saved creator terms remain displayable after expiry without becoming stageable or fundable", () => {
+  const draft = { review_mode: "creator", delivery_deadline: "2000-01-01T00:00:00Z", acceptance_criteria: ["Preserve these checks"] };
+  draft.benchmark = { engine: review.ENGINE, delivery_deadline: Date.parse(draft.delivery_deadline) / 1000, reviewer: "creator", acceptance: "all_published_criteria" };
+  draft.evidence_schema = review.evidenceSchema();
+  const original = JSON.stringify(draft), displayed = review.display(draft);
+  assert.equal(displayed.delivery_deadline, draft.delivery_deadline);
+  assert.equal(displayed.benchmark.engine, review.ENGINE);
+  assert.deepEqual(displayed.acceptance_criteria, draft.acceptance_criteria);
+  assert.equal(JSON.stringify(draft), original);
+  assert.equal(review.ready(displayed.benchmark, displayed.evidence_schema), false);
+  assert.throws(() => review.prepare(draft), /future delivery deadline/);
+  assert.throws(() => review.display({ ...draft, delivery_deadline: "yesterday" }), /timestamp/);
+  assert.throws(() => review.display({ ...draft, delivery_deadline: null }), /future/);
+  assert.throws(() => review.display({ ...draft, meta_child: {} }), /meta/);
+  assert.throws(() => review.display({ ...draft, benchmark: { engine: "sandboxed_regression_v1" } }), /replace/);
+  assert.throws(() => review.display({ ...draft, benchmark: { ...draft.benchmark, delivery_deadline: draft.benchmark.delivery_deadline + 1 } }), /does not match/);
+  assert.throws(() => review.display({ ...draft, evidence_schema: {} }), /does not match/);
+  assert.throws(() => review.display({ ...draft, delivery_deadline: new Date(Date.now() + 367 * 86400000).toISOString() }), /366/);
+});
+
 test("the assessment must cover exact criteria and cannot pass a late submission", () => {
   const env = environment();
   assert.equal(workspace.assessment(env.job, { checks: env.checks }).passed, true);

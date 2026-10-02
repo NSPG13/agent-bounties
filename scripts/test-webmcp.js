@@ -143,7 +143,7 @@ test("staging retains a saved meta parent and distinct solver across navigation"
   assert.equal(client.load().draft.meta_child.intended_child_solver, wallet);
 });
 
-test("reloading a meta-child review restores its draft and solver without borrowing consent", async () => {
+test("reloading a meta-child review waits for composer restoration without restaging saved terms", async () => {
   const env = environment(`/post.html?parentBounty=${contract}`), client = flow.createClient(env.window);
   const meta_child = { parent_bounty_contract: contract, intended_child_solver: wallet };
   const draft = { title: "Saved child", goal: "Keep my answers", acceptance_criteria: ["Checks pass"], solver_reward_usdc: "0.99", verifier_reward_usdc: "0.01", task_window_days: 3, meta_child };
@@ -151,7 +151,10 @@ test("reloading a meta-child review restores its draft and solver without borrow
   let restored;
   env.window.AgentBountiesMetaChild = { resolve: async v => ({ ...v, title: "Parent" }), normalize: v => meta_child };
   env.window.AgentBountyAI = { parseDraft: v => v };
-  env.window.AgentBountiesComposer = { prepareMetaParent: async () => meta_child, stage: async v => { restored = v; }, review: () => ({ explicitly_approved: false, funding_ready: false, meta_child }) };
+  env.window.AgentBountiesComposer = { prepareMetaParent: async () => meta_child,
+    ready: async () => { restored = client.load().draft; },
+    stage: async () => { assert.fail("A read must not restage the saved draft"); },
+    review: () => ({ explicitly_approved: false, funding_ready: false, meta_child }) };
   env.elements.set("#bounty-preview", env.el()); env.register();
   const review = await env.tools.get("agent_bounties_get_bounty_review").execute();
   assert.equal(restored.title, draft.title);
@@ -170,6 +173,30 @@ test("browsers without native WebMCP expose the same validated fallback", async 
   await assert.rejects(fallback.call("eth_sendTransaction"), /Unknown/);
   await assert.rejects(fallback.call("agent_bounties_start_journey", {}), /required/);
   await assert.rejects(fallback.call("agent_bounties_list_ready_work", { search: "ok", approve: true }), /not supported/);
+});
+test("expired-draft guidance preserves financial recovery precedence and never restages on read", async () => {
+  const env = environment("/post.html"), client = flow.createClient(env.window);
+  const journey = client.start({ role: "post", goal: "Resume saved work" });
+  const draft = { title: "Saved creator work", review_mode: "creator", delivery_deadline: "2000-01-01T00:00:00Z" };
+  client.save({ ...journey, draft });
+  env.storage.set("agent-bounties.webmcp.pending-funded-draft.v1", JSON.stringify(draft));
+  let reads = 0;
+  env.window.AgentBountiesComposer = {
+    ready: async () => { reads++; },
+    stage: () => assert.fail("A saved-draft read must not stage terms"),
+    review: () => ({ recovery_code: "delivery_deadline_expired", next_action: "Ask for a new agreed deadline." }),
+  };
+  env.register();
+  const tool = env.tools.get("agent_bounties_get_journey");
+  const expired = await tool.execute();
+  assert.equal(expired.next_action.tool, "agent_bounties_stage_funded_bounty");
+  assert.equal(expired.next_action.posting_operation_id, journey.id);
+  assert.equal(expired.journey.draft.delivery_deadline, draft.delivery_deadline);
+  const recorded = { phase: "submitted", bounty_contract: contract, transactions: ["0x" + "aa".repeat(32)] };
+  env.storage.set("agent-bounties.posting-operation.v1", JSON.stringify(recorded));
+  assert.equal((await tool.execute()).next_action.tool, "agent_bounties_get_posting_status");
+  assert.deepEqual(flow.createPostingJournal(env.window).load(), recorded);
+  assert.equal(reads, 2); assert.equal(env.requests.length, 0);
 });
 test("navigator WebMCP receives tools when document modelContext is absent", () => {
   const env = environment(); env.window.navigator = { modelContext: env.document.modelContext };

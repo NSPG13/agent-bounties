@@ -24,6 +24,22 @@ Only matching canonical settlement proves payment. The progress tool also
 recognizes an exact review already open, so continue the person's review
 there instead of reopening it or creating another intent.
 
+An expired saved creator-review deadline does not erase the draft. On the
+posting page, both journey and review reads remain usable after account
+continuation or reload. The review retains the original deadline and policy,
+returns `recovery_code: delivery_deadline_expired`, the unchanged `saved_draft`,
+and `funding_ready: false`. Historical `explicitly_approved: true` means only
+that the unchanged terms were previously approved; it cannot make expired
+terms fundable. Ask for the new agreed deadline, then restage the same operation.
+That edit invalidates approval of the earlier terms. Never invent a deadline,
+switch verification policy, or restart a pending wallet operation to recover.
+
+Saved-term display is read-only. Malformed terms and failed/conflicting account
+restoration remain errors rather than empty drafts. A recorded financial
+operation takes precedence in journey routing and must be reconciled through
+`agent_bounties_get_posting_status`. The composer owns saved-draft restoration;
+the browser registry does not restage the same stored draft on every reload.
+
 ## Conversation contract
 
 Start with a short explanation: a worker does the task, a reviewer checks it,

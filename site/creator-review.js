@@ -12,11 +12,11 @@
     if (typeof value !== "string" || !/^\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d(?:\.\d{1,3})?)?(?:Z|[+-]\d\d:\d\d)$/.test(value) || !Number.isFinite(Date.parse(value))) throw new Error("Supply the agreed delivery deadline as an ISO timestamp including its time-zone offset.");
     return value;
   }
-  function prepare(draft) {
+  function prepareTerms(draft) {
     if (draft.review_mode !== "creator") return draft;
     if (draft.meta_child) throw new Error("Qualifying meta-bounty children require their existing automated verifier.");
     const cutoff = deadline(draft.delivery_deadline);
-    if (!cutoff || Date.parse(cutoff) <= Date.now()) throw new Error("Creator review requires a future delivery deadline.");
+    if (!cutoff) throw new Error("Creator review requires a future delivery deadline.");
     if (Date.parse(cutoff) > Date.now() + 366 * 86400000) throw new Error("The delivery deadline must be within 366 days; prepare a nearer milestone for longer work.");
     if (draft.benchmark && draft.benchmark.engine !== ENGINE) throw new Error("Do not replace an automated benchmark with creator review. Explicitly restage the selected policy without that benchmark.");
     const schema = evidenceSchema();
@@ -24,13 +24,31 @@
     if (reference) schema["x-agent-bounties-reference-attachment"] = reference;
     return { ...draft, delivery_deadline: cutoff, benchmark: { engine: ENGINE, delivery_deadline: Math.floor(Date.parse(cutoff) / 1000), acceptance: "all_published_criteria", reviewer: "creator" }, evidence_schema: schema };
   }
-  function ready(benchmark, schema) {
+  // Displaying saved terms cannot make them eligible for staging or funding.
+  function prepare(draft) {
+    const prepared = prepareTerms(draft);
+    if (prepared.review_mode === "creator" && Date.parse(prepared.delivery_deadline) <= Date.now()) throw new Error("Creator review requires a future delivery deadline.");
+    return prepared;
+  }
+  function display(draft) {
+    const expected = prepareTerms(draft);
+    if (draft.review_mode === "creator" && (!policyReady(draft.benchmark, draft.evidence_schema)
+      || draft.benchmark.delivery_deadline !== expected.benchmark.delivery_deadline)) {
+      throw new Error("The saved creator-review policy does not match its terms. Restage and review the corrected proposal before funding.");
+    }
+    // Do not normalize approved fields into different terms during restoration.
+    return draft;
+  }
+  function policyReady(benchmark, schema) {
     return benchmark?.engine === ENGINE && benchmark.reviewer === "creator" && benchmark.acceptance === "all_published_criteria"
-      && Number.isSafeInteger(benchmark.delivery_deadline) && benchmark.delivery_deadline > Date.now() / 1000
-      && benchmark.delivery_deadline <= Date.now() / 1000 + 366 * 86400
+      && Number.isSafeInteger(benchmark.delivery_deadline)
       && schema?.type === "object" && ["artifact_url", "artifact_sha256"].every((key) => schema.required?.includes(key))
       && schema.properties?.artifact_url?.pattern === "^https://" && schema.properties?.artifact_sha256?.pattern === "^sha256:[0-9a-f]{64}$";
   }
+  function ready(benchmark, schema) {
+    return policyReady(benchmark, schema) && benchmark.delivery_deadline > Date.now() / 1000
+      && benchmark.delivery_deadline <= Date.now() / 1000 + 366 * 86400;
+  }
   function policy(wallet) { return { mechanism: "signed_quorum", engine: ENGINE, verifiers: wallet ? [wallet.toLowerCase()] : [], threshold: 1, rubric: "Pass only when every published acceptance criterion is satisfied and canonical submission time is no later than the committed delivery deadline.", public_disclosure: DISCLOSURE }; }
-  return { ENGINE, DISCLOSURE, deadline, prepare, ready, policy, evidenceSchema };
+  return { ENGINE, DISCLOSURE, deadline, display, prepare, ready, policy, evidenceSchema };
 });
