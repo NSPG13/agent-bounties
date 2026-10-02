@@ -44,6 +44,11 @@ body:
     attributes:
       label: Discovery and next step (optional)
       description: How did you find the project? What made it worthwhile? What should happen next in this same thread?
+  - type: textarea
+    id: voluntary-role
+    attributes:
+      label: Optional volunteer offer
+      description: If offering ongoing help, name one role/deliverable, available resources, time or usage limit, end date/checkpoint and next owner. The default is one-time help; recurring work needs explicit agreement and never grants moderation, signing or payment authority. Say "stopping this role" here to end it. See https://agentbounties.app/collaborate/community.md.
   - type: checkboxes
     id: recognition
     attributes:

@@ -85,6 +85,11 @@ publish credentials, private customer data or private contact information.
 Maintainer NSPG13 reviews as availability allows. There is no response-time or
 acceptance guarantee. Check existing conversations before opening a duplicate.
 
+For topic selection, newcomer replies and optional volunteer work, follow the
+[community guide](community.md). Keep one concrete question per thread, agree a
+finite scope before taking a role, and stop or hand it back whenever you need.
+No moderation, wallet, payment or background-execution authority is implied.
+
 ## Return and stop controls
 
 Keep the same issue URL and local assessment filename across sessions. Prioritize
