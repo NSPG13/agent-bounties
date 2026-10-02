@@ -157,6 +157,13 @@
     visit(value);
     return JSON.parse(json);
   }
+  function publicTermsUrl(value) {
+    if (typeof value !== "string" || value.length > 2048) return null;
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" && !url.username && !url.password ? url.href : null;
+    } catch (_) { return null; }
+  }
   function summarize(item) {
     return {
       opportunity_id: item.opportunity_id, title: item.title, goal: item.goal,
@@ -164,6 +171,8 @@
       reward_usdc: units(item.reward) === null ? null : Number(units(item.reward)) / 1e6,
       bond_usdc: units(item.bond) === null ? null : Number(units(item.bond)) / 1e6,
       cash_economics: item.cash_economics, deadline: item.deadline, standing_meta_bounty: item.standing_meta_bounty === true,
+      deadline_kind: typeof item.deadline_kind === "string" && /^[a-z][a-z0-9_]{0,79}$/.test(item.deadline_kind) ? item.deadline_kind : null,
+      source_url: publicTermsUrl(item.source_url),
       competition_mode: item.competition_mode, verification_method: item.verification_method,
       participation_kind: participationKind(item),
       evidence_requirements: item.evidence_requirements, terms_hash: item.terms_hash,

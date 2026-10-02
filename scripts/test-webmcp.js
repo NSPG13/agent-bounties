@@ -211,6 +211,47 @@ test("UI and WebMCP share funding and verification readiness", async () => {
   for (const entry of invalid) assert.equal(market.isReadyToEarn(entry), false);
   assert.equal(env.requests[0].cache, "no-store");
 });
+test("browser discovery and inspection preserve deadline meaning and public terms without writes", async () => {
+  const source_url = "https://github.com/NSPG13/agent-bounties/issues/648";
+  for (const deadline_kind of ["funding_deadline", "claim_expires_at", "verification_expires_at", "proof_deadline"]) {
+    const opportunity = item({ deadline: "2026-10-11T00:00:00Z", deadline_kind, source_url });
+    const env = environment("/", [opportunity]); env.register();
+    const listed = await env.tools.get("agent_bounties_list_ready_work").execute({ limit: 1 });
+    const inspected = await env.tools.get("agent_bounties_inspect_opportunity").execute({ opportunity_id: opportunity.opportunity_id });
+    for (const result of [listed.items[0], inspected]) {
+      assert.equal(result.deadline, opportunity.deadline);
+      assert.equal(result.deadline_kind, deadline_kind);
+      assert.equal(result.source_url, source_url);
+      assert.equal(result.opportunity_id, opportunity.opportunity_id);
+    }
+    assert.equal(env.requests.every(request => request.method === "GET"), true);
+    assert.equal(env.requests.some(request => request.url === source_url), false);
+    assert.equal(env.storage.size, 0);
+    assert.equal(env.navigations.length, 0);
+  }
+});
+test("unavailable or malformed discovery metadata stays unknown instead of inventing a deadline or link", async () => {
+  for (const metadata of [
+    {},
+    { deadline_kind: null, source_url: null },
+    { deadline_kind: { type: "funding_deadline" }, source_url: { url: "https://example.com/terms" } },
+    { deadline_kind: "", source_url: "javascript:alert(1)" },
+    { deadline_kind: "a".repeat(81), source_url: "https://user:password@example.com/terms" },
+    { deadline_kind: "delivery deadline", source_url: "/terms" },
+  ]) {
+    const opportunity = item({ deadline: "2026-10-11T00:00:00Z", ...metadata });
+    const env = environment("/", [opportunity]); env.register();
+    const listed = await env.tools.get("agent_bounties_list_ready_work").execute({ limit: 1 });
+    const inspected = await env.tools.get("agent_bounties_inspect_opportunity").execute({ opportunity_id: opportunity.opportunity_id });
+    for (const result of [listed.items[0], inspected]) {
+      assert.equal(result.deadline, opportunity.deadline);
+      assert.equal(result.deadline_kind, null);
+      assert.equal(result.source_url, null);
+    }
+    assert.equal(env.requests.every(request => request.method === "GET"), true);
+    assert.equal(env.storage.size, 0);
+  }
+});
 test("ready work opens a first-party workspace instead of a GitHub mirror", async () => {
   const env = environment(); env.register();
   const result = await env.tools.get("agent_bounties_open_opportunity").execute({ opportunity_id: item().opportunity_id });
