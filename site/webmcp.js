@@ -63,9 +63,9 @@
   const flow = window.AgentBountiesWorkflow;
   if (!flow) throw new Error("The shared marketplace workflow did not load.");
   const client = flow.createClient(window);
-  const isPost = /\/post\.html$/.test(window.location.pathname);
-  const isCompetition = /\/competition\.html$/.test(window.location.pathname);
-  const isParticipant = /\/participate\.html$/.test(window.location.pathname);
+  const isPost = /^\/post(?:\.html)?$/.test(window.location.pathname);
+  const isCompetition = /^\/competition(?:\.html)?$/.test(window.location.pathname);
+  const isParticipant = /^\/participate(?:\.html)?$/.test(window.location.pathname);
   let parentReady = Promise.resolve();
   async function proofWorkspace() {
     await waitFor(() => window.AgentBountiesProofWorkspace, 8000);
@@ -199,7 +199,7 @@
 
   async function stageOnPostPage(draft) {
     await parentReady;
-    if (!/\/post\.html$/.test(window.location.pathname)) throw new Error("Open the funded bounty review page first.");
+    if (!/^\/post(?:\.html)?$/.test(window.location.pathname)) throw new Error("Open the funded bounty review page first.");
     const parser = await waitFor(() => window.AgentBountyAI?.parseDraft, 5000);
     if (!parser) throw new Error("The funded bounty review controller is not ready.");
     const normalized = window.AgentBountyAI.parseDraft(draft);
@@ -233,7 +233,7 @@
   }
 
   function consumePendingDraft() {
-    if (!/\/post\.html$/.test(window.location.pathname)) return;
+    if (!/^\/post(?:\.html)?$/.test(window.location.pathname)) return;
     let draft = null;
     try {
       const raw = window.sessionStorage.getItem(PENDING_DRAFT_KEY);
@@ -518,7 +518,7 @@
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, untrustedContentHint: false },
     async execute() {
-      if (!/\/post\.html$/.test(window.location.pathname)) throw new Error("This tool is available on /post.html.");
+      if (!/^\/post(?:\.html)?$/.test(window.location.pathname)) throw new Error("This tool is available on /post.html.");
       await pendingStaging;
       await waitForPostingRestoration();
       const preview = document.getElementById("bounty-preview");
@@ -544,7 +544,7 @@
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: false, untrustedContentHint: false },
     async execute() {
-      if (!/\/post\.html$/.test(window.location.pathname)) throw new Error("This tool is available on /post.html.");
+      if (!/^\/post(?:\.html)?$/.test(window.location.pathname)) throw new Error("This tool is available on /post.html.");
       await pendingStaging;
       await waitForPostingRestoration();
       const approve = document.querySelector("[data-approve-card]");
@@ -570,7 +570,7 @@
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, untrustedContentHint: true },
     async execute() {
-      if (!/\/competition\.html$/.test(window.location.pathname)) throw new Error("Open a competition page first.");
+      if (!/^\/competition(?:\.html)?$/.test(window.location.pathname)) throw new Error("Open a competition page first.");
       await waitFor(() => document.querySelector("[data-competition-app]")?.dataset?.state !== "loading", 8000);
       if (document.querySelector("[data-competition-app]")?.dataset?.state !== "ready") throw new Error("This competition is unavailable. Refresh its canonical state or choose another opportunity.");
       const node = await waitFor(() => {
@@ -589,7 +589,7 @@
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: false, untrustedContentHint: true },
     async execute() {
-      if (!/\/competition\.html$/.test(window.location.pathname)) throw new Error("Open a competition page first.");
+      if (!/^\/competition(?:\.html)?$/.test(window.location.pathname)) throw new Error("Open a competition page first.");
       if (document.querySelector("[data-competition-app]")?.dataset?.state !== "ready") throw new Error("This competition is unavailable; no child bounty can be started from it.");
       const manifest = JSON.parse(document.querySelector("[data-machine-request]").textContent);
       if (!["now", "upcoming"].includes(manifest.phase)) throw new Error("The scoring window is closed. Continue with the competition proof step instead.");
@@ -597,7 +597,7 @@
       if (!link) throw new Error("The child-bounty start link is not available for this competition.");
       const url = new URL(link.getAttribute("href"), window.location.href).href;
       const target = new URL(url);
-      if (target.origin !== window.location.origin || target.pathname !== "/post.html" || target.searchParams.get("parentCompetition") !== manifest.competition_contract.toLowerCase()) throw new Error("The child bounty handoff lost its competition context.");
+      if (target.origin !== window.location.origin || !["/post", "/post.html"].includes(target.pathname) || target.searchParams.get("parentCompetition") !== manifest.competition_contract.toLowerCase()) throw new Error("The child bounty handoff lost its competition context.");
       const journey = client.load() || client.start({ role: "post" });
       client.save({ ...journey, parent_competition: manifest, role: "post" });
       window.setTimeout(() => window.location.assign(url), 0);
