@@ -366,7 +366,7 @@
         const parsed = new URL(value);
         if (
           parsed.origin === location.origin
-          && ["/", "/index.html", "/post.html", "/onramp.html", "/participate.html", "/competition.html"].includes(parsed.pathname)
+          && ["/", "/index", "/index.html", "/post", "/post.html", "/onramp", "/onramp.html", "/participate", "/participate.html", "/competition", "/competition.html"].includes(parsed.pathname)
         ) {
           return parsed;
         }

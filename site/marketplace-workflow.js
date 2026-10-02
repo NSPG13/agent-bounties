@@ -282,7 +282,7 @@
     }
     function currentReview(intent) {
       const page = new URL(win.location.href);
-      return ["/participate.html", "/competition.html"].includes(page.pathname)
+      return ["/participate", "/participate.html", "/competition", "/competition.html"].includes(page.pathname)
         && page.searchParams.get("intent") === intent.intent_id
         && String(page.searchParams.get("bountyContract") || "").toLowerCase() === String(intent.bounty_contract || "").toLowerCase()
         && page.searchParams.get("network") === intent.network;

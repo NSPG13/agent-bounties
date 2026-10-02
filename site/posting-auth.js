@@ -21,7 +21,7 @@
     if (!win?.location?.origin || typeof candidate !== "string" || !candidate || candidate.length > MAX_TARGET_LENGTH) return null;
     try {
       const target = new URL(candidate, win.location.href);
-      if (target.origin !== win.location.origin || target.pathname !== "/post.html"
+      if (target.origin !== win.location.origin || !["/post", "/post.html"].includes(target.pathname)
         || target.username || target.password || target.href.length > MAX_TARGET_LENGTH) return null;
       return target.href;
     } catch (_) {

@@ -40,4 +40,4 @@ Path('site/.well-known/site-build.json').write_text(json.dumps({
 PY
 python3 scripts/check-site.py --require-wallet-bundle
 node scripts/test-creator-push.js
-node --test scripts/test-wallet-link.js scripts/test-solarpunk-home.js
+node --test scripts/test-wallet-link.js scripts/test-solarpunk-home.js scripts/test-posting-auth.js scripts/test-webmcp.js scripts/test-funding-readiness.js

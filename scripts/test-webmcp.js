@@ -837,3 +837,18 @@ test("file preflight adds only the inspected digest and cannot replace reviewed 
   assert.throws(() => validateSubmission(wrong, details, contract, wallet, bountyId, true), /differ/);
   assert.throws(() => validateSubmission(value, { ...details, evidence: { ...details.evidence, source_snapshot_digest: "sha256:" + "c".repeat(64) } }, contract, wallet, bountyId, true), /differ/);
 });
+
+for (const suffix of ["", ".html"]) test(`page tools recognize exact hosted routes with suffix '${suffix}'`, async () => {
+  for (const [page, tool] of [["post", "agent_bounties_get_bounty_review"], ["competition", "agent_bounties_get_competition_manifest"]]) {
+    const env = environment(`/${page}${suffix}`); env.register();
+    assert.ok(env.tools.has(tool), `${page} publishes ${tool}`);
+    const other = environment(`/other/${page}${suffix}`); other.register();
+    assert.ok(!other.tools.has(tool), "nested routes cannot impersonate a workspace");
+  }
+  const env = environment(`/participate${suffix}?bountyContract=${contract}&network=base-mainnet&intent=${intentId}`);
+  env.register();
+  const status = await env.tools.get("agent_bounties_check_progress").execute({intent_id:intentId});
+  assert.equal(status.review_page_open, true);
+  assert.equal(status.paid, false);
+  assert.equal(env.navigations.length, 0);
+});

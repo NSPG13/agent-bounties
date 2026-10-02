@@ -96,3 +96,15 @@ test("posting action is driven by server account state", () => {
   assert.deepEqual(composer.postingPrimaryAction("unavailable", true), { action: "login", disabled: false, label: "CHECK ACCOUNT TO POST" });
   assert.deepEqual(composer.postingPrimaryAction("ready", true), { action: "approve", disabled: false, label: "Confirm bounty" });
 });
+
+for (const path of ["/post", "/post.html"]) test(`account sign-in preserves ${path} continuation`, () => {
+  const target = `https://agentbounties.app${path}?operation_id=10000000-0000-4000-8000-000000000001#bounty-preview`;
+  const win = browser(target);
+  assert.equal(postingAuth.begin(win), target);
+  assert.equal(postingAuth.pending(win), target);
+  assert.equal(postingAuth.complete(win, {}), true);
+  assert.equal(win.navigations.at(-1).value, target);
+  for (const unsafe of ["/post/extra", "/post.html/extra", "/other/post", "https://evil.example/post"]) {
+    assert.equal(postingAuth.safePostTarget(win, unsafe), null);
+  }
+});
