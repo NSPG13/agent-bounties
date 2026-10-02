@@ -28,7 +28,9 @@ function sorted(value) { return value && typeof value === "object" ? Array.isArr
       await context.route("**/*",async route=>{
         const req=route.request(), url=new URL(req.url());
         if (["/auth/session","/v1/site-auth/session"].includes(url.pathname)) return route.fulfill({json:session});
-        if (["/auth/account","/v1/site-auth/account"].includes(url.pathname)) return route.fulfill({json:{...session,data_status:"unavailable",reason:"marketplace_identity_unlinked",wallets:[],saved_drafts:{status:"available",items:[saved],next_offset:null}}});
+        if (["/auth/account","/v1/site-auth/account"].includes(url.pathname)) return route.fulfill({json:{...session,data_status:"unavailable",reason:"marketplace_identity_unlinked",wallets:[],saved_drafts:{status:"available",items:[saved,
+          {...saved,id:"unsafe",continuation_url:"https://outside.example/post.html"},
+          {...saved,id:"false-paid",group:"paid",status:"Paid",payment_state:"paid"}],next_offset:null}}});
         if (url.pathname.endsWith(`/posting-drafts/${operation}`)) {
           reads.push(req.method());
           const envelope=req.method()==="POST" ? req.postDataJSON().draft : draft;
@@ -44,6 +46,11 @@ function sorted(value) { return value && typeof value === "object" ? Array.isArr
       await page.getByRole("heading",{name:"Saved drafts (1)"}).waitFor();
       assert.equal(await inbox.isVisible(),true);
       assert.equal(await page.locator("[data-account-stats]").isVisible(),false);
+      await page.waitForFunction(()=>Boolean(window.AgentBountiesWebMCP));
+      const agent=await page.evaluate(()=>window.AgentBountiesWebMCP.call("agent_bounties_get_account_activity"));
+      assert.equal(agent.items.length,1); assert.equal(agent.items[0].operation_id,operation);
+      assert.equal(agent.items[0].continuation_url,await inbox.getByRole("link",{name:draft.goal}).getAttribute("href"));
+      assert.equal(agent.filtered_item_count,2); assert.equal(agent.activity_status,"unavailable");
       assert.equal(await page.locator(".auth-dialog").evaluate(el=>el.scrollWidth<=el.clientWidth+1),true,`${width}: dialog overflows`);
       if (process.env.ACCOUNT_INBOX_EVIDENCE_DIR) {
         fs.mkdirSync(process.env.ACCOUNT_INBOX_EVIDENCE_DIR,{recursive:true});
@@ -63,7 +70,7 @@ function sorted(value) { return value && typeof value === "object" ? Array.isArr
       await page.waitForFunction(id=>window.AgentBountiesWorkflow?.createClient(window).load()?.id===id,operation);
       assert.deepEqual(errors,[]);
       await context.close();
-      process.stdout.write(`Account inbox: ${width}px — visible before wallet setup; exact draft resumes and survives reload\n`);
+      process.stdout.write(`Account inbox: ${width}px — human and browser-agent continuation agree; exact draft resumes and survives reload\n`);
     }
   } finally { await browser.close(); await new Promise(resolve=>server.close(resolve)); }
 })().catch(error=>{console.error(error);process.exitCode=1;server.close();});

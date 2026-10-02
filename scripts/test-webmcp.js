@@ -747,6 +747,65 @@ test("an agent resumes the exact saved operation without conversation, credentia
   assert.equal((await tool.execute()).authenticated, false);
 });
 
+test("account continuation rejects unsafe links, duplicate records and draft payment claims", async () => {
+  const env = environment();
+  const saved = { id: "saved", operation_id: intentId, title: "Saved work", group: "drafts", status: "Saved draft", continuation_url: `/post.html?operation_id=${intentId}`, payment_state: "unverified" };
+  const paid = { ...saved, id: "settlement", group: "paid", status: "Paid", payment_state: "paid", continuation_url: `/participate.html?bountyContract=${contract}` };
+  env.window.fetch = async () => ({ ok: true, json: async () => ({
+    saved_drafts: { status: "available", items: [saved, saved, { ...paid, id: "false-paid" },
+      ...["https://outside.example/post.html", "https://agentbounties.app.evil.example/post.html", "https://user:password@agentbounties.app/post.html", "javascript:alert(1)", "/privacy.html"].map((continuation_url, i) => ({ ...saved, id: `unsafe:${i}`, continuation_url }))] },
+    activity_inbox: { status: "available", items: [paid, { ...paid, id: "unverified", payment_state: "unverified" }, { ...saved, id: "round2", group: "working", status: "Work in progress" }] },
+  }) });
+  env.register(); const result = await env.tools.get("agent_bounties_get_account_activity").execute();
+  assert.deepEqual(Array.from(result.items, entry => entry.id), ["saved", "round2", "settlement"]);
+  assert.equal(result.items[0].continuation_url, `https://agentbounties.app/post.html?operation_id=${intentId}`);
+  assert.equal(result.items[0].operation_id, intentId);
+  assert.equal(result.filtered_item_count, 8);
+  assert.equal(env.navigations.length, 0);
+});
+
+test("account continuation bounds summaries and projects only canonical timeline fields", async () => {
+  const env = environment(), transaction = `https://basescan.org/tx/0x${"ab".repeat(32)}`;
+  const saved = { id: "saved", title: "a".repeat(500), status: "s".repeat(200), group: "working", continuation_url: "/participate.html", next_action: "n".repeat(800), next_actor: "v".repeat(70),
+    deadline: Number.MAX_SAFE_INTEGER, revision: { secret: "private" }, updated_at: "bad-date", network: { secret: "private" },
+    timeline: [{ event: "submission_added", occurred_at: "2026-10-01T12:00:00Z", transaction_url: transaction, secret: "private" }, { event: "bounty_settled", occurred_at: "bad-date", transaction_url: "https://outside.example/tx", secret: "private" }] };
+  env.window.fetch = async () => ({ ok: true, json: async () => ({ generated_at: { secret: "private" }, saved_drafts: { status: "available", items: [] }, activity_inbox: { status: "available", items: Array.from({ length: 305 }, (_, i) => ({ ...saved, id: `round:${i}` })) } }) });
+  env.register(); const result = await env.tools.get("agent_bounties_get_account_activity").execute(), first = result.items[0];
+  assert.equal(result.items.length, 300); assert.equal(result.filtered_item_count, 5);
+  assert.equal(first.title.length, 160); assert.equal(first.status.length, 100);
+  assert.equal(first.next_action.length, 500); assert.equal(first.next_actor.length, 40);
+  assert.equal(first.deadline, undefined); assert.equal(first.updated_at, undefined); assert.equal(first.revision, undefined);
+  assert.equal(result.generated_at, null); assert.equal(JSON.stringify(result).includes("private"), false);
+  assert.deepEqual(JSON.parse(JSON.stringify(first.timeline)), [{ event: "submission_added", occurred_at: "2026-10-01T12:00:00.000Z", transaction_url: transaction }]);
+  assert.equal(first.filtered_timeline_count, 1);
+  saved.timeline = Array.from({ length: 55 }, (_, i) => ({ event: `event_${i}`, occurred_at: "2026-10-01T12:00:00Z", transaction_url: transaction }));
+  const bounded = (await env.tools.get("agent_bounties_get_account_activity").execute()).items[0];
+  assert.equal(bounded.timeline.length, 50); assert.equal(bounded.timeline[0].event, "event_5");
+  assert.equal(bounded.filtered_timeline_count, 5);
+});
+
+test("account continuation preserves pagination and distinguishes unavailable sources from an empty inbox", async () => {
+  const env = environment(); let payload;
+  env.window.fetch = async () => ({ ok: true, json: async () => payload });
+  env.register(); const tool = env.tools.get("agent_bounties_get_account_activity");
+  for (const next_offset of [-1, 1.5, 100001, "50", { token: "private" }]) {
+    payload = { saved_drafts: { status: "available", items: [], next_offset }, activity_inbox: { status: "available", items: [] } };
+    assert.equal((await tool.execute()).next_draft_offset, null);
+  }
+  payload = { status: "available", items: [{ id: "older", title: "Older draft", status: "Saved", group: "drafts", continuation_url: `/post.html?operation_id=${intentId}`, operation_id: intentId }], next_offset: 100 };
+  const older = await tool.execute({ draft_offset: 50 });
+  assert.equal(older.items[0].operation_id, intentId); assert.equal(older.next_draft_offset, 100);
+  assert.equal(older.activity_status, "unavailable");
+  payload.next_offset = 50; assert.equal((await tool.execute({ draft_offset: 50 })).next_draft_offset, null);
+  for (payload of [null, {}, { saved_drafts: { status: "available", items: {} }, activity_inbox: { status: "private", items: [] } }]) {
+    const missing = await tool.execute();
+    assert.equal(missing.drafts_status, "unavailable"); assert.equal(missing.activity_status, "unavailable");
+    assert.equal(missing.items.length, 0); assert.match(missing.next_action, /source statuses/);
+  }
+  env.window.fetch = async () => ({ ok: false, status: 503 });
+  await assert.rejects(tool.execute(), /Retry.*do not recreate/);
+});
+
 test("progress recognizes the exact review already open without redirecting or granting wallet authority", async () => {
   const env = environment(`/participate.html?bountyContract=${contract}&network=base-mainnet&intent=${intentId}`);
   env.register();

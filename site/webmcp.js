@@ -107,6 +107,59 @@
     return text;
   }
 
+  function accountActivitySummary(payload, offset) {
+    const drafts = offset ? payload : payload?.saved_drafts, activity = offset ? null : payload?.activity_inbox;
+    const priorities = ["needs_action", "recover_funds", "drafts", "working", "awaiting_review", "paid", "completed"];
+    const available = source => source?.status === "available" && Array.isArray(source.items);
+    const text = (value, maximum) => typeof value === "string" ? value.trim().slice(0, maximum) : "";
+    const date = value => typeof value === "string" && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
+    const continuation = value => {
+      if (typeof value !== "string" || value.length > 4096) return null;
+      try {
+        const url = new URL(value, window.location.origin);
+        return [window.location.origin, "https://agentbounties.app"].includes(url.origin)
+          && ["/post.html", "/participate.html", "/competition.html"].includes(url.pathname)
+          && !url.username && !url.password ? url.href : null;
+      } catch (_) { return null; }
+    };
+    const items = [], seen = new Set();
+    let filtered = 0;
+    for (const source of [drafts, activity]) {
+      if (!available(source)) continue;
+      filtered += Math.max(0, source.items.length - 300);
+      for (const item of source.items.slice(0, 300)) {
+        const href = continuation(item?.continuation_url), id = text(item?.id, 256);
+        const title = text(item?.title, 160), status = text(item?.status, 100);
+        if (!href || !id || id !== item.id || seen.has(id) || !title || !status || !priorities.includes(item.group)
+          || (item.group === "paid" && (source !== activity || item.payment_state !== "paid"))) { filtered++; continue; }
+        seen.add(id);
+        const summary = { id, title, group: item.group, status, continuation_url: href,
+          next_actor: text(item.next_actor, 40) || "you", next_action: text(item.next_action, 500) || "Review the current state.",
+          payment_state: source === activity && item.group === "paid" ? "paid" : source === activity && item.payment_state === "unpaid" ? "unpaid" : "unverified" };
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item.operation_id)) summary.operation_id = item.operation_id;
+        for (const key of ["updated_at", "expires_at"]) if (date(item[key])) summary[key] = date(item[key]);
+        for (const key of ["revision", "round"]) if (Number.isSafeInteger(item[key]) && item[key] >= 0) summary[key] = item[key];
+        if (Number.isSafeInteger(item.deadline) && item.deadline > 0 && item.deadline <= 8640000000000) summary.deadline = item.deadline;
+        if (typeof item.bounty_contract === "string" && /^0x[0-9a-f]{40}$/i.test(item.bounty_contract)) summary.bounty_contract = item.bounty_contract;
+        if (item.network === NETWORK) summary.network = NETWORK;
+        if (source === activity && Array.isArray(item.timeline)) {
+          summary.timeline = item.timeline.slice(-50).flatMap(event => {
+            const name = text(event?.event, 80), occurred = date(event?.occurred_at);
+            if (!name || !occurred || typeof event.transaction_url !== "string" || !/^https:\/\/basescan\.org\/tx\/0x[0-9a-f]{64}$/i.test(event.transaction_url)) return [];
+            return [{ event: name, occurred_at: occurred, transaction_url: event.transaction_url }];
+          });
+          summary.filtered_timeline_count = item.timeline.length - summary.timeline.length;
+        }
+        items.push(summary);
+      }
+    }
+    items.sort((a, b) => priorities.indexOf(a.group) - priorities.indexOf(b.group));
+    const next = drafts?.next_offset;
+    return { generated_at: date(payload?.generated_at), drafts_status: available(drafts) ? "available" : "unavailable",
+      activity_status: available(activity) ? "available" : "unavailable", filtered_item_count: filtered,
+      next_draft_offset: available(drafts) && Number.isSafeInteger(next) && next > offset && next <= 100000 ? next : null, items };
+  }
+
   function positiveUsdc(value, label) {
     const text = String(value ?? "").trim();
     if (!/^\d+(?:\.\d{1,6})?$/.test(text)) {
@@ -351,17 +404,9 @@
       const response = await window.fetch(`${flow.apiBase(window.location)}${endpoint}`, { credentials: "include", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer", headers: { Accept: "application/json" } });
       if (response.status === 401) return { authenticated: false, next_action: "Sign in to the account, then retry this read-only tool.", continuation_url: new URL("/#account", window.location.origin).href, items: [] };
       if (!response.ok) throw new Error("Account activity is temporarily unavailable. Retry this read-only request; do not recreate a posting operation.");
-      const payload = await response.json(), drafts = offset ? payload : payload.saved_drafts, activity = offset ? null : payload.activity_inbox;
-      const priorities = ["needs_action", "recover_funds", "drafts", "working", "awaiting_review", "paid", "completed"];
-      const items = [drafts, activity].flatMap(source => source?.status === "available" && Array.isArray(source.items) ? source.items : [])
-        .filter(item => priorities.includes(item.group)).map(item => Object.fromEntries([
-          "id", "operation_id", "title", "group", "status", "next_actor", "next_action", "continuation_url", "updated_at", "expires_at", "deadline", "revision", "round", "bounty_contract", "network", "payment_state", "timeline",
-        ].filter(key => Object.prototype.hasOwnProperty.call(item, key)).map(key => [key, item[key]])))
-        .sort((a, b) => priorities.indexOf(a.group) - priorities.indexOf(b.group));
-      return { authenticated: true, generated_at: payload.generated_at || null,
-        drafts_status: drafts?.status || "unavailable", activity_status: activity?.status || "unavailable",
-        next_draft_offset: drafts?.next_offset ?? null, items,
-        next_action: items.length ? "Choose the relevant operation and open its continuation_url. Resume that same operation instead of starting over. The person keeps wallet confirmation authority." : "No continuation records are available. Check source statuses before starting new work.",
+      const summary = accountActivitySummary(await response.json(), offset);
+      return { authenticated: true, ...summary,
+        next_action: summary.items.length ? "Choose the relevant operation and open its continuation_url. Resume that same operation instead of starting over. The person keeps wallet confirmation authority." : "No continuation records are available. Check source statuses before starting new work.",
         evidence_boundary: "Saved drafts and timing reminders are not payment. Only matching canonical settlement proves payment. This read grants no wallet or payment authority.",
       };
     },
