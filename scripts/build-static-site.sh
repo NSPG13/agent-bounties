@@ -14,6 +14,7 @@ python3 scripts/configure-phone-wallet.py
 python3 scripts/prepare-site-fonts.py
 mkdir -p site/schemas
 cp schemas/discovery-manifest.v2.json site/schemas/discovery-manifest.v2.json
+python3 scripts/refresh_site_metrics.py
 python3 - <<'PY'
 import json, os, re, subprocess
 from pathlib import Path
@@ -30,7 +31,8 @@ revision = subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
 Path('site/.well-known').mkdir(exist_ok=True)
 Path('site/.well-known/site-build.json').write_text(json.dumps({
     'schema':'agent-bounties/static-build-v1','revision':revision,
-    'participation_metrics':'retained checked-in snapshot; not refreshed by this build'
+    'participation_metrics':'refreshed from public GitHub activity during this build',
+    'participation_generated_at':json.loads(Path('site/generated/github-participation.json').read_text())['generated_at']
 })+'\n')
 PY
 python3 scripts/check-site.py --require-wallet-bundle
