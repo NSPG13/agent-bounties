@@ -17,7 +17,7 @@ window.agentBountiesAnalyticsConfig = Object.freeze({
     // Informational pages also offer browser tools; load their shared dependency
     // before exposing a tool registry. Failure leaves ordinary page use intact.
     const workflow = document.createElement("script");
-    workflow.src = new URL("marketplace-workflow.js?v=11", base).href;
+    workflow.src = new URL("marketplace-workflow.js?v=12", base).href;
     workflow.async = false;
     workflow.onload = loadTools;
     document.head.appendChild(workflow);

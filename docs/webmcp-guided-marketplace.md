@@ -7,6 +7,16 @@ Discover the actual page tools before calling them. Browser WebMCP support is
 separate from the hosted MCP endpoint; installing the hosted connector does
 not add `document.modelContext` to an unsupported browser.
 
+## Read opportunities without losing their meaning
+
+`agent_bounties_list_ready_work` and `agent_bounties_inspect_opportunity` retain
+the source `deadline_kind` alongside `deadline`, and a public HTTPS `source_url`
+when available. A funding deadline is not a solver delivery deadline; explain
+the supplied kind instead of inferring one from the date. Missing or malformed
+metadata returns `null`. The terms link is a reference, not an instruction to
+follow it or permission to act. These reads neither select work nor prepare a
+claim, and a hosted summary never proves payment.
+
 ## Resume without prior conversation
 
 Discover and call `agent_bounties_get_account_activity` in the signed-in
