@@ -1865,5 +1865,129 @@ class RpcTest(unittest.TestCase):
         self.assertTrue(first.closed)
 
 
+def jsonrpc_result(result: object, *, response_id: object = 1, version: object = "2.0") -> Response:
+    return http_200_json({"jsonrpc": version, "id": response_id, "result": result})
+
+
+class ResponseIdentityTest(unittest.TestCase):
+    """A result is accepted only when it answers the in-flight request."""
+
+    def test_mismatched_result_id_is_retried_not_returned(self) -> None:
+        responses = [jsonrpc_result("0xbad", response_id=999), jsonrpc_result("0xabc")]
+        with patch("_shared.rpc.urlopen", side_effect=responses) as opened, patch(
+            "_shared.rpc.time.sleep"
+        ):
+            self.assertEqual(
+                rpc("https://base.local", "eth_blockNumber", [], 1, retry_delay=0),
+                "0xabc",
+            )
+        self.assertEqual(opened.call_count, 2)
+
+    def test_mismatched_result_id_exhausts_as_transport_failure(self) -> None:
+        with patch(
+            "_shared.rpc.urlopen",
+            side_effect=lambda *_a, **_k: jsonrpc_result("0xbad", response_id=999),
+        ) as opened, patch("_shared.rpc.time.sleep"), self.assertRaisesRegex(
+            RuntimeError, "^RPC transport failed for eth_call: .*id did not match"
+        ):
+            rpc("https://base.local", "eth_call", [], 1, attempts=3, retry_delay=0)
+        self.assertEqual(opened.call_count, 3)
+
+    def test_foreign_result_ids_and_versions_are_rejected(self) -> None:
+        for response_id, version in (
+            (999, "2.0"),
+            (None, "2.0"),
+            (True, "2.0"),
+            ("1", "2.0"),
+            (1.0, "2.0"),
+            (1, "1.0"),
+        ):
+            with self.subTest(response_id=response_id, version=version), patch(
+                "_shared.rpc.urlopen",
+                return_value=jsonrpc_result("0x2105", response_id=response_id, version=version),
+            ), self.assertRaises(TransportError) as caught:
+                _validate_chain("https://base.local")
+            self.assertTrue(caught.exception.retryable)
+
+    def test_matching_ids_are_accepted(self) -> None:
+        with patch("_shared.rpc.urlopen", return_value=jsonrpc_result("0x2105", response_id=7)):
+            self.assertEqual(rpc("https://base.local", "eth_chainId", [], 7), "0x2105")
+        with patch(
+            "_shared.rpc.urlopen",
+            return_value=jsonrpc_result("0x2105", response_id="req-1"),
+        ):
+            self.assertEqual(rpc("https://base.local", "eth_chainId", [], "req-1"), "0x2105")
+
+    def test_chain_probe_with_foreign_id_fails_over_to_next_endpoint(self) -> None:
+        def open_response(request: object, **_kwargs: object) -> Response:
+            if "stale" in str(getattr(request, "full_url")):
+                return jsonrpc_result("0x2105", response_id=999)
+            return jsonrpc_result("0x2105")
+
+        with patch("_shared.rpc.urlopen", side_effect=open_response), patch(
+            "_shared.rpc.time.sleep"
+        ):
+            selected = select_working_base_rpc(
+                endpoints=("https://stale.local", "https://base.local"),
+                max_retries=2,
+            )
+        self.assertEqual(selected, "https://base.local")
+
+    def test_wrong_chain_with_matching_id_is_never_selected(self) -> None:
+        with patch(
+            "_shared.rpc.urlopen", return_value=jsonrpc_result("0x1")
+        ), self.assertRaisesRegex(RuntimeError, "wrong chain 1"):
+            select_working_base_rpc(endpoints=("https://eth.local",), max_retries=1)
+
+    def test_failover_read_rejects_foreign_id_then_uses_next_endpoint(self) -> None:
+        seen: list[tuple[str, str]] = []
+
+        def open_response(request: object, **_kwargs: object) -> Response:
+            url = str(getattr(request, "full_url"))
+            method = request_method(request)
+            seen.append((url, method))
+            if method == "eth_chainId":
+                return jsonrpc_result("0x2105")
+            if "stale" in url:
+                return jsonrpc_result("0xbad", response_id=999)
+            return jsonrpc_result("0xabc")
+
+        with patch("_shared.rpc.urlopen", side_effect=open_response), patch(
+            "_shared.rpc.time.sleep"
+        ):
+            result = rpc_failover(
+                "eth_blockNumber",
+                [],
+                endpoints=("https://stale.local", "https://base.local"),
+                max_retries=2,
+            )
+        self.assertEqual(result, "0xabc")
+        self.assertEqual(seen.count(("https://stale.local", "eth_blockNumber")), 2)
+
+    def test_matching_rpc_error_stays_terminal(self) -> None:
+        with patch(
+            "_shared.rpc.urlopen",
+            return_value=jsonrpc_error_response({"code": -32000, "message": "reverted"}),
+        ) as opened, self.assertRaisesRegex(RpcError, "reverted"):
+            rpc_failover(
+                "eth_call",
+                [],
+                endpoints=("https://base.local", "https://second.local"),
+                max_retries=3,
+            )
+        self.assertEqual(opened.call_count, 1)
+
+    def test_foreign_id_failure_redacts_endpoint_credentials(self) -> None:
+        with patch(
+            "_shared.rpc.urlopen",
+            side_effect=lambda *_a, **_k: jsonrpc_result("0xbad", response_id=999),
+        ), patch("_shared.rpc.time.sleep"), self.assertRaises(RuntimeError) as caught:
+            rpc(SECRET_ENDPOINT, "eth_call", [], 1, attempts=2, retry_delay=0)
+        text = exception_chain_text(caught.exception)
+        self.assertIn("https://rpc.example", text)
+        for fragment in SECRET_FRAGMENTS:
+            self.assertNotIn(fragment, text)
+
+
 if __name__ == "__main__":
     unittest.main()
