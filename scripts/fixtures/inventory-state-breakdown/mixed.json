@@ -1,0 +1,10 @@
+{
+  "schema_version": "inventory-state-breakdown-v1",
+  "ready_to_earn": 2,
+  "in_progress": 1,
+  "submitted": 1,
+  "paid": 3,
+  "verification_unavailable": 1,
+  "generated_at": "2026-08-12T00:00:00Z",
+  "source": "canonical_base"
+}
