@@ -148,7 +148,7 @@
     endpointPanel.appendChild(element(taskOwner ? "summary" : "h2", "", taskOwner ? "Use another assistant" : "Connect your AI assistant"));
     endpointPanel.appendChild(element("p", "", taskOwner
       ? "Add this URL in your assistant’s remote MCP settings."
-      : "Add Agent Bounties to an assistant that supports remote MCP servers. Then give it a task, define how success will be checked, and ask for a bounty draft to review."));
+      : (platform.connection_description || "Add Agent Bounties to an assistant that supports remote MCP servers. Then give it a task, define how success will be checked, and ask for a bounty draft to review.")));
     const endpointRow = element("div", "endpoint-row");
     endpointRow.appendChild(element("code", "", platform.mcp_url));
     const endpointButton = element("button", "", "Copy endpoint");
@@ -173,7 +173,7 @@
     if (!taskOwner) grid.appendChild(endpointPanel);
 
     const stepsPanel = element("section", "install-panel");
-    stepsPanel.appendChild(element("h2", "", "From task to funded bounty"));
+    stepsPanel.appendChild(element("h2", "", platform.steps_heading || "From task to funded bounty"));
     const steps = element("ol");
     platform.steps.forEach((step) => steps.appendChild(element("li", "", step)));
     stepsPanel.appendChild(steps);
@@ -205,10 +205,20 @@
     }
 
     const promptPanel = element("section", taskOwner ? "install-panel" : "install-panel install-panel-wide");
-    promptPanel.appendChild(element("h2", "", "Bring your first task"));
+    promptPanel.appendChild(element("h2", "", platform.first_prompt_heading || "Bring your first task"));
+    if (platform.resume_instructions) promptPanel.appendChild(element("p", "", platform.resume_instructions));
+    if (platform.resume_command) promptPanel.appendChild(copyBlock("Resume a saved CLI session", platform.resume_command));
     promptPanel.appendChild(copyBlock("Copy this prompt", platform.first_prompt));
     grid.appendChild(promptPanel);
     if (taskOwner) grid.appendChild(stepsPanel);
+
+    if (platform.optional_setup) {
+      const optional = element("details", "install-panel install-panel-wide");
+      optional.appendChild(element("summary", "", platform.optional_setup.title));
+      optional.appendChild(element("p", "", platform.optional_setup.description));
+      platform.optional_setup.actions.forEach((action) => optional.appendChild(renderAction(action, platform)));
+      grid.appendChild(optional);
+    }
 
     const docsPanel = element("section", taskOwner ? "install-source" : "install-panel install-panel-wide");
     docsPanel.appendChild(element(taskOwner ? "h3" : "h2", "", "Review before connecting"));

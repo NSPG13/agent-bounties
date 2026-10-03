@@ -17,7 +17,7 @@
       const cap = await get("/v1/github-app/capabilities", false);
       if (cap.schema !== "agent-bounties/github-origin-v1" || cap.funding_authority !== false) throw new Error("The GitHub integration could not be verified.");
       if (cap.available && /^https:\/\/github\.com\/apps\/[a-z0-9][a-z0-9-]{0,99}\/installations\/new$/.test(cap.installation_url || "")) { install.href = cap.installation_url; install.hidden = false; status.textContent = `Install the app on selected repositories, then mention ${cap.mention} in an issue comment as an owner, member or collaborator. Your draft will appear here.`; }
-      else status.textContent = "The GitHub App is not active yet. The Copilot MCP setup below remains available.";
+      else status.textContent = "The GitHub App is not active yet. The Copilot MCP setup on this page remains available.";
       const inbox = await get("/v1/site-auth/github-origin-drafts", true);
       if (inbox.schema !== cap.schema || inbox.funding_authority !== false || !Array.isArray(inbox.items)) throw new Error("The private draft response could not be verified.");
       login.hidden = true;
