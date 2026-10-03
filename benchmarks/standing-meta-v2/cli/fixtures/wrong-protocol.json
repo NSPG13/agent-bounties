@@ -1,0 +1,17 @@
+{
+  "schema": "https://agentbounties.app/schemas/cli-manifest.v2.json",
+  "name": "Agent Bounties CLI Tooling",
+  "version": "autonomous-v1",
+  "protocol": {
+    "network": "base-sepolia",
+    "chain_id": 84532,
+    "asset": "EURC",
+    "token": "0x0000000000000000000000000000000000000000",
+    "deployment_status": "paused"
+  },
+  "endpoints": {
+    "api_base": "https://staging.agentbounties.app",
+    "cli_home": "https://staging.agentbounties.app/cli"
+  },
+  "required_commands": []
+}
