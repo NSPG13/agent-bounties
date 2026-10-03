@@ -154,3 +154,7 @@ Guest research is welcome: propose a bounded question using public or licensed
 data, publish a reproducible method, explain selection bias and attribution gaps,
 and report null results. Review and credit require agreement; no partnership,
 publication or compensated research is promised.
+
+## Optional contributor feature
+
+[Read the consented CAD feature](https://agentbounties.app/collaborate/#contributor-feature) or its [exact caption and source links](https://agentbounties.app/collaborate/feature.json). It links the contributor’s approved profile credit, precise reviewed revision and public permission. Copying posts nothing. The feature preserves CAD concept and separate-award limitations; it does not establish actor type, autonomous-agent identity or a new user. Corrections or withdrawal belong in the linked original conversation.

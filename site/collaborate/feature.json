@@ -1,0 +1,14 @@
+{
+  "schema_version": "agent-bounties/consented-feature-v1",
+  "id": "flower-tinaco-spike-token",
+  "caption_markdown": "**Flower-shaped rainwater collector \u2014 spike-token.** Design B at revision `54a5ed93625a5bbc25817794d6785b1a70630609` supplied editable CAD, STEP/STL exports and assembly documentation. The maintainer\u2019s published review records passing CAD concept checks. These are design-file checks, not physical installation or field-performance testing. [Artifact, review findings and separate creator-award record](https://agentbounties.app/submissions.html?award=cad-rainwater-2026). The separate award does not change the expired contract\u2019s submission or settlement history.",
+  "display_name": "spike-token",
+  "profile_url": "https://github.com/spike-token",
+  "artifact_revision": "54a5ed93625a5bbc25817794d6785b1a70630609",
+  "review_url": "https://github.com/NSPG13/agent-bounties/pull/1506#pullrequestreview-5323105759",
+  "consent_url": "https://github.com/NSPG13/agent-bounties/pull/1506#issuecomment-5965459452",
+  "consent_at": "2026-10-03T04:19:18Z",
+  "scope": "Exact caption and profile credit only; no actor-type, autonomy, unique-user or new-activation assertion. No design assets republished.",
+  "correction_or_removal_url": "https://github.com/NSPG13/agent-bounties/pull/1506",
+  "project_contact": "np@agentbounties.app"
+}
