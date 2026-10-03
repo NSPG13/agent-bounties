@@ -122,7 +122,8 @@ function postingController(fetchImpl) {
   const context = { ui, state, API: 'https://api.agentbounties.app', AbortController,
     fetch: fetchImpl, postingAccountStatus: composer.postingAccountStatus, postingPrimaryAction: composer.postingPrimaryAction,
     expiredDeliveryDeadline: () => false, supportedVerificationPolicy: () => {},
-    postingJournal: { load: () => null }, postingSession: { canContinue: () => false, invalidate: () => {} },
+    postingJournal: { load: () => null }, postingSession: { canContinue: () => false, invalidate: () => {}, hydrate: async () => {}, approved: async () => false, snapshot: () => ({ status: "saved", conflict: false }) },
+    restoration: Promise.resolve(), restorationError: null,
     setStatus(message) { context.message = message; }, updatePostingTracker: () => {},
     window: { location: { hostname: 'agentbounties.app' },
       setTimeout(fn) { const id = ++timerId; timers.set(id, fn); return id; },
@@ -215,4 +216,40 @@ test('missing and loading proposals do not retain login labels', () => {
   assert.equal(c.ui.approve.textContent, 'Loading bounty image…');
   c.state.imageError = 'failed'; c.syncPrimaryAction();
   assert.equal(c.ui.approve.textContent, 'Fix bounty image');
+});
+
+
+test('a ready account cannot approve while its saved draft is still hydrating', async () => {
+  const c = postingController(async url => jsonResponse(url.endsWith('/session') ? readySession : { wallets: [] }));
+  let finish;
+  c.context.postingSession.hydrate = () => new Promise(resolve => { finish = resolve; });
+  const pending = c.loadPostingAccount(); await drain();
+  assert.equal(c.state.postingAccountStatus, 'restoring');
+  assert.equal(c.ui.approve.textContent, 'Restoring saved draft…');
+  assert.equal(c.ui.approve.disabled, true);
+  assert.equal(c.ui.fundNow.disabled, true);
+  finish(); await pending;
+  assert.equal(c.ui.approve.textContent, 'Approve bounty card');
+  assert.equal(c.ui.approve.disabled, false);
+  assert.equal(c.state.approved, false);
+});
+
+test('failed account draft hydration never exposes approval', async () => {
+  const c = postingController(async () => jsonResponse(readySession));
+  c.context.postingSession.hydrate = async () => { throw new Error('draft unavailable'); };
+  await c.loadPostingAccount();
+  assert.equal(c.ui.approve.textContent, 'CHECK ACCOUNT TO POST');
+  assert.equal(c.ui.approve.dataset.nextAction, 'login');
+  assert.equal(c.ui.fundNow.disabled, true);
+  assert.equal(c.state.accountSession, null);
+});
+
+
+test('nonthrowing hydration failure remains blocked', async () => {
+  const c = postingController(async () => jsonResponse(readySession));
+  c.context.postingSession.snapshot = () => ({ status: 'unavailable', conflict: false });
+  await c.loadPostingAccount();
+  assert.equal(c.state.postingAccountStatus, 'unavailable');
+  assert.equal(c.ui.approve.dataset.nextAction, 'login');
+  assert.equal(c.ui.fundNow.disabled, true);
 });

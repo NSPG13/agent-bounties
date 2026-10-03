@@ -13,7 +13,9 @@ The live affected session was recovered and displayed “Approve bounty card”.
 The fix labels every blocked proposal state and rerenders immediately on
 invalidation. Session and optional wallet-account reads now time out after
 8 seconds each, including response-body decoding; the completed login state is
-rendered before optional wallet discovery. Failed reads expose account recovery
+rendered before optional wallet discovery, after account draft hydration has
+completed. Until then the action explicitly says “Restoring saved draft…” and
+approval remains disabled, including on failed or conflicting restoration. Failed reads expose account recovery
 without treating failure as authentication or authorizing a wallet operation.
 
 Regression tests execute the browser controller with a stale restored proposal,
