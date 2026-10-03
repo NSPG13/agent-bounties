@@ -100,7 +100,10 @@ verification-ready. Recheck chain state before signing.
 
 ## Post work
 
-The public homepage opens the assistant chooser, and the first-party review
+The public homepage offers **Create it here — no AI needed** alongside assistant
+options. The native form collects the title, acceptance criteria, budget, review
+reward and deadline; the creator reviews submissions and signs the verdict.
+Preparing a proposal never publishes or funds it. The first-party review
 handoff is <https://agentbounties.app/post.html>. Machine clients can use
 `prepare_bounty_post` when it appears in their MCP catalog. An approved image
 and its metadata may be supplied together, but are not required by

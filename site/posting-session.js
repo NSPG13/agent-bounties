@@ -53,7 +53,13 @@
     const budget = String(original.budget_usdc ?? "").trim(), decimal = /^(\d+)(?:\.(\d{0,6}))?$/.exec(budget);
     const fraction = decimal?.[2]?.replace(/0+$/, "") || "";
     const deadline = original.deadline_at || journey.draft?.delivery_deadline || null;
-    const brief = journey.brief ? { goal: String(original.goal || journey.draft?.goal || journey.goal || "").trim(),
+    const manual = original.preparation_mode === "manual" ? {
+      preparation_mode: "manual", title: String(original.title || "").slice(0, 200),
+      criteria: String(original.criteria || "").slice(0, 20000),
+      review_reward_usdc: String(original.review_reward_usdc || "").slice(0, 30),
+      review_consent: original.review_consent === true,
+    } : {};
+    const brief = journey.brief ? { ...manual, goal: String(original.goal || journey.draft?.goal || journey.goal || "").trim(),
       budget_usdc: decimal ? `${BigInt(decimal[1])}${fraction ? `.${fraction}` : ""}` : budget,
       deadline_at: deadline && Number.isFinite(Date.parse(deadline)) ? new Date(deadline).toISOString() : deadline } : null;
     return { schema: "agent-bounties/posting-draft-v1", id: journey.id, role: "post", goal: journey.goal || "", preferences: journey.preferences || "",

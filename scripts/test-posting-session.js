@@ -487,3 +487,16 @@ test("another device follows only the server-retired authorization into the unap
   const session=posting.create(win);await session.hydrate(account());
   assert.equal(current(win).id,one.state.next.operation_id);assert.equal(await session.approved(),false);
 });
+
+
+test("native form inputs survive account synchronization and changes revoke approval", async () => {
+  const one = await ready();
+  const manual = { preparation_mode: "manual", title: "Research", criteria: "Twenty sources\nCurrent prices", review_reward_usdc: "0.10", review_consent: true };
+  edit(one.win, value => Object.assign(value.brief, manual));
+  await one.session.flush(); await one.session.approve();
+  const two = await second(one.server);
+  for (const [key, value] of Object.entries(manual)) assert.equal(current(two.win).brief[key], value);
+  assert.equal(await two.session.approved(), true);
+  edit(two.win, value => { value.brief.criteria = "Thirty sources"; });
+  assert.equal(await two.session.approved(), false);
+});

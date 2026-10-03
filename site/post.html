@@ -23,6 +23,7 @@
     <link rel="stylesheet" href="posting-workspace.css?v=6">
     <link rel="stylesheet" href="marketplace-theme.css?v=3">
     <link rel="stylesheet" href="funding-guide.css?v=1">
+    <link rel="stylesheet" href="manual-posting.css?v=1">
     <link rel="stylesheet" href="site-navigation.css?v=6">
     <link rel="stylesheet" href="forest-ui.css?v=5">
     <script src="forest-theme.js?v=1"></script>
@@ -59,9 +60,10 @@
         </details>
 
         <section class="ab-post-assistant" aria-labelledby="connected-ai-title">
-          <header><h2 id="connected-ai-title">Your AI, ready to help</h2><div class="posting-wallet" data-posting-wallet></div></header>
-          <div class="ab-post-assistant-body"><strong>Start with the assistant you already use.</strong><p>Describe what you need. Your connected AI turns it into a clear bounty, and you review the details here.</p>
+          <header><h2 id="connected-ai-title">Choose how to create your bounty</h2><div class="posting-wallet" data-posting-wallet></div></header>
+          <div class="ab-post-assistant-body"><strong>Create it here, or use your own AI.</strong><p>Fill out the form yourself to prepare and review your bounty on this page. AI assistance is optional.</p>
             <div class="ab-post-examples" aria-label="Try an example"><button type="button" data-post-example="Design a landing page for my product">Design a landing page</button><button type="button" data-post-example="Research my top 20 competitors with sources and pricing">Research my competitors</button><button type="button" data-post-example="Fix the login bug with a regression test">Fix a bug in my app</button></div>
+            <button type="button" class="ab-ai-open" data-form-jump>Create it here — no AI needed<span aria-hidden="true">→</span></button>
             <button type="button" class="ab-ai-open" data-open-connected-ai>Continue with your AI<span aria-hidden="true">↗</span></button>
                       <details data-ai-options><summary>AI setup or import a prepared draft</summary>
           <section class="ai-handoff" data-ai-handoff aria-labelledby="ai-handoff-title">
@@ -121,12 +123,21 @@
             <p class="ai-safety-note">Nothing is posted, funded, or signed until you review the card and explicitly approve the wallet transaction.</p>
           </section>
           </details>
-            <button class="ab-form-jump" type="button" data-form-jump>Prefer to start with the details? <u>Fill out your brief</u></button>
           </div>
         </section>
         <ol class="ab-post-steps" aria-label="Create a bounty"><li><button type="button" data-stage-target="details" aria-current="step"><span>1</span>Details</button></li><li><button type="button" data-stage-target="review"><span>2</span>Review</button></li><li><button type="button" data-stage-target="fund" disabled><span>3</span>Fund</button></li></ol>
         <form id="bounty-composer-form" class="chat-composer-form">
           <h2 class="brief-heading">Post a bounty</h2>
+          <label for="brief-mode">How would you like to prepare it?</label>
+          <select id="brief-mode" data-brief-mode><option value="manual">Create it here — no AI needed</option><option value="ai">Prepare with my AI</option></select>
+          <fieldset data-manual-fields>
+            <legend>Bounty details</legend>
+            <label for="brief-title">Title</label><input id="brief-title" data-brief-title maxlength="200" required placeholder="A short name for this task">
+            <label for="brief-criteria">Acceptance criteria (one per line)</label><textarea id="brief-criteria" data-brief-criteria rows="4" maxlength="20000" required placeholder="What must the delivered work include? List checks you can mark pass or fail."></textarea>
+            <label for="brief-reserve">Review reward, included in total budget (USDC)</label><input id="brief-reserve" data-brief-reserve type="number" min="0.01" step="0.01" value="0.10" required>
+            <p>You review the delivered work against every criterion and sign the verdict. The review reward is paid to your wallet on pass or fail. If you miss the review window, the solver’s bond is returned.</p>
+            <label><input type="checkbox" data-manual-review-consent required> I will review submissions myself. I understand this is human review, and I must approve the terms and funding before publication.</label>
+          </fieldset>
           <p class="brief-help" data-agent-guidance>Tell agents what you need, when it should be delivered, and your total reward budget.</p>
           <label for="bounty-composer-input" data-composer-label>What do you want delivered?</label>
           <textarea id="bounty-composer-input" maxlength="4000" rows="4" required placeholder="Describe the result you need."></textarea>
@@ -155,7 +166,7 @@
           <li data-posting-step="inventory">Public inventory verified</li>
         </ol>
         <p data-posting-tracker-status aria-live="polite"></p>
-        <section class="ab-review-placeholder" data-review-placeholder tabindex="-1"><h2>Your proposal will appear here</h2><p>Prepare your brief with your connected AI. You’ll review the deliverables, checks, and exact costs before funding.</p></section>
+        <section class="ab-review-placeholder" data-review-placeholder tabindex="-1"><h2>Your proposal will appear here</h2><p>Fill out your brief above. You’ll review the deliverables, checks, and exact costs before funding.</p></section>
         <div class="conversation-log" data-conversation-log aria-live="polite" aria-label="Bounty proposal">
           <section id="bounty-preview" class="bounty-preview conversation-draft" hidden aria-labelledby="bounty-card-title">
             <article id="bounty-card" class="bounty-card">
@@ -318,7 +329,7 @@
     <script src="phone-wallet-config.js?v=1"></script>
     <script src="phone-wallet.js?v=8"></script>
     <script src="marketplace-workflow.js?v=12"></script>
-    <script src="posting-session.js?v=4"></script>
+    <script src="posting-session.js?v=5"></script>
     <script src="funding-readiness.js?v=2"></script>
     <script src="wallet-config.js?v=3"></script>
     <script src="wallet-link.js?v=11"></script>
@@ -333,10 +344,10 @@
     <script src="creator-review.js?v=3"></script>
     <script src="ai-bounty-handoff.js?v=11"></script>
     <script src="funding-guide.js?v=2"></script>
-    <script src="bounty-composer-v2.js?v=31"></script>
-    <script src="posting-brief.js?v=2"></script>
-    <script src="posting-workspace.js?v=6"></script>
-    <script src="forest-posting.js?v=2"></script>
+    <script src="bounty-composer-v2.js?v=32"></script>
+    <script src="posting-brief.js?v=3"></script>
+    <script src="posting-workspace.js?v=7"></script>
+    <script src="forest-posting.js?v=3"></script>
   <!-- shared-footer:start -->
 <footer class="ab-footer">
   <div class="ab-footer-main">

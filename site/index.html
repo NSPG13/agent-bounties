@@ -41,6 +41,7 @@
     <link rel="stylesheet" href="phone-wallet.css?v=5">
     <link rel="stylesheet" href="wallet-link.css?v=5">
     <link rel="stylesheet" href="wallet-adapters.css?v=6">
+    <link rel="stylesheet" href="manual-posting.css?v=1">
     <link rel="stylesheet" href="site-navigation.css?v=6">
     <link rel="stylesheet" href="forest-ui.css?v=5">
     <link rel="stylesheet" href="forest-hall.css?v=15">
@@ -289,15 +290,17 @@
           <circle cx="24" cy="39" r="2.4"></circle>
         </svg>
       </div>
-      <button class="bounty-launcher-close" type="button" data-bounty-close aria-label="Close AI selection">
+      <button class="bounty-launcher-close" type="button" data-bounty-close aria-label="Close posting options">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"></path></svg>
       </button>
 
       <header class="bounty-launcher-heading">
         <p>Post a bounty</p>
-        <h2 id="bounty-launcher-title">Choose your AI</h2>
-        <span id="bounty-launcher-description">Choose an assistant to help prepare your bounty.</span>
+        <h2 id="bounty-launcher-title">Choose how to start</h2>
+        <span id="bounty-launcher-description">Create your bounty here, or ask your AI to help.</span>
       </header>
+
+      <a class="ab-button ab-button--primary" data-bounty-manual href="post.html?mode=manual#bounty-composer-form">Create it here — no AI needed <span aria-hidden="true">→</span></a>
 
       <p class="bounty-launch-status" data-bounty-launch-status aria-live="polite"></p>
       <div class="bounty-launch-actions" data-bounty-custom-actions hidden>
@@ -353,7 +356,7 @@
     <script src="analytics.js?v=5"></script>
     <script src="posting-prompt.js?v=6"></script>
     <script src="creator-push.js?v=3"></script>
-  <script src="solarpunk-home.js?v=30"></script>
+  <script src="solarpunk-home.js?v=31"></script>
     <script src="forest-home.js?v=7"></script>
     <script src="forest-hall.js?v=4"></script>
   <!-- shared-footer:start -->

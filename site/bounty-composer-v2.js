@@ -732,7 +732,7 @@
       ? (state.bountyImage
           ? "Review the exact image and bounty terms you approved in your AI conversation. Agent Bounties cannot edit or replace them."
           : "Review the exact bounty terms you approved in your AI conversation. This card uses a deterministic content-derived visual.")
-      : "Review the bounty card your AI prepared. You can approve it or ask your AI for a revision.";
+      : "Review the bounty terms below. You can approve them or edit your brief.";
     const client = window.AgentBountiesWorkflow.createClient(window);
     const journey = client.load() || client.start({ role: "post" });
     const operationId = prepared.posting_operation_id || new URLSearchParams(window.location.search).get("operation_id");
@@ -1068,7 +1068,7 @@
     if (expiredDeliveryDeadline()) risks.unshift("Agree a new delivery deadline and review the updated terms before funding.");
     if (!risks.length) {
       const item = document.createElement("li");
-      item.textContent = "No material blocker was identified by the drafting AI. The creator still accepts feasibility and verification risk.";
+      item.textContent = "Review the scope, feasibility and acceptance criteria carefully before approving. The creator accepts feasibility and verification risk.";
       ui.risks.append(item);
     } else {
       for (const risk of risks) {
@@ -1662,11 +1662,11 @@
     ui.approve.textContent = "Approve bounty card";
     ui.fund.disabled = true;
     const savedGoal = ui.input.value;
-    setComposer({ phase:"revise", prompt:"Edit your brief, then continue with your AI in this conversation.", label:"What do you want delivered?", placeholder:"Describe the result you need.", button:"Save brief", hint:"Your AI uses the saved brief to update the proposal." });
+    setComposer({ phase:"revise", prompt:"Edit your brief, then prepare the updated proposal.", label:"What do you want delivered?", placeholder:"Describe the result you need.", button:"Prepare for review →", hint:"Review the updated terms before approving." });
     ui.input.value = savedGoal || state.draft?.goal || state.originalRequest;
     ui.form.scrollIntoView({behavior:"smooth",block:"start"});
     ui.input.focus({ preventScroll: true });
-    setStatus("Edit the saved brief above and ask your AI to update the proposal in your current conversation.", "pending");
+    setStatus("Edit the saved brief above, then prepare and review the updated proposal.", "pending");
   }
 
   async function openFunding() {

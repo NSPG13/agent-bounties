@@ -1,0 +1,7 @@
+/* Native posting remains a first-class option alongside assistant handoffs. */
+[data-bounty-manual] { margin: 22px 0 8px; width: 100%; justify-content: center; white-space: normal; }
+[data-manual-fields] { border: 1px solid var(--ab-line); border-radius: 12px; padding: 18px; margin: 20px 0; min-width: 0; }
+[data-manual-fields] input:not([type="checkbox"]), [data-manual-fields] textarea, [data-brief-mode] { box-sizing: border-box; width: 100%; background: var(--ab-bg); color: inherit; border: 1px solid var(--ab-line); border-radius: 8px; padding: 12px; font: inherit; }
+[data-manual-fields] label { display: block; margin: 12px 0 6px; }
+[data-manual-fields] p { color: var(--ab-muted); font-size: 14px; }
+[data-manual-review-consent] { width: auto; margin-right: 8px; }

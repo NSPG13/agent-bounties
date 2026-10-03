@@ -9,6 +9,24 @@
   const status = document.querySelector("[data-brief-status]");
   const timezone = document.querySelector("[data-brief-timezone]");
   const helper = window.AgentBountiesPostingBrief;
+  const mode = document.querySelector("[data-brief-mode]");
+  const manualFields = document.querySelector("[data-manual-fields]");
+  const title = document.querySelector("[data-brief-title]");
+  const criteria = document.querySelector("[data-brief-criteria]");
+  const reserve = document.querySelector("[data-brief-reserve]");
+  const consent = document.querySelector("[data-manual-review-consent]");
+  const params = new URLSearchParams(window.location.search);
+  const protectedHandoff = params.has("parentBounty") || ["ai-app", "chatgpt-app"].includes(params.get("from"));
+  function setMode() {
+    const manual = mode.value === "manual";
+    manualFields.hidden = !manual;
+    manualFields.disabled = !manual;
+    form.querySelector("[data-composer-submit]").textContent = manual ? "Prepare for review →" : "Continue with my AI →";
+  }
+  const saved = client.load();
+  mode.value = protectedHandoff ? "ai" : params.get("mode") === "manual" ? "manual" : saved?.brief?.preparation_mode || (saved?.draft ? "ai" : "manual");
+  mode.disabled = protectedHandoff;
+  setMode();
   const deadlineSummary = document.querySelector("[data-brief-deadline-summary]");
   const budgetSummary = document.querySelector("[data-brief-budget-summary]");
   const warningList = document.querySelector("[data-brief-warnings]");
@@ -59,8 +77,8 @@
     if (budgetSummary) {
       const staged = journey?.draft;
       budgetSummary.textContent = staged
-        ? `Proposal split: ${staged.solver_reward_usdc} USDC for the worker + ${staged.verifier_reward_usdc} USDC ${staged.review_mode === "creator" ? "creator-review reserve" : "verifier reward"}.${journey.draft_stale ? " Your brief changed; ask your AI to update this proposal before approving." : " These are the amounts on the review card."}`
-        : "Enter the combined worker and review budget. Your AI will propose an explicit split for you to review.";
+        ? `Proposal split: ${staged.solver_reward_usdc} USDC for the worker + ${staged.verifier_reward_usdc} USDC ${staged.review_mode === "creator" ? "creator-review reserve" : "verifier reward"}.${journey.draft_stale ? " Your brief changed; prepare an updated proposal before approving." : " These are the amounts on the review card."}`
+        : "Enter the combined worker and review budget. The exact split will appear on the review card.";
     }
     if (warningList) {
       warningList.replaceChildren();
@@ -91,7 +109,13 @@
       }
       catch (_) { deadline.value = brief.deadline_local || ""; }
     }
-    status.textContent = journey.draft ? "Draft saved on this device. Review the proposal below." : "Brief saved on this device. Your connected AI can use these answers.";
+    if (document.activeElement !== title) title.value = brief.title ?? journey.draft?.title ?? "";
+    if (document.activeElement !== criteria) criteria.value = brief.criteria ?? journey.draft?.acceptance_criteria?.join("\n") ?? "";
+    if (document.activeElement !== reserve) reserve.value = brief.review_reward_usdc ?? journey.draft?.verifier_reward_usdc ?? "0.10";
+    if (document.activeElement !== consent) consent.checked = brief.review_consent === true;
+    if (brief.preparation_mode && !protectedHandoff) mode.value = brief.preparation_mode;
+    setMode();
+    status.textContent = journey.draft ? "Draft saved on this device. Review the proposal below." : "Brief saved on this device. Complete the details to prepare your proposal.";
     restoring = false;
     render();
   }
@@ -99,22 +123,44 @@
     if (restoring) return;
     const current = client.load() || client.start({ role: "post" });
     const result = render();
-    const brief = { goal: goal.value.trim(), budget_usdc: budget.value, deadline_at: result.iso, deadline_local: deadline.value, timezone: timezone.value.trim() };
+    const brief = { preparation_mode: mode.value, title: title.value, criteria: criteria.value, review_reward_usdc: reserve.value, review_consent: consent.checked, goal: goal.value.trim(), budget_usdc: budget.value, deadline_at: result.iso, deadline_local: deadline.value, timezone: timezone.value.trim() };
     // Compare decisions, not display formatting, so restoring an old brief
     // does not invalidate approval simply because display fields were added.
     const before = current.brief || {};
-    const changed = brief.goal !== (before.goal || current.draft?.goal || current.goal || "")
+    const manualChanged = mode.value === "manual" && (brief.title !== (before.title ?? current.draft?.title ?? "")
+      || brief.criteria !== (before.criteria ?? current.draft?.acceptance_criteria?.join("\n") ?? "")
+      || Number(brief.review_reward_usdc) !== Number(before.review_reward_usdc ?? current.draft?.verifier_reward_usdc ?? "0.10")
+      || brief.review_consent !== (before.review_consent === true));
+    const changed = manualChanged || brief.goal !== (before.goal || current.draft?.goal || current.goal || "")
       || Number(brief.budget_usdc) !== Number(before.budget_usdc || (current.draft ? Number(current.draft.solver_reward_usdc) + Number(current.draft.verifier_reward_usdc) : ""))
       || (Date.parse(brief.deadline_at) || null) !== (Date.parse(before.deadline_at || current.draft?.delivery_deadline) || null);
     if (changed && current.draft) window.AgentBountiesComposer?.invalidate();
     client.save({ ...current, role: "post", goal: brief.goal, brief, draft_stale: current.draft_stale || Boolean(changed && current.draft), updated_at: new Date().toISOString() });
-    status.textContent = result.error || (changed && current.draft ? "Brief updated. Your AI must update the proposal before you can approve funding." : "Brief saved. Continue with your AI in the same conversation.");
+    status.textContent = result.error || (changed && current.draft ? "Brief updated. Prepare the updated proposal before approving funding." : "Brief saved. Prepare your proposal when the details are ready.");
   }
-  for (const input of [goal, budget, deadline, timezone]) input.addEventListener("input", save);
-  form.addEventListener("submit", (event) => {
+  mode.addEventListener("change", () => {
+    const url = new URL(window.location.href); url.searchParams.set("mode", mode.value);
+    window.history?.replaceState?.(null, "", url);
+    setMode(); save();
+  });
+  for (const input of [goal, budget, deadline, timezone, title, criteria, reserve, consent]) input.addEventListener("input", save);
+  form.addEventListener("submit", async (event) => {
     event.preventDefault(); event.stopImmediatePropagation(); save();
     if (!form.reportValidity()) return;
     const journey = client.load();
+    if (mode.value === "manual") {
+      const submit = form.querySelector("[data-composer-submit]");
+      submit.disabled = true;
+      try {
+        if (journey?.meta_child || journey?.draft?.meta_child || protectedHandoff) throw new Error("This linked bounty requires its existing reviewed policy. Continue with that proposal.");
+        const draft = helper.manualDraft(journey.brief);
+        await window.AgentBountiesComposer.stage(draft);
+        status.textContent = "Proposal prepared from your form. Review the exact terms and costs below before approving.";
+        document.querySelector("#bounty-preview").scrollIntoView({ block: "start", behavior: "smooth" });
+      } catch (error) { status.textContent = error.message || "Could not prepare the proposal. Your brief is still saved."; }
+      finally { submit.disabled = false; }
+      return;
+    }
     window.AgentBountyAI.show(goal.value.trim(), { draft: journey?.draft, brief: journey?.brief });
     document.querySelector("[data-ai-options]").open = !document.documentElement.dataset.agentConnected;
   }, true);
@@ -134,6 +180,7 @@
     link.href = url; link.download = "agent-bounties-draft.json"; link.click(); URL.revokeObjectURL(url);
   });
   restore(client.load());
+  if (params.get("mode") === "manual" && !protectedHandoff) { mode.value = "manual"; setMode(); }
   window.setInterval(() => { if (!document.hidden) render(); }, 30000);
   document.addEventListener("visibilitychange", render);
   // Canonical completion belongs to the shared posting operation tracker.
