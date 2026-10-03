@@ -8,6 +8,19 @@ const metrics = require("../site/metrics.js");
 
 const NOW = Date.parse("2026-08-12T20:22:19Z");
 
+test("an unavailable optional GitHub aggregate does not look like a complete zero count", () => {
+  const unavailable = {
+    schema_version: "agent-bounties/github-participation-v1",
+    generated_at: "2026-08-12T20:22:19Z",
+    periods: {},
+    coverage: { status: "unavailable", raw_identifiers_included: false },
+  };
+  const merged = metrics.mergeMetrics(platform(), unavailable, "7d", NOW);
+  assert.equal(merged.github_status, "unavailable");
+  assert.equal(merged.status, "partial");
+  assert.equal(merged.active_complete, false);
+});
+
 test("public dashboard presents one marketplace without mechanism counters", () => {
   const html = fs.readFileSync(path.join(__dirname, "..", "site", "metrics.html"), "utf8");
   assert.doesNotMatch(html, /Open Competition V[12]/i);
