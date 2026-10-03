@@ -77,15 +77,15 @@
           <div><p class="metrics-kicker">Confirmed payments</p><h2 id="payout-audit-title">Verify every payout</h2></div>
           <div class="audit-verdict" aria-live="polite">
             <span class="source-state" data-audit-status data-status="loading">loading</span>
-            <p data-audit-copy>Loading the canonical marketplace event streams and recomputing the selected period.</p>
+            <p data-audit-copy>Loading historical payout proof for the selected reporting snapshot.</p>
           </div>
         </div>
         <div class="audit-totals" aria-label="Payout audit reconciliation">
           <article><span>Payments total</span><strong data-audit-total>—</strong><small>Work, reviews and completion bonuses</small></article>
           <article><span>Completed payments</span><strong data-audit-settlements>—</strong><small>confirmed canonical settlement records</small></article>
           <article><span>All payment records</span><strong data-audit-payout-events>—</strong><small>Includes reviews of rejected work</small></article>
-          <article><span>Excluded test records</span><strong data-audit-excluded-events>—</strong><small>Platform tests outside public totals</small></article>
-          <article><span>Excluded test payments</span><strong data-audit-excluded-volume>—</strong><small>reported separately, never included</small></article>
+          <article><span>Policy-excluded contracts</span><strong data-audit-excluded-events>—</strong><small>Declared exclusions from this payout selection</small></article>
+          <article><span>Excluded payment amounts</span><strong data-audit-excluded-volume>—</strong><small>Not counted as zero or included in these totals</small></article>
         </div>
         <div class="audit-table-shell" tabindex="0" role="region" aria-label="Scrollable canonical payout event ledger">
           <table class="audit-table">
@@ -93,7 +93,7 @@
             <tbody data-audit-rows></tbody>
           </table>
         </div>
-        <p class="audit-method">This table is recomputed in your browser from the public Autonomous and Open Competition event APIs and the <a href="generated/public-metrics-policy.json">public metrics policy</a>. Every included row links to its raw event set and BaseScan transaction; participant wallet identities are not displayed here.</p>
+        <p class="audit-method">This table sums bounded historical proof pages, including older factories, under the headline’s reporting window and <a href="generated/public-metrics-policy.json">public metrics policy</a>. Every included row links to its proof JSON and BaseScan transaction. Returned bonds and creator awards are excluded. The API declares the applied policy; matching arithmetic does not prove indexer freshness, lifetime coverage or independent participants. Wallet identities are not displayed here.</p>
       </section>
 </div></details>
 <details class="metrics-detail" id="participation"><summary><span>Participation and completion<small>Accounts taking part, completion rates and reward breakdowns.</small></span></summary><div class="metrics-detail-body">
@@ -304,7 +304,8 @@
     <script src="analytics-config.js?v=13"></script>
     <script src="analytics.js?v=4"></script>
     <script src="creator-awards.js?v=1"></script>
-    <script src="metrics.js?v=10"></script>
+    <script src="payout-proof.js?v=1"></script>
+    <script src="metrics.js?v=11"></script>
     <script src="marketplace-navigation.js?v=1"></script>
   </body>
 </html>

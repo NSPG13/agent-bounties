@@ -111,20 +111,55 @@ The response intentionally excludes GitHub participation
 and all raw handles, wallet addresses, comment authors, event IDs, and
 transaction IDs.
 
-For public auditability, the dashboard independently reads the existing
-canonical event surfaces:
+For public auditability, use `GET /v1/metrics/platform/payouts` with the
+aggregate’s `period`, `window.ended_at` as `as_of`, and `payout_proof.snapshot`.
+The aggregate also accepts an optional `as_of` between launch and now. Bounds
+are `[started_at, ended_at)` in UTC, with at most microsecond precision.
+The headline, daily totals and selection fingerprint come from one repeatable-read
+DB transaction. The proof route reuses that selection SQL, including historical
+factories, canonical legacy block-time checks, V2 safe-indexing policy and
+public exclusions. Active earning inventory remains scoped to current factories.
 
-- `GET /v1/base/autonomous-bounties/events?network=base-mainnet`
-- `GET /v1/base/open-competition-v1/events?network=base-mainnet`
-- `GET /v1/base/open-competition-v2-beta3/events?network=base-mainnet`
+The additive `agent-bounties/platform-payout-proof-v1` response contains public
+contract/bounty/transaction references and exact integer strings for reward
+components, block and log indices. Autonomous historical factory is `null`
+because it is unavailable in this projection. No participant identities appear.
+Returned bonds, refunds, funding, creator awards and noncanonical observations
+are not payout components. Policy-excluded contracts are listed; their rows and
+amounts are not enumerated or displayed as zero.
 
-It filters those records to the selected UTC window, applies the payout formula
-above, and requires the exact base-unit sum and canonical settlement count to
-match the aggregate. Every displayed payout row links to the bounty-scoped raw event
-set and its BaseScan transaction. Contract, bounty, event, and transaction
-identifiers are public blockchain evidence; participant wallet identities are
-not rendered in the ledger. A missing stream or arithmetic mismatch marks the
-dashboard partial instead of silently trusting or replacing the aggregate.
+Pagination is bounded: default100/max200 rows per page, at most5000 qualifying
+rows, at most256KiB per response, a five-second DB statement timeout. The shared
+browser/Node reader allows25 pages and12seconds per streamed request, rejects
+redirects and omits credentials. Larger selections return503 with
+`proof_capacity_exceeded`; the aggregate keeps its totals and reports unavailable
+proof capacity. Its transaction uses a10second per-statement limit.
+
+Keep `period`, `as_of` and `snapshot` fixed and pass `next_cursor` verbatim.
+Cursors bind the window, policy and indexed row digest; they are public
+continuation markers, not authorization tokens. Changed policy/records return409
+with `restart_required:true`; restart from a new aggregate explicitly. New
+out-of-window records do not change the selected digest. This detects revision
+changes rather than promising a permanently retained database snapshot.
+`complete:true` means final page, not full chain/lifetime coverage. Validate
+continuous offsets, total count and unique transaction/log identities.
+
+The dashboard uses the same bounded helper as agents and BigInt arithmetic to
+compare every component, settlement count and UTC daily total. Each row links
+to its proof JSON page and BaseScan transaction. A mismatch or unavailable page
+keeps payment checks partial. Indexer freshness and participation-source warnings
+remain independent even when arithmetic reconciles. The original current-factory
+event APIs remain available for their existing consumers.
+
+From a repository checkout with Node20+, a no-account read-only replay is:
+
+```bash
+node examples/read-platform-payouts.cjs lifetime
+```
+
+The result retains the aggregate, proof pages and computed audit. It never
+requests a wallet or signs/sends a transaction. Exit1 means incomplete or
+mismatched proof. Project contact: np@agentbounties.app.
 
 `/generated/github-participation.json`
 
@@ -194,7 +229,7 @@ retrospectively.
 - Missing inventory stays unavailable instead of becoming zero.
 - Missing historical browser analytics is disclosed and never estimated.
 
-The page refreshes the platform aggregate, both canonical proof streams, and
+The page refreshes the platform aggregate, its historical proof pages, and
 interface/browser analytics every minute. GitHub participation and repository
 traffic refresh every five minutes. It pauses periodic work while hidden and
 refreshes after the page becomes visible again.

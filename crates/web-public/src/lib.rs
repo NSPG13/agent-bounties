@@ -115,6 +115,8 @@ pub struct DiscoveryEndpoints {
     pub opportunity_embed_markdown: String,
     pub opportunity_conversion_funnel: String,
     pub site_analytics: String,
+    pub platform_metrics: String,
+    pub platform_payout_proof: String,
     pub unfunded_bounties: String,
     pub x402_discovery: String,
     pub x402_bounty_funding: String,
@@ -677,6 +679,8 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "{api}/v1/opportunities/conversion-funnel"
         ),
         site_analytics: format!("{api}/v1/analytics/site"),
+        platform_metrics: format!("{api}/v1/metrics/platform"),
+        platform_payout_proof: format!("{api}/v1/metrics/platform/payouts"),
         unfunded_bounties: format!("{api}/v1/unfunded-bounties"),
         x402_discovery: format!("{api}/.well-known/x402.json"),
         x402_bounty_funding: format!(
