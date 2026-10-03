@@ -1,0 +1,36 @@
+{
+  "schema_version": "agent-bounties/routed-v3-parent-v1",
+  "issue": 590,
+  "network": "base-mainnet",
+  "chain_id": 8453,
+  "parent": {
+    "contract": "0x8a4acb37acef4c24c821835dad36345b6afa7d4d",
+    "kind": "routed-v3",
+    "creation_and_funding_transaction": "0x17366520b7b1ad1c0084e6aa4b8b8627d7753bbc0d32de96f59e5b46461833eb",
+    "funded_usdc_minor": 2010000,
+    "target_usdc_minor": 2010000,
+    "solver_reward_usdc_minor": 2000000,
+    "verifier_reward_usdc_minor": 10000,
+    "claim_bond_usdc_minor": 10000,
+    "status": "claimable"
+  },
+  "child": {
+    "required_target_usdc_minor": 1000000,
+    "protocol": "agent-discovery",
+    "verifier_quorum": "sandboxed_regression_v1",
+    "verifier_quorum_threshold": 2,
+    "terms_publication_required_before": "child-creation",
+    "distinct_solver_wallet_required": true
+  },
+  "margin": {
+    "guaranteed_parent_gross_usdc_minor": 1000000
+  },
+  "verifier": {
+    "router": "0x380c1af742593dd88b6f20387e9ee693a0536731",
+    "routed_policy_hash": "0x8d8e5cca196fcc8ba123d6ffdbb4659c014d82d27cfe1f587f9d031059e23e58",
+    "routed_implementation": "0x1518ccd19002ca3b69dc33aa4ade349f70be6446"
+  },
+  "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+  "canonical_factory": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+  "evidence_boundary": "This manifest records the funded routed V3 parent terms for issue 590. Confirmed funding and claimability are recorded on Base mainnet; this file does not prove child creation, child completion, or parent settlement."
+}
