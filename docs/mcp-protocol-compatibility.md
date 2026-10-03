@@ -114,6 +114,15 @@ implement.
 
 ## Published catalog stability
 
+Successful tool results expose the same JSON object in `structuredContent` and
+a serialized JSON `TextContent` block, alongside the existing narration. This
+lets clients that give models only text inspect identifiers, exact amounts,
+unknown values, source timestamps and coverage limits. Parse the JSON block;
+the narration alone does not distinguish an empty feed from unavailable data.
+Wallet-review metadata remains separate, and errors retain `isError: true`.
+The extra text block changes neither tool schemas nor action authority. This
+follows the [MCP structured-content compatibility guidance](https://modelcontextprotocol.io/specification/2025-11-25/server/tools#structured-content).
+
 The hosted release uses the nine-tool ChatGPT catalog and twenty-eight-tool core
 catalog described here. Query the deployed service for its actual version and
 available tools; an older source checkout may have a different catalog. The

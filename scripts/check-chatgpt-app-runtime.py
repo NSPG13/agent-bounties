@@ -100,6 +100,20 @@ def request(
             )
         body = json.loads(response.read())
     require("error" not in body, f"{method} failed: {body.get('error')}")
+    result = body["result"]
+    if method == "tools/call" and "structuredContent" in result:
+        text_results = []
+        for block in result.get("content", []):
+            if block.get("type") != "text":
+                continue
+            try:
+                text_results.append(json.loads(block["text"]))
+            except (ValueError, KeyError):
+                continue
+        require(
+            result["structuredContent"] in text_results,
+            "text-only client lost the tool's structured result",
+        )
     return body["result"]
 
 
@@ -293,6 +307,18 @@ def main() -> int:
             },
         )
         v2_guide = v2_guide_call["structuredContent"]
+        legacy_guide = rpc(
+            "tools/call",
+            {
+                "name": "inspect_open_competition_v2",
+                "arguments": {"operation": "guide", "network": "base-mainnet"},
+            },
+            modern=False,
+        )
+        require(
+            legacy_guide["structuredContent"] == v2_guide,
+            "modern and legacy readers received different guide evidence",
+        )
         v2_guide_text = json.dumps(v2_guide)
         require(
             v2_guide["schema_version"]
