@@ -1,0 +1,193 @@
+{
+  "autonomous-v1": [
+    {
+      "id": "2a972a23-f590-56a6-aba4-ba28af229ed1",
+      "log_key": "0xc5f056ce59064e072e2805026c4be6c60201dcbe6eb55d22bb6c50149a2638d9:263",
+      "tx_hash": "0xc5f056ce59064e072e2805026c4be6c60201dcbe6eb55d22bb6c50149a2638d9",
+      "block_number": 48602272,
+      "log_index": 263,
+      "contract_address": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+      "bounty_id": "0x7624384505d8848747423241cced57e57f31a4cd2a9b93e0e59f72fc141bda93",
+      "kind": "canonical_bounty_created",
+      "data": {
+        "bounty_contract": "0xfb3439ef4e2e5c7635f5946d3e78b521e681a2e4",
+        "creation_nonce": "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "creator": "0xf16f0882de08315b438e9f3a2abfb2d2e5d94eca",
+        "policy_hash": "0xba1c8bb425716695a26e42491480e4f6d79196112d8b206b040dc77a38d1e058",
+        "terms_hash": "0xed6154cbd7c589dd46bcd34b3048cebec99ca5837dc6d431051f89f802401216"
+      },
+      "occurred_at": "2026-07-14T01:51:31Z"
+    },
+    {
+      "id": "c0aac089-70da-51ca-ad23-48ab67fd1a10",
+      "log_key": "0xf3fd6169dc7c1fb68274c411fa7d5ac9fad2e9a5e4c79ed86e02530afc638829:258",
+      "tx_hash": "0xf3fd6169dc7c1fb68274c411fa7d5ac9fad2e9a5e4c79ed86e02530afc638829",
+      "block_number": 48602493,
+      "log_index": 258,
+      "contract_address": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+      "bounty_id": "0x640aa4c5e070e24f53108cb27aa40d477f9e8e3ccf4d3438addb1e91f96a7d10",
+      "kind": "canonical_bounty_created",
+      "data": {
+        "bounty_contract": "0xd3052644a454ebfe1d8ec665d96a51770a1c89ca",
+        "creation_nonce": "0x0000000000000000000000000000000000000000000000000000000000000003",
+        "creator": "0xf16f0882de08315b438e9f3a2abfb2d2e5d94eca",
+        "policy_hash": "0xba1c8bb425716695a26e42491480e4f6d79196112d8b206b040dc77a38d1e058",
+        "terms_hash": "0x93b972d6d2600d1691b0360ac45594d6e39fcbf147b9717619c99ba789e524e0"
+      },
+      "occurred_at": "2026-07-14T01:58:53Z"
+    },
+    {
+      "id": "0677a42f-0171-5ec7-9e14-a3db68e2c444",
+      "log_key": "0xa3e7336ec8ace33d4704872fa53c9d37e84362ff9d338f3bcf88e187fa122640:94",
+      "tx_hash": "0xa3e7336ec8ace33d4704872fa53c9d37e84362ff9d338f3bcf88e187fa122640",
+      "block_number": 48602358,
+      "log_index": 94,
+      "contract_address": "0xfb3439ef4e2e5c7635f5946d3e78b521e681a2e4",
+      "bounty_id": "0x7624384505d8848747423241cced57e57f31a4cd2a9b93e0e59f72fc141bda93",
+      "kind": "bounty_settled",
+      "data": {
+        "claim_bond_returned": 100000,
+        "evidence_hash": "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "policy_hash": "0xba1c8bb425716695a26e42491480e4f6d79196112d8b206b040dc77a38d1e058",
+        "round": 1,
+        "solver": "0x515d935be52e76f0d9b37aa99fc33947b3b65f62",
+        "solver_payout": 900000,
+        "solver_reward": 800000,
+        "submission_hash": "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "timeout_bond_bonus": 0,
+        "verification_hash": "0x8e0fb86dca441649c7610b5aa34893bf57f3092d9701739ce5496d572e99bff6",
+        "verifier_reward": 100000
+      },
+      "occurred_at": "2026-07-14T01:54:23Z"
+    },
+    {
+      "id": "703dc292-cee1-5166-8935-3d55c856df80",
+      "log_key": "0x693290575ef3ec1f319b7503ff0a6f3eda92a9005fafb4a23d36433074f5fc2a:668",
+      "tx_hash": "0x693290575ef3ec1f319b7503ff0a6f3eda92a9005fafb4a23d36433074f5fc2a",
+      "block_number": 48602547,
+      "log_index": 668,
+      "contract_address": "0xd3052644a454ebfe1d8ec665d96a51770a1c89ca",
+      "bounty_id": "0x640aa4c5e070e24f53108cb27aa40d477f9e8e3ccf4d3438addb1e91f96a7d10",
+      "kind": "bounty_settled",
+      "data": {
+        "claim_bond_returned": 100000,
+        "evidence_hash": "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "policy_hash": "0xba1c8bb425716695a26e42491480e4f6d79196112d8b206b040dc77a38d1e058",
+        "round": 1,
+        "solver": "0x515d935be52e76f0d9b37aa99fc33947b3b65f62",
+        "solver_payout": 900000,
+        "solver_reward": 800000,
+        "submission_hash": "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "timeout_bond_bonus": 0,
+        "verification_hash": "0xc24eff4bb9f4d6fefeac2990b18d94469361e09bb792e9da20712f9002099664",
+        "verifier_reward": 100000
+      },
+      "occurred_at": "2026-07-14T02:00:41Z"
+    }
+  ],
+  "open-competition-v1": {
+    "deployment_block": 49663931,
+    "events": [
+      {
+        "block_number": 49664295,
+        "bounty_id": "0x078d1d7cb973c093c4a3f9a6ce9cd0cd1996ee6ad8f6552613eaa3f28dff3d92",
+        "contract_address": "0x9e9382beb8b1a45b737d484b5eafa7b8779d4ca5",
+        "data": {
+          "bounty_contract": "0xb307ab8e3205cfe89200877a9195a7c5c33254bb",
+          "creation_nonce": "0xcc3b764854d7be56ade0ca25a8b4a2065e4bb068188149e8fe0c9cb21aed5ba3",
+          "creator": "0x884834e884d6e93462655a2820140ad03e6747bc",
+          "policy_hash": "0xe9bb3580a394ac8f9bf2c03521b32075e431fd10aecb9e8273278b7921a31cf9",
+          "terms_hash": "0xbd78f6d4366eab544cdc3d66403ff48cfbfcb7a96d20dc8ab77e482e4c579552"
+        },
+        "id": "d7718fc0-e38b-5e4f-b054-8a03100b7f79",
+        "kind": "canonical_competition_created",
+        "log_index": 367,
+        "log_key": "0x9914bef22a5f2535805696fc6dcc3608c44a13a9641a84c552ea2c5d6b02b781:367",
+        "occurred_at": "2026-08-07T15:52:17Z",
+        "protocol_version": "agent-bounties/open-competition-v1",
+        "tx_hash": "0x9914bef22a5f2535805696fc6dcc3608c44a13a9641a84c552ea2c5d6b02b781"
+      },
+      {
+        "block_number": 49664756,
+        "bounty_id": "0x078d1d7cb973c093c4a3f9a6ce9cd0cd1996ee6ad8f6552613eaa3f28dff3d92",
+        "contract_address": "0xb307ab8e3205cfe89200877a9195a7c5c33254bb",
+        "data": {
+          "canonical_payment_evidence": true,
+          "entry_bond_returned": 100000,
+          "evidence_hash": "0x4fdb67030d97da975a7d133112856223efaa4e06bbf9e0a0b49ba8510171872d",
+          "policy_hash": "0xe9bb3580a394ac8f9bf2c03521b32075e431fd10aecb9e8273278b7921a31cf9",
+          "solver": "0xb87c9679a14e082e92c103f66327fd1f1e846087",
+          "solver_reward": 1000000,
+          "submission_hash": "0x60fbd22a22c3b98891a31381cd36c3edc1280b7b6e50e2466a7e0c18876267be",
+          "submission_sequence": 1,
+          "timeout_bond_bonus": 0,
+          "verification_hash": "0xe585b602d83e76e1b0037547c3a520559bb1e1d3bf6ed93090d575b5327e0cea",
+          "verifier_reward": 100000
+        },
+        "id": "66b0526d-e79d-5fc4-a732-79c6f6e6adfa",
+        "kind": "bounty_settled",
+        "log_index": 217,
+        "log_key": "0x12bab153424dbd4cd5fb0d9b0c6f4e4ff2ff4623b88703ad3f99afb9f7e279e5:217",
+        "occurred_at": "2026-08-07T16:07:39Z",
+        "protocol_version": "agent-bounties/open-competition-v1",
+        "tx_hash": "0x12bab153424dbd4cd5fb0d9b0c6f4e4ff2ff4623b88703ad3f99afb9f7e279e5"
+      }
+    ],
+    "evidence_boundary": "These are version-specific canonical events from the configured factory deployment block. A transaction hash or hosted row is not payment; only a confirmed BountySettled event proves solver payment.",
+    "factory_contract": "0x9e9382beb8b1a45b737d484b5eafa7b8779d4ca5",
+    "network": "base-mainnet",
+    "protocol_version": "agent-bounties/open-competition-v1",
+    "schema_version": "agent-bounties/open-competition-v1-events-v1"
+  },
+  "open-competition-v2-beta3": {
+    "events": [
+      {
+        "block_number": 50343392,
+        "bounty_id": "0x50facc990cbd8e335989159d5f074f626f9b24eb87578d674198594d51687e1e",
+        "contract_address": "0x29d0e39e0c03797c690633535722e6b34a69a78a",
+        "data": {
+          "beta_risk_hash": "0x2ae728de7d15efcb7e4cb20fab5acb1b193f61ea5c80f05ad9c8a6ed45c76353",
+          "competition": "0x5cf577877c099eb3cdef844793dac152e7f598b5",
+          "creation_nonce": "0x37cf08d5368f9adee73a31076bac8596d9bfe6db3eb5681cc40427020ce2b83a",
+          "creator": "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+        },
+        "id": "ed3e372f-aac2-57d4-8be0-0927a921752d",
+        "kind": "canonical_competition_created",
+        "log_index": 13,
+        "log_key": "0x7d76e66c7886b460a4b6428eedd2925c443315393c2858d36022af15d5b19d50:13",
+        "occurred_at": "2026-08-23T09:08:51Z",
+        "protocol_version": "agent-bounties/open-competition-v2-beta3",
+        "tx_hash": "0x7d76e66c7886b460a4b6428eedd2925c443315393c2858d36022af15d5b19d50"
+      },
+      {
+        "block_number": 50343439,
+        "bounty_id": "0x50facc990cbd8e335989159d5f074f626f9b24eb87578d674198594d51687e1e",
+        "contract_address": "0x5cf577877c099eb3cdef844793dac152e7f598b5",
+        "data": {
+          "evidence_hash": "0x916bd65d689cb8acc675d2b74d7ab5d8f06ef78acc573ba2ea4002e77c377d60",
+          "keeper": "0xfd7be4c69541ab297aece2a674fc1418b898cc0a",
+          "keeper_reward": 12500,
+          "score": "7",
+          "settlement_policy_hash": "0xefef64b26dbd7ffd7d63aa8e8d9207b598656500aff744e138756bcb8f9d230b",
+          "solver": "0x74e0789533abcb89ee07ca826a5618cbeba381b2",
+          "solver_reward": 250000,
+          "submission_hash": "0xe6c9f86981358c4a0998f8bf59a1c9740f257bfa949f1181b94db8c3504584e2",
+          "winning_sequence": 2
+        },
+        "id": "90bd552b-803d-5b39-8beb-d722e56f68e1",
+        "kind": "competition_settled",
+        "log_index": 281,
+        "log_key": "0xc77a2689894c849c215885f63d6e09c1d5432d665d730f2021312994501ce259:281",
+        "occurred_at": "2026-08-23T09:10:25Z",
+        "protocol_version": "agent-bounties/open-competition-v2-beta3",
+        "tx_hash": "0xc77a2689894c849c215885f63d6e09c1d5432d665d730f2021312994501ce259"
+      }
+    ],
+    "evidence_boundary": "CompetitionEntryQualifiedV2 and transaction hashes are not payment. Only a safe-block CompetitionSettledV2 event proves solver payment.",
+    "factory_contract": "0x29d0e39e0c03797c690633535722e6b34a69a78a",
+    "network": "base-mainnet",
+    "payment_event": "competition_settled",
+    "protocol_version": "agent-bounties/open-competition-v2-beta3",
+    "schema_version": "agent-bounties/open-competition-v2-events-v1"
+  }
+}
