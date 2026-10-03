@@ -36,6 +36,35 @@ class McpToolRegistryTests(unittest.TestCase):
         self.assertIn("inspect_open_competition_v2", names)
         self.assertIn("prepare_open_competition_v2", names)
 
+    def test_required_discovery_tools_present_and_distinguished(self) -> None:
+        registry = json.loads(
+            (ROOT / "crates/mcp-server/fixtures/tool-registry.json").read_text(encoding="utf-8")
+        )
+        protocol = json.loads((ROOT / "site/protocol.json").read_text(encoding="utf-8"))
+
+        required_tools = [
+            "list_autonomous_bounties",
+            "list_opportunities",
+            "prepare_agent_to_earn",
+            "prepare_bounty_post",
+        ]
+        tools = registry.get("tools", [])
+
+        # Check no duplicates
+        self.assertEqual(len(tools), len(set(tools)), "Duplicate tool names detected in registry")
+
+        # Check required tools present
+        missing = [tool for tool in required_tools if tool not in tools]
+        self.assertFalse(missing, f"Missing required discovery tools: {missing}")
+
+        # Distinguish transport endpoint vs json tool inventory endpoint
+        mcp_transport_url = protocol.get("mcp_base_url", "") + "/mcp"
+        json_inventory_url = protocol.get("api_base_url", "") + "/v1/mcp/tool-registry"
+
+        self.assertNotEqual(mcp_transport_url, json_inventory_url)
+        self.assertTrue(mcp_transport_url.startswith("https://mcp.agentbounties.app"))
+        self.assertTrue(json_inventory_url.startswith("https://api.agentbounties.app"))
+
 
 class CodexPluginDistributionTests(unittest.TestCase):
     def test_manifest_routes_funded_posting_and_earning_intents_to_hosted_mcp(self) -> None:
