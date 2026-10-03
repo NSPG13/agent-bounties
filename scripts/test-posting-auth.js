@@ -108,3 +108,148 @@ for (const path of ["/post", "/post.html"]) test(`account sign-in preserves ${pa
     assert.equal(postingAuth.safePostTarget(win, unsafe), null);
   }
 });
+
+// Exercise the actual browser controller, including early-return rendering and
+// requests that never produce headers or finish their JSON body.
+const vm = require('node:vm');
+const fs = require('node:fs');
+const controllerSource = fs.readFileSync(require.resolve('../site/bounty-composer-v2.js'), 'utf8');
+function postingController(fetchImpl) {
+  const element = () => ({ disabled: false, textContent: '', dataset: {} });
+  const ui = Object.fromEntries(['fundNow', 'fund', 'approve', 'confidence', 'recovery'].map(key => [key, element()]));
+  const state = { draft: {}, imageReady: true, reviewStale: false, postingAccountStatus: 'checking', approved: false };
+  const timers = new Map(); let timerId = 0;
+  const context = { ui, state, API: 'https://api.agentbounties.app', AbortController,
+    fetch: fetchImpl, postingAccountStatus: composer.postingAccountStatus, postingPrimaryAction: composer.postingPrimaryAction,
+    expiredDeliveryDeadline: () => false, supportedVerificationPolicy: () => {},
+    postingJournal: { load: () => null }, postingSession: { canContinue: () => false, invalidate: () => {}, hydrate: async () => {}, approved: async () => false, snapshot: () => ({ status: "saved", conflict: false }) },
+    restoration: Promise.resolve(), restorationError: null,
+    setStatus(message) { context.message = message; }, updatePostingTracker: () => {},
+    window: { location: { hostname: 'agentbounties.app' },
+      setTimeout(fn) { const id = ++timerId; timers.set(id, fn); return id; },
+      clearTimeout(id) { timers.delete(id); } },
+  };
+  const start = controllerSource.indexOf('  function postingAuthMessage()');
+  const end = controllerSource.indexOf('  function beginPostingLogin()', start);
+  const controller = vm.runInNewContext(controllerSource.slice(start, end) + '\n({syncPrimaryAction, loadPostingAccount})', context);
+  return { ...controller, ui, state, timers, context };
+}
+const readySession = { authenticated: true, account_status: 'ready', account_complete: true };
+const jsonResponse = value => ({ ok: true, json: async () => value });
+const drain = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
+
+test('restored stale proposal replaces Checking login with its real blocker', async () => {
+  const c = postingController(async url => jsonResponse(url.endsWith('/session') ? readySession : { wallets: [] }));
+  c.syncPrimaryAction();
+  assert.equal(c.ui.approve.textContent, 'Checking login…');
+  c.state.reviewStale = true;
+  await c.loadPostingAccount();
+  assert.equal(c.state.postingAccountStatus, 'ready');
+  assert.equal(c.ui.approve.textContent, 'Update proposal first');
+  assert.equal(c.ui.approve.dataset.nextAction, 'blocked');
+  assert.equal(c.ui.approve.disabled, true);
+  assert.match(c.context.message, /brief changed/i);
+  c.state.reviewStale = false;
+  c.syncPrimaryAction();
+  assert.equal(c.ui.approve.textContent, 'Approve bounty card');
+  assert.equal(c.ui.approve.disabled, false);
+  assert.equal(c.state.approved, false);
+});
+
+test('brief/reference invalidation immediately updates the visible action', () => {
+  const c = postingController();
+  const start = controllerSource.indexOf('    invalidate() {', controllerSource.indexOf('window.AgentBountiesComposer ='));
+  const end = controllerSource.indexOf('    stage(value)', start);
+  const invalidate = vm.runInNewContext('({' + controllerSource.slice(start, end) + '}).invalidate', {
+    ...c.context, postingBusy: false, stagedFingerprint: 'old', syncPrimaryAction: c.syncPrimaryAction,
+  });
+  c.ui.approve.textContent = 'Checking login…';
+  c.state.approved = true;
+  invalidate();
+  assert.equal(c.ui.approve.textContent, 'Update proposal first');
+  assert.equal(c.ui.approve.dataset.approved, 'false');
+  assert.equal(c.ui.fund.disabled, true);
+  assert.equal(c.ui.fundNow.disabled, true);
+});
+
+for (const phase of ['headers', 'body']) test(`hung session ${phase} times out and a later retry recovers without approval`, async () => {
+  let recover = false;
+  const c = postingController(async url => {
+    if (recover) return jsonResponse(url.endsWith('/session') ? readySession : { wallets: [] });
+    if (phase === 'headers') return new Promise(() => {});
+    return { ok: true, json: () => new Promise(() => {}) };
+  });
+  c.state.accountSession = readySession;
+  c.state.linkedWallets = [{ address: 'old' }];
+  const pending = c.loadPostingAccount(); await drain();
+  for (const timer of [...c.timers.values()]) timer();
+  await pending;
+  assert.equal(c.state.postingAccountStatus, 'unavailable');
+  assert.equal(c.state.accountSession, null);
+  assert.equal(c.state.linkedWallets.length, 0);
+  assert.equal(c.ui.approve.textContent, 'CHECK ACCOUNT TO POST');
+  assert.equal(c.ui.approve.disabled, false);
+  assert.equal(c.ui.fund.disabled, true);
+  assert.equal(c.timers.size, 0);
+  recover = true; await c.loadPostingAccount();
+  assert.equal(c.ui.approve.textContent, 'Approve bounty card');
+  assert.equal(c.state.approved, false);
+});
+
+test('optional wallet discovery cannot hide a completed login or hang initialization', async () => {
+  const c = postingController(async url => url.endsWith('/session') ? jsonResponse(readySession) : new Promise(() => {}));
+  const pending = c.loadPostingAccount(); await drain();
+  assert.equal(c.ui.approve.textContent, 'Approve bounty card');
+  assert.equal(c.ui.approve.disabled, false);
+  for (const timer of [...c.timers.values()]) timer();
+  await pending;
+  assert.equal(c.state.postingAccountStatus, 'ready');
+  assert.equal(c.state.approved, false);
+  assert.equal(c.timers.size, 0);
+});
+
+test('missing and loading proposals do not retain login labels', () => {
+  const c = postingController();
+  c.state.draft = null; c.syncPrimaryAction();
+  assert.equal(c.ui.approve.textContent, 'Prepare a proposal first');
+  c.state.draft = {}; c.state.imageReady = false; c.syncPrimaryAction();
+  assert.equal(c.ui.approve.textContent, 'Loading bounty image…');
+  c.state.imageError = 'failed'; c.syncPrimaryAction();
+  assert.equal(c.ui.approve.textContent, 'Fix bounty image');
+});
+
+
+test('a ready account cannot approve while its saved draft is still hydrating', async () => {
+  const c = postingController(async url => jsonResponse(url.endsWith('/session') ? readySession : { wallets: [] }));
+  let finish;
+  c.context.postingSession.hydrate = () => new Promise(resolve => { finish = resolve; });
+  const pending = c.loadPostingAccount(); await drain();
+  assert.equal(c.state.postingAccountStatus, 'restoring');
+  assert.equal(c.ui.approve.textContent, 'Restoring saved draft…');
+  assert.equal(c.ui.approve.disabled, true);
+  assert.equal(c.ui.fundNow.disabled, true);
+  finish(); await pending;
+  assert.equal(c.ui.approve.textContent, 'Approve bounty card');
+  assert.equal(c.ui.approve.disabled, false);
+  assert.equal(c.state.approved, false);
+});
+
+test('failed account draft hydration never exposes approval', async () => {
+  const c = postingController(async () => jsonResponse(readySession));
+  c.context.postingSession.hydrate = async () => { throw new Error('draft unavailable'); };
+  await c.loadPostingAccount();
+  assert.equal(c.ui.approve.textContent, 'CHECK ACCOUNT TO POST');
+  assert.equal(c.ui.approve.dataset.nextAction, 'login');
+  assert.equal(c.ui.fundNow.disabled, true);
+  assert.equal(c.state.accountSession, null);
+});
+
+
+test('nonthrowing hydration failure remains blocked', async () => {
+  const c = postingController(async () => jsonResponse(readySession));
+  c.context.postingSession.snapshot = () => ({ status: 'unavailable', conflict: false });
+  await c.loadPostingAccount();
+  assert.equal(c.state.postingAccountStatus, 'unavailable');
+  assert.equal(c.ui.approve.dataset.nextAction, 'login');
+  assert.equal(c.ui.fundNow.disabled, true);
+});

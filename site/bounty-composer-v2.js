@@ -78,6 +78,7 @@
   function postingPrimaryAction(accountStatus, handoffReview = false) {
     if (accountStatus === "ready") return { action: "approve", disabled: false, label: handoffReview ? "Confirm bounty" : "Approve bounty card" };
     if (accountStatus === "setup") return { action: "login", disabled: false, label: "FINISH SETUP TO POST" };
+    if (accountStatus === "restoring") return { action: "wait", disabled: true, label: "Restoring saved draft…" };
     if (accountStatus === "checking") return { action: "wait", disabled: true, label: "Checking login…" };
     if (accountStatus === "unavailable") return { action: "login", disabled: false, label: "CHECK ACCOUNT TO POST" };
     return { action: "login", disabled: false, label: "LOG IN TO POST" };
@@ -284,6 +285,9 @@
     if (state.postingAccountStatus === "setup") {
       return "You are signed in. Finish linking an account wallet, then you will return to this exact prepared bounty. Account setup cannot post or fund it.";
     }
+    if (state.postingAccountStatus === "restoring") {
+      return "You are signed in. Restoring your saved draft before review; nothing has been posted or funded.";
+    }
     if (state.postingAccountStatus === "checking") {
       return "Checking your Agent Bounties login. Your prepared bounty remains in this tab.";
     }
@@ -313,6 +317,8 @@
     if (!state.draft || !state.imageReady || state.reviewStale) {
       ui.approve.disabled = true; ui.fund.disabled = true;
       ui.approve.dataset.nextAction = "blocked";
+      ui.approve.dataset.approved = String(state.approved);
+      ui.approve.textContent = !state.draft ? "Prepare a proposal first" : state.reviewStale ? "Update proposal first" : state.imageError ? "Fix bounty image" : "Loading bounty image…";
       setStatus(!state.draft ? "Prepare a proposal before approving." : state.reviewStale ? "Your brief changed. Update the proposal, then review its new terms." : state.imageError || "The bounty image is still loading. Approval will be available when the complete card is ready.", state.imageError ? "error" : "pending");
       return;
     }
@@ -321,7 +327,7 @@
       ui.approve.dataset.nextAction = action.action;
       ui.approve.disabled = action.disabled;
       ui.approve.textContent = action.label;
-      ui.fund.disabled = true;
+      ui.fund.disabled = true; ui.fundNow.disabled = true;
       setStatus(postingAuthMessage(), "pending");
       return;
     }
@@ -344,26 +350,62 @@
     updatePostingTracker();
   }
 
+  async function postingAccountJson(endpoint) {
+    const controller = new AbortController();
+    let timer;
+    try {
+      // Bound both headers and body; abort alone is not a completion guarantee.
+      return await Promise.race([
+        (async () => {
+          const response = await fetch(endpoint, { cache: "no-store", credentials: "include", headers: { Accept: "application/json" }, signal: controller.signal });
+          if (!response.ok) throw new Error(`session ${response.status}`);
+          return await response.json();
+        })(),
+        new Promise((_, reject) => {
+          timer = window.setTimeout(() => {
+            reject(new Error("Account check timed out"));
+            controller.abort();
+          }, 8000);
+        }),
+      ]);
+    } finally { window.clearTimeout(timer); }
+  }
+
   async function loadPostingAccount() {
+    state.postingAccountStatus = "checking";
+    syncPrimaryAction();
     try {
       const local = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(window.location.hostname);
       const endpoint = local ? "/auth/session" : `${API}/v1/site-auth/session`;
-      const response = await fetch(endpoint, { cache: "no-store", credentials: "include", headers: { Accept: "application/json" } });
-      if (!response.ok) throw new Error(`session ${response.status}`);
-      const payload = await response.json();
+      const payload = await postingAccountJson(endpoint);
       state.accountSession = payload;
-      state.postingAccountStatus = postingAccountStatus(payload);
+      const accountStatus = postingAccountStatus(payload);
+      state.postingAccountStatus = payload.authenticated ? "restoring" : accountStatus;
+      state.linkedWallets = [];
+      if (!payload.authenticated) state.approved = false;
+      state.postingAuthReceipt = window.AgentBountiesPostingAuth?.consumeReceipt(window) || null;
+      // A successful login is not a hydrated draft or approval authority.
+      syncPrimaryAction();
+      await postingSession.hydrate(payload);
+      await restoration;
+      if (restorationError) throw restorationError;
+      const saved = postingSession.snapshot();
+      if (saved.conflict || saved.status === "unavailable") throw new Error(saved.message || "Account draft restoration is unavailable");
+      state.approved = await postingSession.approved();
+      state.postingAccountStatus = accountStatus;
+      syncPrimaryAction();
       if (payload.authenticated) {
         try {
-          const dashboard = await fetch(`${API}/v1/site-auth/account`, { cache: "no-store", credentials: "include" });
-          if (dashboard.ok) state.linkedWallets = (await dashboard.json()).wallets || [];
+          const dashboard = await postingAccountJson(`${API}/v1/site-auth/account`);
+          state.linkedWallets = dashboard.wallets || [];
         } catch (_) { /* Account authentication remains valid when its activity view is unavailable. */ }
-      } else { state.linkedWallets = []; state.approved = false; }
+      }
     } catch (_) {
+      state.accountSession = null;
+      state.linkedWallets = [];
       state.postingAccountStatus = "unavailable";
+      syncPrimaryAction();
     }
-    state.postingAuthReceipt = window.AgentBountiesPostingAuth?.consumeReceipt(window) || null;
-    syncPrimaryAction();
     return state.postingAccountStatus;
   }
 
@@ -2469,7 +2511,6 @@
         if (!retryingRestoration) retryingRestoration = (async () => {
           await loadPostingAccount();
           if (state.postingAccountStatus !== "unavailable") {
-            await postingSession.hydrate(state.accountSession);
             await restoration;
           }
         })().finally(() => { retryingRestoration = null; });
@@ -2486,6 +2527,7 @@
       state.reviewStale = true; state.approved = false; stagedFingerprint = null;
       postingSession.invalidate();
       ui.approve.dataset.approved = "false"; ui.approve.disabled = true; ui.fund.disabled = true; ui.fundNow.disabled = true;
+      syncPrimaryAction();
     },
     stage(value) {
       staging = staging.catch(() => {}).then(() => {
@@ -2597,7 +2639,6 @@
   window.addEventListener("focus", () => {
     initialization = initialization.catch(() => {}).then(async () => {
       await loadPostingAccount();
-      await postingSession.hydrate(state.accountSession);
       await restoration;
       await resumePosting();
     });
@@ -2625,7 +2666,6 @@
     await prefillFromQuery();
     if (!state.draft) await queueRestoration(window.AgentBountiesWorkflow.createClient(window).load());
     await loadPostingAccount();
-    await postingSession.hydrate(state.accountSession);
     await restoration;
     state.approved = await postingSession.approved(); syncPrimaryAction(); updatePostingTracker();
     await resumePosting();
