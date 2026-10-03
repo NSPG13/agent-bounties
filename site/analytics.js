@@ -195,6 +195,10 @@
       return;
     }
     if (consent === "denied" || document.querySelector("[data-google-analytics-consent]")) return;
+    if (!document.body) {
+      document.addEventListener("DOMContentLoaded", offerGoogleAnalytics, { once: true });
+      return;
+    }
     const notice = document.createElement("aside");
     notice.className = "analytics-consent";
     notice.dataset.googleAnalyticsConsent = "";
