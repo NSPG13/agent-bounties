@@ -43,6 +43,13 @@ path where AgentBounties is the seller of record.
 - The EIP-712 domain version is `2`. Claim, submit, and attestation
   signatures cannot be replayed between v1 and v2 bounties.
 
+**Launch configuration.** The first v2 factory uses 750 bps and the operator
+wallet `0x884834E884d6e93462655A2820140aD03E6747bC` as its immutable fee
+recipient. That wallet is a single-key MetaMask account; the maintainer
+accepts the single-key risk for launch. To move fees to a multisig later,
+deploy a new v2 factory for new bounties. Bounties created by the first
+factory keep paying this address.
+
 `BountySettled` keeps the v1 shape and remains the only proof of solver
 payment. Fee evidence is `PlatformFeePaid`, or `PlatformFeeDeferred` followed
 by `PlatformFeeWithdrawn`.
