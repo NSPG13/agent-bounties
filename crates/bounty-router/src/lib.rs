@@ -106,6 +106,20 @@ pub fn classify_goal(goal: &str, context: &str) -> CapabilityClass {
     }
 }
 
+pub fn retry_bounty_op<F, T, E>(mut op: F, retries: u32) -> Result<T, E>
+where
+    F: FnMut() -> Result<T, E>,
+{
+    for i in 0..retries {
+        match op() {
+            Ok(val) => return Ok(val),
+            Err(e) if i == retries - 1 => return Err(e),
+            _ => std::thread::sleep(std::time::Duration::from_millis(100)),
+        }
+    }
+    unreachable!()
+}
+
 pub fn template_for_class(class: &CapabilityClass) -> &'static str {
     match class {
         CapabilityClass::Coding => "small-code-change",
