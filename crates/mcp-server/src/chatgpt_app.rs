@@ -4393,7 +4393,10 @@ fn tool_result(value: Value, narration: &str, wallet_review: bool) -> Value {
         json!({"items": value})
     };
     let mut result = json!({
-        "content": [{"type": "text", "text": narration}],
+        "content": [
+            {"type": "text", "text": narration},
+            {"type": "text", "text": structured_content.to_string()}
+        ],
         "structuredContent": structured_content
     });
     if wallet_review {
@@ -7554,6 +7557,69 @@ mod tests {
         let result = tool_result(json!([{"id": 1}]), "List result", false);
         assert!(result["structuredContent"].is_object());
         assert_eq!(result["structuredContent"]["items"][0]["id"], 1);
+        let text: Value =
+            serde_json::from_str(result["content"][1]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(text["items"][0]["id"], 1);
+    }
+
+    #[tokio::test]
+    async fn content_only_client_can_assess_the_sandbox_feed() {
+        let result = sandbox_tool_result(
+            "get_bounty_feed",
+            &json!({"network": "base-mainnet", "view": "ready_to_earn", "limit": 5}),
+        )
+        .await
+        .unwrap();
+        // Model clients may expose only TextContent, even when structuredContent exists.
+        let feed: Value = result["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|block| block["text"].as_str())
+            .find_map(|text| serde_json::from_str(text).ok())
+            .expect("a text-only client must receive the actual feed, not just narration");
+        assert_eq!(feed["sandbox"], true);
+        let items = feed["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0]["opportunity_id"],
+            "canonical_base:base-mainnet:0xabc1000000000000000000000000000000000001"
+        );
+        assert_eq!(items[0]["reward"]["amount"], "3500000");
+        assert_eq!(items[0]["bond"]["amount"], "500000");
+        assert_eq!(items[0]["work_state"], "claimable");
+        assert_eq!(items[0]["payment_state"], "escrowed");
+        assert_eq!(items[0]["verification_ready"], true);
+        assert_eq!(feed, result["structuredContent"]);
+    }
+
+    #[test]
+    fn content_only_client_preserves_unknown_costs_and_partial_coverage() {
+        let result = tool_result(
+            json!({
+                "items": [{"reward": "9007199254740993", "bond": null, "spend": "0"}],
+                "degraded": true,
+                "source_statuses": [{"available": false, "error": "source unavailable"}]
+            }),
+            "Partial source coverage",
+            true,
+        );
+        let text: Value =
+            serde_json::from_str(result["content"][1]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(text["items"][0]["reward"], "9007199254740993");
+        assert!(text["items"][0]["bond"].is_null());
+        assert_eq!(text["items"][0]["spend"], "0");
+        assert_eq!(text["degraded"], true);
+        assert_eq!(text["source_statuses"][0]["error"], "source unavailable");
+        assert!(text.get("_meta").is_none());
+        assert_eq!(result["_meta"]["handoff_kind"], "wallet_review");
+        assert_eq!(result["content"][0]["text"], "Partial source coverage");
+
+        let empty = tool_result(json!({"items": [], "degraded": false}), "Empty feed", false);
+        let text: Value =
+            serde_json::from_str(empty["content"][1]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(text["items"], json!([]));
+        assert_eq!(text["degraded"], false);
     }
 
     #[test]
