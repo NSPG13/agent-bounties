@@ -127,7 +127,8 @@ test("unavailable sponsorship stops before signing and a mismatched relay cannot
 test("saved brief edits reach the shared journey and invalidate an older funding proposal", () => {
   const flow = require("../site/marketplace-workflow.js"), records = new Map(), listeners = new Map(), elements = new Map();
   const element = () => ({ value: "", textContent: "", open: false, handlers: {}, setCustomValidity(value) { this.validationMessage = value; }, addEventListener(name, fn) { this.handlers[name] = fn; } });
-  for (const name of ["#bounty-composer-form", "#bounty-composer-input", "[data-brief-budget]", "[data-brief-deadline]", "[data-brief-status]", "[data-brief-timezone]", "[data-ai-options]", "[data-export-draft]"]) elements.set(name, element());
+  for (const name of ["#bounty-composer-form", "#bounty-composer-input", "[data-brief-budget]", "[data-brief-deadline]", "[data-brief-status]", "[data-brief-timezone]", "[data-ai-options]", "[data-export-draft]", "[data-brief-mode]", "[data-manual-fields]", "[data-brief-title]", "[data-brief-criteria]", "[data-brief-reserve]", "[data-manual-review-consent]", "[data-composer-submit]"]) elements.set(name, element());
+  elements.get("#bounty-composer-form").querySelector = name => elements.get(name);
   const document = { activeElement: null, documentElement: { dataset: {} }, querySelector: (name) => elements.get(name), addEventListener() {} };
   let invalidations = 0;
   const win = { AgentBountiesWorkflow: flow, AgentBountiesPostingBrief: require("../site/posting-brief.js"), AgentBountiesComposer: { invalidate() { invalidations++; } }, document, setInterval() {},
@@ -135,7 +136,7 @@ test("saved brief edits reach the shared journey and invalidate an older funding
     sessionStorage: { getItem: (key) => records.get(key) || null, setItem: (key, value) => records.set(key, value) },
     CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail; } },
     addEventListener(name, fn) { listeners.set(name, fn); }, dispatchEvent(event) { listeners.get(event.type)?.(event); } };
-  vm.runInNewContext(fs.readFileSync(require.resolve("../site/posting-workspace.js"), "utf8"), { window: win, document, Intl, Date, URL, Blob });
+  vm.runInNewContext(fs.readFileSync(require.resolve("../site/posting-workspace.js"), "utf8"), { window: win, document, Intl, Date, URL, URLSearchParams, Blob });
   const goal = elements.get("#bounty-composer-input"), budget = elements.get("[data-brief-budget]"), deadline = elements.get("[data-brief-deadline]");
   goal.value = "Make a dimensioned CAD model"; document.activeElement = goal; goal.handlers.input();
   const client = flow.createClient(win); assert.equal(client.load().goal, goal.value);

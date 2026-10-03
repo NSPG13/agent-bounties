@@ -92,5 +92,18 @@
     }
     return output;
   }
-  return Object.freeze({ resolveDeadline, wallTime, proposedSplit, estimateBudget, countdown, warnings, cents });
+  function manualDraft(brief, now = Date.now()) {
+    const title = String(brief.title || "").trim(), goal = String(brief.goal || "").trim();
+    const criteria = String(brief.criteria || "").split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    if (!title || title.length > 200) throw new Error("Enter a title of up to 200 characters.");
+    if (!goal || goal.length > 4000) throw new Error("Describe the work in up to 4,000 characters.");
+    if (!criteria.length || criteria.length > 20 || criteria.some(s => s.length > 1000)) throw new Error("Add 1–20 acceptance criteria, one per line, with up to 1,000 characters each.");
+    const total = cents(brief.budget_usdc), reserve = cents(brief.review_reward_usdc);
+    if (total === null || total > 900000000000 || reserve === null || total - reserve < 200) throw new Error("The total must cover at least 2 USDC for the worker plus a review reward of at least 0.01 USDC.");
+    const remaining = Date.parse(brief.deadline_at) - now;
+    if (!Number.isFinite(remaining) || remaining <= 0 || remaining > 30 * 86400000) throw new Error("Choose a future delivery deadline within 30 days. Use a smaller milestone for longer work.");
+    if (brief.review_consent !== true) throw new Error("Confirm that you will review submissions yourself.");
+    return { title, goal, acceptance_criteria: criteria, solver_reward_usdc: ((total - reserve) / 100).toFixed(2), verifier_reward_usdc: (reserve / 100).toFixed(2), task_window_days: Math.max(1, Math.ceil(remaining / 86400000)), delivery_deadline: brief.deadline_at, review_mode: "creator", discovery_source: "Platform form (no AI)" };
+  }
+  return Object.freeze({ manualDraft, resolveDeadline, wallTime, proposedSplit, estimateBudget, countdown, warnings, cents });
 });

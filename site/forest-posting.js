@@ -60,7 +60,7 @@
     window.AgentBountyAI.show(goal.value.trim(), { draft: journey?.draft, brief: journey?.brief });
     options.open = true; scroll(options);
   });
-  document.querySelector("[data-form-jump]").addEventListener("click", () => { scroll(form); goal.focus({ preventScroll: true }); });
+  document.querySelector("[data-form-jump]").addEventListener("click", () => { const mode = document.querySelector("[data-brief-mode]"); mode.value = "manual"; mode.dispatchEvent(new Event("change", { bubbles: true })); scroll(form); goal.focus({ preventScroll: true }); });
   document.querySelectorAll("[data-stage-target]").forEach(button => button.addEventListener("click", () => {
     const target = button.dataset.stageTarget;
     if (target === "details") { scroll(form); goal.focus({ preventScroll: true }); }

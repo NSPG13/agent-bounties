@@ -1561,6 +1561,8 @@ ${competitionChildBrief(item)}`;
       const launcherTitle = dialog.querySelector("#bounty-launcher-title");
       const launcherDescription = dialog.querySelector("#bounty-launcher-description");
       const postingRequest = parseCompetitionPostingRequest(win.location.search);
+      const manualLink = dialog.querySelector("[data-bounty-manual]");
+      if (manualLink) manualLink.hidden = postingRequest.requested;
       let launcherPrompt = BOUNTY_POSTING_PROMPT;
       let fallbackProvider = null;
       const reviewDestination = () => win.agentBountiesAnalytics?.handoffUrl?.("https://agentbounties.app/post.html?from=webmcp") || null;
@@ -1595,7 +1597,7 @@ ${competitionChildBrief(item)}`;
         if (promptPreview) promptPreview.textContent = currentLauncherPrompt();
         if (!dialog.open) dialog.showModal();
         openButton.setAttribute("aria-expanded", "true");
-        win.requestAnimationFrame?.(() => assistantButtons[0]?.focus());
+        win.requestAnimationFrame?.(() => (manualLink && !manualLink.hidden ? manualLink : assistantButtons[0])?.focus());
       };
       const closeDialog = () => {
         if (dialog.open) dialog.close();
