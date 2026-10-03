@@ -1,0 +1,8 @@
+.ab-work-history { margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--ab-border, #365442); }
+.ab-work-history form { display: flex; flex-wrap: wrap; gap: .7rem; align-items: end; }
+.ab-work-history label { display: grid; gap: .4rem; flex: 1 1 20rem; min-width: 0; }
+.ab-work-history input, .ab-work-history textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: .7rem; color: inherit; background: transparent; border: 1px solid currentColor; border-radius: .5rem; font: inherit; }
+.ab-work-history article { margin: 1rem 0; padding: 1rem; border: 1px solid var(--ab-border, #365442); border-radius: .6rem; }
+.ab-work-history p, .ab-work-history a, .ab-work-history li { overflow-wrap: anywhere; }
+.ab-work-history textarea { font: .85rem monospace; margin-top: .8rem; }
+.ab-work-history :focus-visible { outline: 3px solid currentColor; outline-offset: 3px; }

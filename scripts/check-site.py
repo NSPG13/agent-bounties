@@ -233,6 +233,9 @@ REQUIRED_FILES = {
     "x402-test-vectors.json",
 }
 ALLOWED_UI_CODE = {
+    "work-history.js",
+    "work-history-ui.js",
+    "work-history.css",
     "collaborate/assessment.js",
     "collaborate/collaborate.js",
     "collaborate/collaborate.css",
@@ -1419,6 +1422,7 @@ def main() -> int:
         str(repo_root / "scripts/test-contribution-recognition.cjs"),
         str(repo_root / "scripts/test-builder-review.cjs"),
         str(repo_root / "scripts/test-contribution-consumer.cjs"),
+        str(repo_root / "scripts/test-work-history.cjs"),
     ], check=True)
     for relative in sorted(REQUIRED_FILES | EXPECTED_SCENE_ASSETS):
         if not (site_dir / relative).exists():
