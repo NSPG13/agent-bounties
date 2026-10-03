@@ -15,6 +15,7 @@ use chrono::{DateTime, Duration, Utc};
 use db::{AttributionReliability, DiscoveryInterface, DiscoveryRouteFamily};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use url::Url;
@@ -329,6 +330,11 @@ pub(crate) async fn agent_card() -> Response {
     let card: A2aAgentCard =
         serde_json::from_str(AGENT_CARD_JSON).expect("bundled A2A Agent Card must be valid");
     let mut response = Json(card).into_response();
+    let hash = hex::encode(Sha256::digest(AGENT_CARD_JSON.as_bytes()));
+    let etag = format!("\"{}\"", &hash[..16]);
+    if let Ok(value) = HeaderValue::from_str(&etag) {
+        response.headers_mut().insert(header::ETAG, value);
+    }
     response.headers_mut().insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("public, max-age=300, must-revalidate"),
