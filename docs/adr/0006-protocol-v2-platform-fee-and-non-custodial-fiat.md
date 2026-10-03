@@ -208,7 +208,9 @@ covers:
 - a failing recipient deferring the fee without blocking the solver, and the
   later forward;
 - the eligibility gate rejecting unregistered, wrong-source and expired
-  wallets, admitting current contractors, and rejecting inconsistent config;
+  wallets on `claim`, `claimWithSignature` and `claimWithAuthorization`,
+  admitting current contractors, and rejecting inconsistent config;
+- relayed EIP-3009 creation funding the full target, including the fee;
 - a rejected round keeping the fee escrowed;
 - the timeout bonus going to the solver, not the fee;
 - cancellation refunding the fee;
@@ -216,6 +218,26 @@ covers:
 - interface and version separation from v1;
 - the EIP-712 domain version;
 - fuzzed conservation of every base unit across settlement and cancellation.
+
+`RUN_MAINNET_FORK=true BASE_MAINNET_RPC_URL=<rpc> forge test --match-contract AgentBountyV2MainnetForkTest`
+runs against real Base USDC at a pinned block, and runs in
+`mainnet-fork-rehearsal.yml`. It proves three things:
+
+- real EIP-3009 signatures create, fund and bond a v2 bounty;
+- the fee reaches the launch recipient at payout, although that account
+  carries EIP-7702 delegation code;
+- a real Circle blacklist on the recipient defers the fee without blocking the
+  solver, and the fee forwards after un-blacklisting.
+
+Slither 0.11.6 reports two medium findings in `AgentBountyV2`. Both are
+triaged as not exploitable:
+
+- `incorrect-equality` flags the intended source-hash identity check.
+- `reentrancy-no-eth` flags the deferral write after the fee transfer. Every
+  external entry point is `nonReentrant`, and the call target is the
+  bounty's immutable settlement token.
+
+`AgentBountyFactoryV2` has no medium or high findings.
 
 This ADR records protocol design only. It does not deploy contracts, change
 live listings, authorize payment, or establish legal compliance for any

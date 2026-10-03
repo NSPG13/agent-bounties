@@ -9,12 +9,14 @@ interface V2Vm {
     function warp(uint256) external;
     function addr(uint256 privateKey) external returns (address);
     function sign(uint256 privateKey, bytes32 digest) external returns (uint8 v, bytes32 r, bytes32 s);
+    function prank(address sender) external;
 }
 
 contract V2TestToken {
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
     mapping(address => bool) public blocked;
+    mapping(address => mapping(bytes32 => bool)) public authorizationUsed;
 
     function mint(address to, uint256 amount) external {
         balanceOf[to] += amount;
@@ -45,6 +47,27 @@ contract V2TestToken {
         balanceOf[from] -= amount;
         balanceOf[to] += amount;
         return true;
+    }
+
+    /// @dev Signature checks are covered by the real-USDC fork test; this mock enforces
+    /// only the validity window, nonce reuse, and balance, like ProtocolTestToken.
+    function transferWithAuthorization(
+        address from,
+        address to,
+        uint256 amount,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        uint8,
+        bytes32,
+        bytes32
+    ) external {
+        require(block.timestamp > validAfter && block.timestamp < validBefore, "authorization window");
+        require(!authorizationUsed[from][nonce], "authorization used");
+        require(balanceOf[from] >= amount, "balance");
+        authorizationUsed[from][nonce] = true;
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
     }
 }
 
@@ -386,6 +409,97 @@ contract AgentBountyV2Test {
         return address(_createGated(SOLVER_REWARD, VERIFIER_REWARD, 0, deadline, registry, source));
     }
 
+    function testRelayedAuthorizationCreatesFundedBountyWithFeeInTarget() public {
+        address poster = address(0xB0B);
+        token.mint(poster, EXPECTED_TARGET);
+        creationNonceCounter += 1;
+        AgentBountyFactoryV2.CreateBountyParams memory params = _params(
+            SOLVER_REWARD, VERIFIER_REWARD, uint64(block.timestamp + 1 days), address(0), bytes32(0)
+        );
+        address predicted =
+            factory.predictBountyAddress(poster, params, new address[](0), bytes32(creationNonceCounter));
+        AgentBountyFactoryV2.FundingAuthorization memory authorization = AgentBountyFactoryV2.FundingAuthorization({
+            validAfter: 0, validBefore: block.timestamp + 1 hours, nonce: keccak256("create"), v: 27, r: 0, s: 0
+        });
+
+        (address bountyAddress,) = factory.createBountyWithAuthorization(
+            poster, params, new address[](0), EXPECTED_TARGET, bytes32(creationNonceCounter), authorization
+        );
+
+        AgentBountyV2 bounty = AgentBountyV2(bountyAddress);
+        require(bountyAddress == predicted, "predicted address mismatch");
+        require(bounty.creator() == poster, "creator must be the authorizing poster");
+        require(bounty.contributions(poster) == EXPECTED_TARGET, "poster contribution includes fee");
+        require(bounty.bountyStatus() == AgentBountyV2.BountyStatus.Claimable, "fully funded with fee");
+        require(token.balanceOf(poster) == 0, "exact authorization amount");
+    }
+
+    uint256 constant ATTESTER_KEY = 0xA77E57;
+    uint256 constant CONTRACTOR_KEY = 0x501E;
+    bytes32 constant CONTRACTOR_SOURCE = keccak256("agent-bounties/invoice-contractor-v1");
+
+    function testEligibilityGateAppliesToSignedClaims() public {
+        ParticipantEligibilityRegistry registry = new ParticipantEligibilityRegistry(vm.addr(ATTESTER_KEY));
+        AgentBountyV2 bounty = _createContractorOnly(registry);
+        address contractor = vm.addr(CONTRACTOR_KEY);
+        token.mint(contractor, VERIFIER_REWARD);
+        vm.prank(contractor);
+        token.approve(address(bounty), VERIFIER_REWARD);
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes memory signature = _claimSignature(bounty, contractor, deadline);
+
+        (bool unregistered,) = address(bounty).call(
+            abi.encodeCall(AgentBountyV2.claimWithSignature, (contractor, deadline, signature))
+        );
+        require(!unregistered, "unregistered signed claim accepted");
+
+        _attest(registry, ATTESTER_KEY, contractor, CONTRACTOR_SOURCE, 30 days);
+        bounty.claimWithSignature(contractor, deadline, signature);
+        require(bounty.solver() == contractor, "registered signed claim rejected");
+        require(token.balanceOf(contractor) == 0, "bond collected");
+    }
+
+    function testEligibilityGateAppliesToAuthorizedClaims() public {
+        ParticipantEligibilityRegistry registry = new ParticipantEligibilityRegistry(vm.addr(ATTESTER_KEY));
+        AgentBountyV2 bounty = _createContractorOnly(registry);
+        address contractor = vm.addr(CONTRACTOR_KEY);
+        token.mint(contractor, VERIFIER_REWARD);
+
+        (bool unregistered,) = address(bounty).call(
+            abi.encodeCall(
+                AgentBountyV2.claimWithAuthorization,
+                (contractor, 0, block.timestamp + 1 hours, keccak256("bond-a"), 27, bytes32(0), bytes32(0))
+            )
+        );
+        require(!unregistered, "unregistered authorized claim accepted");
+
+        _attest(registry, ATTESTER_KEY, contractor, CONTRACTOR_SOURCE, 30 days);
+        bounty.claimWithAuthorization(
+            contractor, 0, block.timestamp + 1 hours, keccak256("bond-b"), 27, bytes32(0), bytes32(0)
+        );
+        require(bounty.solver() == contractor, "registered authorized claim rejected");
+        require(token.balanceOf(contractor) == 0, "bond collected");
+    }
+
+    function _createContractorOnly(ParticipantEligibilityRegistry registry) private returns (AgentBountyV2) {
+        return _createGated(
+            SOLVER_REWARD,
+            VERIFIER_REWARD,
+            EXPECTED_TARGET,
+            uint64(block.timestamp + 1 days),
+            address(registry),
+            CONTRACTOR_SOURCE
+        );
+    }
+
+    function _claimSignature(AgentBountyV2 bounty, address solver, uint256 deadline)
+        private
+        returns (bytes memory)
+    {
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(CONTRACTOR_KEY, bounty.claimDigest(solver, bounty.round() + 1, deadline));
+        return abi.encodePacked(r, s, v);
+    }
+
     function testFuzzSettlementConservesEveryBaseUnit(uint64 solverSeed, uint64 verifierSeed) public {
         uint256 solverReward = 1 + uint256(solverSeed) % 1_000_000_000_000;
         uint256 verifierReward = 1 + uint256(verifierSeed) % 1_000_000_000;
@@ -456,7 +570,21 @@ contract AgentBountyV2Test {
         bytes32 eligibilitySource
     ) private returns (AgentBountyV2) {
         creationNonceCounter += 1;
-        AgentBountyFactoryV2.CreateBountyParams memory params = AgentBountyFactoryV2.CreateBountyParams({
+        AgentBountyFactoryV2.CreateBountyParams memory params =
+            _params(solverReward, verifierReward, fundingDeadline, eligibilityRegistry, eligibilitySource);
+        (address bountyAddress,) =
+            factory.createBounty(params, new address[](0), initialFunding, bytes32(creationNonceCounter));
+        return AgentBountyV2(bountyAddress);
+    }
+
+    function _params(
+        uint256 solverReward,
+        uint256 verifierReward,
+        uint64 fundingDeadline,
+        address eligibilityRegistry,
+        bytes32 eligibilitySource
+    ) private view returns (AgentBountyFactoryV2.CreateBountyParams memory) {
+        return AgentBountyFactoryV2.CreateBountyParams({
             solverReward: solverReward,
             verifierReward: verifierReward,
             termsHash: TERMS_HASH,
@@ -474,9 +602,6 @@ contract AgentBountyV2Test {
             claimEligibilityRegistry: eligibilityRegistry,
             claimEligibilitySource: eligibilitySource
         });
-        (address bountyAddress,) =
-            factory.createBounty(params, new address[](0), initialFunding, bytes32(creationNonceCounter));
-        return AgentBountyV2(bountyAddress);
     }
 
     function _newSolver(AgentBountyV2 bounty) private returns (V2Actor solver) {

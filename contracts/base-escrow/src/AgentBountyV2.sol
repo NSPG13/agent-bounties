@@ -625,9 +625,12 @@ contract AgentBountyV2 is IAgentBountyV2 {
         require(solver_ != creator, "creator cannot solve");
         require(activeClaimBond == 0, "claim bond active");
         if (claimEligibilityRegistry != address(0)) {
-            (, bytes32 sourceHash, bool eligible) = IParticipantEligibilityRegistryV1(claimEligibilityRegistry)
-                .eligibleAt(solver_, uint64(block.timestamp) + 1);
-            require(eligible && sourceHash == claimEligibilitySource, "solver not eligible");
+            (bytes32 participantId, bytes32 sourceHash, bool eligible) = IParticipantEligibilityRegistryV1(
+                    claimEligibilityRegistry
+                ).eligibleAt(solver_, uint64(block.timestamp) + 1);
+            require(
+                eligible && participantId != bytes32(0) && sourceHash == claimEligibilitySource, "solver not eligible"
+            );
         }
     }
 

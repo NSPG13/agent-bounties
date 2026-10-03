@@ -43,5 +43,5 @@ jobs:
         run: >-
           forge test
           --root contracts/base-escrow
-          --match-contract AgentBountyMainnetForkTest
+          --match-contract 'AgentBounty(V2)?MainnetForkTest'
           -vv
