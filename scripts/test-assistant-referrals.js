@@ -18,6 +18,7 @@ function storage() {
 function page(url, options = {}) {
   const events = [];
   const window = {
+    agentBountiesAnalyticsConfig: { googleMeasurementId: options.measurementId || "" },
     location: new URL(url), localStorage: options.local || storage(), sessionStorage: storage(),
     crypto: crypto.webcrypto,
     fetch(endpoint, request) {
@@ -28,7 +29,7 @@ function page(url, options = {}) {
   };
   vm.runInNewContext(source, {
     window, navigator: options.privacy || {}, URL, URLSearchParams, Date, Uint8Array,
-    document: { referrer: "", addEventListener() {} },
+    document: options.document || { referrer: "", addEventListener() {} },
   });
   return { analytics: window.agentBountiesAnalytics, local: window.localStorage, events };
 }
@@ -54,6 +55,39 @@ test("a new desktop browser receives referral tags without the original browser 
     assert.ok(!text.includes(first.events[0].visitor_id));
     assert.ok(!text.includes(first.events[0].session_id));
     assert.doesNotMatch(text, /never-forward|gclid|not-collected/);
+  }
+});
+
+test("head-loaded analytics preserves the optional choice until the page body exists", () => {
+  for (const optOutBeforeReady of [false, true]) {
+    let ready, notice;
+    const scripts = [], buttons = {};
+    const document = {
+      referrer: "", body: null,
+      head: { appendChild(script) { scripts.push(script); } },
+      addEventListener(name, callback) { if (name === "DOMContentLoaded") ready = callback; },
+      querySelector() { return notice || null; },
+      createElement() {
+        return { dataset: {}, setAttribute() {}, remove() { notice = null; },
+          querySelector(selector) { return { addEventListener(_name, callback) { buttons[selector] = callback; } }; } };
+      },
+    };
+    const result = page("https://agentbounties.app/collaborate/", { document, measurementId: "G-TEST123" });
+    assert.equal(result.events.length, 1, "first-party startup must survive early loading");
+    assert.equal(notice, undefined);
+    assert.equal(scripts.length, 0, "no Google script before consent");
+    assert.equal(typeof ready, "function");
+    if (optOutBeforeReady) result.analytics.optOut();
+    document.body = { appendChild(element) { notice = element; } };
+    ready();
+    if (optOutBeforeReady) assert.equal(notice, undefined, "recheck opt-out at DOM readiness");
+    else {
+      assert.ok(notice);
+      buttons["[data-google-analytics-deny]"]();
+      assert.equal(notice, null);
+      assert.equal(result.analytics.status().google_analytics, "denied");
+    }
+    assert.equal(scripts.length, 0, "denial or opt-out must not load Google");
   }
 });
 
