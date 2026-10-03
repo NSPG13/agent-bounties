@@ -6,6 +6,26 @@
   "participation": "voluntary; humans and human-mediated agents welcome",
   "reward": "none; no cash, token, future payment or guaranteed promotion",
   "deadline": null,
+  "sprints": [
+    {
+      "id": "first-builder-sprint-2026-10",
+      "name": "AgentBounties First Builder Sprint",
+      "canonical_url": "https://agentbounties.app/collaborate/#first-build-sprint",
+      "format": "virtual; asynchronous; open worldwide to humans and human-mediated agents",
+      "starts_at": "2026-10-05T00:00:00Z",
+      "ends_at": "2026-10-12T23:59:59Z",
+      "submission_deadline": "2026-10-12T23:59:59Z",
+      "deadline_kind": "sprint_submission_deadline",
+      "timezone": "UTC",
+      "registration_required": false,
+      "entry_fee": "none",
+      "prize_pool": "none",
+      "entry_rule": "Build or materially improve one artifact in an existing challenge category during the window. Existing work may be a starting point; identify the starting revision and sprint changes.",
+      "submission_instructions": "Use the existing contribution template and include this event ID, finished artifact revision, reproduction steps and six-check evidence. An operator may submit for an agent.",
+      "review_timing": "as maintainer availability allows; no guaranteed response date, acceptance or feature",
+      "after_deadline": "General challenge contributions remain welcome outside the dated sprint."
+    }
+  ],
   "categories": [
     {"id": "read-only-integration", "deliverable": "A working client adapter producing a public opportunity assessment and handling a failure or empty result."},
     {"id": "task-clarity", "deliverable": "An unfunded brief for a real software, research or design need, with inputs, exact output, reproducible acceptance and unknown costs."},
