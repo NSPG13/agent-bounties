@@ -313,6 +313,8 @@
     if (!state.draft || !state.imageReady || state.reviewStale) {
       ui.approve.disabled = true; ui.fund.disabled = true;
       ui.approve.dataset.nextAction = "blocked";
+      ui.approve.dataset.approved = String(state.approved);
+      ui.approve.textContent = !state.draft ? "Prepare a proposal first" : state.reviewStale ? "Update proposal first" : state.imageError ? "Fix bounty image" : "Loading bounty image…";
       setStatus(!state.draft ? "Prepare a proposal before approving." : state.reviewStale ? "Your brief changed. Update the proposal, then review its new terms." : state.imageError || "The bounty image is still loading. Approval will be available when the complete card is ready.", state.imageError ? "error" : "pending");
       return;
     }
@@ -344,26 +346,51 @@
     updatePostingTracker();
   }
 
+  async function postingAccountJson(endpoint) {
+    const controller = new AbortController();
+    let timer;
+    try {
+      // Bound both headers and body; abort alone is not a completion guarantee.
+      return await Promise.race([
+        (async () => {
+          const response = await fetch(endpoint, { cache: "no-store", credentials: "include", headers: { Accept: "application/json" }, signal: controller.signal });
+          if (!response.ok) throw new Error(`session ${response.status}`);
+          return await response.json();
+        })(),
+        new Promise((_, reject) => {
+          timer = window.setTimeout(() => {
+            reject(new Error("Account check timed out"));
+            controller.abort();
+          }, 8000);
+        }),
+      ]);
+    } finally { window.clearTimeout(timer); }
+  }
+
   async function loadPostingAccount() {
     try {
       const local = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(window.location.hostname);
       const endpoint = local ? "/auth/session" : `${API}/v1/site-auth/session`;
-      const response = await fetch(endpoint, { cache: "no-store", credentials: "include", headers: { Accept: "application/json" } });
-      if (!response.ok) throw new Error(`session ${response.status}`);
-      const payload = await response.json();
+      const payload = await postingAccountJson(endpoint);
       state.accountSession = payload;
       state.postingAccountStatus = postingAccountStatus(payload);
+      state.linkedWallets = [];
+      if (!payload.authenticated) state.approved = false;
+      state.postingAuthReceipt = window.AgentBountiesPostingAuth?.consumeReceipt(window) || null;
+      // Render the authoritative login result before optional wallet discovery.
+      syncPrimaryAction();
       if (payload.authenticated) {
         try {
-          const dashboard = await fetch(`${API}/v1/site-auth/account`, { cache: "no-store", credentials: "include" });
-          if (dashboard.ok) state.linkedWallets = (await dashboard.json()).wallets || [];
+          const dashboard = await postingAccountJson(`${API}/v1/site-auth/account`);
+          state.linkedWallets = dashboard.wallets || [];
         } catch (_) { /* Account authentication remains valid when its activity view is unavailable. */ }
-      } else { state.linkedWallets = []; state.approved = false; }
+      }
     } catch (_) {
+      state.accountSession = null;
+      state.linkedWallets = [];
       state.postingAccountStatus = "unavailable";
+      syncPrimaryAction();
     }
-    state.postingAuthReceipt = window.AgentBountiesPostingAuth?.consumeReceipt(window) || null;
-    syncPrimaryAction();
     return state.postingAccountStatus;
   }
 
@@ -2486,6 +2513,7 @@
       state.reviewStale = true; state.approved = false; stagedFingerprint = null;
       postingSession.invalidate();
       ui.approve.dataset.approved = "false"; ui.approve.disabled = true; ui.fund.disabled = true; ui.fundNow.disabled = true;
+      syncPrimaryAction();
     },
     stage(value) {
       staging = staging.catch(() => {}).then(() => {
