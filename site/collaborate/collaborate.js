@@ -98,7 +98,7 @@
   document.querySelectorAll("[data-copy]").forEach(button => button.addEventListener("click", async () => {
     const target = document.getElementById(button.dataset.copy);
     try { await navigator.clipboard.writeText(target.textContent); button.textContent = "Copied"; }
-    catch (_) { button.textContent = "Select and copy the text below"; target.focus(); }
+    catch (_) { button.textContent = "Select and copy the text below"; const details = target.closest?.("details"); if (details) details.open = true; target.focus(); }
   }));
 
   try {
