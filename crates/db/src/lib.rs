@@ -1,3 +1,4 @@
+mod platform_payouts;
 use chain_base::{
     AutonomousBountyEvent, AutonomousBountyEventKind, OpenCompetitionEvent,
     OpenCompetitionEventKind, OpenCompetitionV2Event, OpenCompetitionV2EventKind,
@@ -20,6 +21,9 @@ use domain::{
 };
 use hmac::{Hmac, Mac};
 use ledger::{LedgerEntry, Posting};
+pub use platform_payouts::{
+    platform_payout_snapshot_hash, PlatformPayoutProofRow, PLATFORM_PAYOUT_PROOF_MAX_ROWS,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgRow, PgPool, Postgres, Row, Transaction};
@@ -178,6 +182,8 @@ const BOND_SPONSORSHIP_SELECT_BY_CANDIDATE_SQL: &str = r#"
 
 #[derive(Debug, Error)]
 pub enum DbError {
+    #[error("historical payout projection exceeds its bounded snapshot capacity")]
+    PayoutProofCapacity,
     #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
     #[error(transparent)]
@@ -914,6 +920,7 @@ pub struct PlatformMetricsCoverageStats {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PlatformMetricsStats {
+    pub payout_proof_snapshot: Option<String>,
     pub generated_at: DateTime<Utc>,
     pub identities: PlatformIdentityStats,
     pub payouts: PlatformPayoutStats,
@@ -3606,6 +3613,13 @@ impl PostgresStore {
         excluded_comment_authors: &[String],
         excluded_bounty_contracts: &[String],
     ) -> DbResult<PlatformMetricsStats> {
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *transaction)
+            .await?;
+        sqlx::query("SET LOCAL statement_timeout = '10s'")
+            .execute(&mut *transaction)
+            .await?;
         let identity_row = sqlx::query(
             r#"
             WITH event_actors AS (
@@ -3828,60 +3842,12 @@ impl PostgresStore {
         .bind(excluded_wallets)
         .bind(excluded_comment_authors)
         .bind(excluded_bounty_contracts)
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *transaction)
         .await?;
 
-        let payout_row = sqlx::query(
-            r#"
+        let payout_sql = r#"
             WITH payouts AS (
-              SELECT occurred_at, kind = 'bounty_settled' AS settled,
-                     CASE WHEN kind = 'bounty_settled'
-                       THEN COALESCE((data->>'solver_reward')::numeric, 0)
-                       ELSE 0 END AS solver_amount,
-                     COALESCE((data->>'verifier_reward')::numeric, 0) AS verifier_amount,
-                     0::numeric AS keeper_amount,
-                     CASE WHEN kind = 'bounty_settled'
-                       THEN COALESCE((data->>'timeout_bond_bonus')::numeric, 0)
-                       ELSE 0 END AS bonus_amount
-              FROM autonomous_bounty_events
-              WHERE network = $1
-                AND block_time_verified = TRUE
-                AND occurred_at >= $5
-                AND occurred_at < $3
-                AND NOT lower(contract_address) = ANY($7)
-                AND kind IN ('bounty_settled', 'submission_rejected')
-              UNION ALL
-              SELECT occurred_at, kind = 'bounty_settled' AS settled,
-                     CASE WHEN kind = 'bounty_settled'
-                       THEN COALESCE((data->>'solver_reward')::numeric, 0)
-                       ELSE 0 END AS solver_amount,
-                     CASE WHEN kind = 'bounty_settled'
-                       THEN COALESCE((data->>'verifier_reward')::numeric, 0)
-                       ELSE COALESCE((data->>'bond_paid_to_verifier')::numeric, 0)
-                     END AS verifier_amount,
-                     0::numeric AS keeper_amount,
-                     CASE WHEN kind = 'bounty_settled'
-                       THEN COALESCE((data->>'timeout_bond_bonus')::numeric, 0)
-                       ELSE 0 END AS bonus_amount
-              FROM open_competition_events
-              WHERE network = $1
-                AND block_time_verified = TRUE
-                AND occurred_at >= $5
-                AND occurred_at < $3
-                AND NOT lower(contract_address) = ANY($7)
-                AND kind IN ('bounty_settled', 'competition_submission_rejected')
-              UNION ALL
-              SELECT occurred_at, TRUE AS settled,
-                     COALESCE((data->>'solver_reward')::numeric, 0) AS solver_amount,
-                     0::numeric AS verifier_amount,
-                     COALESCE((data->>'keeper_reward')::numeric, 0) AS keeper_amount,
-                     0::numeric AS bonus_amount
-              FROM open_competition_v2_events
-              WHERE network = $1
-                AND occurred_at >= $5
-                AND occurred_at < $3
-                AND NOT lower(contract_address) = ANY($7)
-                AND kind = 'competition_settled'
+{payout_projection}
             ), normalized AS (
               SELECT *, solver_amount + verifier_amount + keeper_amount + bonus_amount AS total_amount
               FROM payouts
@@ -3920,17 +3886,17 @@ impl PostgresStore {
               ) AS first_month_settled,
               COUNT(*) FILTER (WHERE settled) AS lifetime_settled
             FROM normalized
-            "#,
-        )
-        .bind(network)
-        .bind(selected_started_at)
-        .bind(selected_ended_at)
-        .bind(previous_started_at)
-        .bind(launch_at)
-        .bind(first_month_ended_at)
-        .bind(excluded_bounty_contracts)
-        .fetch_one(&self.pool)
-        .await?;
+            "#.replace("{payout_projection}", &platform_payouts::projection_sql(1, 5, 3, 7));
+        let payout_row = sqlx::query(&payout_sql)
+            .bind(network)
+            .bind(selected_started_at)
+            .bind(selected_ended_at)
+            .bind(previous_started_at)
+            .bind(launch_at)
+            .bind(first_month_ended_at)
+            .bind(excluded_bounty_contracts)
+            .fetch_one(&mut *transaction)
+            .await?;
 
         let cohort_row = sqlx::query(
             r#"
@@ -3981,11 +3947,10 @@ impl PostgresStore {
         .bind(selected_started_at)
         .bind(selected_ended_at)
         .bind(excluded_bounty_contracts)
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *transaction)
         .await?;
 
-        let daily_rows = sqlx::query(
-            r#"
+        let daily_sql = r#"
             WITH event_actors AS (
               SELECT event.occurred_at,
                      'base_wallet'::text AS namespace,
@@ -4122,44 +4087,10 @@ impl PostgresStore {
               SELECT occurred_at, namespace, identity FROM comment_actors
               WHERE identity <> '' AND NOT identity = ANY($5)
             ), payouts AS (
-              SELECT occurred_at, kind = 'bounty_settled' AS settled,
-                     CASE WHEN kind = 'bounty_settled'
-                       THEN COALESCE((data->>'solver_reward')::numeric, 0) ELSE 0 END
-                     + COALESCE((data->>'verifier_reward')::numeric, 0)
-                     + CASE WHEN kind = 'bounty_settled'
-                       THEN COALESCE((data->>'timeout_bond_bonus')::numeric, 0) ELSE 0 END
-                       AS total_amount
-              FROM autonomous_bounty_events
-              WHERE network = $1
-                AND block_time_verified = TRUE
-                AND occurred_at >= $2 AND occurred_at < $3
-                AND NOT lower(contract_address) = ANY($6)
-                AND kind IN ('bounty_settled', 'submission_rejected')
-              UNION ALL
-              SELECT occurred_at, kind = 'bounty_settled' AS settled,
-                     CASE WHEN kind = 'bounty_settled'
-                       THEN COALESCE((data->>'solver_reward')::numeric, 0) ELSE 0 END
-                     + CASE WHEN kind = 'bounty_settled'
-                       THEN COALESCE((data->>'verifier_reward')::numeric, 0)
-                       ELSE COALESCE((data->>'bond_paid_to_verifier')::numeric, 0) END
-                     + CASE WHEN kind = 'bounty_settled'
-                       THEN COALESCE((data->>'timeout_bond_bonus')::numeric, 0) ELSE 0 END
-                       AS total_amount
-              FROM open_competition_events
-              WHERE network = $1
-                AND block_time_verified = TRUE
-                AND occurred_at >= $2 AND occurred_at < $3
-                AND NOT lower(contract_address) = ANY($6)
-                AND kind IN ('bounty_settled', 'competition_submission_rejected')
-              UNION ALL
-              SELECT occurred_at, TRUE AS settled,
-                     COALESCE((data->>'solver_reward')::numeric, 0)
-                     + COALESCE((data->>'keeper_reward')::numeric, 0) AS total_amount
-              FROM open_competition_v2_events
-              WHERE network = $1
-                AND occurred_at >= $2 AND occurred_at < $3
-                AND NOT lower(contract_address) = ANY($6)
-                AND kind = 'competition_settled'
+              SELECT *, solver_amount + verifier_amount + keeper_amount + bonus_amount AS total_amount
+              FROM (
+{payout_projection}
+              ) AS historical_payouts
             ), days AS (
               SELECT generate_series(
                 date_trunc('day', $2::timestamptz),
@@ -4182,16 +4113,16 @@ impl PostgresStore {
                           (days.day AT TIME ZONE 'UTC')::date) AS settled_rounds
             FROM days
             ORDER BY days.day
-            "#,
-        )
-        .bind(network)
-        .bind(selected_started_at)
-        .bind(selected_ended_at)
-        .bind(excluded_wallets)
-        .bind(excluded_comment_authors)
-        .bind(excluded_bounty_contracts)
-        .fetch_all(&self.pool)
-        .await?;
+            "#.replace("{payout_projection}", &platform_payouts::projection_sql(1, 2, 3, 6));
+        let daily_rows = sqlx::query(&daily_sql)
+            .bind(network)
+            .bind(selected_started_at)
+            .bind(selected_ended_at)
+            .bind(excluded_wallets)
+            .bind(excluded_comment_authors)
+            .bind(excluded_bounty_contracts)
+            .fetch_all(&mut *transaction)
+            .await?;
 
         let coverage_row = sqlx::query(
             r#"
@@ -4223,10 +4154,31 @@ impl PostgresStore {
         )
         .bind(network)
         .bind(launch_at)
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *transaction)
         .await?;
 
+        let proof_rows = platform_payouts::read_rows(
+            &mut transaction,
+            network,
+            selected_started_at,
+            selected_ended_at,
+            excluded_bounty_contracts,
+        )
+        .await?;
+        let payout_proof_snapshot = if proof_rows.len() <= PLATFORM_PAYOUT_PROOF_MAX_ROWS {
+            Some(platform_payout_snapshot_hash(
+                &proof_rows,
+                network,
+                selected_started_at,
+                selected_ended_at,
+                excluded_bounty_contracts,
+            )?)
+        } else {
+            None
+        };
+        transaction.commit().await?;
         Ok(PlatformMetricsStats {
+            payout_proof_snapshot,
             generated_at: selected_ended_at,
             identities: PlatformIdentityStats {
                 selected: u64_from_i64(identity_row.try_get("selected")?)?,
@@ -13449,7 +13401,11 @@ mod tests {
             add_competition_v2_settlement(
                 &store,
                 &network,
-                competition_factory,
+                if offset < 3 {
+                    "0x7777777777777777777777777777777777777777"
+                } else {
+                    competition_factory
+                },
                 block,
                 &format!("0x{:040x}", 0x600_u64 + offset as u64),
                 &format!("beta3-{offset}"),
@@ -13919,6 +13875,91 @@ mod tests {
         assert_eq!(stats.payouts.selected_keeper_base_units, "200000");
         assert_eq!(stats.payouts.selected_bonus_base_units, "125000");
         assert_eq!(stats.payouts.selected_settled_rounds, 9);
+        let proof = store
+            .platform_payout_proof_rows(
+                &network,
+                selected_started_at,
+                selected_ended_at,
+                &[policy_excluded_contract.to_string()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(proof.iter().filter(|row| row.is_settlement).count(), 9);
+        assert_eq!(
+            stats.payout_proof_snapshot.as_deref(),
+            Some(
+                platform_payout_snapshot_hash(
+                    &proof,
+                    &network,
+                    selected_started_at,
+                    selected_ended_at,
+                    &[policy_excluded_contract.to_string()],
+                )
+                .unwrap()
+                .as_str()
+            )
+        );
+        assert_eq!(
+            proof
+                .iter()
+                .map(|row| row.total_base_units.parse::<u128>().unwrap())
+                .sum::<u128>()
+                .to_string(),
+            stats.payouts.selected_total_base_units
+        );
+        assert!(proof
+            .iter()
+            .all(|row| row.contract_address != policy_excluded_contract));
+        assert!(proof
+            .iter()
+            .any(|row| row.contract_address == recovery_contract));
+        assert_eq!(
+            proof
+                .iter()
+                .filter(|row| row.protocol == "open-competition-v2")
+                .count(),
+            5
+        );
+        let historical_factories: std::collections::HashSet<_> = proof
+            .iter()
+            .filter(|row| row.protocol == "open-competition-v2")
+            .map(|row| row.factory_contract.as_deref().unwrap())
+            .collect();
+        assert_eq!(
+            historical_factories.len(),
+            2,
+            "older and current factories both remain inspectable"
+        );
+        // An out-of-window event cannot shift pages or the selected fingerprint.
+        add_competition_v2_settlement(
+            &store,
+            &network,
+            competition_factory,
+            block + 100,
+            competition_contract,
+            "future-proof",
+            competition_solver_one,
+            selected_ended_at,
+        )
+        .await;
+        let unchanged = store
+            .platform_payout_proof_rows(
+                &network,
+                selected_started_at,
+                selected_ended_at,
+                &[policy_excluded_contract.to_string()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(proof, unchanged);
+        for day in &stats.daily {
+            let sum = proof
+                .iter()
+                .filter(|row| row.occurred_at.format("%Y-%m-%d").to_string() == day.day)
+                .map(|row| row.total_base_units.parse::<u128>().unwrap())
+                .sum::<u128>();
+            assert_eq!(sum.to_string(), day.payout_base_units);
+        }
         assert_eq!(stats.claim_cohort.settled, 1);
         assert_eq!(stats.claim_cohort.mature, 3);
         assert_eq!(stats.claim_cohort.immature, 1);

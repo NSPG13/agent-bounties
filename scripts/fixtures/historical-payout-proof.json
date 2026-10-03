@@ -1,0 +1,2158 @@
+{
+  "description": "Offline projection of captured Oct2 indexed feeds plus five separately verified Aug20 receipts. Snapshot is a fixture marker, not a production digest or new adoption. No wallet identities included.",
+  "expected": {
+    "total_base_units": "73065000",
+    "settlement_events": 57,
+    "payout_events": 65
+  },
+  "platform": {
+    "schema_version": "agent-bounties/platform-metrics-v3",
+    "network": "base-mainnet",
+    "generated_at": "2026-10-02T17:30:45.796423322+00:00",
+    "window": {
+      "period": "lifetime",
+      "started_at": "2026-07-08T20:22:19+00:00",
+      "ended_at": "2026-10-02T17:30:45.796423322+00:00",
+      "previous_started_at": "2026-07-08T20:22:19+00:00",
+      "previous_ended_at": "2026-07-08T20:22:19+00:00",
+      "launch_at": "2026-07-08T20:22:19+00:00",
+      "first_month_started_at": "2026-07-08T20:22:19+00:00",
+      "first_month_ended_at": "2026-08-08T20:22:19+00:00"
+    },
+    "platform_active_identities": {
+      "selected": 62,
+      "previous": 0,
+      "latest_week": 13,
+      "previous_week": 2,
+      "first_month": 23,
+      "lifetime": 62,
+      "roles": [
+        {
+          "role": "posters",
+          "active_identities": 13
+        },
+        {
+          "role": "funders",
+          "active_identities": 12
+        },
+        {
+          "role": "solvers",
+          "active_identities": 53
+        },
+        {
+          "role": "verifiers",
+          "active_identities": 0
+        },
+        {
+          "role": "commenters",
+          "active_identities": 5
+        }
+      ],
+      "namespaces": [
+        {
+          "namespace": "base_wallet",
+          "active_identities": 57
+        },
+        {
+          "namespace": "opportunity_comment_author",
+          "active_identities": 5
+        }
+      ],
+      "definition": "One identity is counted once per namespace and reporting window after the public maintainer exclusion policy is applied. Role counts are not additive.",
+      "cross_namespace_deduplication": false
+    },
+    "marketplace_payout_volume": {
+      "selected": {
+        "usdc_base_units": "73065000",
+        "usdc": "73.065000"
+      },
+      "previous": {
+        "usdc_base_units": "0",
+        "usdc": "0.000000"
+      },
+      "first_month": {
+        "usdc_base_units": "34710000",
+        "usdc": "34.710000"
+      },
+      "lifetime": {
+        "usdc_base_units": "73065000",
+        "usdc": "73.065000"
+      },
+      "selected_solver_pay": {
+        "usdc_base_units": "68210000",
+        "usdc": "68.210000"
+      },
+      "selected_verifier_pay": {
+        "usdc_base_units": "4590000",
+        "usdc": "4.590000"
+      },
+      "selected_keeper_pay": {
+        "usdc_base_units": "225000",
+        "usdc": "0.225000"
+      },
+      "selected_completion_bonus": {
+        "usdc_base_units": "40000",
+        "usdc": "0.040000"
+      },
+      "selected_settled_rounds": 57,
+      "previous_settled_rounds": 0,
+      "first_month_settled_rounds": 30,
+      "lifetime_settled_rounds": 57,
+      "definition": "Confirmed solver, verifier, keeper, and completion-bonus payouts from canonical BountySettled and CompetitionSettledV2 events, plus verifier pay from canonical rejection events. Returned bonds, refunds, funding plans, prizes, and declared synthetic canaries are excluded."
+    },
+    "mature_claim_to_settlement": {
+      "settled_rounds": 46,
+      "mature_claimed_rounds": 215,
+      "immature_claimed_rounds": 4,
+      "settlement_rate": 0.21395348837209302,
+      "definition": "Settled exclusive-claim rounds divided by exclusive-claim rounds whose claim deadline has passed or that already have a terminal canonical event. Recent immature claims are shown separately and excluded from the rate. Open Competition has no exclusive claim and is not part of this cohort."
+    },
+    "current_inventory": {
+      "status": "unavailable",
+      "active_funded_opportunities": null,
+      "available_funding_usdc": null,
+      "available_solver_rewards_usdc": null,
+      "available_verifier_rewards_usdc": null,
+      "generated_at": null,
+      "definition": "One or more canonical inventory sources could not be read. Historical metrics remain available, and unified inventory is not silently replaced with a lower total or zero."
+    },
+    "demand_growth": {
+      "gmv_usdc_7d": {
+        "usdc_base_units": "2000000",
+        "usdc": "2.000000"
+      },
+      "gmv_usdc_28d": {
+        "usdc_base_units": "5000000",
+        "usdc": "5.000000"
+      },
+      "lifetime_canonical_gmv_usdc": {
+        "usdc_base_units": "70365000",
+        "usdc": "70.365000"
+      },
+      "lifetime_canonical_payouts_usdc": {
+        "usdc_base_units": "73065000",
+        "usdc": "73.065000"
+      },
+      "new_poster_funder_wallets_28d": 4,
+      "repeat_poster_funder_rate_28d": 1,
+      "non_operator_funded_gmv_share_28d": 1,
+      "funding_attribution_complete_28d": true,
+      "definition": "GMV counts confirmed canonical settlement events only. New and repeat poster/funder figures use non-operator wallets, not unique people. Non-operator-funded GMV is prorated by canonical FundingAdded amounts and withheld when any settled GMV lacks complete funding attribution."
+    },
+    "daily": [
+      {
+        "day": "2026-07-08",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-07-09",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-07-10",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-07-11",
+        "active_identities": 1,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-07-12",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-07-13",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-07-14",
+        "active_identities": 5,
+        "payout": {
+          "usdc_base_units": "12000000",
+          "usdc": "12.000000"
+        },
+        "settled_rounds": 12
+      },
+      {
+        "day": "2026-07-15",
+        "active_identities": 1,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-07-16",
+        "active_identities": 2,
+        "payout": {
+          "usdc_base_units": "4590000",
+          "usdc": "4.590000"
+        },
+        "settled_rounds": 7
+      },
+      {
+        "day": "2026-07-17",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-07-18",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-07-19",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-07-20",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-07-21",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-07-22",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-07-23",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-07-24",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-07-25",
+        "active_identities": 1,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-07-26",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-07-27",
+        "active_identities": 1,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-07-28",
+        "active_identities": 2,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-07-29",
+        "active_identities": 2,
+        "payout": {
+          "usdc_base_units": "2000000",
+          "usdc": "2.000000"
+        },
+        "settled_rounds": 1
+      },
+      {
+        "day": "2026-07-30",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-07-31",
+        "active_identities": 2,
+        "payout": {
+          "usdc_base_units": "1000000",
+          "usdc": "1.000000"
+        },
+        "settled_rounds": 1
+      },
+      {
+        "day": "2026-08-01",
+        "active_identities": 1,
+        "payout": {
+          "usdc_base_units": "2010000",
+          "usdc": "2.010000"
+        },
+        "settled_rounds": 1
+      },
+      {
+        "day": "2026-08-02",
+        "active_identities": 3,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-08-03",
+        "active_identities": 1,
+        "payout": {
+          "usdc_base_units": "8000000",
+          "usdc": "8.000000"
+        },
+        "settled_rounds": 4
+      },
+      {
+        "day": "2026-08-04",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-08-05",
+        "active_identities": 1,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-08-06",
+        "active_identities": 3,
+        "payout": {
+          "usdc_base_units": "1000000",
+          "usdc": "1.000000"
+        },
+        "settled_rounds": 1
+      },
+      {
+        "day": "2026-08-07",
+        "active_identities": 6,
+        "payout": {
+          "usdc_base_units": "4110000",
+          "usdc": "4.110000"
+        },
+        "settled_rounds": 3
+      },
+      {
+        "day": "2026-08-08",
+        "active_identities": 4,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-08-09",
+        "active_identities": 1,
+        "payout": {
+          "usdc_base_units": "90000",
+          "usdc": "0.090000"
+        },
+        "settled_rounds": 1
+      },
+      {
+        "day": "2026-08-10",
+        "active_identities": 2,
+        "payout": {
+          "usdc_base_units": "1550000",
+          "usdc": "1.550000"
+        },
+        "settled_rounds": 2
+      },
+      {
+        "day": "2026-08-11",
+        "active_identities": 2,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-08-12",
+        "active_identities": 4,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-08-13",
+        "active_identities": 2,
+        "payout": {
+          "usdc_base_units": "110000",
+          "usdc": "0.110000"
+        },
+        "settled_rounds": 1
+      },
+      {
+        "day": "2026-08-14",
+        "active_identities": 2,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-08-15",
+        "active_identities": 1,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-08-16",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-08-17",
+        "active_identities": 3,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-08-18",
+        "active_identities": 3,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-08-19",
+        "active_identities": 3,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-08-20",
+        "active_identities": 4,
+        "payout": {
+          "usdc_base_units": "15200000",
+          "usdc": "15.200000"
+        },
+        "settled_rounds": 5
+      },
+      {
+        "day": "2026-08-21",
+        "active_identities": 3,
+        "payout": {
+          "usdc_base_units": "5130000",
+          "usdc": "5.130000"
+        },
+        "settled_rounds": 3
+      },
+      {
+        "day": "2026-08-22",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-08-23",
+        "active_identities": 5,
+        "payout": {
+          "usdc_base_units": "525000",
+          "usdc": "0.525000"
+        },
+        "settled_rounds": 2
+      },
+      {
+        "day": "2026-08-24",
+        "active_identities": 4,
+        "payout": {
+          "usdc_base_units": "4030000",
+          "usdc": "4.030000"
+        },
+        "settled_rounds": 2
+      },
+      {
+        "day": "2026-08-25",
+        "active_identities": 3,
+        "payout": {
+          "usdc_base_units": "510000",
+          "usdc": "0.510000"
+        },
+        "settled_rounds": 1
+      },
+      {
+        "day": "2026-08-26",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-08-27",
+        "active_identities": 1,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-08-28",
+        "active_identities": 14,
+        "payout": {
+          "usdc_base_units": "3110000",
+          "usdc": "3.110000"
+        },
+        "settled_rounds": 4
+      },
+      {
+        "day": "2026-08-29",
+        "active_identities": 3,
+        "payout": {
+          "usdc_base_units": "1100000",
+          "usdc": "1.100000"
+        },
+        "settled_rounds": 1
+      },
+      {
+        "day": "2026-08-30",
+        "active_identities": 2,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-08-31",
+        "active_identities": 1,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-09-01",
+        "active_identities": 1,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-09-02",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-09-03",
+        "active_identities": 1,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-09-04",
+        "active_identities": 1,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-09-05",
+        "active_identities": 1,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-09-06",
+        "active_identities": 1,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-09-07",
+        "active_identities": 3,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-09-08",
+        "active_identities": 4,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-09-09",
+        "active_identities": 1,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-09-10",
+        "active_identities": 3,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-09-11",
+        "active_identities": 7,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-09-12",
+        "active_identities": 1,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-09-13",
+        "active_identities": 2,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-09-14",
+        "active_identities": 2,
+        "payout": {
+          "usdc_base_units": "3000000",
+          "usdc": "3.000000"
+        },
+        "settled_rounds": 3
+      },
+      {
+        "day": "2026-09-15",
+        "active_identities": 2,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-09-16",
+        "active_identities": 1,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-09-17",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-09-18",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-09-19",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-09-20",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-09-21",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-09-22",
+        "active_identities": 2,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-09-23",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-09-24",
+        "active_identities": 1,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-09-25",
+        "active_identities": 2,
+        "payout": {
+          "usdc_base_units": "2000000",
+          "usdc": "2.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-09-26",
+        "active_identities": 2,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-09-27",
+        "active_identities": 2,
+        "payout": {
+          "usdc_base_units": "1000000",
+          "usdc": "1.000000"
+        },
+        "settled_rounds": 1
+      },
+      {
+        "day": "2026-09-28",
+        "active_identities": 3,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-09-29",
+        "active_identities": 10,
+        "payout": {
+          "usdc_base_units": "1000000",
+          "usdc": "1.000000"
+        },
+        "settled_rounds": 1
+      },
+      {
+        "day": "2026-09-30",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-10-01",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      },
+      {
+        "day": "2026-10-02",
+        "active_identities": 0,
+        "payout": {
+          "usdc_base_units": "0",
+          "usdc": "0.000000"
+        },
+        "settled_rounds": 0
+      }
+    ],
+    "platform_revenue": {
+      "usdc_base_units": "0",
+      "usdc": "0.000000"
+    },
+    "monetization_status": "monetization not active",
+    "coverage": {
+      "status": "partial",
+      "marketplace_indexers_fresh": false,
+      "verified_canonical_events": 1305,
+      "awaiting_block_time_events": 0,
+      "opportunity_comments": 29,
+      "latest_verified_event_at": "2026-09-29T20:07:49+00:00",
+      "latest_comment_at": "2026-09-29T06:33:08.540400+00:00",
+      "github_included": false,
+      "github_snapshot_path": "/generated/github-participation.json",
+      "maintainer_exclusion_policy": "agent-bounties/public-metrics-policy-v1",
+      "identity_limitations": [
+        "A wallet, GitHub login, and self-reported comment author are separate identity namespaces unless explicitly verified and linked.",
+        "Wallet ownership is never inferred. Only addresses deliberately added to this public policy are excluded as maintainer-controlled.",
+        "Opportunity-comment authors are self-reported labels, not authenticated people."
+      ]
+    },
+    "definitions": {
+      "external_active_identities": "Distinct provider-namespaced marketplace wallets and normalized opportunity-comment authors that performed a qualifying action. GitHub identities are supplied by the separate aggregate snapshot and must be added only once. Identities are not verified unique people.",
+      "marketplace_payout_volume": "Confirmed solver, verifier, keeper, and completion-bonus payouts from canonical BountySettled and CompetitionSettledV2 events, plus verifier pay from canonical rejection events. Returned bonds, refunds, funding plans, prizes, and declared synthetic canaries are excluded.",
+      "mature_claim_to_settlement": "Settled exclusive-claim rounds divided by exclusive-claim rounds whose claim deadline has passed or that already have a terminal canonical event. Recent immature claims are shown separately and excluded from the rate. Open Competition has no exclusive claim and is not part of this cohort.",
+      "platform_revenue": "The live marketplace protocols have no platform fee. Marketplace payout volume is not platform revenue."
+    },
+    "evidence_boundary": "This public response contains aggregate counts and amounts only. Canonical metrics use block-time-verified legacy events and safe-block V2 events. It returns no wallet, GitHub, comment-author, event, transaction, or customer identifiers. GitHub participation is intentionally generated as a separate aggregate snapshot to avoid double counting. Only BountySettled or CompetitionSettledV2 proves solver payment.",
+    "payout_proof": {
+      "status": "available",
+      "snapshot": "sha256:f5c026ebe1950c51cea50cf5f20810fb555a250a06793278cd36202d3ff717ab",
+      "policy_hash": "sha256:88ea352366836162cd2dc0eb99c47369c885f96cb034f7c4950b8b97d67b30e5"
+    }
+  },
+  "pages": [
+    {
+      "schema_version": "agent-bounties/platform-payout-proof-v1",
+      "network": "base-mainnet",
+      "period": "lifetime",
+      "started_at": "2026-07-08T20:22:19+00:00",
+      "ended_at": "2026-10-02T17:30:45.796423322+00:00",
+      "generated_at": "2026-10-02T17:30:45.796423322+00:00",
+      "snapshot": "sha256:f5c026ebe1950c51cea50cf5f20810fb555a250a06793278cd36202d3ff717ab",
+      "policy_hash": "sha256:88ea352366836162cd2dc0eb99c47369c885f96cb034f7c4950b8b97d67b30e5",
+      "excluded_bounty_contracts": [
+        "0x3e052b933628b960d61654a68fca23d869d8989f",
+        "0xaa4a9300bb1c90f93b4048fd83298da6c6145734",
+        "0xf8c8897e748e4057d52182c27beb4025f4d49d68",
+        "0x5f884d4a4cc2727ddbc22382efd776274bc3e7aa"
+      ],
+      "excluded_rows_enumerated": false,
+      "total_rows": 65,
+      "offset": 0,
+      "next_cursor": null,
+      "complete": true,
+      "records": [
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0x3edcf165583824795f6f0a92b3dbc38c4d930d41",
+          "bounty_id": "0xe677c90aebc0ff6f12b158f43d9f48e420596bcc6c597bfd7a3b0e982dd78d11",
+          "tx_hash": "0x7b32938b82ec69797fa5c38c52349c970e31b41e97abdee8dfaa9067580bb10c",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-09-29T08:37:53Z",
+          "is_settlement": true,
+          "block_number": "51940863",
+          "log_index": "136",
+          "solver_base_units": "990000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "1000000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0x26f0a0a60f8a1c12ca9b724062b9c5bfe8d013ce",
+          "bounty_id": "0x669cd437c121b46cfcdccdfb708a8d0acd04527621f161d26d873920b3e4b8ce",
+          "tx_hash": "0x77f98cb02f7889d78c37076042cf5cfd19473a29342079129aab0b3896af744a",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-09-27T05:38:19Z",
+          "is_settlement": true,
+          "block_number": "51849076",
+          "log_index": "548",
+          "solver_base_units": "990000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "1000000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0xe11965e2c68f6f4da4b97c8e62fda5015ae0137b",
+          "bounty_id": "0xf79d7f05f8a72835a715dc595881254c3be77ff63404ca4ba1dbae32f75bf6bb",
+          "tx_hash": "0xeaae56368a638518c5162c55b4b9a5f0eb2eb66de58b32ac93061f988815f846",
+          "kind": "submission_rejected",
+          "occurred_at": "2026-09-25T22:11:05Z",
+          "is_settlement": false,
+          "block_number": "51792459",
+          "log_index": "595",
+          "solver_base_units": "0",
+          "verifier_base_units": "2000000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "2000000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0x9771bafaa92ce3e8452e0ffa9da95ad9413d8d5e",
+          "bounty_id": "0x9c69260bcabb12cf59b29674292ca453ad65692ee37b128fd7b9aba687b6ff77",
+          "tx_hash": "0x99a01feaf31f444be102a80ed2f0a2c73a006ae6f0ec6f811fb5b6388b7bc264",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-09-14T16:27:47Z",
+          "is_settlement": true,
+          "block_number": "51306960",
+          "log_index": "234",
+          "solver_base_units": "990000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "1000000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0x3e04a4f24a31217d57a7baed289d0c22cf3199cd",
+          "bounty_id": "0x344ce8db6ff91759b6c4c7d177cc9bb4e26ce80adfe09e6d9a6d9551fa31b0f2",
+          "tx_hash": "0xf46970139b501450df8b577cfab4228de25ec814a4bc1d1e7a5a7cd057ba54c1",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-09-14T16:00:45Z",
+          "is_settlement": true,
+          "block_number": "51306149",
+          "log_index": "153",
+          "solver_base_units": "990000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "1000000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0x8e02d50c65614afb45c41f34a1e3fd576e650e1f",
+          "bounty_id": "0x855054af373db1f1d83cfc21f6ac8d7b214b5f49908be84d2e3e45681d19262f",
+          "tx_hash": "0x478fd04992104e35af1efb132328370c7ac12d9dc7bda4cc028cdd7b0f29c311",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-09-14T15:49:07Z",
+          "is_settlement": true,
+          "block_number": "51305800",
+          "log_index": "276",
+          "solver_base_units": "990000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "1000000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0x22cec92c195a6dc0f7aeaf850e7f2cacb3b6de33",
+          "bounty_id": "0x51408b922225594472fd1a55798209f813554c58714e7ad442177181697eba69",
+          "tx_hash": "0x56338f1b323082a20ba064995d00bbf2347f4bae071effb2f41b2dbe36c05888",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-08-29T20:23:55Z",
+          "is_settlement": true,
+          "block_number": "50622844",
+          "log_index": "457",
+          "solver_base_units": "1000000",
+          "verifier_base_units": "100000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "1100000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0xa067be3a248beb204213222cab2b1c3a2b8746fe",
+          "bounty_id": "0x01a75717ba92b862bdaa21f328bc775fa62a53b00627b6e7abe709569a06ef68",
+          "tx_hash": "0x4a763d115553e9a65aa563403a31600c57936fa774712a97fa60a457a259da90",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-08-28T17:46:19Z",
+          "is_settlement": true,
+          "block_number": "50574916",
+          "log_index": "289",
+          "solver_base_units": "990000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "1000000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0x2b3a0e86969d22cbbbaf8c85b4b3ce456907548d",
+          "bounty_id": "0x661a43f286508a5292e7645a6bb99f7b4a7ac0e90a168a873e895c1885427f3d",
+          "tx_hash": "0x76667a62d7acd245282f589d35dbb779db874127d257994b2450746be140f155",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-08-28T13:39:13Z",
+          "is_settlement": true,
+          "block_number": "50567503",
+          "log_index": "187",
+          "solver_base_units": "990000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "1000000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0xf4492edc8d16649cd92e6875471a8ff76b7fdca3",
+          "bounty_id": "0x7945e35adae352bc5c354ffec2af4bb260a504ac8520bdd955182e33fece968f",
+          "tx_hash": "0x533c13a178449e499b401f3aa14af069aaa7fb9e268d942ea59668d306a1488b",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-08-28T09:40:37Z",
+          "is_settlement": true,
+          "block_number": "50560345",
+          "log_index": "1002",
+          "solver_base_units": "990000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "1000000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0x5dfcb9e153fb215f5f2c62269ee4888484107763",
+          "bounty_id": "0xa63145c8678882f0bd5ead03bfc52aa2b56ed3f0731103ff7dba192e3269a60f",
+          "tx_hash": "0x6704e60b3ee103aa39dc18a03a9ffdc631ee48aa88c5e452070fb53e38eeb631",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-08-28T06:18:21Z",
+          "is_settlement": true,
+          "block_number": "50554277",
+          "log_index": "337",
+          "solver_base_units": "100000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "110000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0xeb5ee90fa328608aa1e49c32d339bc5e64b1e58c",
+          "bounty_id": "0x0a14dfe14f70157c05a30605c5586d58b2fd87d936e8bd3aecb3eaf95940d553",
+          "tx_hash": "0x3de5cec9d688e1476505a4a8f2deb9330092aaed0e99f547423d74de60816607",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-08-25T18:44:15Z",
+          "is_settlement": true,
+          "block_number": "50447054",
+          "log_index": "197",
+          "solver_base_units": "500000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "510000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0xbd5ab1cd1a0b4cfb55137cec37cafca109bb8fb3",
+          "bounty_id": "0xb5460b0dd38bfd1dece1949bdfedbbdb583ce63d1ee07f9e302b5f183ea5675a",
+          "tx_hash": "0x22853eb379adea08cdc00327ab82485d73c342122e39a5af1d0287eb83aca2b7",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-08-24T16:25:01Z",
+          "is_settlement": true,
+          "block_number": "50399677",
+          "log_index": "138",
+          "solver_base_units": "2000000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "2010000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0x8e242a9397b14255f5c426032b202ca04ee2bfae",
+          "bounty_id": "0x19008aa4d2a2dd4238bf21178f1a08d44221ffebc5c1171c553466d85cf22bcf",
+          "tx_hash": "0xadd997fa0b63e916eec244e09f4be20bd452b6d6e426e9261e49bf75852eedfd",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-08-24T12:42:37Z",
+          "is_settlement": true,
+          "block_number": "50393005",
+          "log_index": "3263",
+          "solver_base_units": "2000000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "10000",
+          "total_base_units": "2020000"
+        },
+        {
+          "protocol": "open-competition-v2",
+          "network": "base-mainnet",
+          "factory_contract": "0x29d0e39e0c03797c690633535722e6b34a69a78a",
+          "contract_address": "0x3a943ff8e67f4eeb497626ba20d3a0b40abc15ee",
+          "bounty_id": "0xf0a48b9f2ba82bcfeab79e18ea39fdb791bf81c8bccd3a80898ac2a2f4f72efa",
+          "tx_hash": "0x9b5f2fb1eb9e6840f369360ba84529126a3cfd2f4f95b5f5f78a7458fd7348f2",
+          "kind": "competition_settled",
+          "occurred_at": "2026-08-23T09:26:53Z",
+          "is_settlement": true,
+          "block_number": "50343933",
+          "log_index": "1010",
+          "solver_base_units": "250000",
+          "verifier_base_units": "0",
+          "keeper_base_units": "12500",
+          "bonus_base_units": "0",
+          "total_base_units": "262500"
+        },
+        {
+          "protocol": "open-competition-v2",
+          "network": "base-mainnet",
+          "factory_contract": "0x29d0e39e0c03797c690633535722e6b34a69a78a",
+          "contract_address": "0x5cf577877c099eb3cdef844793dac152e7f598b5",
+          "bounty_id": "0x50facc990cbd8e335989159d5f074f626f9b24eb87578d674198594d51687e1e",
+          "tx_hash": "0xc77a2689894c849c215885f63d6e09c1d5432d665d730f2021312994501ce259",
+          "kind": "competition_settled",
+          "occurred_at": "2026-08-23T09:10:25Z",
+          "is_settlement": true,
+          "block_number": "50343439",
+          "log_index": "281",
+          "solver_base_units": "250000",
+          "verifier_base_units": "0",
+          "keeper_base_units": "12500",
+          "bonus_base_units": "0",
+          "total_base_units": "262500"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0x9df0c38c005cb187353828d2cf32198a4b779a1a",
+          "bounty_id": "0xf2b5e2af7742db63bfaedf65f6fc243a512ffd3864d7181d4593cd783d6a9883",
+          "tx_hash": "0x87f3daf7e17e3dc0d45f2f4f4289fcd9aa920326a86a3f26e1e0609f290b7ab4",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-08-21T08:25:09Z",
+          "is_settlement": true,
+          "block_number": "50255681",
+          "log_index": "284",
+          "solver_base_units": "2000000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "10000",
+          "total_base_units": "2020000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0x9baa8a4a2ad3096c6ebfb2c994a93afb7a299274",
+          "bounty_id": "0x34e8d16cdbfff635e77ce703cc6efea8fc64a3adb1ee2ef293c604b85bb6a8cb",
+          "tx_hash": "0x8085af681c95d8df24048986fcd55260dc001202fb987a0b1c195861394a771b",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-08-21T04:40:59Z",
+          "is_settlement": true,
+          "block_number": "50248956",
+          "log_index": "389",
+          "solver_base_units": "2000000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "2010000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0x2b0856b5ec229cbb0a5bcfaa825e7d6c03cffaaf",
+          "bounty_id": "0x5dfa3c356d4c13b81ef40facc1086e82e24da437e1d10ad6d10d355d6319b933",
+          "tx_hash": "0xe60b9a066efd6595ecd6b5e1d19d322e94507929de366d8744087a756e3600e2",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-08-21T01:04:15Z",
+          "is_settlement": true,
+          "block_number": "50242454",
+          "log_index": "728",
+          "solver_base_units": "1000000",
+          "verifier_base_units": "100000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "1100000"
+        },
+        {
+          "protocol": "open-competition-v2",
+          "network": "base-mainnet",
+          "factory_contract": "0xa45c6636d75fc94eec8cf6f6a34308c687e42ce4",
+          "contract_address": "0xbeed3ee13db5ff84dd0f98c7418facc730ea15f4",
+          "bounty_id": "0xf198adda3799e3ba9eccd5c0a705ee137534c4adb1a9b7e0dc2206fd92899268",
+          "tx_hash": "0xc2f19c257fc875f5ea35f6ecaa8726b4012cf9abb628dcd031fa3d4cedb72581",
+          "kind": "competition_settled",
+          "occurred_at": "2026-08-20T23:37:01.000Z",
+          "is_settlement": true,
+          "block_number": "50239837",
+          "log_index": "90",
+          "solver_base_units": "3000000",
+          "verifier_base_units": "0",
+          "keeper_base_units": "40000",
+          "bonus_base_units": "0",
+          "total_base_units": "3040000"
+        },
+        {
+          "protocol": "open-competition-v2",
+          "network": "base-mainnet",
+          "factory_contract": "0xa45c6636d75fc94eec8cf6f6a34308c687e42ce4",
+          "contract_address": "0x2d484cdc61218fbcc079488b47471223af170a21",
+          "bounty_id": "0x1257f1b3a66a35cca1cd47b9af982edca9bc3bbe581c15d1b004bb2f49a47ff8",
+          "tx_hash": "0x50b3f131d52d8b2c93ad4a1c157ecd03261f3d6c3a6f62a08a2c6374e99d4b5f",
+          "kind": "competition_settled",
+          "occurred_at": "2026-08-20T23:27:37.000Z",
+          "is_settlement": true,
+          "block_number": "50239555",
+          "log_index": "441",
+          "solver_base_units": "3000000",
+          "verifier_base_units": "0",
+          "keeper_base_units": "40000",
+          "bonus_base_units": "0",
+          "total_base_units": "3040000"
+        },
+        {
+          "protocol": "open-competition-v2",
+          "network": "base-mainnet",
+          "factory_contract": "0xa45c6636d75fc94eec8cf6f6a34308c687e42ce4",
+          "contract_address": "0xb9bea3cb1c91c3725961b28f5578a3b43e3eb603",
+          "bounty_id": "0x1a072fa044f46cbe95659745ca4bcb9450b0e8f1962765870279351dde9e8333",
+          "tx_hash": "0xd38b4e1c6d0d6ca6d6618edb390851125269177cfe9ad84f8f1e1fa200270be8",
+          "kind": "competition_settled",
+          "occurred_at": "2026-08-20T23:08:33.000Z",
+          "is_settlement": true,
+          "block_number": "50238983",
+          "log_index": "65",
+          "solver_base_units": "3000000",
+          "verifier_base_units": "0",
+          "keeper_base_units": "40000",
+          "bonus_base_units": "0",
+          "total_base_units": "3040000"
+        },
+        {
+          "protocol": "open-competition-v2",
+          "network": "base-mainnet",
+          "factory_contract": "0xa45c6636d75fc94eec8cf6f6a34308c687e42ce4",
+          "contract_address": "0x0618b169c3c878a0386b5da7b54713f60baa1ec2",
+          "bounty_id": "0xe5a73bf7669a2c3fa66ae38a47383bfa8f05448ba54e07a9af1a4013deb30f19",
+          "tx_hash": "0x7d694958e97da5299aedddc73316e66aa3e3dac621de02f7f1bceb881e99d50a",
+          "kind": "competition_settled",
+          "occurred_at": "2026-08-20T22:49:41.000Z",
+          "is_settlement": true,
+          "block_number": "50238417",
+          "log_index": "435",
+          "solver_base_units": "3000000",
+          "verifier_base_units": "0",
+          "keeper_base_units": "40000",
+          "bonus_base_units": "0",
+          "total_base_units": "3040000"
+        },
+        {
+          "protocol": "open-competition-v2",
+          "network": "base-mainnet",
+          "factory_contract": "0xa45c6636d75fc94eec8cf6f6a34308c687e42ce4",
+          "contract_address": "0x740bbea2c8075e699c50c20ce71be0a88d6263ec",
+          "bounty_id": "0x6fc6bb1edaef22851ccd26d5820de923d43b3924d8f912374a8586db7449a607",
+          "tx_hash": "0x1633d8d73340deee23554db53436380936542452a529644fe4d822ff5e76eb14",
+          "kind": "competition_settled",
+          "occurred_at": "2026-08-20T22:09:11.000Z",
+          "is_settlement": true,
+          "block_number": "50237202",
+          "log_index": "271",
+          "solver_base_units": "3000000",
+          "verifier_base_units": "0",
+          "keeper_base_units": "40000",
+          "bonus_base_units": "0",
+          "total_base_units": "3040000"
+        },
+        {
+          "protocol": "open-competition-v1",
+          "network": "base-mainnet",
+          "factory_contract": "0x9e9382beb8b1a45b737d484b5eafa7b8779d4ca5",
+          "contract_address": "0x60820f98bd004123d5d03ac9c0131d1021a8aac4",
+          "bounty_id": "0xbe3ad8d6d6f1c53a607c6ac8ad5c0b8f8a02907a64eb18ce95d8730f5de2391d",
+          "tx_hash": "0x2c3524f27e051459ff50fe5adfb53e18d64942f1cf72187f6314862a40009ca0",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-08-13T04:09:47Z",
+          "is_settlement": true,
+          "block_number": "49902420",
+          "log_index": "411",
+          "solver_base_units": "100000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "110000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0xc0b2ab593373f2d448eee05a7e8873be10e760fe",
+          "bounty_id": "0x9a81831b0af1634042e03c014c49f156f84aa324414051774b8f9f315d822e2d",
+          "tx_hash": "0xfbdf2ee08090da9796b4c08604870aa9eb0a73377efbf377237df0a077b85a11",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-08-10T22:44:27Z",
+          "is_settlement": true,
+          "block_number": "49806260",
+          "log_index": "400",
+          "solver_base_units": "990000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "1000000"
+        },
+        {
+          "protocol": "open-competition-v1",
+          "network": "base-mainnet",
+          "factory_contract": "0x9e9382beb8b1a45b737d484b5eafa7b8779d4ca5",
+          "contract_address": "0x3551ca7bb9090fb8c1648eea40837c8a1cbcc973",
+          "bounty_id": "0x5be117671b7cc50b2b9d204854fff4ee0af0065cf27e98445667e66461c7862b",
+          "tx_hash": "0xc5cfdfb4024ac5d6f1011121cf6e2e7c78c5e8ca7f57f8d70cf52e5336265f35",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-08-10T19:11:57Z",
+          "is_settlement": true,
+          "block_number": "49799885",
+          "log_index": "195",
+          "solver_base_units": "500000",
+          "verifier_base_units": "50000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "550000"
+        },
+        {
+          "protocol": "open-competition-v1",
+          "network": "base-mainnet",
+          "factory_contract": "0x9e9382beb8b1a45b737d484b5eafa7b8779d4ca5",
+          "contract_address": "0x3a6de8db2c7df42f4ea966e26bd9e3dd045ff61e",
+          "bounty_id": "0x0cf19da2c5a0af9a2cc7fc65775a243e622f7ee9d48c82146b8aa32e013ac2b2",
+          "tx_hash": "0xc45404babb1b143d267c182ada921ad0e8b073f76e83795d746fa98577f0abe4",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-08-09T18:52:45Z",
+          "is_settlement": true,
+          "block_number": "49756109",
+          "log_index": "136",
+          "solver_base_units": "80000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "90000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0x41f7f2722f0af7289c2f2eea6afed6f4873f722a",
+          "bounty_id": "0xeba5dad578290281d78a230169b3c6bf53abc3d06292f927b8d66aaf53f55304",
+          "tx_hash": "0x0a5bfb2014118d9d6c536d818bf7bd183fcc65a35e1cfda852adddbfa40925f4",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-08-07T20:46:21Z",
+          "is_settlement": true,
+          "block_number": "49673117",
+          "log_index": "160",
+          "solver_base_units": "2000000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "2010000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0xbf026b9b40505cf34fe78576050410e5def695e5",
+          "bounty_id": "0x15511b145aa3c553e88d1a4de7e8e74a163619f0dba633f96051cfe9a496d455",
+          "tx_hash": "0xcfdff9ae98dcf1225a3a697d5b64a6c93c54b39b150024d825c7b8eae1e391c4",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-08-07T20:24:41Z",
+          "is_settlement": true,
+          "block_number": "49672467",
+          "log_index": "133",
+          "solver_base_units": "990000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "1000000"
+        },
+        {
+          "protocol": "open-competition-v1",
+          "network": "base-mainnet",
+          "factory_contract": "0x9e9382beb8b1a45b737d484b5eafa7b8779d4ca5",
+          "contract_address": "0xb307ab8e3205cfe89200877a9195a7c5c33254bb",
+          "bounty_id": "0x078d1d7cb973c093c4a3f9a6ce9cd0cd1996ee6ad8f6552613eaa3f28dff3d92",
+          "tx_hash": "0x12bab153424dbd4cd5fb0d9b0c6f4e4ff2ff4623b88703ad3f99afb9f7e279e5",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-08-07T16:07:39Z",
+          "is_settlement": true,
+          "block_number": "49664756",
+          "log_index": "217",
+          "solver_base_units": "1000000",
+          "verifier_base_units": "100000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "1100000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0xe376d929745ca7419826e376ffd9a805571c2ff5",
+          "bounty_id": "0x4f74d65a765cc9d552142307ef4ccc4c360f0576836418aacaa1d5df73f2452e",
+          "tx_hash": "0xd5bcc2c670047e87dfa98aa10335671ef8594e9df4eceb5a8c5b424cffac169f",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-08-06T11:46:29Z",
+          "is_settlement": true,
+          "block_number": "49613721",
+          "log_index": "457",
+          "solver_base_units": "990000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "1000000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0xc710d54d192ffb0b84cd6e051754ab70acf1130c",
+          "bounty_id": "0x06f8c7e72b25fdc0ba5ea58f9282347bc003139bf3b59e011cbf9c01a6641823",
+          "tx_hash": "0x9e97c14b7134a60828814f45332951e4c509dc4e92268987dded18d90611566b",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-08-03T21:07:19Z",
+          "is_settlement": true,
+          "block_number": "49500946",
+          "log_index": "67",
+          "solver_base_units": "1990000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "2000000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0x2afb91d160200fac4b91e6134b2cc9d9bff86f42",
+          "bounty_id": "0xd52391ed936c8d0d4f1c3090bc7fd02ac0a9c46510c8a7d2a2e7e61617a54eaf",
+          "tx_hash": "0x7afb01db02fc487edcf39df51b832b213a64e9507762f9b93cc748d70aa3646f",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-08-03T21:07:03Z",
+          "is_settlement": true,
+          "block_number": "49500938",
+          "log_index": "91",
+          "solver_base_units": "1990000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "2000000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0xf2e47a253988e98f535ab60f4b9bd7f8975c1263",
+          "bounty_id": "0x8ec846408afab2725ceedd7ec7f4241e01ed6c881730e6f216612d1a69e2788b",
+          "tx_hash": "0xcec44c4d3dc63e37f9a295f18d0012ee03e6af215f0a91d4907dc3dc4bd1ae4a",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-08-03T21:06:53Z",
+          "is_settlement": true,
+          "block_number": "49500933",
+          "log_index": "102",
+          "solver_base_units": "1990000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "2000000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0xad4532e45d371ff5b5c40ebbf0c20687ed9e6fc4",
+          "bounty_id": "0x2f317d9500815d7054ddc4a611ac171e0f31fca2f570924d47ca52c875ea1842",
+          "tx_hash": "0x8f5f01e990543fd4cc74b91d38e4ccb06416a197e7b57249edbda1900ae8b35a",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-08-03T21:06:35Z",
+          "is_settlement": true,
+          "block_number": "49500924",
+          "log_index": "39",
+          "solver_base_units": "1990000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "2000000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0x6c93cb2ae08e2c44c45619ad5b08819a3b50da9a",
+          "bounty_id": "0x9d3d20c8c9e8fdd18b888e962d63eb88ba9c74822413e905f200695fe0b414f6",
+          "tx_hash": "0xafba64bbfe2dc8c695451b1447dd63f6352274d561a3c0c0f570d76592b8c413",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-08-01T02:42:33Z",
+          "is_settlement": true,
+          "block_number": "49381403",
+          "log_index": "213",
+          "solver_base_units": "2000000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "2010000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0xc6432b0fe9e63bc0068f69e89b62223aaffba24a",
+          "bounty_id": "0xe2850422bfb2884c1c3f7d55300954e488e861893a9df50d36af4332eb3ec4a0",
+          "tx_hash": "0x02480539f9ae65b0475b031570150c9b9b53599d64a536a7b316a7262dea801c",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-07-31T15:10:27Z",
+          "is_settlement": true,
+          "block_number": "49360640",
+          "log_index": "248",
+          "solver_base_units": "990000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "1000000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0xc13ccf6c6a03b53f836d433c5e628f06bbc1dbf4",
+          "bounty_id": "0x992aabb2ba8bd33947529e9c58b67b611f29dc3a4db5760db470229f04828cbf",
+          "tx_hash": "0xc099f45af8dc36672846ae4477614f1d9563bd7c74f966fa102a87f6394dfbd8",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-07-29T10:49:19Z",
+          "is_settlement": true,
+          "block_number": "49266406",
+          "log_index": "152",
+          "solver_base_units": "1990000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "2000000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0xff53d4732cd4104a057285ad8217b68a4b31b3d0",
+          "bounty_id": "0xb866680c04a8dfcd0614530b6c79947804a84f8457a1d7ff679e406355b501a9",
+          "tx_hash": "0x8e0bc37cd1ee3d1f35173e85ea17385a4e5d2f7b1da3f30acd84858176b0158a",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-07-16T20:22:15Z",
+          "is_settlement": true,
+          "block_number": "48721994",
+          "log_index": "382",
+          "solver_base_units": "100000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "110000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0x3d0e396dd4c07c8a7dff13ec93e59c4e7e5a270e",
+          "bounty_id": "0xa9ecd20c70da07dea26ff531dcbd3422d04ff921fcbc872a7fbb3062832a1677",
+          "tx_hash": "0xdc0dc865c4ee5b404b49dfce985c3964bb4098fe011d26abdd4e7789d26c46fa",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-07-16T20:20:21Z",
+          "is_settlement": true,
+          "block_number": "48721937",
+          "log_index": "808",
+          "solver_base_units": "100000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "110000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0x377ebd1eb8fea9e22f4a7d08ceab9199699d2346",
+          "bounty_id": "0xeb31e971b3c2c4322d7b6dd8ff2c608f320a4c35537fca9d52d825093bf006e2",
+          "tx_hash": "0x65ad6d2faa353b5fb424e5dfe82c2ee769a901e1a647faf9df20f3f9034441e1",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-07-16T14:03:35Z",
+          "is_settlement": true,
+          "block_number": "48710634",
+          "log_index": "82",
+          "solver_base_units": "100000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "110000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0x9a03c923059a6931163c73eb438557a5068ce46c",
+          "bounty_id": "0xda08c57cc28ac7749c2296725a51ed596ac9d4a13ecf43b4ea2097fa9299d2c5",
+          "tx_hash": "0x2d2533294ccc2cc3fd5c56d6e83a414fb85df3273fcb4232e0cf2ca8a959a195",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-07-16T10:59:45Z",
+          "is_settlement": true,
+          "block_number": "48705119",
+          "log_index": "60",
+          "solver_base_units": "100000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "110000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0xcb4fafd31ee984d4d864e18014110a20b02ae2bd",
+          "bounty_id": "0xd6f93eab2011e5fd3a694be99f6462b220ed4b104ac63fd249cffda93a48da9a",
+          "tx_hash": "0xee62cd3d411cf93b2fd2c6d8028e4d2488f996311af0fb88a21072efe48d6cac",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-07-16T08:02:13Z",
+          "is_settlement": true,
+          "block_number": "48699793",
+          "log_index": "172",
+          "solver_base_units": "100000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "110000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0x47ff67e7b2cc5f839876b2ef6a2d02a017cc4781",
+          "bounty_id": "0x41b72cb3fd2e0224b8a74a9d6dd0aed06dacca2b7370fdd6c04e3e0e86d80f9f",
+          "tx_hash": "0x14a9154d26936303c0c94321a827f673c3021a3dbd7029877725304740d82158",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-07-16T06:28:17Z",
+          "is_settlement": true,
+          "block_number": "48696975",
+          "log_index": "224",
+          "solver_base_units": "2000000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "10000",
+          "total_base_units": "2020000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0xffe2d12022bf9cae5e81ee4aef665da42472f9e1",
+          "bounty_id": "0x35cab26705660d7d65c86ec25d4a9a1fbc6fc317ff3e5fc94e03b5f3bd82ac54",
+          "tx_hash": "0x81429a2ff6debb1737fbf398f6c8b64f9db60a7f8ff3bd2fb98201c0d74aad29",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-07-16T06:11:03Z",
+          "is_settlement": true,
+          "block_number": "48696458",
+          "log_index": "178",
+          "solver_base_units": "2000000",
+          "verifier_base_units": "10000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "10000",
+          "total_base_units": "2020000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0xafac1296f884373b8362df88db6d75c997bc79d2",
+          "bounty_id": "0x687cbb2519e509df727f7491ecb3a9d186d6528a482bac337124a521fd0e6630",
+          "tx_hash": "0x67f0262a232f5f0bbb3e2eedac48676b7a018e5c46ec2b885912c92a5473da27",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-07-14T03:33:43Z",
+          "is_settlement": true,
+          "block_number": "48605338",
+          "log_index": "126",
+          "solver_base_units": "900000",
+          "verifier_base_units": "100000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "1000000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0x79c4f4c6281de38b97217806e13aea8e43d72ee2",
+          "bounty_id": "0xb946503203441630331e906efaa782c47552d825a51ebf82c3b2ab08efb960b5",
+          "tx_hash": "0x5f1e1dae4412694120dd4029137cb0bb1ee06a5dfef7119ee9acac012e81190d",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-07-14T03:33:33Z",
+          "is_settlement": true,
+          "block_number": "48605333",
+          "log_index": "383",
+          "solver_base_units": "800000",
+          "verifier_base_units": "100000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "900000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0x0e919fd268ce865fc8e434022a2c7d410d26afae",
+          "bounty_id": "0xc8639e6246dd69888ef49b9bf1d523a0d1c948631159a83e49a75a1714f0ba5d",
+          "tx_hash": "0xa197ef03dcb6c4d1816eaec66da6709b224118ee698ebc5a5a58e200767552f9",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-07-14T03:32:55Z",
+          "is_settlement": true,
+          "block_number": "48605314",
+          "log_index": "141",
+          "solver_base_units": "900000",
+          "verifier_base_units": "100000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "1000000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0xd4539c6ce63ffa3dbf41f7b347b54dee609abd4b",
+          "bounty_id": "0x8f282258cb5d08997a9641ca350b024d6c318076048b43a87e70a8d27ade4de7",
+          "tx_hash": "0xc3466a0c22886579900b6fa3cc04757c30c429d5c6c79a8b78f18ee1f914b06c",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-07-14T03:32:45Z",
+          "is_settlement": true,
+          "block_number": "48605309",
+          "log_index": "394",
+          "solver_base_units": "800000",
+          "verifier_base_units": "100000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "900000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0x4340ec8281a5fe9628a504d2de2115345b516cea",
+          "bounty_id": "0x74c85776463c5498f8ddec328791499794fbd93744c14e49a21c843991717fe2",
+          "tx_hash": "0x57b5259c997da08341cd76cd66a15bc727f0f73509e23f5241832a8b3818272b",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-07-14T03:29:35Z",
+          "is_settlement": true,
+          "block_number": "48605214",
+          "log_index": "258",
+          "solver_base_units": "900000",
+          "verifier_base_units": "100000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "1000000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0xc255141ac175d999149b099e3a153d0ce1e548fb",
+          "bounty_id": "0x1be2fd64745bf49ae0583d54b1b2c1f4f17eb9bda0cd754b656c6e619228e8fc",
+          "tx_hash": "0xaca5332cd73f0ee8272b6420e7b7a05d86ea478dd8d442f6e82b0cb837520a42",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-07-14T03:29:27Z",
+          "is_settlement": true,
+          "block_number": "48605210",
+          "log_index": "112",
+          "solver_base_units": "900000",
+          "verifier_base_units": "100000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "1000000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0xafac1296f884373b8362df88db6d75c997bc79d2",
+          "bounty_id": "0x687cbb2519e509df727f7491ecb3a9d186d6528a482bac337124a521fd0e6630",
+          "tx_hash": "0x4b4270ac18e4a7381ee2db28b61b4d58697b4ac655d45d9b800d05dfd15eab76",
+          "kind": "submission_rejected",
+          "occurred_at": "2026-07-14T03:18:47Z",
+          "is_settlement": false,
+          "block_number": "48604890",
+          "log_index": "218",
+          "solver_base_units": "0",
+          "verifier_base_units": "100000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "100000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0xf0ffe1c6aaf0ad437e5cf3944fff7bc8b8a1fd88",
+          "bounty_id": "0xf8673d5c26962969ea1343cbab2d135a00abeae15f10b7ee9cb2014b09d4e57b",
+          "tx_hash": "0x6ae4bc5ebd2bf0411b3906f17013e8a237e25ca93736edc482c6d758a0500897",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-07-14T03:18:25Z",
+          "is_settlement": true,
+          "block_number": "48604879",
+          "log_index": "381",
+          "solver_base_units": "800000",
+          "verifier_base_units": "100000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "900000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0xc003cd82625fd04741894f35673a26db8a1f4437",
+          "bounty_id": "0x051117b7e4b2804155c40a3ea5b575c002e82a6ef0f916c5a0b8e06a00981225",
+          "tx_hash": "0xc6ee21caa2069bd0e2094e1d98db093c089e8391ec6285b06ac38a9d454cd9d9",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-07-14T03:02:23Z",
+          "is_settlement": true,
+          "block_number": "48604398",
+          "log_index": "342",
+          "solver_base_units": "900000",
+          "verifier_base_units": "100000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "1000000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0x0efa24e275bd0ff8ed65f7dd6340b6421038be40",
+          "bounty_id": "0xd6d500c7ccd2cdc3d8c974e6688494f41cd6f9f317110fddafe90f0506011359",
+          "tx_hash": "0x0aeec74596012d4932ec6163054c94e0a70349b78b3a334a1b402a579608a313",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-07-14T03:02:13Z",
+          "is_settlement": true,
+          "block_number": "48604393",
+          "log_index": "524",
+          "solver_base_units": "800000",
+          "verifier_base_units": "100000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "900000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0xc003cd82625fd04741894f35673a26db8a1f4437",
+          "bounty_id": "0x051117b7e4b2804155c40a3ea5b575c002e82a6ef0f916c5a0b8e06a00981225",
+          "tx_hash": "0xa05957bf957175dd0addab8a980f0a3aff96520c9b939414c144fd4b441c7aea",
+          "kind": "submission_rejected",
+          "occurred_at": "2026-07-14T03:00:13Z",
+          "is_settlement": false,
+          "block_number": "48604333",
+          "log_index": "117",
+          "solver_base_units": "0",
+          "verifier_base_units": "100000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "100000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0x9ee536460519e098f9cc8b3e33adf801f168f867",
+          "bounty_id": "0xc898feb626186bfa292fef8e99c0741a55ba3fade3c54dfea4701f8542e9bc5c",
+          "tx_hash": "0x38c5a0ca167eaa7a6d1a244022efa546a12b7eae405120aa74361ec1312afe5b",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-07-14T02:59:17Z",
+          "is_settlement": true,
+          "block_number": "48604305",
+          "log_index": "231",
+          "solver_base_units": "800000",
+          "verifier_base_units": "100000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "900000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0x9ee536460519e098f9cc8b3e33adf801f168f867",
+          "bounty_id": "0xc898feb626186bfa292fef8e99c0741a55ba3fade3c54dfea4701f8542e9bc5c",
+          "tx_hash": "0xc79a75188a6d60ab03b0fc3349968aa797c8374320173ed31e22671af9cc7c9a",
+          "kind": "submission_rejected",
+          "occurred_at": "2026-07-14T02:57:01Z",
+          "is_settlement": false,
+          "block_number": "48604237",
+          "log_index": "119",
+          "solver_base_units": "0",
+          "verifier_base_units": "100000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "100000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0xc003cd82625fd04741894f35673a26db8a1f4437",
+          "bounty_id": "0x051117b7e4b2804155c40a3ea5b575c002e82a6ef0f916c5a0b8e06a00981225",
+          "tx_hash": "0x8f1fe8bbbe77a65439e030448d2d70b6d8c5ba0761e0a8a6216b4b7ffa6602cf",
+          "kind": "submission_rejected",
+          "occurred_at": "2026-07-14T02:50:37Z",
+          "is_settlement": false,
+          "block_number": "48604045",
+          "log_index": "379",
+          "solver_base_units": "0",
+          "verifier_base_units": "100000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "100000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0x9ee536460519e098f9cc8b3e33adf801f168f867",
+          "bounty_id": "0xc898feb626186bfa292fef8e99c0741a55ba3fade3c54dfea4701f8542e9bc5c",
+          "tx_hash": "0xc3cadb618a98ba6e4f356da4ff609fd2cd334b9d72c047f29a3a333826423a50",
+          "kind": "submission_rejected",
+          "occurred_at": "2026-07-14T02:50:19Z",
+          "is_settlement": false,
+          "block_number": "48604036",
+          "log_index": "197",
+          "solver_base_units": "0",
+          "verifier_base_units": "100000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "100000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0xc003cd82625fd04741894f35673a26db8a1f4437",
+          "bounty_id": "0x051117b7e4b2804155c40a3ea5b575c002e82a6ef0f916c5a0b8e06a00981225",
+          "tx_hash": "0x0791c0bcadef1562128d2383a75ca02bf3cf51c6fcf3d85cf12285c8afc79137",
+          "kind": "submission_rejected",
+          "occurred_at": "2026-07-14T02:42:55Z",
+          "is_settlement": false,
+          "block_number": "48603814",
+          "log_index": "125",
+          "solver_base_units": "0",
+          "verifier_base_units": "100000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "100000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0x9ee536460519e098f9cc8b3e33adf801f168f867",
+          "bounty_id": "0xc898feb626186bfa292fef8e99c0741a55ba3fade3c54dfea4701f8542e9bc5c",
+          "tx_hash": "0x456d7703f0b19d8e8cb8f7350ae91bd48145ec7437b056754bf0f5205c02e123",
+          "kind": "submission_rejected",
+          "occurred_at": "2026-07-14T02:42:17Z",
+          "is_settlement": false,
+          "block_number": "48603795",
+          "log_index": "195",
+          "solver_base_units": "0",
+          "verifier_base_units": "100000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "100000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0xd3052644a454ebfe1d8ec665d96a51770a1c89ca",
+          "bounty_id": "0x640aa4c5e070e24f53108cb27aa40d477f9e8e3ccf4d3438addb1e91f96a7d10",
+          "tx_hash": "0x693290575ef3ec1f319b7503ff0a6f3eda92a9005fafb4a23d36433074f5fc2a",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-07-14T02:00:41Z",
+          "is_settlement": true,
+          "block_number": "48602547",
+          "log_index": "668",
+          "solver_base_units": "800000",
+          "verifier_base_units": "100000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "900000"
+        },
+        {
+          "protocol": "autonomous-v1",
+          "network": "base-mainnet",
+          "factory_contract": null,
+          "contract_address": "0xfb3439ef4e2e5c7635f5946d3e78b521e681a2e4",
+          "bounty_id": "0x7624384505d8848747423241cced57e57f31a4cd2a9b93e0e59f72fc141bda93",
+          "tx_hash": "0xa3e7336ec8ace33d4704872fa53c9d37e84362ff9d338f3bcf88e187fa122640",
+          "kind": "bounty_settled",
+          "occurred_at": "2026-07-14T01:54:23Z",
+          "is_settlement": true,
+          "block_number": "48602358",
+          "log_index": "94",
+          "solver_base_units": "800000",
+          "verifier_base_units": "100000",
+          "keeper_base_units": "0",
+          "bonus_base_units": "0",
+          "total_base_units": "900000"
+        }
+      ],
+      "coverage": "indexed_history_only"
+    }
+  ]
+}

@@ -165,7 +165,9 @@
     "objective_action_plan": "https://api.agentbounties.app/v1/objectives/{objective_id}/action-plans",
     "objective_action_apply": "https://api.agentbounties.app/v1/objectives/{objective_id}/actions",
     "objective_reconcile": "https://api.agentbounties.app/v1/objectives/{objective_id}/reconcile",
-    "objective_coordination_guide": "https://github.com/NSPG13/agent-bounties/blob/main/docs/objective-coordination.md"
+    "objective_coordination_guide": "https://github.com/NSPG13/agent-bounties/blob/main/docs/objective-coordination.md",
+    "platform_metrics": "https://api.agentbounties.app/v1/metrics/platform",
+    "platform_payout_proof": "https://api.agentbounties.app/v1/metrics/platform/payouts"
   },
   "agent_tools": [
     "get_bounty_feed",

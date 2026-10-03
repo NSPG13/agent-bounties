@@ -199,6 +199,7 @@ REQUIRED_FILES = {
     "metrics.css",
     "metrics.html",
     "metrics.js",
+    "payout-proof.js",
     "marketplace.css",
     "marketplace.js",
     "moonpay-direct-fallback.js",
@@ -311,6 +312,7 @@ ALLOWED_UI_CODE = {
     "legal-consent.js",
     "metrics.css",
     "metrics.js",
+    "payout-proof.js",
     "marketplace.css",
     "marketplace.js",
     "moonpay-direct-fallback.js",
@@ -774,7 +776,7 @@ def check_metrics(site_dir: Path) -> None:
             "Claim completion rate",
             "Counts are external requests, not unique people, agents, clients, or sessions",
             "Verify every payout",
-            "Excluded test payments",
+            "Excluded payment amounts",
             "Discovery data",
             "Visits from ChatGPT",
             "GitHub unique cloners",
@@ -1425,6 +1427,7 @@ def main() -> int:
         str(repo_root / "scripts/test-builder-review.cjs"),
         str(repo_root / "scripts/test-contribution-consumer.cjs"),
         str(repo_root / "scripts/test-work-history.cjs"),
+        str(repo_root / "scripts/test-payout-proof.cjs"),
     ], check=True)
     for relative in sorted(REQUIRED_FILES | EXPECTED_SCENE_ASSETS):
         if not (site_dir / relative).exists():

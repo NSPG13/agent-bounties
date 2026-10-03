@@ -5,6 +5,7 @@ mod distribution;
 mod github_discovery;
 mod open_competition_v2_api;
 mod opportunities;
+mod platform_payouts;
 mod site_auth;
 
 use app::{
@@ -220,6 +221,7 @@ use worker::{
         record_site_analytics_event,
         site_analytics,
         platform_metrics,
+        platform_payouts::platform_payouts,
         discoverability::ingest_snapshots,
         discoverability::operator_report,
         discoverability::public_summary,
@@ -474,6 +476,10 @@ use worker::{
         ,InterfaceUsageResponse
         ,SiteAnalyticsRateResponse
         ,SiteAnalyticsResponse
+        ,platform_payouts::PayoutProofMetadata
+        ,platform_payouts::PayoutProofRecord
+        ,platform_payouts::PayoutProofResponse
+        ,platform_payouts::PayoutProofError
         ,PlatformMetricsResponse
         ,PlatformMetricsWindowResponse
         ,PlatformIdentityMetricsResponse
@@ -1645,6 +1651,7 @@ struct SiteAnalyticsResponse {
 #[derive(Debug, Clone, Deserialize)]
 struct PlatformMetricsQuery {
     period: Option<String>,
+    as_of: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1782,6 +1789,7 @@ struct PlatformMetricsResponse {
     window: PlatformMetricsWindowResponse,
     platform_active_identities: PlatformIdentityMetricsResponse,
     marketplace_payout_volume: PlatformPayoutMetricsResponse,
+    payout_proof: platform_payouts::PayoutProofMetadata,
     mature_claim_to_settlement: PlatformClaimCohortResponse,
     current_inventory: PlatformInventoryResponse,
     demand_growth: PlatformDemandGrowthResponse,
@@ -2339,6 +2347,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/analytics/events", post(record_site_analytics_event))
         .route("/v1/analytics/site", get(site_analytics))
         .route("/v1/metrics/platform", get(platform_metrics))
+        .route(
+            "/v1/metrics/platform/payouts",
+            get(platform_payouts::platform_payouts),
+        )
         .route(
             "/public/opportunities/:opportunity_id/embed",
             get(opportunity_embed_page),
@@ -5945,7 +5957,8 @@ fn platform_metrics_response(
     Ok(PlatformMetricsResponse {
         schema_version: "agent-bounties/platform-metrics-v3".to_string(),
         network: "base-mainnet".to_string(),
-        generated_at: stats.generated_at.to_rfc3339(),
+        generated_at: Utc::now().to_rfc3339(),
+        payout_proof: platform_payouts::metadata(&window, stats.payout_proof_snapshot.clone()),
         window: PlatformMetricsWindowResponse {
             period: window.period,
             started_at: window.started_at.to_rfc3339(),
@@ -6132,7 +6145,8 @@ async fn platform_canonical_source_freshness(
 #[utoipa::path(
     get,
     path = "/v1/metrics/platform",
-    params(("period" = Option<String>, Query, description = "Reporting window: 7d, 28d, 90d, or lifetime; defaults to 7d")),
+    params(("period" = Option<String>, Query, description = "Reporting window: 7d, 28d, 90d, or lifetime; defaults to 7d"),
+        ("as_of" = Option<String>, Query, description = "Optional RFC3339 exclusive reporting cutoff between launch and now")),
     responses(
         (status = 200, body = PlatformMetricsResponse),
         (status = 400, description = "Unknown reporting period"),
@@ -6147,7 +6161,10 @@ async fn platform_metrics(
         .store
         .as_ref()
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-    let window = platform_metric_window(query.period.as_deref(), Utc::now())?;
+    let window = platform_metric_window(
+        query.period.as_deref(),
+        platform_payouts::cutoff(query.as_of.as_deref(), Utc::now())?,
+    )?;
     let policy = public_metrics_policy()?;
     // Historical metrics are immutable once their canonical events are verified.
     // Recovery reservations only protect current earning inventory; the public
@@ -6177,7 +6194,7 @@ async fn platform_metrics(
         )
         .await
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-    let source_freshness = platform_canonical_source_freshness(&state, stats.generated_at).await;
+    let source_freshness = platform_canonical_source_freshness(&state, Utc::now()).await;
     let autonomous_inventory = if source_freshness.autonomous {
         match load_verified_autonomous_bounty_feed(&state, "base-mainnet", true).await {
             Ok(feed) => build_autonomous_inventory_summary(&state, "base-mainnet", feed).ok(),
@@ -20753,6 +20770,7 @@ mod tests {
     fn platform_metrics_response_is_aggregate_only_and_preserves_payment_math() {
         let generated_at = parse_public_metrics_timestamp("2026-08-12T20:22:19Z").unwrap();
         let stats = PlatformMetricsStats {
+            payout_proof_snapshot: None,
             generated_at,
             identities: PlatformIdentityStats {
                 selected: 4,
@@ -20933,6 +20951,7 @@ mod tests {
         assert_eq!(
             platform_metrics_response(
                 PlatformMetricsStats {
+                    payout_proof_snapshot: None,
                     generated_at: parse_public_metrics_timestamp("2026-08-12T20:22:19Z").unwrap(),
                     identities: PlatformIdentityStats {
                         selected: 0,
@@ -21022,6 +21041,12 @@ mod tests {
         let paths = value["paths"].as_object().unwrap();
 
         assert!(paths.contains_key("/v1/route-blocked-goal"));
+        assert!(paths.contains_key("/v1/metrics/platform/payouts"));
+        assert_eq!(
+            value["components"]["schemas"]["PayoutProofRecord"]["properties"]["total_base_units"]
+                ["type"],
+            "string"
+        );
         assert!(paths.contains_key("/.well-known/agent-card.json"));
         assert!(paths.contains_key("/a2a/v1/message:send"));
         assert!(paths.contains_key("/a2a/v1/tasks"));

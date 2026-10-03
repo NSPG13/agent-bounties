@@ -1,10 +1,10 @@
 (function (root, factory) {
   "use strict";
-  const api = factory();
+  const api = factory(typeof module === "object" && module.exports ? require("./payout-proof.js") : root.AgentBountiesPayoutProof);
   if (typeof module === "object" && module.exports) module.exports = api;
   if (root) root.AgentBountiesMetrics = api;
   if (root && root.document) api.start(root, root.document);
-})(typeof window !== "undefined" ? window : globalThis, function () {
+})(typeof window !== "undefined" ? window : globalThis, function (historicalProof) {
   "use strict";
 
   const PLATFORM_URL = "https://api.agentbounties.app/v1/metrics/platform";
@@ -540,6 +540,8 @@
     const state = {
       period: "lifetime",
       platform: null,
+      proofPages: null,
+      proofGeneration: 0,
       autonomousEvents: null,
       competitionEvents: null,
       competitionV2Events: null,
@@ -581,24 +583,20 @@
       }
       setText("[data-audit-total]", audit.status === "unavailable"
         ? "—"
-        : formatUsdc(audit.summary.total_base_units / USDC_SCALE));
+        : historicalProof.formatAmount(audit.summary.total_base_units));
       setText("[data-audit-settlements]", audit.status === "unavailable"
         ? "—"
         : formatInteger(audit.summary.settlement_events));
       setText("[data-audit-payout-events]", audit.status === "unavailable"
         ? "—"
         : formatInteger(audit.summary.payout_events));
-      setText("[data-audit-excluded-events]", audit.status === "unavailable"
-        ? "—"
-        : formatInteger(audit.excluded_summary.payout_events));
-      setText("[data-audit-excluded-volume]", audit.status === "unavailable"
-        ? "—"
-        : formatUsdc(audit.excluded_summary.total_base_units / USDC_SCALE, { maximumFractionDigits: 6 }));
+      setText("[data-audit-excluded-events]", audit.status === "unavailable" ? "—" : formatInteger(audit.excluded_contracts.length));
+      setText("[data-audit-excluded-volume]", audit.status === "unavailable" ? "—" : "Not enumerated");
       setText("[data-audit-copy]", audit.status === "ready"
-        ? "The independent event sum exactly matches the headline payout and settlement count for this period."
+        ? "Historical records exactly match the selected headline components, settlement count and daily totals. Indexer freshness and participation coverage remain separate checks."
         : audit.status === "partial"
-          ? "The public event sum does not match the aggregate yet. Treat the headline as partial while indexing catches up."
-          : "A canonical event source or the public metrics policy is unavailable or malformed. No unverifiable replacement is shown.");
+          ? "Historical proof does not match the selected totals. Treat payment checks as partial; refresh to obtain one new reporting snapshot."
+          : `Historical payout proof is unavailable: ${audit.reason || "source could not be checked"}. No missing value is replaced with zero.`);
 
       const body = one("[data-audit-rows]");
       if (!body) return;
@@ -636,7 +634,7 @@
         contract.append(contractCode, bountyCode);
 
         const payout = doc.createElement("td");
-        payout.textContent = formatUsdc(row.total_base_units / USDC_SCALE);
+        payout.textContent = historicalProof.formatAmount(row.total_base_units);
 
         const proof = doc.createElement("td");
         const explorer = doc.createElement("a");
@@ -649,8 +647,8 @@
         raw.href = row.api_url;
         raw.target = "_blank";
         raw.rel = "noopener noreferrer";
-        raw.textContent = "Raw events";
-        raw.title = `Open canonical event records for ${row.bounty_id}`;
+        raw.textContent = "Proof JSON";
+        raw.title = `Open the historical proof page containing ${row.tx_hash}`;
         proof.append(explorer, raw);
         tr.append(when, event, contract, payout, proof);
         body.appendChild(tr);
@@ -804,7 +802,7 @@
       target.replaceChildren();
       const sources = [
         ["Marketplace events", merged.platform_status, state.platform?.generated_at, "Confirmed canonical Base events with verified block time."],
-        ["Payout proof ledger", audit.status, audit.generated_at, "Every qualifying payout event is summed in the browser and linked to its raw record and Base transaction."],
+        ["Payout proof ledger", audit.status, audit.generated_at, "Bounded historical proof pages share the headline window and policy; browser sums match components and daily totals. Chain freshness is separate."],
         ["External interface usage", interfaceUsage.status, state.acquisition?.generated_at, "Hourly external API, CLI, and MCP request aggregates; verified operator traffic is omitted."],
         ["GitHub participation", merged.github_status, state.github?.generated_at, "Hourly aggregate of external issues, pull requests, comments, and reviews."],
         ["Repository acquisition", repositoryStatus, state.github?.repository_acquisition?.generated_at, "GitHub clone and page-view aggregates for its rolling 14-day traffic window."],
@@ -852,13 +850,8 @@
         now,
         GITHUB_DELAY_MS,
       );
-      const audit = payoutAuditSnapshot(
-        platform,
-        state.autonomousEvents,
-        state.competitionEvents,
-        state.competitionV2Events,
-        state.publicMetricsPolicy,
-      );
+      const audit = historicalProof.audit(platform, state.proofPages);
+      if (audit.status === "unavailable" && state.errors.platformProof) audit.reason = state.errors.platformProof.message;
       const interfaceSummary = interfaceUsageSummary(state.acquisition);
       const interfaceUsage = interfaceSummary.status === "unavailable"
         ? interfaceSummary
@@ -993,50 +986,19 @@
     }
 
     async function refreshPlatform() {
-      const [platformResult, autonomousResult, competitionResult, competitionV2Result, policyResult] = await Promise.allSettled([
-        requestJson(`${PLATFORM_URL}?period=${encodeURIComponent(state.period)}`),
-        requestJson(AUTONOMOUS_EVENTS_URL),
-        requestJson(COMPETITION_EVENTS_URL),
-        requestJson(COMPETITION_V2_EVENTS_URL),
-        requestJson(`${PUBLIC_METRICS_POLICY_URL}?v=${Date.now()}`),
-      ]);
-      if (platformResult.status === "fulfilled") {
-        state.platform = platformResult.value;
-        delete state.errors.platform;
-      } else {
-        state.errors.platform = platformResult.reason;
-        state.platform = null;
-      }
-      if (autonomousResult.status === "fulfilled") {
-        state.autonomousEvents = autonomousResult.value;
-        delete state.errors.autonomousEvents;
-      } else {
-        state.autonomousEvents = null;
-        state.errors.autonomousEvents = autonomousResult.reason;
-      }
-      if (competitionResult.status === "fulfilled") {
-        state.competitionEvents = competitionResult.value;
-        delete state.errors.competitionEvents;
-      } else {
-        state.competitionEvents = null;
-        state.errors.competitionEvents = competitionResult.reason;
-      }
-      if (competitionV2Result.status === "fulfilled") {
-        state.competitionV2Events = competitionV2Result.value;
-        delete state.errors.competitionV2Events;
-      } else {
-        state.competitionV2Events = null;
-        state.errors.competitionV2Events = competitionV2Result.reason;
-      }
-      if (policyResult.status === "fulfilled" && normalizedPublicMetricsPolicy(policyResult.value)) {
-        state.publicMetricsPolicy = policyResult.value;
-        delete state.errors.publicMetricsPolicy;
-      } else {
-        state.publicMetricsPolicy = null;
-        state.errors.publicMetricsPolicy = policyResult.status === "fulfilled"
-          ? new Error("Malformed public metrics policy")
-          : policyResult.reason;
-      }
+      const generation = ++state.proofGeneration;
+      const period = state.period;
+      let platform = null, pages = null, failure = null;
+      try {
+        platform = await historicalProof.requestJson(win.fetch.bind(win), `${PLATFORM_URL}?period=${encodeURIComponent(period)}`);
+        pages = await historicalProof.loadPages(platform, win.fetch.bind(win));
+      } catch (error) { failure = error; }
+      // Period changes and overlapping refreshes cannot mix old proof with a new headline.
+      if (generation !== state.proofGeneration || period !== state.period) return;
+      state.platform = platform;
+      state.proofPages = pages;
+      if (failure) state.errors.platformProof = failure;
+      else delete state.errors.platformProof;
       render();
     }
 

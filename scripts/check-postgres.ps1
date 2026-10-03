@@ -37,6 +37,9 @@ try {
             cargo test -p db tests::platform_metrics_query_separates_history_from_identity_and_cohort_boundaries -- --ignored --exact --nocapture
         }
         Invoke-Checked {
+            cargo test -p api platform_payouts::tests::platform_payout_http_replays_real_database_selection -- --ignored --exact --nocapture
+        }
+        Invoke-Checked {
             cargo test -p db tests::opportunity_comment_round_trip_is_durable_and_idempotent -- --ignored --exact --nocapture
         }
         Invoke-Checked {
