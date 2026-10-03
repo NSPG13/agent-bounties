@@ -26,6 +26,8 @@ contract AgentBountyFactoryV2 {
         address verifierModule;
         address verifierRewardRecipient;
         uint8 threshold;
+        address claimEligibilityRegistry;
+        bytes32 claimEligibilitySource;
     }
 
     struct FundingAuthorization {
@@ -68,6 +70,9 @@ contract AgentBountyFactoryV2 {
     );
     event CanonicalBountyPlatformFeeConfigured(
         bytes32 indexed bountyId, uint16 platformFeeBps, uint256 platformFee, address indexed platformFeeRecipient
+    );
+    event CanonicalBountyClaimEligibilityConfigured(
+        bytes32 indexed bountyId, address indexed claimEligibilityRegistry, bytes32 claimEligibilitySource
     );
     event CanonicalBountyVerificationConfigured(
         bytes32 indexed bountyId,
@@ -225,6 +230,11 @@ contract AgentBountyFactoryV2 {
             params.verificationWindowSeconds
         );
         emit CanonicalBountyPlatformFeeConfigured(bountyId, platformFeeBps, platformFee, platformFeeRecipient);
+        if (params.claimEligibilityRegistry != address(0)) {
+            emit CanonicalBountyClaimEligibilityConfigured(
+                bountyId, params.claimEligibilityRegistry, params.claimEligibilitySource
+            );
+        }
         emit CanonicalBountyVerificationConfigured(
             bountyId,
             params.verificationMode,
@@ -268,7 +278,9 @@ contract AgentBountyFactoryV2 {
             verifierRewardRecipient: params.verifierRewardRecipient,
             threshold: params.threshold,
             platformFeeBps: platformFeeBps,
-            platformFeeRecipient: platformFeeRecipient
+            platformFeeRecipient: platformFeeRecipient,
+            claimEligibilityRegistry: params.claimEligibilityRegistry,
+            claimEligibilitySource: params.claimEligibilitySource
         });
         isCanonicalBounty[bountyAddress] = true;
         bounty.initialize(config, verifiers);

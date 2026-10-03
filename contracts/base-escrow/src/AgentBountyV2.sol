@@ -13,8 +13,9 @@ function agentBountyV2PlatformFee(uint256 solverReward, uint16 platformFeeBps) p
 
 /// @notice A single, immutable-policy digital bounty with autonomous settlement and
 /// an explicit platform fee. The poster funds `solverReward + verifierReward + platformFee`.
-/// The fee stays escrowed through reject and timeout paths, accrues only on settlement,
-/// and is refunded with contributor principal on cancellation.
+/// The fee stays escrowed through reject and timeout paths, is paid only at settlement,
+/// and is refunded with contributor principal on cancellation. An optional eligibility
+/// registry restricts which solver wallets may claim.
 contract AgentBountyV2 is IAgentBountyV2 {
     using SafeBountyToken for address;
 
@@ -74,6 +75,8 @@ contract AgentBountyV2 is IAgentBountyV2 {
         uint8 threshold;
         uint16 platformFeeBps;
         address platformFeeRecipient;
+        address claimEligibilityRegistry;
+        bytes32 claimEligibilitySource;
     }
 
     struct Attestation {
@@ -108,6 +111,8 @@ contract AgentBountyV2 is IAgentBountyV2 {
     uint256 public override platformFee;
     address public override platformFeeRecipient;
     uint256 public override platformFeeAccrued;
+    address public override claimEligibilityRegistry;
+    bytes32 public override claimEligibilitySource;
 
     uint256 public override fundedAmount;
     BountyStatus private _status;
@@ -193,7 +198,10 @@ contract AgentBountyV2 is IAgentBountyV2 {
         uint256 timeoutBondBonus,
         uint256 amount
     );
-    event PlatformFeeAccrued(
+    event PlatformFeePaid(
+        bytes32 indexed bountyId, uint64 indexed round, address indexed platformFeeRecipient, uint256 platformFee
+    );
+    event PlatformFeeDeferred(
         bytes32 indexed bountyId, uint64 indexed round, address indexed platformFeeRecipient, uint256 platformFee
     );
     event PlatformFeeWithdrawn(bytes32 indexed bountyId, address indexed platformFeeRecipient, uint256 amount);
@@ -224,6 +232,14 @@ contract AgentBountyV2 is IAgentBountyV2 {
         require(config.platformFeeBps <= AGENT_BOUNTY_V2_MAX_PLATFORM_FEE_BPS, "platform fee too high");
         require(
             (config.platformFeeBps == 0) == (config.platformFeeRecipient == address(0)), "bad platform fee recipient"
+        );
+        require(
+            (config.claimEligibilityRegistry == address(0)) == (config.claimEligibilitySource == bytes32(0)),
+            "bad claim eligibility"
+        );
+        require(
+            config.claimEligibilityRegistry == address(0) || config.claimEligibilityRegistry.code.length > 0,
+            "eligibility registry has no code"
         );
         uint256 platformFee_ = agentBountyV2PlatformFee(config.solverReward, config.platformFeeBps);
         require(config.solverReward + config.verifierReward + platformFee_ <= type(uint64).max, "target too large");
@@ -269,6 +285,8 @@ contract AgentBountyV2 is IAgentBountyV2 {
         platformFeeBps = config.platformFeeBps;
         platformFee = platformFee_;
         platformFeeRecipient = config.platformFeeRecipient;
+        claimEligibilityRegistry = config.claimEligibilityRegistry;
+        claimEligibilitySource = config.claimEligibilitySource;
         targetAmount = config.solverReward + config.verifierReward + platformFee_;
         termsHash = config.termsHash;
         policyHash = config.policyHash;
@@ -315,8 +333,8 @@ contract AgentBountyV2 is IAgentBountyV2 {
             || interfaceId == type(IERC165).interfaceId;
     }
 
-    /// @notice Anyone may push an accrued fee to the fixed recipient. Pulling keeps a
-    /// blocked or blacklisted recipient from ever blocking solver or verifier payment.
+    /// @notice Anyone may forward a fee whose settlement-time transfer failed. The destination
+    /// is the fixed recipient, so the caller chooses only when the retry happens.
     function withdrawPlatformFee() external override nonReentrant returns (uint256 amount) {
         amount = platformFeeAccrued;
         require(amount > 0, "no platform fee");
@@ -606,6 +624,11 @@ contract AgentBountyV2 is IAgentBountyV2 {
         require(solver_ != address(0), "solver zero");
         require(solver_ != creator, "creator cannot solve");
         require(activeClaimBond == 0, "claim bond active");
+        if (claimEligibilityRegistry != address(0)) {
+            (, bytes32 sourceHash, bool eligible) = IParticipantEligibilityRegistryV1(claimEligibilityRegistry)
+                .eligibleAt(solver_, uint64(block.timestamp) + 1);
+            require(eligible && sourceHash == claimEligibilitySource, "solver not eligible");
+        }
     }
 
     function _collectClaimBondFrom(address solver_) private {
@@ -652,8 +675,7 @@ contract AgentBountyV2 is IAgentBountyV2 {
 
         settlementToken.safeTransfer(solver, solverReward + returnedBond + timeoutBonus);
         _payVerifierReward(verifierRecipients);
-
-        if (platformFee > 0) emit PlatformFeeAccrued(bountyId, round, platformFeeRecipient, platformFee);
+        _payPlatformFee();
         emit BountySettled(
             bountyId,
             round,
@@ -690,6 +712,21 @@ contract AgentBountyV2 is IAgentBountyV2 {
             for (uint256 i = 0; i < verifierRecipients.length; i++) {
                 settlementToken.safeTransfer(verifierRecipients[i], share);
             }
+        }
+    }
+
+    /// @dev Pays the fee at settlement. A failed transfer leaves it escrowed for
+    /// `withdrawPlatformFee` instead of reverting the solver and verifier payout.
+    function _payPlatformFee() private {
+        uint256 fee = platformFeeAccrued;
+        if (fee == 0) return;
+        (bool ok, bytes memory result) =
+            settlementToken.call(abi.encodeCall(IERC20BountyToken.transfer, (platformFeeRecipient, fee)));
+        if (ok && (result.length == 0 || (result.length == 32 && abi.decode(result, (bool))))) {
+            platformFeeAccrued = 0;
+            emit PlatformFeePaid(bountyId, round, platformFeeRecipient, fee);
+        } else {
+            emit PlatformFeeDeferred(bountyId, round, platformFeeRecipient, fee);
         }
     }
 
