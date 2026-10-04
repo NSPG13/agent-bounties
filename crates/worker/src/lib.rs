@@ -663,6 +663,8 @@ pub async fn poll_autonomous_indexer_once(
                     | AutonomousBountyEventKind::CanonicalBountyEconomicsConfigured
                     | AutonomousBountyEventKind::CanonicalBountyVerificationConfigured
                     | AutonomousBountyEventKind::ExternalBountySubmitted
+                    | AutonomousBountyEventKind::CanonicalBountyPlatformFeeConfigured
+                    | AutonomousBountyEventKind::CanonicalBountyClaimEligibilityConfigured
             )
     }) {
         return Err(anyhow!(

@@ -1068,6 +1068,9 @@ mod tests {
             verification_ready: true,
             verification_readiness_reason: "ready".to_string(),
             validation_errors: vec![],
+            protocol_version: None,
+            platform_fee: None,
+            claim_eligibility: None,
             events,
         }
     }

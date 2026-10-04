@@ -511,6 +511,74 @@ The public feed accepts a clone only when the creation emitter is the configured
 factory and all four creation events plus terms commitments agree. External
 contract registration never crosses this boundary.
 
+## Autonomous-v2: Platform Fee and Claim Gate
+
+`agent-bounties/autonomous-v2` (`AgentBountyV2`, `AgentBountyFactoryV2`,
+[ADR 0006](adr/0006-protocol-v2-platform-fee-and-non-custodial-fiat.md)) keeps
+the v1 bounty surface and adds two things. Contribution, claim, submission,
+settlement, expiry, cancellation and refund calls are unchanged, so the same
+planners serve both versions. v2 is not deployed yet.
+
+**Platform fee**
+- `platformFee = ceil(solverReward * platformFeeBps / 10_000)`. The rate and
+  recipient are factory immutables, capped at 1,000 bps.
+- `target = solverReward + verifierReward + platformFee`; the claim bond still
+  equals the verifier reward.
+- Settlement pays the fee in the same transaction as the solver
+  (`PlatformFeePaid`). If that transfer fails, settlement still completes, the
+  fee stays escrowed (`PlatformFeeDeferred`), and `withdrawPlatformFee()`
+  forwards it to the same recipient later (`PlatformFeeWithdrawn`).
+- Cancellation refunds the fee pro-rata with principal.
+
+**Claim gate.** A bounty may commit a `ParticipantEligibilityRegistry` and a
+source hash. Every claim path then requires a current attestation from that
+source. Gated bounties never appear in open "ready to earn" views.
+
+**Factory events.** Each v2 bounty adds:
+- `CanonicalBountyPlatformFeeConfigured(bytes32 indexed bountyId, uint16 platformFeeBps, uint256 platformFee, address indexed platformFeeRecipient)`;
+- `CanonicalBountyClaimEligibilityConfigured(bytes32 indexed bountyId, address indexed registry, bytes32 source)`, emitted only when gated.
+
+The v1 `CanonicalBountyEconomicsConfigured.targetAmount` includes the fee.
+
+**Signing.** The EIP-712 domain version is `"2"`. Use
+`plan_v2_submission_authorization` and `plan_v2_verification_attestation`;
+v1 signatures cannot be replayed on v2 bounties. Creation uses the 16-field
+parameter tuple: the v1 fields plus `claimEligibilityRegistry` and
+`claimEligibilitySource`.
+
+**Committed terms.** v2 `contract_terms` must declare all of:
+- `protocol_version: agent-bounties/autonomous-v2`;
+- `platform_fee_bps`;
+- `platform_fee` (a usdc money object equal to the formula above);
+- `platform_fee_recipient`;
+- `claim_eligibility_registry` and `claim_eligibility_source`, both or
+  neither.
+
+v1 terms must not declare any of these keys.
+
+**Indexing and feed.** A bounty is v2 exactly when its factory emitted
+`CanonicalBountyPlatformFeeConfigured`. The feed fails closed, exactly as
+v1 economics do, when:
+- the fee does not match the formula;
+- the target omits the fee;
+- the recipient and fee disagree;
+- a fee event names another amount or recipient;
+- fee events arrive out of order (paid twice, or forwarded without a
+  deferral).
+
+v2 feed items carry `protocol_version`, `platform_fee` (`bps`, `amount`,
+`recipient`, `status`) and, when gated, `claim_eligibility`. All three fields
+are omitted for v1 items. The fee `status` is one of:
+- `pending`;
+- `paid` (fee received);
+- `deferred`;
+- `forwarded` (fee received);
+- `refundable`.
+
+`crates/chain-base/tests/fixtures/autonomous-v2-loop.json` holds real logs and
+calldata from the compiled contracts. Regenerate it with
+`python tools/capture_autonomous_v2_fixture.py`.
+
 ## Safety Properties
 
 - no owner or settlement signer,

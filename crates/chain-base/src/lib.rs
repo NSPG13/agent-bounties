@@ -25,6 +25,7 @@ pub use verifier_health::*;
 use verifier_sdk::RegressionSandboxPolicy;
 
 mod agent_wallet_readiness;
+mod autonomous_v2;
 mod creator_review;
 mod open_competition;
 mod open_competition_v2;
@@ -32,6 +33,7 @@ mod open_competition_v2_planner;
 mod standing_meta_v4;
 
 pub use agent_wallet_readiness::*;
+pub use autonomous_v2::*;
 pub use open_competition::*;
 pub use open_competition_v2::*;
 pub use open_competition_v2_planner::*;
@@ -1072,7 +1074,7 @@ impl AutonomousBountyTxPlanner {
         let creator = normalize_address(&create.creator)?;
         let params = autonomous_create_param_words(create)?;
         let verifiers = normalized_verifiers(create)?;
-        validate_autonomous_creation(create, &verifiers)?;
+        validate_autonomous_creation(create, &verifiers, 0)?;
         let creation_nonce = parse_bytes32(&create.creation_nonce)?;
         let bounty_id = autonomous_bounty_id(
             network.chain_id,
@@ -3758,6 +3760,16 @@ pub enum AutonomousBountyEventKind {
     SubmissionExpired,
     BountyCancelled,
     RefundWithdrawn,
+    /// autonomous-v2 factory: immutable platform fee terms for one bounty.
+    CanonicalBountyPlatformFeeConfigured,
+    /// autonomous-v2 factory: optional on-chain claim gate for one bounty.
+    CanonicalBountyClaimEligibilityConfigured,
+    /// autonomous-v2 bounty: fee paid to the recipient in the settlement transaction.
+    PlatformFeePaid,
+    /// autonomous-v2 bounty: fee transfer failed at settlement and stays escrowed.
+    PlatformFeeDeferred,
+    /// autonomous-v2 bounty: a deferred fee was forwarded to the recipient.
+    PlatformFeeWithdrawn,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3804,6 +3816,15 @@ pub struct AutonomousBountyFeedItem {
     pub verification_ready: bool,
     pub verification_readiness_reason: String,
     pub validation_errors: Vec<String>,
+    /// `agent-bounties/autonomous-v2` for v2 bounties; absent for autonomous-v1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol_version: Option<String>,
+    /// autonomous-v2 platform fee terms and payment status; absent for autonomous-v1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform_fee: Option<AutonomousBountyPlatformFee>,
+    /// autonomous-v2 on-chain claim gate; absent when any wallet may claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim_eligibility: Option<AutonomousBountyClaimEligibility>,
     pub events: Vec<AutonomousBountyEvent>,
 }
 
@@ -4075,6 +4096,8 @@ pub fn autonomous_bounty_is_earning_ready(item: &AutonomousBountyFeedItem) -> bo
     item.status == "claimable"
         && item.terms_valid
         && item.verification_ready
+        // A gated v2 bounty rejects claims from wallets without a registry attestation.
+        && item.claim_eligibility.is_none()
         && !item.terms.as_ref().is_some_and(|terms| {
             terms.document.benchmark["engine"] == creator_review::ENGINE
                 && terms.document.benchmark["delivery_deadline"]
@@ -4182,6 +4205,11 @@ fn validate_autonomous_terms_against_creation(
             }
             Err(error) => errors.push(error.to_string()),
         }
+        autonomous_v2::validate_v2_terms_against_creation(
+            contract_terms,
+            creation_data,
+            &mut errors,
+        );
     } else {
         errors.push("published contract_terms are unavailable".to_string());
     }
@@ -4988,6 +5016,11 @@ pub fn autonomous_bounty_event_topics() -> Vec<String> {
         event_topic("SubmissionExpired(bytes32,uint64,address,uint256)"),
         event_topic("BountyCancelled(bytes32,uint256)"),
         event_topic("RefundWithdrawn(bytes32,address,uint256,uint256,uint256)"),
+        event_topic("CanonicalBountyPlatformFeeConfigured(bytes32,uint16,uint256,address)"),
+        event_topic("CanonicalBountyClaimEligibilityConfigured(bytes32,address,bytes32)"),
+        event_topic("PlatformFeePaid(bytes32,uint64,address,uint256)"),
+        event_topic("PlatformFeeDeferred(bytes32,uint64,address,uint256)"),
+        event_topic("PlatformFeeWithdrawn(bytes32,address,uint256)"),
     ]
 }
 
@@ -5215,6 +5248,71 @@ impl AutonomousBountyLogDecoder {
                     }),
                 )
             }
+            AutonomousEventSignature::CanonicalBountyPlatformFeeConfigured => {
+                let name = "CanonicalBountyPlatformFeeConfigured";
+                require_topic_count(&log, 3, name)?;
+                let words = decode_words(&log.data, 2, name)?;
+                (
+                    AutonomousBountyEventKind::CanonicalBountyPlatformFeeConfigured,
+                    word_hex(topic_word(&log, 1, name)?),
+                    json!({
+                        "platform_fee_bps": word_to_u64(words[0], name)?,
+                        "platform_fee": word_to_u128(words[1])?,
+                        "platform_fee_recipient": address_from_word(topic_word(&log, 2, name)?),
+                    }),
+                )
+            }
+            AutonomousEventSignature::CanonicalBountyClaimEligibilityConfigured => {
+                let name = "CanonicalBountyClaimEligibilityConfigured";
+                require_topic_count(&log, 3, name)?;
+                let words = decode_words(&log.data, 1, name)?;
+                (
+                    AutonomousBountyEventKind::CanonicalBountyClaimEligibilityConfigured,
+                    word_hex(topic_word(&log, 1, name)?),
+                    json!({
+                        "claim_eligibility_registry": address_from_word(topic_word(&log, 2, name)?),
+                        "claim_eligibility_source": word_hex(words[0]),
+                    }),
+                )
+            }
+            AutonomousEventSignature::PlatformFeePaid
+            | AutonomousEventSignature::PlatformFeeDeferred => {
+                let (name, kind) = if signature == AutonomousEventSignature::PlatformFeePaid {
+                    (
+                        "PlatformFeePaid",
+                        AutonomousBountyEventKind::PlatformFeePaid,
+                    )
+                } else {
+                    (
+                        "PlatformFeeDeferred",
+                        AutonomousBountyEventKind::PlatformFeeDeferred,
+                    )
+                };
+                require_topic_count(&log, 4, name)?;
+                let words = decode_words(&log.data, 1, name)?;
+                (
+                    kind,
+                    word_hex(topic_word(&log, 1, name)?),
+                    json!({
+                        "round": topic_u64(&log, 2, name)?,
+                        "platform_fee_recipient": address_from_word(topic_word(&log, 3, name)?),
+                        "platform_fee": word_to_u128(words[0])?,
+                    }),
+                )
+            }
+            AutonomousEventSignature::PlatformFeeWithdrawn => {
+                let name = "PlatformFeeWithdrawn";
+                require_topic_count(&log, 3, name)?;
+                let words = decode_words(&log.data, 1, name)?;
+                (
+                    AutonomousBountyEventKind::PlatformFeeWithdrawn,
+                    word_hex(topic_word(&log, 1, name)?),
+                    json!({
+                        "platform_fee_recipient": address_from_word(topic_word(&log, 2, name)?),
+                        "amount": word_to_u128(words[0])?,
+                    }),
+                )
+            }
         };
 
         Ok(AutonomousBountyEvent {
@@ -5313,7 +5411,19 @@ pub fn build_autonomous_bounty_feed(
                 "CanonicalBountyCreated data is not an object".to_string(),
             )
         })?;
-        for configuration in [terms_committed, economics, verification] {
+        // autonomous-v2 factories also emit fee terms and, when gated, the claim-eligibility
+        // gate. Duplicates are rejected in `project_autonomous_economics`.
+        let v2_configuration = events.iter().filter(|event| {
+            matches!(
+                event.kind,
+                AutonomousBountyEventKind::CanonicalBountyPlatformFeeConfigured
+                    | AutonomousBountyEventKind::CanonicalBountyClaimEligibilityConfigured
+            )
+        });
+        for configuration in [terms_committed, economics, verification]
+            .into_iter()
+            .chain(v2_configuration)
+        {
             let object = configuration.data.as_object().ok_or_else(|| {
                 ChainBaseError::InvalidLogData(format!(
                     "{:?} data is not an object",
@@ -5355,13 +5465,6 @@ pub fn build_autonomous_bounty_feed(
                 "CanonicalBountyCreated missing target_amount".to_string(),
             )
         })?;
-        if solver_reward.checked_add(verifier_reward) != Some(target_amount)
-            || claim_bond != verifier_reward
-        {
-            return Err(ChainBaseError::InvalidLogData(
-                "canonical bounty economics are inconsistent".to_string(),
-            ));
-        }
         let mut funded_amount = creation_data["initial_funding"].as_u64().ok_or_else(|| {
             ChainBaseError::InvalidLogData(
                 "CanonicalBountyCreated missing initial_funding".to_string(),
@@ -5409,9 +5512,26 @@ pub fn build_autonomous_bounty_feed(
                 | AutonomousBountyEventKind::CanonicalBountyEconomicsConfigured
                 | AutonomousBountyEventKind::CanonicalBountyVerificationConfigured
                 | AutonomousBountyEventKind::ExternalBountySubmitted
-                | AutonomousBountyEventKind::RefundWithdrawn => {}
+                | AutonomousBountyEventKind::RefundWithdrawn
+                | AutonomousBountyEventKind::CanonicalBountyPlatformFeeConfigured
+                | AutonomousBountyEventKind::CanonicalBountyClaimEligibilityConfigured
+                | AutonomousBountyEventKind::PlatformFeePaid
+                | AutonomousBountyEventKind::PlatformFeeDeferred
+                | AutonomousBountyEventKind::PlatformFeeWithdrawn => {}
             }
         }
+        let autonomous_v2::AutonomousV2Projection {
+            platform_fee,
+            claim_eligibility,
+        } = autonomous_v2::project_autonomous_economics(
+            &creation_data,
+            &events,
+            status,
+            solver_reward,
+            verifier_reward,
+            claim_bond,
+            target_amount,
+        )?;
         let verification_mode = match creation_data["verification_mode"].as_u64() {
             Some(0) => "deterministic_module",
             Some(1) => "signed_quorum",
@@ -5559,6 +5679,11 @@ pub fn build_autonomous_bounty_feed(
             verification_ready,
             verification_readiness_reason: verification_readiness_reason.to_string(),
             validation_errors,
+            protocol_version: platform_fee
+                .is_some()
+                .then(|| AUTONOMOUS_V2_PROTOCOL_VERSION.to_string()),
+            platform_fee,
+            claim_eligibility,
             events,
         };
         if claimable_only && !autonomous_bounty_is_earning_ready(&item) {
@@ -5904,7 +6029,10 @@ fn validate_contract_terms_document(
     let object = contract_terms.as_object().ok_or_else(|| {
         ChainBaseError::InvalidTermsDocument("contract_terms must be an object".to_string())
     })?;
-    if contract_terms_string(object, "protocol_version")? != "agent-bounties/autonomous-v1" {
+    let protocol_version = contract_terms_string(object, "protocol_version")?;
+    if protocol_version != AUTONOMOUS_V1_PROTOCOL_VERSION
+        && protocol_version != AUTONOMOUS_V2_PROTOCOL_VERSION
+    {
         return Err(ChainBaseError::InvalidTermsDocument(
             "contract_terms protocol_version is unsupported".to_string(),
         ));
@@ -5929,9 +6057,19 @@ fn validate_contract_terms_document(
     let verifier_reward = contract_terms_money(object, "verifier_reward", false)?;
     let claim_bond = contract_terms_money(object, "claim_bond", false)?;
     let initial_funding = contract_terms_money(object, "initial_funding", true)?;
-    let target = solver_reward.checked_add(verifier_reward).ok_or_else(|| {
-        ChainBaseError::InvalidTermsDocument("contract_terms reward target overflows".to_string())
-    })?;
+    let platform_fee = autonomous_v2::validate_contract_terms_fee_commitment(
+        object,
+        protocol_version,
+        solver_reward,
+    )?;
+    let target = solver_reward
+        .checked_add(verifier_reward)
+        .and_then(|value| value.checked_add(platform_fee))
+        .ok_or_else(|| {
+            ChainBaseError::InvalidTermsDocument(
+                "contract_terms reward target overflows".to_string(),
+            )
+        })?;
     if claim_bond != verifier_reward || initial_funding > target {
         return Err(ChainBaseError::InvalidTermsDocument(
             "claim bond must equal verifier reward and initial funding cannot exceed target"
@@ -6075,6 +6213,11 @@ enum AutonomousEventSignature {
     SubmissionExpired,
     BountyCancelled,
     RefundWithdrawn,
+    CanonicalBountyPlatformFeeConfigured,
+    CanonicalBountyClaimEligibilityConfigured,
+    PlatformFeePaid,
+    PlatformFeeDeferred,
+    PlatformFeeWithdrawn,
 }
 
 fn autonomous_event_signature(topic: &str) -> Option<AutonomousEventSignature> {
@@ -6139,6 +6282,26 @@ fn autonomous_event_signature(topic: &str) -> Option<AutonomousEventSignature> {
         (
             "RefundWithdrawn(bytes32,address,uint256,uint256,uint256)",
             AutonomousEventSignature::RefundWithdrawn,
+        ),
+        (
+            "CanonicalBountyPlatformFeeConfigured(bytes32,uint16,uint256,address)",
+            AutonomousEventSignature::CanonicalBountyPlatformFeeConfigured,
+        ),
+        (
+            "CanonicalBountyClaimEligibilityConfigured(bytes32,address,bytes32)",
+            AutonomousEventSignature::CanonicalBountyClaimEligibilityConfigured,
+        ),
+        (
+            "PlatformFeePaid(bytes32,uint64,address,uint256)",
+            AutonomousEventSignature::PlatformFeePaid,
+        ),
+        (
+            "PlatformFeeDeferred(bytes32,uint64,address,uint256)",
+            AutonomousEventSignature::PlatformFeeDeferred,
+        ),
+        (
+            "PlatformFeeWithdrawn(bytes32,address,uint256)",
+            AutonomousEventSignature::PlatformFeeWithdrawn,
         ),
     ];
     signatures
@@ -6465,15 +6628,18 @@ fn normalized_verifiers(create: &AutonomousBountyCreate) -> Result<Vec<[u8; 32]>
         .collect()
 }
 
+/// `platform_fee` is zero for autonomous-v1; for v2 the funding target includes it.
 fn validate_autonomous_creation(
     create: &AutonomousBountyCreate,
     verifier_words: &[[u8; 32]],
+    platform_fee: u128,
 ) -> Result<(), ChainBaseError> {
     let solver_reward = autonomous_money_to_uint256(&create.solver_reward, false)?;
     let verifier_reward = autonomous_money_to_uint256(&create.verifier_reward, true)?;
     let initial_funding = autonomous_money_to_uint256(&create.initial_funding, true)?;
     let target = solver_reward
         .checked_add(verifier_reward)
+        .and_then(|value| value.checked_add(platform_fee))
         .ok_or(ChainBaseError::InvalidAmount)?;
     if target > u128::from(u64::MAX) {
         return Err(ChainBaseError::InvalidAmount);
@@ -7845,6 +8011,9 @@ mod tests {
             verification_ready: true,
             verification_readiness_reason: "exact deployed verifier".to_string(),
             validation_errors: vec![],
+            protocol_version: None,
+            platform_fee: None,
+            claim_eligibility: None,
             events: vec![],
         };
 
@@ -9227,6 +9396,9 @@ mod tests {
             verification_readiness_reason: "deterministic verifier module is committed on-chain"
                 .to_string(),
             validation_errors: Vec::new(),
+            protocol_version: None,
+            platform_fee: None,
+            claim_eligibility: None,
             events: Vec::new(),
         };
 
@@ -9345,6 +9517,9 @@ mod tests {
             verification_readiness_reason: "deterministic verifier module is committed on-chain"
                 .to_string(),
             validation_errors: Vec::new(),
+            protocol_version: None,
+            platform_fee: None,
+            claim_eligibility: None,
             events: vec![AutonomousBountyEvent {
                 id: Uuid::new_v4(),
                 log_key: "100:0".to_string(),
@@ -9545,6 +9720,9 @@ mod tests {
             verification_readiness_reason:
                 "quorum verifier service availability is not canonically attested".to_string(),
             validation_errors: vec![],
+            protocol_version: None,
+            platform_fee: None,
+            claim_eligibility: None,
             events: vec![AutonomousBountyEvent {
                 id: Uuid::new_v4(),
                 log_key: "100:0".to_string(),
@@ -9666,6 +9844,9 @@ mod tests {
             verification_readiness_reason: "content-addressed terms are invalid or unavailable"
                 .to_string(),
             validation_errors: vec!["fixture omits terms".to_string()],
+            protocol_version: None,
+            platform_fee: None,
+            claim_eligibility: None,
             events: vec![AutonomousBountyEvent {
                 id: Uuid::new_v4(),
                 log_key: "101:0".to_string(),
@@ -9731,7 +9912,8 @@ mod tests {
         let request = query.rpc_request(9);
         assert_eq!(request.params[0].from_block, "0x64");
         assert_eq!(request.params[0].to_block, "0x78");
-        assert_eq!(request.params[0].topics[0].len(), 15);
+        // 15 autonomous-v1 topics plus the 5 autonomous-v2 fee and gate topics.
+        assert_eq!(request.params[0].topics[0].len(), 20);
         assert_eq!(
             request.params[0].address,
             EthGetLogsAddressFilter::One(query.contract)

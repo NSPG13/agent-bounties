@@ -81,5 +81,25 @@ immutable verifier policy.
 
 ## Fees
 
-Autonomous-v1 has no platform fee. A later fee requires a new protocol version
-whose exact amount and recipient are visible and terms-hashed before funding.
+Autonomous-v1 has no platform fee.
+
+Autonomous-v2 charges 7.5% (750 bps) of the solver reward only, rounded up.
+The poster funds it on top: `target = solver reward + verifier reward +
+platform fee`.
+
+- **Fixed and published before funding.** The rate and recipient are immutable
+  per factory and emitted on-chain at creation. The bounty's `contract_terms`
+  commit to them, so they are terms-hashed before anyone funds.
+- **Paid only on success.** The fee is paid to the recipient in the same
+  settlement transaction as the solver. A rejected or expired round leaves it
+  escrowed, and cancellation refunds it with contributor principal.
+- **Never blocks payout.** If the fee transfer fails, settlement still pays
+  the solver and verifiers, and the fee can be forwarded to the same recipient
+  later.
+- **No fee on deposits or verification.** Claim bonds and verifier rewards
+  carry no fee.
+
+Fee payment evidence is `PlatformFeePaid`, or `PlatformFeeDeferred` followed by
+`PlatformFeeWithdrawn`. Solver payment evidence remains `BountySettled`. See
+[ADR 0006](adr/0006-protocol-v2-platform-fee-and-non-custodial-fiat.md) and
+[the autonomous protocol](autonomous-protocol.md#autonomous-v2-platform-fee-and-claim-gate).
