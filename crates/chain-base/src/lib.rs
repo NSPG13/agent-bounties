@@ -6745,6 +6745,12 @@ pub fn validate_autonomous_creation_against_terms(
     let contract_terms = terms.document.contract_terms.as_object().ok_or_else(|| {
         ChainBaseError::InvalidTermsDocument("published contract_terms are unavailable".to_string())
     })?;
+    if contract_terms_string(contract_terms, "protocol_version")? != AUTONOMOUS_V1_PROTOCOL_VERSION
+    {
+        return Err(ChainBaseError::InvalidTermsDocument(
+            "autonomous-v1 creation requires autonomous-v1 terms; plan autonomous-v2 terms with plan_v2_creation".to_string(),
+        ));
+    }
     let network_descriptor = base_network_descriptor(network)?;
     let committed_network =
         base_network_descriptor(contract_terms_string(contract_terms, "network")?)?;
@@ -8798,6 +8804,13 @@ mod tests {
             creation_nonce: format!("0x{}", "11".repeat(32)),
         };
         validate_autonomous_creation_against_terms("base-mainnet", &create, &record).unwrap();
+        let mut v2_terms = record.clone();
+        v2_terms.document.contract_terms["protocol_version"] =
+            json!(AUTONOMOUS_V2_PROTOCOL_VERSION);
+        assert!(
+            validate_autonomous_creation_against_terms("base-mainnet", &create, &v2_terms).is_err(),
+            "a v1 bounty must not be planned from terms that declare autonomous-v2"
+        );
         assert!(
             validate_autonomous_creation_for_public_earning("base-mainnet", &create, &record,)
                 .is_err()
