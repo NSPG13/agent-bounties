@@ -18438,6 +18438,9 @@ mod tests {
             verification_ready: true,
             verification_readiness_reason: "ready".to_string(),
             validation_errors: Vec::new(),
+            protocol_version: None,
+            platform_fee: None,
+            claim_eligibility: None,
             events: vec![matching_claim.clone()],
         };
 
@@ -19849,6 +19852,9 @@ mod tests {
             verification_ready: true,
             verification_readiness_reason: "ready".to_string(),
             validation_errors: vec![],
+            protocol_version: None,
+            platform_fee: None,
+            claim_eligibility: None,
             events: vec![
                 event(AutonomousBountyEventKind::BountyBecameClaimable, 1),
                 event(AutonomousBountyEventKind::BountySettled, 2),
@@ -23374,6 +23380,9 @@ mod tests {
                 verification_ready: true,
                 verification_readiness_reason: "test fixture".to_string(),
                 validation_errors: Vec::new(),
+                protocol_version: None,
+                platform_fee: None,
+                claim_eligibility: None,
                 events: Vec::new(),
             }],
         )

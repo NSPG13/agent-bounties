@@ -10879,6 +10879,15 @@ fn autonomous_event_kind_storage_name(kind: AutonomousBountyEventKind) -> &'stat
         AutonomousBountyEventKind::SubmissionExpired => "submission_expired",
         AutonomousBountyEventKind::BountyCancelled => "bounty_cancelled",
         AutonomousBountyEventKind::RefundWithdrawn => "refund_withdrawn",
+        AutonomousBountyEventKind::CanonicalBountyPlatformFeeConfigured => {
+            "canonical_bounty_platform_fee_configured"
+        }
+        AutonomousBountyEventKind::CanonicalBountyClaimEligibilityConfigured => {
+            "canonical_bounty_claim_eligibility_configured"
+        }
+        AutonomousBountyEventKind::PlatformFeePaid => "platform_fee_paid",
+        AutonomousBountyEventKind::PlatformFeeDeferred => "platform_fee_deferred",
+        AutonomousBountyEventKind::PlatformFeeWithdrawn => "platform_fee_withdrawn",
     }
 }
 

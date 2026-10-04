@@ -2612,6 +2612,9 @@ mod tests {
             verification_ready,
             verification_readiness_reason: "ready".to_string(),
             validation_errors: Vec::new(),
+            protocol_version: None,
+            platform_fee: None,
+            claim_eligibility: None,
             events: vec![event],
         }
     }
