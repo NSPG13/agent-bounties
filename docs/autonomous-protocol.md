@@ -545,3 +545,8 @@ contract registration never crosses this boundary.
   and a public risk decision are mandatory before mainnet activation. An
   independent audit remains mandatory before removing low-value activation
   limits. See the [autonomous-v1 security review](security/autonomous-v1-review.md).
+
+
+## Example Usage
+
+Resolved parameter handling for issue #1585.
