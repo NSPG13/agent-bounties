@@ -8,6 +8,7 @@ interface CaptureVm {
     function startBroadcast(uint256 privateKey) external;
     function stopBroadcast() external;
     function addr(uint256 privateKey) external returns (address);
+    function envAddress(string calldata name) external returns (address);
     function sign(uint256 privateKey, bytes32 digest) external returns (uint8 v, bytes32 r, bytes32 s);
 }
 
@@ -59,7 +60,10 @@ contract CaptureVerdictModule is IAgentBountyVerifier {
 
 /// @notice Emits every autonomous-v2 event from the compiled contracts on a local Anvil chain so
 /// `crates/chain-base` can test its decoder, feed, and planner against real ABI-encoded data.
-/// Regenerate `crates/chain-base/tests/fixtures/autonomous-v2-loop.json` with
+/// `tools/capture_autonomous_v2_fixture.py` deploys the token, module, registry, and factory with
+/// `forge create` and passes their addresses in; deploying them here would embed the factory and
+/// bounty creation code and push this script past the EIP-170 size gate. Regenerate
+/// `crates/chain-base/tests/fixtures/autonomous-v2-loop.json` with
 /// `python tools/capture_autonomous_v2_fixture.py` (needs anvil, forge, and cast on PATH).
 contract CaptureAutonomousV2Fixture {
     CaptureVm private constant vm = CaptureVm(address(uint160(uint256(keccak256("hevm cheat code")))));
@@ -86,11 +90,14 @@ contract CaptureAutonomousV2Fixture {
         address solver = vm.addr(SOLVER_KEY);
         address secondSolver = vm.addr(SECOND_SOLVER_KEY);
 
+        token = CaptureToken(vm.envAddress("CAPTURE_TOKEN"));
+        module = CaptureVerdictModule(vm.envAddress("CAPTURE_MODULE"));
+        registry = ParticipantEligibilityRegistry(vm.envAddress("CAPTURE_REGISTRY"));
+        factory = AgentBountyFactoryV2(vm.envAddress("CAPTURE_FACTORY"));
+        require(factory.platformFeeBps() == 750 && factory.platformFeeRecipient() == FEE_RECIPIENT, "factory fee");
+        require(registry.attester() == vm.addr(ATTESTER_KEY), "registry attester");
+
         vm.startBroadcast(CREATOR_KEY);
-        token = new CaptureToken();
-        module = new CaptureVerdictModule();
-        registry = new ParticipantEligibilityRegistry(vm.addr(ATTESTER_KEY));
-        factory = new AgentBountyFactoryV2(address(token), 750, FEE_RECIPIENT);
         token.mint(creator, 10 * TARGET);
         token.mint(solver, 10 * VERIFIER_REWARD);
         token.mint(secondSolver, 10 * VERIFIER_REWARD);

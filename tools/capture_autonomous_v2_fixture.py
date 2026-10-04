@@ -9,6 +9,7 @@ checked exactly. Requires anvil, forge, and cast on PATH. Never touches a public
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import time
@@ -23,11 +24,25 @@ PARAMS = "(uint256,uint256,bytes32,bytes32,bytes32,bytes32,bytes32,uint64,uint64
 CREATE = f"createBounty({PARAMS},address[],uint256,bytes32)"
 CREATE_WITH_AUTH = f"createBountyWithAuthorization(address,{PARAMS},address[],uint256,bytes32,(uint256,uint256,bytes32,uint8,bytes32,bytes32))"
 LABELS = {1: "paid_after_reject", 2: "fee_deferred_then_forwarded", 3: "contractor_gated", 4: "cancelled_and_refunded"}
+# Anvil's default development keys (accounts 0 and 3). Never use them outside a local chain.
+DEPLOYER_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+ATTESTER_ADDRESS = "0x90F79bf6EB2c4f870365E785982E1f101E93b906"
+FEE_RECIPIENT = "0xfEE0000000000000000000000000000000000fee"
 
 
 def run(*args: str, cwd: Path = ROOT, quiet: bool = False) -> str:
     stderr = subprocess.DEVNULL if quiet else None
     return subprocess.check_output(args, cwd=cwd, text=True, stderr=stderr).strip()
+
+
+def deploy(contract: str, *constructor_args: str) -> str:
+    args = ["forge", "create", contract, "--rpc-url", RPC, "--private-key", DEPLOYER_KEY, "--broadcast"]
+    if constructor_args:
+        args += ["--constructor-args", *constructor_args]
+    match = re.search(r"Deployed to: (0x[0-9a-fA-F]{40})", run(*args, cwd=CONTRACTS))
+    if not match:
+        raise RuntimeError(f"forge create did not report an address for {contract}")
+    return match.group(1)
 
 
 def main() -> int:
@@ -39,8 +54,18 @@ def main() -> int:
                     break
             except subprocess.CalledProcessError:
                 time.sleep(0.25)
-        run("forge", "script", "script/CaptureAutonomousV2Fixture.s.sol", "--tc", "CaptureAutonomousV2Fixture",
-            "--rpc-url", RPC, "--broadcast", "--slow", cwd=CONTRACTS)
+        script = "script/CaptureAutonomousV2Fixture.s.sol"
+        token = deploy(f"{script}:CaptureToken")
+        environment = {
+            "CAPTURE_TOKEN": token,
+            "CAPTURE_MODULE": deploy(f"{script}:CaptureVerdictModule"),
+            "CAPTURE_REGISTRY": deploy("src/ParticipantEligibilityRegistry.sol:ParticipantEligibilityRegistry", ATTESTER_ADDRESS),
+            "CAPTURE_FACTORY": deploy("src/AgentBountyFactoryV2.sol:AgentBountyFactoryV2", token, "750", FEE_RECIPIENT),
+        }
+        subprocess.check_call(
+            ["forge", "script", script, "--tc", "CaptureAutonomousV2Fixture", "--rpc-url", RPC, "--broadcast", "--slow"],
+            cwd=CONTRACTS, env={**os.environ, **environment}, stdout=subprocess.DEVNULL,
+        )
         logs = json.loads(run("cast", "logs", "--rpc-url", RPC, "--from-block", "0", "--json"))
         created_topic = run("cast", "keccak", "CanonicalBountyCreated(bytes32,address,address,bytes32,bytes32,bytes32)")
         creations = [log for log in logs if log["topics"][0].lower() == created_topic.lower()]
