@@ -212,7 +212,20 @@ impl AutonomousIndexerConfig {
         Self::from_lookup(|key| std::env::var(key).ok())
     }
 
+    /// `autonomous-v1` or `autonomous-v2`. Each protocol's factory gets its own indexer process
+    /// and cursor; both write to the same event table and feed.
+    pub fn from_env_for_protocol(protocol: &str) -> anyhow::Result<Self> {
+        Self::from_lookup_for_protocol(|key| std::env::var(key).ok(), protocol)
+    }
+
     pub fn from_lookup<F>(lookup: F) -> anyhow::Result<Self>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        Self::from_lookup_for_protocol(lookup, "autonomous-v1")
+    }
+
+    pub fn from_lookup_for_protocol<F>(lookup: F, protocol: &str) -> anyhow::Result<Self>
     where
         F: Fn(&str) -> Option<String>,
     {
@@ -221,7 +234,7 @@ impl AutonomousIndexerConfig {
             .unwrap_or_else(|| "base-mainnet".to_string());
         let descriptor = base_network_descriptor(&requested_network)?;
         let network = canonical_base_network(&descriptor);
-        let factory_contract_env = factory_contract_env_for_network(&descriptor)?;
+        let factory_contract_env = factory_contract_env_for_network(&descriptor, protocol)?;
         let factory_contract = lookup("BASE_INDEXER_FACTORY_CONTRACT")
             .filter(|value| nonempty(value))
             .or_else(|| lookup(factory_contract_env).filter(|value| nonempty(value)))
@@ -1448,11 +1461,19 @@ fn canonical_base_network(descriptor: &BaseNetworkDescriptor) -> String {
 
 fn factory_contract_env_for_network(
     descriptor: &BaseNetworkDescriptor,
+    protocol: &str,
 ) -> anyhow::Result<&'static str> {
-    match descriptor.chain_id {
-        8_453 => Ok("BASE_MAINNET_BOUNTY_FACTORY"),
-        84_532 => Ok("BASE_SEPOLIA_BOUNTY_FACTORY"),
-        _ => Err(anyhow!("unsupported Base chain id {}", descriptor.chain_id)),
+    match (protocol, descriptor.chain_id) {
+        ("autonomous-v1", 8_453) => Ok("BASE_MAINNET_BOUNTY_FACTORY"),
+        ("autonomous-v1", 84_532) => Ok("BASE_SEPOLIA_BOUNTY_FACTORY"),
+        ("autonomous-v2", 84_532) => Ok("BASE_SEPOLIA_BOUNTY_V2_FACTORY"),
+        ("autonomous-v2", 8_453) => Err(anyhow!(
+            "autonomous-v2 is not pinned on Base mainnet; index it only after an independently reviewed deployment"
+        )),
+        ("autonomous-v1" | "autonomous-v2", chain_id) => {
+            Err(anyhow!("unsupported Base chain id {chain_id}"))
+        }
+        (other, _) => Err(anyhow!("unsupported autonomous indexer protocol {other}")),
     }
 }
 
@@ -1918,6 +1939,51 @@ mod tests {
             "0x1111111111111111111111111111111111111111"
         );
         assert_eq!(config.start_block, Some(456));
+    }
+
+    #[test]
+    fn autonomous_v2_indexer_uses_its_own_sepolia_factory_and_refuses_mainnet() {
+        let values = HashMap::from([
+            ("BASE_INDEXER_NETWORK", "base-sepolia"),
+            ("BASE_SEPOLIA_RPC_URL", "https://sepolia.example"),
+            (
+                "BASE_SEPOLIA_BOUNTY_FACTORY",
+                "0x1111111111111111111111111111111111111111",
+            ),
+            (
+                "BASE_SEPOLIA_BOUNTY_V2_FACTORY",
+                "0x2222222222222222222222222222222222222222",
+            ),
+        ]);
+        let lookup = |key: &str| values.get(key).map(|value| value.to_string());
+        let v1 = AutonomousIndexerConfig::from_lookup(lookup).unwrap();
+        let v2 =
+            AutonomousIndexerConfig::from_lookup_for_protocol(lookup, "autonomous-v2").unwrap();
+        assert_eq!(
+            v1.factory_contract,
+            "0x1111111111111111111111111111111111111111"
+        );
+        assert_eq!(
+            v2.factory_contract,
+            "0x2222222222222222222222222222222222222222"
+        );
+        assert_eq!(v2.network, "base-sepolia");
+
+        let mainnet = HashMap::from([
+            ("BASE_MAINNET_RPC_URL", "https://base.example"),
+            (
+                "BASE_INDEXER_FACTORY_CONTRACT",
+                "0x2222222222222222222222222222222222222222",
+            ),
+        ]);
+        assert!(AutonomousIndexerConfig::from_lookup_for_protocol(
+            |key| mainnet.get(key).map(|value| value.to_string()),
+            "autonomous-v2"
+        )
+        .is_err());
+        assert!(
+            AutonomousIndexerConfig::from_lookup_for_protocol(lookup, "autonomous-v9").is_err()
+        );
     }
 
     #[test]

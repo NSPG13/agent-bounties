@@ -52,11 +52,13 @@ use chain_base::{
     plan_canonical_child_bounty_terms as build_canonical_child_bounty_terms_plan,
     plan_open_competition_action, plan_open_competition_creation,
     plan_open_competition_entrant_action, plan_standing_meta_v4_action,
-    prepare_agent_to_earn as inspect_agent_wallet_readiness, solver_leaderboard_award_id,
-    standing_meta_v2_parent_context, standing_meta_v4_readiness,
+    prepare_agent_to_earn as inspect_agent_wallet_readiness, quote_autonomous_v2_bounty,
+    solver_leaderboard_award_id, standing_meta_v2_parent_context, standing_meta_v4_readiness,
     validate_attestation_request_against_feed, validate_autonomous_cancel_authority,
-    validate_autonomous_creation_for_public_earning, validate_open_competition_commitment_envelope,
-    AgentWalletReadinessReport, AtomicClaimSponsorGrant, AutonomousBountyAuthorizationSignature,
+    validate_autonomous_creation_for_public_earning,
+    validate_autonomous_v2_creation_for_public_earning,
+    validate_open_competition_commitment_envelope, AgentWalletReadinessReport,
+    AtomicClaimSponsorGrant, AutonomousBountyAuthorizationSignature,
     AutonomousBountyAuthorizedClaimPlan, AutonomousBountyAuthorizedContributionPlan,
     AutonomousBountyAuthorizedCreationPlan, AutonomousBountyClaimPlan,
     AutonomousBountyContribution, AutonomousBountyContributionPlan, AutonomousBountyCreate,
@@ -64,25 +66,26 @@ use chain_base::{
     AutonomousBountyFeedItem, AutonomousBountyRecoveryReservations,
     AutonomousBountySubmissionAuthorizationRequest,
     AutonomousBountySubmissionAuthorizationTypedData, AutonomousBountySubmissionPreparation,
-    AutonomousBountyTxPlanner, AutonomousSignedAttestation,
-    AutonomousVerificationAttestationRequest, AutonomousVerificationAttestationTypedData,
-    AutonomousVerificationJob, BaseNetworkDescriptor, BaseRelayedTransaction, BaseRpcUrlConfig,
-    BaseTransactionRelayer, CanonicalChildBountyTermsPlan, CanonicalChildBountyTermsRequest,
-    ChainBaseError, Eip3009AuthorizationTypedData, EthGetTransactionReceiptRequest,
-    EthSendRawTransactionRequest, EvmLog, EvmTransactionIntent, OpenCompetitionActionPlan,
-    OpenCompetitionAuthorizationSignature, OpenCompetitionCommitmentEnvelope,
-    OpenCompetitionCreateParams, OpenCompetitionCreationPlan, OpenCompetitionCreationRequest,
-    OpenCompetitionDeploymentState, OpenCompetitionEntrantAction, OpenCompetitionEntrantActionPlan,
-    OpenCompetitionEntrantWalletReleaseManifest, OpenCompetitionEntrantWalletSafeState,
-    OpenCompetitionEvent, OpenCompetitionFundingAuthorization, OpenCompetitionOffchainGates,
-    OpenCompetitionOperation, OpenCompetitionReadinessReport, OpenCompetitionReleaseManifest,
-    OpenCompetitionSafeState, OpenCompetitionStateQuery, OpenCompetitionVerifierCatalog,
-    OpenCompetitionVerifierProfile, PrepareAgentToEarnInput, RpcTransactionReceipt,
-    SolverLeaderboardAwardSafeObservation, StandingMetaV2ChildPreparationPlan,
-    StandingMetaV2ChildPreparationRequest, StandingMetaV4ActionPlan,
-    StandingMetaV4EconomicsEvidence, StandingMetaV4Operation, StandingMetaV4ReadinessEvidence,
-    StandingMetaV4ReadinessReport, AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION,
-    AUTONOMOUS_FUND_WITH_AUTHORIZATION_SELECTOR,
+    AutonomousBountyTxPlanner, AutonomousBountyV2Create, AutonomousBountyV2CreationPlan,
+    AutonomousBountyV2Quote, AutonomousSignedAttestation, AutonomousVerificationAttestationRequest,
+    AutonomousVerificationAttestationTypedData, AutonomousVerificationJob, BaseNetworkDescriptor,
+    BaseRelayedTransaction, BaseRpcUrlConfig, BaseTransactionRelayer,
+    CanonicalChildBountyTermsPlan, CanonicalChildBountyTermsRequest, ChainBaseError,
+    Eip3009AuthorizationTypedData, EthGetTransactionReceiptRequest, EthSendRawTransactionRequest,
+    EvmLog, EvmTransactionIntent, OpenCompetitionActionPlan, OpenCompetitionAuthorizationSignature,
+    OpenCompetitionCommitmentEnvelope, OpenCompetitionCreateParams, OpenCompetitionCreationPlan,
+    OpenCompetitionCreationRequest, OpenCompetitionDeploymentState, OpenCompetitionEntrantAction,
+    OpenCompetitionEntrantActionPlan, OpenCompetitionEntrantWalletReleaseManifest,
+    OpenCompetitionEntrantWalletSafeState, OpenCompetitionEvent,
+    OpenCompetitionFundingAuthorization, OpenCompetitionOffchainGates, OpenCompetitionOperation,
+    OpenCompetitionReadinessReport, OpenCompetitionReleaseManifest, OpenCompetitionSafeState,
+    OpenCompetitionStateQuery, OpenCompetitionVerifierCatalog, OpenCompetitionVerifierProfile,
+    PrepareAgentToEarnInput, RpcTransactionReceipt, SolverLeaderboardAwardSafeObservation,
+    StandingMetaV2ChildPreparationPlan, StandingMetaV2ChildPreparationRequest,
+    StandingMetaV4ActionPlan, StandingMetaV4EconomicsEvidence, StandingMetaV4Operation,
+    StandingMetaV4ReadinessEvidence, StandingMetaV4ReadinessReport,
+    AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION, AUTONOMOUS_FUND_WITH_AUTHORIZATION_SELECTOR,
+    AUTONOMOUS_V2_PROTOCOL_VERSION,
 };
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use cloud_agent::{
@@ -323,6 +326,9 @@ use worker::{
         prepare_standing_meta_v2_child,
         plan_autonomous_bounty_creation,
         plan_autonomous_bounty_authorized_creation,
+        quote_autonomous_v2_bounty_route,
+        plan_autonomous_v2_bounty_creation,
+        plan_autonomous_v2_bounty_authorized_creation,
         plan_autonomous_bounty_contribution,
         plan_autonomous_bounty_authorized_contribution,
         plan_autonomous_bounty_claim,
@@ -1269,6 +1275,27 @@ struct PlanAutonomousBountyContributionRequest {
 struct PlanAutonomousBountyAuthorizedCreationRequest {
     network: Option<String>,
     create: AutonomousBountyCreate,
+    signature: AutonomousBountyAuthorizationSignature,
+    relayer: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct QuoteAutonomousV2BountyRequest {
+    network: Option<String>,
+    solver_reward: Money,
+    verifier_reward: Money,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanAutonomousV2BountyCreationRequest {
+    network: Option<String>,
+    create: AutonomousBountyV2Create,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanAutonomousV2BountyAuthorizedCreationRequest {
+    network: Option<String>,
+    create: AutonomousBountyV2Create,
     signature: AutonomousBountyAuthorizationSignature,
     relayer: Option<String>,
 }
@@ -2577,6 +2604,18 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/base/autonomous-bounties/authorized-creation-plan",
             post(plan_autonomous_bounty_authorized_creation),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/v2/quote",
+            post(quote_autonomous_v2_bounty_route),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/v2/creation-plan",
+            post(plan_autonomous_v2_bounty_creation),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/v2/authorized-creation-plan",
+            post(plan_autonomous_v2_bounty_authorized_creation),
         )
         .route(
             "/v1/base/autonomous-bounties/contribution-plan",
@@ -11160,6 +11199,52 @@ fn configured_autonomous_planner(network: &str) -> Result<AutonomousBountyTxPlan
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
+/// The configured autonomous-v2 factory for `network`, or 503 when v2 is not configured there.
+fn configured_autonomous_v2_deployment(
+    network: &str,
+) -> Result<service_runtime::AutonomousV2Deployment, StatusCode> {
+    let descriptor = base_network_descriptor(network).map_err(|_| StatusCode::BAD_REQUEST)?;
+    match service_runtime::autonomous_v2_deployment_for_chain(descriptor.chain_id) {
+        Ok(Some(deployment)) => Ok(deployment),
+        Err(service_runtime::AutonomousV2DeploymentError::UnsupportedNetwork) => {
+            Err(StatusCode::BAD_REQUEST)
+        }
+        Ok(None) | Err(_) => Err(StatusCode::SERVICE_UNAVAILABLE),
+    }
+}
+
+fn configured_autonomous_v2_planner(
+    network: &str,
+) -> Result<
+    (
+        AutonomousBountyTxPlanner,
+        service_runtime::AutonomousV2Deployment,
+    ),
+    StatusCode,
+> {
+    let deployment = configured_autonomous_v2_deployment(network)?;
+    let planner = AutonomousBountyTxPlanner::new(&deployment.factory, &deployment.implementation)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok((planner, deployment))
+}
+
+/// Canonical factories indexed for `network`: the v1 factory and, when configured, the v2 factory.
+fn configured_canonical_factories(network: &str) -> Result<Vec<String>, StatusCode> {
+    let v1 = configured_autonomous_planner(network).map(|planner| planner.factory_contract);
+    let v2 = configured_autonomous_v2_deployment(network).map(|deployment| deployment.factory);
+    match (v1, v2) {
+        (Err(StatusCode::BAD_REQUEST), _) => Err(StatusCode::BAD_REQUEST),
+        (Ok(v1), Ok(v2)) => Ok(vec![v1, v2]),
+        (Ok(v1), Err(_)) => Ok(vec![v1]),
+        (Err(_), Ok(v2)) => Ok(vec![v2]),
+        (Err(error), Err(_)) => Err(error),
+    }
+}
+
+fn is_autonomous_v2_item(item: &AutonomousBountyFeedItem) -> bool {
+    item.protocol_version.as_deref() == Some(AUTONOMOUS_V2_PROTOCOL_VERSION)
+}
+
 async fn require_indexed_canonical_bounty(
     state: &SharedState,
     network: &str,
@@ -11181,15 +11266,20 @@ async fn indexed_autonomous_bounty(
     let Some(store) = &state.store else {
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     };
-    let planner = configured_autonomous_planner(network)?;
+    let factories = configured_canonical_factories(network)?;
     let events = store
         .list_autonomous_bounty_events(network)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let canonical_contracts = store
-        .list_canonical_autonomous_bounty_contracts(network, &planner.factory_contract)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut canonical_contracts = Vec::new();
+    for factory in &factories {
+        canonical_contracts.extend(
+            store
+                .list_canonical_autonomous_bounty_contracts(network, factory)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+        );
+    }
     if !canonical_contracts
         .iter()
         .any(|contract| contract.eq_ignore_ascii_case(bounty_contract))
@@ -11351,6 +11441,88 @@ async fn plan_autonomous_bounty_authorized_creation(
         .map_err(|_| StatusCode::BAD_REQUEST)?;
     record_opportunity_creation_progress(&state, network, &terms, "wallet_signed").await?;
     Ok(Json(plan))
+}
+
+#[utoipa::path(post, path = "/v1/base/autonomous-bounties/v2/quote", responses((status = 200, description = "Fee-inclusive autonomous-v2 funding target for the configured v2 factory"), (status = 503, description = "No autonomous-v2 factory is configured for this network")))]
+async fn quote_autonomous_v2_bounty_route(
+    Json(request): Json<QuoteAutonomousV2BountyRequest>,
+) -> Result<Json<AutonomousBountyV2Quote>, StatusCode> {
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    let deployment = configured_autonomous_v2_deployment(network)?;
+    let amount = |money: &Money, allow_zero: bool| {
+        u128::try_from(money.amount)
+            .ok()
+            .filter(|value| {
+                money.currency.eq_ignore_ascii_case("usdc") && (allow_zero || *value > 0)
+            })
+            .ok_or(StatusCode::BAD_REQUEST)
+    };
+    quote_autonomous_v2_bounty(
+        amount(&request.solver_reward, false)?,
+        amount(&request.verifier_reward, true)?,
+        &deployment.fee,
+    )
+    .map(Json)
+    .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+#[utoipa::path(post, path = "/v1/base/autonomous-bounties/v2/creation-plan", responses((status = 200, description = "Unsigned autonomous-v2 creation plan whose target includes the platform fee"), (status = 409, description = "Creation does not match its published v2 terms or public-earning policy")))]
+async fn plan_autonomous_v2_bounty_creation(
+    State(state): State<SharedState>,
+    Json(request): Json<PlanAutonomousV2BountyCreationRequest>,
+) -> Result<Json<AutonomousBountyV2CreationPlan>, StatusCode> {
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    let (planner, deployment) = configured_autonomous_v2_planner(network)?;
+    let terms =
+        require_autonomous_v2_creation_terms(&state, network, &request.create, &deployment).await?;
+    let plan = planner
+        .plan_v2_creation(network, &request.create, &deployment.fee)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    record_opportunity_creation_progress(&state, network, &terms, "funding_prepared").await?;
+    Ok(Json(plan))
+}
+
+#[utoipa::path(post, path = "/v1/base/autonomous-bounties/v2/authorized-creation-plan", responses((status = 200, description = "Relayer transaction plan for an autonomous-v2 creation after the creator signs the fee-inclusive EIP-3009 authorization")))]
+async fn plan_autonomous_v2_bounty_authorized_creation(
+    State(state): State<SharedState>,
+    Json(request): Json<PlanAutonomousV2BountyAuthorizedCreationRequest>,
+) -> Result<Json<AutonomousBountyAuthorizedCreationPlan>, StatusCode> {
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    let (planner, deployment) = configured_autonomous_v2_planner(network)?;
+    let terms =
+        require_autonomous_v2_creation_terms(&state, network, &request.create, &deployment).await?;
+    let plan = planner
+        .plan_v2_authorized_creation(
+            network,
+            &request.create,
+            &deployment.fee,
+            &request.signature,
+            request.relayer.as_deref(),
+        )
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    record_opportunity_creation_progress(&state, network, &terms, "wallet_signed").await?;
+    Ok(Json(plan))
+}
+
+async fn require_autonomous_v2_creation_terms(
+    state: &SharedState,
+    network: &str,
+    create: &AutonomousBountyV2Create,
+    deployment: &service_runtime::AutonomousV2Deployment,
+) -> Result<AutonomousBountyTermsRecord, StatusCode> {
+    let terms = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?
+        .get_autonomous_bounty_terms(&create.base.terms_hash)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    validate_autonomous_v2_creation_for_public_earning(network, create, &terms, &deployment.fee)
+        .map_err(|_| StatusCode::CONFLICT)?;
+    service_runtime::verifier_readiness::require_available(&terms)
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok(terms)
 }
 
 async fn require_autonomous_creation_terms(
@@ -13748,11 +13920,51 @@ async fn plan_autonomous_bounty_submission_authorization(
     Json(request): Json<PlanAutonomousBountySubmissionAuthorizationRequest>,
 ) -> Result<Json<AutonomousBountySubmissionAuthorizationTypedData>, StatusCode> {
     let network = request.network.as_deref().unwrap_or("base-mainnet");
-    require_indexed_canonical_bounty(&state, network, &request.submission.bounty_contract).await?;
-    configured_autonomous_planner(network)?
-        .plan_submission_authorization(network, &request.submission)
-        .map(Json)
-        .map_err(|_| StatusCode::BAD_REQUEST)
+    let item =
+        indexed_autonomous_bounty(&state, network, &request.submission.bounty_contract).await?;
+    if !item.terms_valid {
+        return Err(StatusCode::CONFLICT);
+    }
+    plan_submission_authorization_for_item(
+        &item,
+        network,
+        &request.submission,
+        || configured_autonomous_planner(network),
+        || configured_autonomous_v2_planner(network).map(|(planner, _)| planner),
+    )
+    .map(Json)
+}
+
+/// v2 bounties sign under EIP-712 domain version "2" and v1 bounties under "1"; a signature
+/// for the wrong domain is rejected on-chain.
+fn plan_submission_authorization_for_item(
+    item: &AutonomousBountyFeedItem,
+    network: &str,
+    submission: &AutonomousBountySubmissionAuthorizationRequest,
+    v1: impl FnOnce() -> Result<AutonomousBountyTxPlanner, StatusCode>,
+    v2: impl FnOnce() -> Result<AutonomousBountyTxPlanner, StatusCode>,
+) -> Result<AutonomousBountySubmissionAuthorizationTypedData, StatusCode> {
+    if is_autonomous_v2_item(item) {
+        v2()?.plan_v2_submission_authorization(network, submission)
+    } else {
+        v1()?.plan_submission_authorization(network, submission)
+    }
+    .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+fn plan_verification_attestation_for_item(
+    item: &AutonomousBountyFeedItem,
+    network: &str,
+    attestation: &AutonomousVerificationAttestationRequest,
+    v1: impl FnOnce() -> Result<AutonomousBountyTxPlanner, StatusCode>,
+    v2: impl FnOnce() -> Result<AutonomousBountyTxPlanner, StatusCode>,
+) -> Result<AutonomousVerificationAttestationTypedData, StatusCode> {
+    if is_autonomous_v2_item(item) {
+        v2()?.plan_v2_verification_attestation(network, attestation)
+    } else {
+        v1()?.plan_verification_attestation(network, attestation)
+    }
+    .map_err(|_| StatusCode::BAD_REQUEST)
 }
 
 #[utoipa::path(post, path = "/v1/base/autonomous-bounties/verification-attestation-plan", responses((status = 200, description = "Exact EIP-712 payload for one committed verifier to sign")))]
@@ -13766,10 +13978,14 @@ async fn plan_autonomous_verification_attestation(
     let observed_at = u64::try_from(Utc::now().timestamp()).map_err(|_| StatusCode::BAD_REQUEST)?;
     validate_attestation_request_against_feed(&item, &request.attestation, observed_at)
         .map_err(|_| StatusCode::CONFLICT)?;
-    configured_autonomous_planner(network)?
-        .plan_verification_attestation(network, &request.attestation)
-        .map(Json)
-        .map_err(|_| StatusCode::BAD_REQUEST)
+    plan_verification_attestation_for_item(
+        &item,
+        network,
+        &request.attestation,
+        || configured_autonomous_planner(network),
+        || configured_autonomous_v2_planner(network).map(|(planner, _)| planner),
+    )
+    .map(Json)
 }
 
 #[utoipa::path(post, path = "/v1/base/autonomous-bounties/module-settlement-plan", responses((status = 200, description = "Permissionless deterministic verifier call that atomically settles on pass")))]
@@ -14545,11 +14761,15 @@ async fn load_scoped_autonomous_bounty_feed(
         .store
         .as_ref()
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-    let planner = configured_autonomous_planner(network)?;
-    let events = store
-        .list_autonomous_bounty_history_for_contract(network, &planner.factory_contract, contract)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut events = Vec::new();
+    for factory in configured_canonical_factories(network)? {
+        events.extend(
+            store
+                .list_autonomous_bounty_history_for_contract(network, &factory, contract)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+        );
+    }
     let hashes = scoped_autonomous_terms_hashes(&events);
     let mut terms = Vec::new();
     for hash in hashes {
@@ -17170,6 +17390,148 @@ mod tests {
         primitives::B256,
         signers::{local::PrivateKeySigner, SignerSync},
     };
+
+    const AUTONOMOUS_V2_FIXTURE: &str =
+        include_str!("../../chain-base/tests/fixtures/autonomous-v2-loop.json");
+
+    fn autonomous_v2_fixture_feed() -> (serde_json::Value, Vec<AutonomousBountyFeedItem>) {
+        let fixture: serde_json::Value = serde_json::from_str(AUTONOMOUS_V2_FIXTURE).unwrap();
+        let logs: Vec<chain_base::RpcEvmLog> =
+            serde_json::from_value(fixture["logs"].clone()).unwrap();
+        let events =
+            decode_autonomous_bounty_logs(chain_base::rpc_logs_to_evm_logs(logs).unwrap()).unwrap();
+        let feed = build_autonomous_bounty_feed(events, Vec::new(), false).unwrap();
+        (fixture, feed)
+    }
+
+    #[test]
+    fn signing_plans_follow_each_bounty_protocol_domain() {
+        let (fixture, feed) = autonomous_v2_fixture_feed();
+        let bounty = fixture["gasless_loop"]["bounty"].as_str().unwrap();
+        let v2_item = feed
+            .iter()
+            .find(|item| item.bounty_contract == bounty)
+            .unwrap()
+            .clone();
+        assert!(is_autonomous_v2_item(&v2_item));
+        let mut v1_item = v2_item.clone();
+        v1_item.protocol_version = None;
+        let planner = || {
+            AutonomousBountyTxPlanner::new(
+                fixture["factory"].as_str().unwrap(),
+                fixture["implementation"].as_str().unwrap(),
+            )
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+        };
+        let unavailable = || Err(StatusCode::SERVICE_UNAVAILABLE);
+        let steps = fixture["gasless_loop"]["steps"].as_array().unwrap();
+        let signed_submission = &steps[2]["authorizations"][0];
+        let submission: AutonomousBountySubmissionAuthorizationRequest =
+            serde_json::from_value(signed_submission["request"]["submission"].clone()).unwrap();
+        let typed = plan_submission_authorization_for_item(
+            &v2_item,
+            "base-sepolia",
+            &submission,
+            unavailable,
+            planner,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&typed).unwrap(),
+            signed_submission["typed_data"],
+            "the hosted v2 plan must equal the typed data the contract accepted"
+        );
+        let v1 = plan_submission_authorization_for_item(
+            &v1_item,
+            "base-sepolia",
+            &submission,
+            planner,
+            unavailable,
+        )
+        .unwrap();
+        assert_eq!(v1.domain.version, "1");
+        assert_eq!(
+            plan_submission_authorization_for_item(
+                &v2_item,
+                "base-sepolia",
+                &submission,
+                planner,
+                unavailable
+            )
+            .unwrap_err(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "a v2 bounty never falls back to the v1 domain"
+        );
+
+        let signed_verdict = &steps[3]["authorizations"][0];
+        let attestation: AutonomousVerificationAttestationRequest =
+            serde_json::from_value(signed_verdict["request"]["attestation"].clone()).unwrap();
+        let typed = plan_verification_attestation_for_item(
+            &v2_item,
+            "base-sepolia",
+            &attestation,
+            unavailable,
+            planner,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&typed).unwrap(),
+            signed_verdict["typed_data"]
+        );
+    }
+
+    #[tokio::test]
+    async fn autonomous_v2_quote_requires_a_pinned_configured_factory() {
+        let prefix = "BASE_SEPOLIA_BOUNTY_V2";
+        let names = [
+            "FACTORY",
+            "IMPLEMENTATION",
+            "PLATFORM_FEE_BPS",
+            "PLATFORM_FEE_RECIPIENT",
+        ];
+        let request = |network: &str| QuoteAutonomousV2BountyRequest {
+            network: Some(network.to_string()),
+            solver_reward: Money::new(1_000_000, "USDC").unwrap(),
+            verifier_reward: Money::new(100_000, "USDC").unwrap(),
+        };
+        for name in names {
+            std::env::remove_var(format!("{prefix}_{name}"));
+        }
+        assert_eq!(
+            quote_autonomous_v2_bounty_route(Json(request("base-sepolia")))
+                .await
+                .unwrap_err(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        for (name, value) in names.into_iter().zip([
+            "0xcf7ed3acca5a467e9e704c703e8d87f634fb0fc9",
+            "0xd8058efe0198ae9dd7d563e1b4938dcbc86a1f81",
+            "750",
+            "0x884834E884d6e93462655A2820140aD03E6747bC",
+        ]) {
+            std::env::set_var(format!("{prefix}_{name}"), value);
+        }
+        let quote = quote_autonomous_v2_bounty_route(Json(request("base-sepolia")))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(quote.platform_fee, "75000");
+        assert_eq!(quote.target_amount, "1175000");
+        assert_eq!(
+            configured_canonical_factories("base-sepolia").unwrap(),
+            vec!["0xcf7ed3acca5a467e9e704c703e8d87f634fb0fc9".to_string()]
+        );
+        assert_eq!(
+            quote_autonomous_v2_bounty_route(Json(request("base-mainnet")))
+                .await
+                .unwrap_err(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "mainnet v2 stays unavailable until a reviewed deployment is pinned"
+        );
+        for name in names {
+            std::env::remove_var(format!("{prefix}_{name}"));
+        }
+    }
     use app::{
         AddFundingContributionRequest, ClaimBountyRequest, CreateFundingIntentRequest,
         OpenPooledBountyRequest, PostBountyRequest, RegisterAgentRequest,

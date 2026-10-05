@@ -9,7 +9,10 @@ use app::{
     RejectRiskEventRequest, RequestQuotesRequest, ReviewedBountyApproval, SubmitResultRequest,
     VerifySubmissionRequest,
 };
-use chain_base::{base_network_descriptor, BaseNetworkDescriptor};
+use chain_base::{
+    base_network_descriptor, quote_autonomous_v2_bounty, AutonomousV2FactoryFee,
+    BaseNetworkDescriptor,
+};
 use chrono::Utc;
 use db::{BountyStatusScope, PostgresStore};
 use domain::{
@@ -69,6 +72,95 @@ pub fn autonomous_planner_addresses(
         )),
         _ => Err(PlannerAddressError::UnsupportedNetwork),
     }
+}
+
+/// One configured `AgentBountyFactoryV2`: its address, clone implementation, and immutable fee
+/// terms. The fee terms must equal the factory's constructor arguments; on-chain events remain the
+/// only evidence, and the feed fails closed if a bounty's fee differs from its terms.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutonomousV2Deployment {
+    pub factory: String,
+    pub implementation: String,
+    pub fee: AutonomousV2FactoryFee,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutonomousV2DeploymentError {
+    UnsupportedNetwork,
+    /// Base mainnet v2 is refused until an independently reviewed deployment is pinned here.
+    MainnetNotPinned,
+    /// Some but not all of the four v2 settings are set.
+    Incomplete,
+    InvalidFeeTerms,
+}
+
+/// Resolves a v2 deployment from its four settings. All unset means v2 is not configured.
+pub fn autonomous_v2_deployment(
+    chain_id: u64,
+    factory: Option<String>,
+    implementation: Option<String>,
+    platform_fee_bps: Option<String>,
+    platform_fee_recipient: Option<String>,
+) -> Result<Option<AutonomousV2Deployment>, AutonomousV2DeploymentError> {
+    let settings = [
+        factory,
+        implementation,
+        platform_fee_bps,
+        platform_fee_recipient,
+    ]
+    .map(|value| value.and_then(|item| non_empty(&item).map(str::to_string)));
+    if settings.iter().all(Option::is_none) {
+        return match chain_id {
+            8_453 | 84_532 => Ok(None),
+            _ => Err(AutonomousV2DeploymentError::UnsupportedNetwork),
+        };
+    }
+    match chain_id {
+        84_532 => {}
+        8_453 => return Err(AutonomousV2DeploymentError::MainnetNotPinned),
+        _ => return Err(AutonomousV2DeploymentError::UnsupportedNetwork),
+    }
+    let [Some(factory), Some(implementation), Some(bps), Some(recipient)] = settings else {
+        return Err(AutonomousV2DeploymentError::Incomplete);
+    };
+    let fee = AutonomousV2FactoryFee {
+        platform_fee_bps: bps
+            .parse()
+            .map_err(|_| AutonomousV2DeploymentError::InvalidFeeTerms)?,
+        platform_fee_recipient: recipient,
+    };
+    let quote = quote_autonomous_v2_bounty(0, 0, &fee)
+        .map_err(|_| AutonomousV2DeploymentError::InvalidFeeTerms)?;
+    let normalize = |address: &str| {
+        chain_base::normalize_evm_address(address)
+            .map_err(|_| AutonomousV2DeploymentError::Incomplete)
+    };
+    Ok(Some(AutonomousV2Deployment {
+        factory: normalize(&factory)?,
+        implementation: normalize(&implementation)?,
+        fee: AutonomousV2FactoryFee {
+            platform_fee_bps: quote.platform_fee_bps,
+            platform_fee_recipient: quote.platform_fee_recipient,
+        },
+    }))
+}
+
+/// Reads `BASE_{SEPOLIA,MAINNET}_BOUNTY_V2_{FACTORY,IMPLEMENTATION,PLATFORM_FEE_BPS,PLATFORM_FEE_RECIPIENT}`.
+pub fn autonomous_v2_deployment_for_chain(
+    chain_id: u64,
+) -> Result<Option<AutonomousV2Deployment>, AutonomousV2DeploymentError> {
+    let prefix = match chain_id {
+        84_532 => "BASE_SEPOLIA_BOUNTY_V2",
+        8_453 => "BASE_MAINNET_BOUNTY_V2",
+        _ => return Err(AutonomousV2DeploymentError::UnsupportedNetwork),
+    };
+    autonomous_v2_deployment(
+        chain_id,
+        env_nonempty(&format!("{prefix}_FACTORY")),
+        env_nonempty(&format!("{prefix}_IMPLEMENTATION")),
+        env_nonempty(&format!("{prefix}_PLATFORM_FEE_BPS")),
+        env_nonempty(&format!("{prefix}_PLATFORM_FEE_RECIPIENT")),
+    )
 }
 
 pub fn canonical_mainnet_factory(
@@ -899,8 +991,9 @@ async fn hydrate(
 #[cfg(test)]
 mod tests {
     use super::{
-        autonomous_planner_addresses, bounty_status_from_network, operator_token_is_authorized,
-        BountyStatusLookupError, PlannerAddressError, CANONICAL_BASE_MAINNET_BOUNTY_FACTORY,
+        autonomous_planner_addresses, autonomous_v2_deployment, bounty_status_from_network,
+        operator_token_is_authorized, AutonomousV2DeploymentError, BountyStatusLookupError,
+        PlannerAddressError, CANONICAL_BASE_MAINNET_BOUNTY_FACTORY,
         CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION,
     };
     use app::{BountyNetwork, PostBountyRequest};
@@ -942,6 +1035,73 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn v2_deployment_requires_all_settings_valid_fee_terms_and_no_mainnet() {
+        let some = |value: &str| Some(value.to_string());
+        let factory = "0xCF7ED3ACCA5A467E9E704C703E8D87F634FB0FC9";
+        let implementation = "0xd8058efe0198ae9dd7d563e1b4938dcbc86a1f81";
+        let recipient = "0x884834E884d6e93462655A2820140aD03E6747bC";
+        assert_eq!(
+            autonomous_v2_deployment(84_532, None, None, None, None),
+            Ok(None)
+        );
+        assert_eq!(
+            autonomous_v2_deployment(8_453, None, None, None, None),
+            Ok(None)
+        );
+        let deployment = autonomous_v2_deployment(
+            84_532,
+            some(factory),
+            some(implementation),
+            some("750"),
+            some(recipient),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(deployment.factory, factory.to_ascii_lowercase());
+        assert_eq!(deployment.fee.platform_fee_bps, 750);
+        assert_eq!(
+            deployment.fee.platform_fee_recipient,
+            recipient.to_ascii_lowercase()
+        );
+        assert_eq!(
+            autonomous_v2_deployment(84_532, some(factory), None, some("750"), some(recipient)),
+            Err(AutonomousV2DeploymentError::Incomplete)
+        );
+        for (bps, fee_recipient) in [
+            ("1001", recipient),
+            ("750", "0x0000000000000000000000000000000000000000"),
+            ("0", recipient),
+            ("-1", recipient),
+        ] {
+            assert_eq!(
+                autonomous_v2_deployment(
+                    84_532,
+                    some(factory),
+                    some(implementation),
+                    some(bps),
+                    some(fee_recipient)
+                ),
+                Err(AutonomousV2DeploymentError::InvalidFeeTerms),
+                "{bps} {fee_recipient}"
+            );
+        }
+        assert_eq!(
+            autonomous_v2_deployment(
+                8_453,
+                some(factory),
+                some(implementation),
+                some("750"),
+                some(recipient)
+            ),
+            Err(AutonomousV2DeploymentError::MainnetNotPinned)
+        );
+        assert_eq!(
+            autonomous_v2_deployment(1, None, None, None, None),
+            Err(AutonomousV2DeploymentError::UnsupportedNetwork)
+        );
     }
 
     #[test]

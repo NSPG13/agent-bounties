@@ -332,6 +332,71 @@ impl AutonomousBountyTxPlanner {
     }
 }
 
+/// Checks a v2 creation request against its published terms: every v1 commitment, the v2
+/// `protocol_version`, the factory's immutable fee terms, and the claim gate. Returns the platform
+/// fee the funding target includes.
+pub fn validate_autonomous_v2_creation_against_terms(
+    network: &str,
+    create: &AutonomousBountyV2Create,
+    terms: &AutonomousBountyTermsRecord,
+    factory_fee: &AutonomousV2FactoryFee,
+) -> Result<u128, ChainBaseError> {
+    validate_creation_against_terms_for_protocol(
+        network,
+        &create.base,
+        terms,
+        AUTONOMOUS_V2_PROTOCOL_VERSION,
+    )?;
+    let contract_terms = terms.document.contract_terms.as_object().ok_or_else(|| {
+        ChainBaseError::InvalidTermsDocument("published contract_terms are unavailable".to_string())
+    })?;
+    let quote = quote_autonomous_v2_bounty(
+        autonomous_money_to_uint256(&create.base.solver_reward, false)?,
+        autonomous_money_to_uint256(&create.base.verifier_reward, true)?,
+        factory_fee,
+    )?;
+    let platform_fee: u128 = quote
+        .platform_fee
+        .parse()
+        .map_err(|_| ChainBaseError::InvalidAmount)?;
+    let (registry, source) = create.gate_words()?;
+    let mut planned = json!({
+        "platform_fee_bps": quote.platform_fee_bps,
+        "platform_fee": u64::try_from(platform_fee).map_err(|_| ChainBaseError::InvalidAmount)?,
+        "platform_fee_recipient": quote.platform_fee_recipient,
+    });
+    if registry != [0u8; 32] {
+        planned["claim_eligibility_registry"] = json!(address_from_word(registry));
+        planned["claim_eligibility_source"] = json!(word_hex(source));
+    }
+    let mut errors = Vec::new();
+    validate_v2_terms_against_creation(contract_terms, &planned, &mut errors);
+    if let Some(error) = errors.into_iter().next() {
+        return Err(ChainBaseError::InvalidTermsDocument(error));
+    }
+    Ok(platform_fee)
+}
+
+/// v2 public-earning gate: exact v2 terms plus the shared policy, with the fee in the target.
+/// Gated (invoice-contractor) bounties are not open public inventory and are rejected here; plan
+/// them through the invoice treasury path instead.
+pub fn validate_autonomous_v2_creation_for_public_earning(
+    network: &str,
+    create: &AutonomousBountyV2Create,
+    terms: &AutonomousBountyTermsRecord,
+    factory_fee: &AutonomousV2FactoryFee,
+) -> Result<u128, ChainBaseError> {
+    let platform_fee =
+        validate_autonomous_v2_creation_against_terms(network, create, terms, factory_fee)?;
+    if create.claim_eligibility_registry.is_some() {
+        return Err(ChainBaseError::InvalidTermsDocument(
+            "claim-gated bounties are not open public earning inventory".to_string(),
+        ));
+    }
+    validate_public_earning_policy(&create.base, terms, platform_fee)?;
+    Ok(platform_fee)
+}
+
 /// One autonomous-v2 planning request, as accepted by `cli autonomous-v2-plan`. Every action
 /// returns unsigned typed data or an unsigned transaction intent; none of them is funding, claim,
 /// submission or settlement evidence.

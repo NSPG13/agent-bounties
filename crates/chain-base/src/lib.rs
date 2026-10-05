@@ -6757,6 +6757,23 @@ pub fn validate_autonomous_creation_against_terms(
     create: &AutonomousBountyCreate,
     terms: &AutonomousBountyTermsRecord,
 ) -> Result<(), ChainBaseError> {
+    validate_creation_against_terms_for_protocol(
+        network,
+        create,
+        terms,
+        AUTONOMOUS_V1_PROTOCOL_VERSION,
+    )
+}
+
+/// Shared v1/v2 check that a creation request matches its published terms exactly. The
+/// committed `protocol_version` must equal `protocol_version`; v2 fee and gate commitments are
+/// checked separately by `validate_autonomous_v2_creation_against_terms`.
+pub(crate) fn validate_creation_against_terms_for_protocol(
+    network: &str,
+    create: &AutonomousBountyCreate,
+    terms: &AutonomousBountyTermsRecord,
+    protocol_version: &str,
+) -> Result<(), ChainBaseError> {
     validate_reconciled_regression_benchmark(&terms.document)?;
     validate_known_deterministic_module_semantics(&terms.document)?;
     let hashes_match = create.terms_hash.eq_ignore_ascii_case(&terms.terms_hash)
@@ -6781,11 +6798,10 @@ pub fn validate_autonomous_creation_against_terms(
     let contract_terms = terms.document.contract_terms.as_object().ok_or_else(|| {
         ChainBaseError::InvalidTermsDocument("published contract_terms are unavailable".to_string())
     })?;
-    if contract_terms_string(contract_terms, "protocol_version")? != AUTONOMOUS_V1_PROTOCOL_VERSION
-    {
-        return Err(ChainBaseError::InvalidTermsDocument(
-            "autonomous-v1 creation requires autonomous-v1 terms; plan autonomous-v2 terms with plan_v2_creation".to_string(),
-        ));
+    if contract_terms_string(contract_terms, "protocol_version")? != protocol_version {
+        return Err(ChainBaseError::InvalidTermsDocument(format!(
+            "{protocol_version} creation requires {protocol_version} terms; plan autonomous-v1 terms with plan_creation and autonomous-v2 terms with plan_v2_creation"
+        )));
     }
     let network_descriptor = base_network_descriptor(network)?;
     let committed_network =
@@ -6910,13 +6926,25 @@ pub fn validate_autonomous_creation_for_public_earning(
     terms: &AutonomousBountyTermsRecord,
 ) -> Result<(), ChainBaseError> {
     validate_autonomous_creation_against_terms(network, create, terms)?;
+    validate_public_earning_policy(create, terms, 0)
+}
 
+/// Public-earning policy shared by v1 and v2: a positive solver reward, the verifier-reward
+/// floor, full atomic funding of the fee-inclusive target, and only supported verifiers.
+pub(crate) fn validate_public_earning_policy(
+    create: &AutonomousBountyCreate,
+    terms: &AutonomousBountyTermsRecord,
+    platform_fee: u128,
+) -> Result<(), ChainBaseError> {
     let solver_reward = autonomous_money_to_uint256(&create.solver_reward, false)?;
     let verifier_reward = autonomous_money_to_uint256(&create.verifier_reward, true)?;
     let initial_funding = autonomous_money_to_uint256(&create.initial_funding, true)?;
-    let target = solver_reward.checked_add(verifier_reward).ok_or_else(|| {
-        ChainBaseError::InvalidTermsDocument("bounty funding target overflowed".to_string())
-    })?;
+    let target = solver_reward
+        .checked_add(verifier_reward)
+        .and_then(|value| value.checked_add(platform_fee))
+        .ok_or_else(|| {
+            ChainBaseError::InvalidTermsDocument("bounty funding target overflowed".to_string())
+        })?;
     if solver_reward == 0
         || verifier_reward < PUBLIC_EARNING_MIN_VERIFIER_REWARD_USDC_BASE_UNITS
         || initial_funding != target
@@ -8851,6 +8879,107 @@ mod tests {
             validate_autonomous_creation_for_public_earning("base-mainnet", &create, &record,)
                 .is_err()
         );
+
+        let fee_recipient = "0x884834e884d6e93462655a2820140ad03e6747bc";
+        let factory_fee = AutonomousV2FactoryFee {
+            platform_fee_bps: 750,
+            platform_fee_recipient: fee_recipient.to_string(),
+        };
+        let mut v2_document = record.document.clone();
+        v2_document.contract_terms["protocol_version"] = json!(AUTONOMOUS_V2_PROTOCOL_VERSION);
+        v2_document.contract_terms["platform_fee_bps"] = json!(750);
+        v2_document.contract_terms["platform_fee"] = json!({"amount": 67_500, "currency": "usdc"});
+        v2_document.contract_terms["platform_fee_recipient"] = json!(fee_recipient);
+        v2_document.contract_terms["initial_funding"] =
+            json!({"amount": 1_067_500, "currency": "usdc"});
+        let v2_record =
+            build_autonomous_bounty_terms_record(&record.creator_wallet, v2_document, now).unwrap();
+        let v2_create = AutonomousBountyV2Create {
+            base: AutonomousBountyCreate {
+                terms_hash: v2_record.terms_hash.clone(),
+                policy_hash: v2_record.policy_hash.clone(),
+                acceptance_criteria_hash: v2_record.acceptance_criteria_hash.clone(),
+                benchmark_hash: v2_record.benchmark_hash.clone(),
+                evidence_schema_hash: v2_record.evidence_schema_hash.clone(),
+                initial_funding: Money::new(1_067_500, "usdc").unwrap(),
+                ..create.clone()
+            },
+            claim_eligibility_registry: None,
+            claim_eligibility_source: None,
+        };
+        assert_eq!(
+            validate_autonomous_v2_creation_against_terms(
+                "base-mainnet",
+                &v2_create,
+                &v2_record,
+                &factory_fee
+            )
+            .unwrap(),
+            67_500
+        );
+        assert!(
+            validate_autonomous_creation_against_terms("base-mainnet", &v2_create.base, &v2_record)
+                .is_err(),
+            "v1 creation must refuse v2 terms"
+        );
+        let v1_hashes = AutonomousBountyV2Create {
+            base: create.clone(),
+            ..v2_create.clone()
+        };
+        assert!(
+            validate_autonomous_v2_creation_against_terms(
+                "base-mainnet",
+                &v1_hashes,
+                &record,
+                &factory_fee
+            )
+            .is_err(),
+            "v2 creation must refuse v1 terms"
+        );
+        for wrong_fee in [
+            AutonomousV2FactoryFee {
+                platform_fee_bps: 500,
+                ..factory_fee.clone()
+            },
+            AutonomousV2FactoryFee {
+                platform_fee_recipient: "0x00000000000000000000000000000000000000aa".to_string(),
+                ..factory_fee.clone()
+            },
+        ] {
+            assert!(
+                validate_autonomous_v2_creation_against_terms(
+                    "base-mainnet",
+                    &v2_create,
+                    &v2_record,
+                    &wrong_fee
+                )
+                .is_err(),
+                "terms must commit to the factory's exact fee terms"
+            );
+        }
+        let undeclared_gate = AutonomousBountyV2Create {
+            claim_eligibility_registry: Some(
+                "0x9fe46736679d2d9a65f0992f2272de9f3c7fa6e0".to_string(),
+            ),
+            claim_eligibility_source: Some(format!("0x{}", "aa".repeat(32))),
+            ..v2_create.clone()
+        };
+        assert!(validate_autonomous_v2_creation_against_terms(
+            "base-mainnet",
+            &undeclared_gate,
+            &v2_record,
+            &factory_fee
+        )
+        .is_err());
+        assert!(matches!(
+            validate_autonomous_v2_creation_for_public_earning(
+                "base-mainnet",
+                &undeclared_gate,
+                &v2_record,
+                &factory_fee
+            ),
+            Err(ChainBaseError::InvalidTermsDocument(_))
+        ));
         let derived = autonomous_bounty_create_from_terms(&record).unwrap();
         assert_eq!(derived.creator, create.creator);
         assert_eq!(derived.solver_reward, create.solver_reward);
