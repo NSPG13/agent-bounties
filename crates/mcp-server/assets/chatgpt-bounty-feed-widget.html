@@ -294,6 +294,13 @@
         white-space: nowrap;
       }
 
+      .fee-note {
+        margin: 8px 0 0;
+        color: var(--guild-muted);
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
       .evidence {
         margin: 0 14px 12px;
         padding-left: 9px;
@@ -547,6 +554,13 @@
           if (node) node.textContent = state.notice;
         }
 
+        function feeNote(item) {
+          const fee = item.platform_fee;
+          if (!fee || isPublicReview()) return "";
+          const percent = Number(fee.bps) / 100;
+          return `<p class="fee-note">Platform fee: ${esc(amount(fee.amount))} (${esc(percent.toLocaleString(undefined, { maximumFractionDigits: 2 }))}%), paid by the poster on top of the reward. The reward is not reduced.</p>`;
+        }
+
         function amount(money) {
           if (!money) return "Not stated";
           const raw = Number(money.amount || 0);
@@ -658,6 +672,7 @@
                       <strong>${esc(short(item.verification_method || item.review_method || "Public evidence", 30))}</strong>
                     </div>
                   </div>
+                  ${feeNote(item)}
                 </div>
               </div>
               <div class="evidence">${esc(short(item.evidence_boundary || "Inspect the authoritative source before acting.", 300))}</div>

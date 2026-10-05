@@ -127,6 +127,19 @@ pub struct OpportunityCashEconomics {
     pub scope_disclaimer: String,
 }
 
+/// The autonomous-v2 platform fee. The poster funds it on top of the solver and verifier rewards,
+/// so it never reduces the solver reward. `status` follows the canonical fee events: only `paid`
+/// and `forwarded` mean the recipient received it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct OpportunityPlatformFee {
+    pub amount: OpportunityAmount,
+    pub bps: u16,
+    pub recipient: String,
+    pub status: String,
+    pub paid_by: String,
+    pub protocol_version: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct OpportunityStandingMetaV4Economics {
     pub parent_solver_reward: OpportunityAmount,
@@ -220,6 +233,8 @@ pub struct OpportunityItem {
     pub standing_meta_bounty: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cash_economics: Option<OpportunityCashEconomics>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub platform_fee: Option<OpportunityPlatformFee>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub standing_meta_v4: Option<OpportunityStandingMetaV4>,
     pub decision_authority: String,
@@ -578,6 +593,7 @@ pub fn unfunded_opportunity(
         competition_ends_at: None,
         standing_meta_bounty: false,
         cash_economics: None,
+        platform_fee: None,
         standing_meta_v4: None,
         decision_authority: "The poster reviews this offchain submission; no canonical verifier is configured.".to_string(),
         payment_authority: "None. This opportunity is unfunded and creates no payment promise.".to_string(),
@@ -703,6 +719,7 @@ pub fn legacy_opportunity(
         competition_ends_at: None,
         standing_meta_bounty: false,
         cash_economics: None,
+        platform_fee: None,
         standing_meta_v4: None,
         decision_authority: format!("Legacy configured verification path: {verification_method}."),
         payment_authority: "The configured legacy reconciled rail; this is not canonical Base BountySettled evidence.".to_string(),
@@ -864,6 +881,14 @@ pub fn canonical_opportunity(
         competition_ends_at: None,
         standing_meta_bounty: standing_meta_v2_parent_context(item).is_ok(),
         cash_economics: Some(cash_economics),
+        platform_fee: item.platform_fee.as_ref().map(|fee| OpportunityPlatformFee {
+            amount: OpportunityAmount::usdc_base_units(fee.amount.clone()),
+            bps: fee.bps,
+            recipient: fee.recipient.clone(),
+            status: fee.status.clone(),
+            paid_by: "poster".to_string(),
+            protocol_version: item.protocol_version.clone().unwrap_or_default(),
+        }),
         standing_meta_v4: None,
         decision_authority: format!(
             "The immutable canonical verification mode/module configured on {} decides the submission result.",
@@ -1344,6 +1369,7 @@ pub fn open_competition_v2_opportunities(
                 gross_cash_margin_positive: net > 0,
                 scope_disclaimer: "Gross cash margin is solver reward minus the configured hosted proof and relay fees. It excludes gas, taxes, losing risk and other execution costs; winning is not guaranteed.".to_string(),
             }),
+            platform_fee: None,
             standing_meta_v4: None,
             decision_authority: format!(
                 "The immutable SP1 {} verifier and policy hashes on {} decide qualification.",
@@ -1612,6 +1638,7 @@ pub fn open_competition_opportunities(
             competition_ends_at,
             standing_meta_bounty: false,
             cash_economics: Some(cash_economics),
+            platform_fee: None,
             standing_meta_v4: None,
             decision_authority: format!("The exact immutable verifier {} with runtime hash {} decides each reveal; the lowest confirmed passing reveal sequence wins.", profile.verifier_address, profile.runtime_code_hash),
             payment_authority: format!("The immutable competition contract {bounty_contract} controls escrow; only its confirmed BountySettled event proves payment."),
@@ -2938,6 +2965,46 @@ mod tests {
         assert!(economics
             .scope_disclaimer
             .contains("not guaranteed net profit"));
+    }
+
+    #[test]
+    fn v2_opportunities_show_the_poster_paid_platform_fee() {
+        let v1 = canonical_opportunity(
+            &canonical("claimable", "1000000", true),
+            "base-mainnet",
+            "https://api.example",
+        )
+        .unwrap();
+        assert!(v1.platform_fee.is_none());
+        assert!(
+            serde_json::to_value(&v1)
+                .unwrap()
+                .get("platform_fee")
+                .is_none(),
+            "v1 output is unchanged"
+        );
+
+        let mut source = canonical("claimable", "1075000", true);
+        source.target_amount = "1075000".to_string();
+        source.protocol_version = Some("agent-bounties/autonomous-v2".to_string());
+        source.platform_fee = Some(chain_base::AutonomousBountyPlatformFee {
+            bps: 750,
+            amount: "75000".to_string(),
+            recipient: "0x884834e884d6e93462655a2820140ad03e6747bc".to_string(),
+            status: "pending".to_string(),
+        });
+        let v2 = canonical_opportunity(&source, "base-sepolia", "https://api.example").unwrap();
+        let fee = v2.platform_fee.as_ref().unwrap();
+        assert_eq!(fee.amount.amount, "75000");
+        assert_eq!(fee.bps, 750);
+        assert_eq!(fee.paid_by, "poster");
+        assert_eq!(fee.status, "pending");
+        assert_eq!(fee.protocol_version, "agent-bounties/autonomous-v2");
+        assert_eq!(
+            v2.reward.amount, "900000",
+            "the fee never reduces the solver reward"
+        );
+        assert_eq!(v2.funding_target.amount, "1075000");
     }
 
     #[test]

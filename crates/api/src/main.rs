@@ -450,6 +450,7 @@ use worker::{
         ,opportunities::OpportunityAmount
         ,opportunities::OpportunityNextAction
         ,opportunities::OpportunityEmbedLinks
+        ,opportunities::OpportunityPlatformFee
         ,opportunities::OpportunityStandingMetaV4Economics
         ,opportunities::OpportunityAnonymousSeparation
         ,opportunities::OpportunityVerifierGovernance

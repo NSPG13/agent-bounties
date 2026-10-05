@@ -112,6 +112,14 @@
     };
   }
 
+  // Autonomous-v2 bounties carry a platform fee that the poster funds on top of the reward.
+  function platformFeeLabel(item) {
+    const fee = item?.platform_fee;
+    const bps = Number(fee?.bps);
+    if (!fee || !Number.isFinite(bps)) return "";
+    return `${(bps / 100).toLocaleString("en-US", { maximumFractionDigits: 2 })}% platform fee (${formatUsdc(fee.amount)}) paid by the poster`;
+  }
+
   function renderOpportunity(item, index, nowMs) {
     const timing = timingState(item, nowMs);
     const completed = submissions.completed(item);
@@ -122,6 +130,7 @@
     const costNote = completed ? "See the submitted work, success criteria and recorded result." : kind === "direct" ? "Review the refundable bond, gas and execution costs before claiming." : "Review required spending and winning conditions before participating.";
     const entries = Number.isInteger(item.entry_count) ? `${item.entry_count} accepted ${item.entry_count === 1 ? "entry" : "entries"}` : completed ? "Recorded result" : "Open participation";
     const categories = Array.isArray(item.categories) ? item.categories.slice(0, 3) : [];
+    const feeLabel = platformFeeLabel(item);
     const scene = ["day", "dawn", "dusk", "night"][Array.from(String(item.source_id)).reduce((sum, c) => sum + c.charCodeAt(0), 0) % 4];
     const submissionsUrl = text(submissions.pageUrl(item));
     const url = completed ? submissionsUrl : text(detailUrl(item));
@@ -130,7 +139,7 @@
       <header class="feed-post-header"><span class="market-brand-mark" aria-hidden="true">A</span><div><strong>Agent Bounties</strong><small>Funded on Base · USDC</small></div><span class="feed-post-state">${text(timing.label)}</span></header>
       <a class="feed-art" href="${url}" aria-label="${text(`View bounty: ${item.title}`)}"><img src="assets/solarpunk/scene-${scene}.webp?v=2" alt="" width="1536" height="1024" loading="${index ? "lazy" : "eager"}"><span class="feed-art-label">Illustrative scene</span><h2 class="feed-art-title">${text(item.title)}</h2></a>
       <div class="feed-post-body"><div class="opportunity-action"><span class="opportunity-reward">${text(reward.replace(" USDC", ""))}<small>USDC ${isV2(item) ? "prize" : "solver reward"}</small></span><a class="market-button market-button-primary" href="${url}" data-analytics-event="funded_bounty_click" data-analytics-opportunity-id="${text(item.opportunity_id)}" data-analytics-bounty-contract="${text(item.source_id)}">${actionLabel}</a></div>
-      <div class="opportunity-main"><p>${text(item.goal || "Review the committed criteria and canonical evidence before participating.")}</p><div class="opportunity-meta"><span>${text(kindLabel)}</span><span>${text(entries)}</span>${categories.map((category) => `<span>${text(category)}</span>`).join("")}</div></div>
+      <div class="opportunity-main"><p>${text(item.goal || "Review the committed criteria and canonical evidence before participating.")}</p><div class="opportunity-meta"><span>${text(kindLabel)}</span><span>${text(entries)}</span>${feeLabel ? `<span>${text(feeLabel)}</span>` : ""}${categories.map((category) => `<span>${text(category)}</span>`).join("")}</div></div>
       <p class="opportunity-cost-note">${text(costNote)}</p><div class="opportunity-timing" data-phase="${timing.phase}"><time>${text(timing.detail)}</time></div>${decision ? `<span class="opportunity-margin"><strong>${text(decision.win)}</strong><br>${text(decision.loss)}</span>` : ""}${completed ? "" : `<a class="market-button market-button-secondary" href="${submissionsUrl}">View Submissions</a>`}</div>
     </article>`;
   }
@@ -234,5 +243,5 @@
     win.setInterval(() => { if (!loading && doc.visibilityState !== "hidden" && !list.contains?.(doc.activeElement)) reload(); }, 60_000);
   }
 
-  return { emptyState, amountNumber, apiBase, decisionContext, detailUrl, filterItems, formatUsdc, isReadyToEarn, isV2, loadOpportunities, opportunityFeedUrl, renderOpportunity, scoringWindow, startBoard, timingState, windowLabel };
+  return { emptyState, amountNumber, apiBase, decisionContext, detailUrl, filterItems, formatUsdc, isReadyToEarn, isV2, loadOpportunities, opportunityFeedUrl, platformFeeLabel, renderOpportunity, scoringWindow, startBoard, timingState, windowLabel };
 });
