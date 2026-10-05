@@ -4461,10 +4461,10 @@ fn autonomous_v2_bounty_create_property() -> Value {
         true,
     );
     schema["properties"]["claim_eligibility_registry"] = nullable_string_property(
-        "Optional ParticipantEligibilityRegistry that gates claims; set together with claim_eligibility_source.",
+        "Leave null. Claim-gated bounties are refused on public-earning creation tools; they are created only through the invoice treasury path.",
     );
     schema["properties"]["claim_eligibility_source"] = nullable_string_property(
-        "Optional 0x-prefixed bytes32 eligibility source the registry must attest for a claiming solver.",
+        "Leave null. Set only with claim_eligibility_registry, which public-earning creation tools refuse.",
     );
     schema
 }
@@ -8142,6 +8142,33 @@ mod tests {
             solver_reward: Money::new(1_000_000, "USDC").unwrap(),
             verifier_reward: Money::new(100_000, "USDC").unwrap(),
         };
+        // The process environment is shared by parallel tests: serialize, and restore the prior
+        // values even if an assertion fails.
+        static ENV_LOCK: Mutex<()> = Mutex::new(());
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        struct RestoreEnv(Vec<(String, Option<String>)>);
+        impl Drop for RestoreEnv {
+            fn drop(&mut self) {
+                for (name, value) in &self.0 {
+                    match value {
+                        Some(value) => std::env::set_var(name, value),
+                        None => std::env::remove_var(name),
+                    }
+                }
+            }
+        }
+        let _restore = RestoreEnv(
+            names
+                .iter()
+                .map(|name| {
+                    let name = format!("{prefix}_{name}");
+                    let value = std::env::var(&name).ok();
+                    (name, value)
+                })
+                .collect(),
+        );
         for name in names {
             std::env::remove_var(format!("{prefix}_{name}"));
         }
@@ -8163,9 +8190,6 @@ mod tests {
         let mainnet = quote_autonomous_v2_bounty_tool(Json(args("base-mainnet")))
             .await
             .0;
-        for name in names {
-            std::env::remove_var(format!("{prefix}_{name}"));
-        }
         let quote = &quoted["content"][0]["json"];
         assert_eq!(quote["platform_fee"], "75000", "{quoted}");
         assert_eq!(quote["target_amount"], "1175000");

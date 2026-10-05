@@ -13184,6 +13184,29 @@ async fn relay_atomic_sponsored_claim(
             "Replay the same request without creating another signature or sponsorship.",
         ));
     }
+    if is_autonomous_v2_item(item) {
+        // AtomicClaimSponsor pins the v1 factory, so a v2 reservation (one made before v2 bounties
+        // were refused sponsorship) can never relay. Fail it, which frees its budget, instead of
+        // telling the solver to retry forever. Nothing was broadcast, so nothing can be stranded.
+        const MESSAGE: &str = "the atomic claim sponsor accepts only autonomous-v1 bounties";
+        if let Some(store) = state.store.as_ref() {
+            store
+                .mark_bond_sponsorship_failed(
+                    sponsorship.id,
+                    "sponsorship_protocol_unsupported",
+                    MESSAGE,
+                )
+                .await
+                .map_err(map_agent_claim_db_error)?;
+        }
+        return Err(agent_claim_problem(
+            StatusCode::CONFLICT,
+            "sponsorship_protocol_unsupported",
+            "relay_atomic_claim",
+            MESSAGE,
+            "Start a fresh claim candidate and fund the exact bond from the solver wallet with request_bond_sponsorship=false.",
+        ));
+    }
     let sponsor_contract = state
         .bond_sponsor
         .contract_for(&candidate.network)
@@ -17595,6 +17618,102 @@ mod tests {
         assert!(
             !atomic_bond_sponsorship_fits(&v1_item, 20_000, 100_000),
             "an explicit policy without sponsorship_allowed opts out"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_reserved_v2_sponsorship_fails_terminally_instead_of_retrying() {
+        let (fixture, feed) = autonomous_v2_fixture_feed();
+        let bounty = fixture["gasless_loop"]["bounty"].as_str().unwrap();
+        let v2_item = feed
+            .iter()
+            .find(|item| item.bounty_contract == bounty)
+            .unwrap()
+            .clone();
+        let mut v1_item = v2_item.clone();
+        v1_item.protocol_version = None;
+        let now = Utc::now();
+        let solver_wallet = "0x2222222222222222222222222222222222222222";
+        let candidate = ClaimCandidate {
+            id: Uuid::new_v4(),
+            idempotency_key: "v2-sponsored-claim".to_string(),
+            network: "base-sepolia".to_string(),
+            bounty_contract: bounty.to_string(),
+            solver_wallet: solver_wallet.to_string(),
+            agent_id: None,
+            eligibility_evidence: AgentEligibilityEvidence {
+                agent_id: None,
+                solver_wallet: solver_wallet.to_string(),
+                capabilities: Vec::new(),
+                paid_completions: 0,
+                paid_usdc_base_units: 0,
+            },
+            eligibility_decision: AgentEligibilityDecision {
+                eligible: true,
+                reasons: Vec::new(),
+            },
+            status: ClaimCandidateStatus::AuthorizationReady,
+            exclusive_until: Some(now),
+            authorization_nonce: Some(format!("0x{}", "55".repeat(32))),
+            authorization_valid_before: Some(1_800_000_000),
+            claim_transaction_hash: None,
+            canonical_event_id: None,
+            failure_code: None,
+            failure_message: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let sponsorship = BondSponsorship {
+            id: Uuid::new_v4(),
+            claim_candidate_id: candidate.id,
+            network: candidate.network.clone(),
+            bounty_contract: bounty.to_string(),
+            solver_wallet: solver_wallet.to_string(),
+            sponsor_wallet: "0x3333333333333333333333333333333333333333".to_string(),
+            amount: 20_000,
+            status: BondSponsorshipStatus::Reserved,
+            transaction_hash: None,
+            confirmed_block: None,
+            failure_code: None,
+            failure_message: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let signature = AutonomousBountyAuthorizationSignature {
+            v: 27,
+            r: format!("0x{}", "11".repeat(32)),
+            s: format!("0x{}", "22".repeat(32)),
+        };
+        let state = test_state(BountyNetwork::default());
+        let relay = |item: AutonomousBountyFeedItem| {
+            let (state, candidate, sponsorship, signature) = (
+                state.clone(),
+                candidate.clone(),
+                sponsorship.clone(),
+                signature.clone(),
+            );
+            async move {
+                relay_atomic_sponsored_claim(
+                    &state,
+                    &candidate,
+                    &item,
+                    20_000,
+                    &format!("0x{}", "55".repeat(32)),
+                    1_800_000_000,
+                    &signature,
+                    &sponsorship,
+                )
+                .await
+                .unwrap_err()
+            }
+        };
+        let v2 = relay(v2_item).await;
+        assert_eq!(v2.0, StatusCode::CONFLICT);
+        assert_eq!(v2.1 .0["error"], "sponsorship_protocol_unsupported");
+        assert_ne!(
+            relay(v1_item).await.1 .0["error"],
+            "sponsorship_protocol_unsupported",
+            "v1 bounties keep the sponsored relay"
         );
     }
 
