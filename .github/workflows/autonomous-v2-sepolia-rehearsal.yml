@@ -1,0 +1,107 @@
+name: Autonomous-v2 Base Sepolia rehearsal
+
+# Fork mode runs on every relevant pull request without secrets: it forks Base Sepolia, so the
+# gasless v2 loop runs against Circle's real test-USDC contract. Live mode spends the shared keeper's
+# test ETH on Base Sepolia itself, and only runs on manual dispatch from main.
+on:
+  workflow_dispatch:
+    inputs:
+      live:
+        description: Deploy and rehearse on Base Sepolia itself with the shared keeper
+        required: true
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - ".github/workflows/autonomous-v2-sepolia-rehearsal.yml"
+      - "tools/rehearse_autonomous_v2_sepolia.py"
+      - "contracts/base-escrow/src/AgentBountyV2.sol"
+      - "contracts/base-escrow/src/AgentBountyFactoryV2.sol"
+      - "crates/chain-base/src/autonomous_v2.rs"
+
+permissions:
+  contents: read
+
+jobs:
+  fork-rehearsal:
+    if: github.event_name == 'pull_request' || !inputs.live
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      FORK_RPC: http://127.0.0.1:18550
+      # Anvil's first development key; it exists only on the local fork. It is deliberately not
+      # named like the shared keeper secret, which only the live job may hold.
+      FORK_SIGNER_KEY: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+      USDC: "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@v2
+      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Fork Base Sepolia and fund the local keeper with test USDC
+        run: |
+          anvil --port 18550 --fork-url https://sepolia.base.org --silent &
+          for _ in $(seq 1 120); do cast chain-id --rpc-url "$FORK_RPC" >/dev/null 2>&1 && break; sleep 0.5; done
+          keeper=$(cast wallet address --private-key "$FORK_SIGNER_KEY")
+          for holder in 0x884834E884d6e93462655A2820140aD03E6747bC 0xc26a630e85134ed30968735c8e7de4576cfa5dbc; do
+            balance=$(cast call "$USDC" "balanceOf(address)(uint256)" "$keeper" --rpc-url "$FORK_RPC" | cut -d' ' -f1)
+            if [ "$balance" -ge 200000 ]; then break; fi
+            cast rpc anvil_impersonateAccount "$holder" --rpc-url "$FORK_RPC" >/dev/null
+            cast rpc anvil_setBalance "$holder" 0x16345785D8A0000 --rpc-url "$FORK_RPC" >/dev/null
+            held=$(cast call "$USDC" "balanceOf(address)(uint256)" "$holder" --rpc-url "$FORK_RPC" | cut -d' ' -f1)
+            if [ "$held" -ge 200000 ]; then
+              cast send --rpc-url "$FORK_RPC" --unlocked --from "$holder" "$USDC" "transfer(address,uint256)" "$keeper" 200000 >/dev/null
+            fi
+          done
+          balance=$(cast call "$USDC" "balanceOf(address)(uint256)" "$keeper" --rpc-url "$FORK_RPC" | cut -d' ' -f1)
+          echo "fork keeper test USDC: $balance"
+          [ "$balance" -ge 200000 ]
+      - name: Rehearse the gasless v2 loop against real test USDC
+        run: python tools/rehearse_autonomous_v2_sepolia.py --rpc-url "$FORK_RPC" --keeper-key-env FORK_SIGNER_KEY --output target/autonomous-v2-sepolia-fork-rehearsal.json
+      - uses: actions/upload-artifact@v7.0.1
+        if: always()
+        with:
+          name: autonomous-v2-sepolia-fork-rehearsal
+          path: target/autonomous-v2-sepolia-fork-rehearsal.json
+          if-no-files-found: ignore
+
+  live-rehearsal:
+    if: github.event_name == 'workflow_dispatch' && inputs.live && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: agent-bounties-shared-base-keeper
+      cancel-in-progress: false
+    env:
+      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+      BASE_SEPOLIA_RPC_URL: https://sepolia.base.org
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@v2
+      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Deploy AgentBountyFactoryV2 and rehearse the full gasless loop on Base Sepolia
+        run: python tools/rehearse_autonomous_v2_sepolia.py --output target/autonomous-v2-sepolia-rehearsal.json
+      - name: Summarize
+        if: always()
+        run: |
+          if [ -f target/autonomous-v2-sepolia-rehearsal.json ]; then
+            {
+              echo '## Autonomous-v2 Base Sepolia rehearsal'
+              echo '```json'
+              cat target/autonomous-v2-sepolia-rehearsal.json
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v7.0.1
+        if: always()
+        with:
+          name: autonomous-v2-sepolia-rehearsal
+          path: target/autonomous-v2-sepolia-rehearsal.json
+          if-no-files-found: ignore

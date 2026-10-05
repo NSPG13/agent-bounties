@@ -110,3 +110,35 @@ Activation is complete only after a fresh zero-USDC, zero-ETH solver:
 A grant, signature, relay row, transaction hash, submission, or verifier output
 is not payment evidence. Only `BountySettled` proves protocol settlement, and a
 Base Sepolia settlement still has no monetary value.
+
+## Autonomous-v2 (Platform Fee) Rehearsal
+
+`tools/rehearse_autonomous_v2_sepolia.py` deploys `AgentBountyFactoryV2` with
+the launch fee terms: 750 bps to `0x884834E884d6e93462655A2820140aD03E6747bC`.
+It then runs the full gasless loop with real test USDC:
+1. relayed EIP-3009 creation;
+2. relayed EIP-3009 claim bond;
+3. `submitWithSignature`;
+4. `settleWithAttestations` from a two-verifier quorum.
+
+**Participants.** The poster, solver and verifiers are fresh in-memory wallets.
+They only sign planner typed data and never hold ETH. The shared keeper deploys,
+funds them with test USDC, and relays every transaction.
+
+**Pass condition.** The run passes only when every step emits its canonical
+events and the fee recipient's USDC balance rises by exactly the platform fee.
+The evidence JSON lists the factory, its deployment block, each transaction,
+and the hosted settings (`BASE_SEPOLIA_BOUNTY_V2_*`, and
+`BASE_INDEXER_PROTOCOL=autonomous-v2` with `BASE_INDEXER_START_BLOCK`).
+
+**How it runs** (`.github/workflows/autonomous-v2-sepolia-rehearsal.yml`):
+- **Fork mode**, on pull requests: forks Base Sepolia, so the loop runs
+  against Circle's real test-USDC contract with no secrets and no testnet
+  spend.
+- **Live mode**, a manual dispatch from `main` with `live: true`: uses
+  `BASE_KEEPER_PRIVATE_KEY` under the shared keeper concurrency group. The
+  keeper needs about 0.0003 Base Sepolia ETH and 0.15 test USDC. The tool
+  refuses to start, and reports the shortfall, when it holds less.
+
+A Base Sepolia settlement still has no monetary value. Mainnet deployment waits
+for the independent review in #1577.
