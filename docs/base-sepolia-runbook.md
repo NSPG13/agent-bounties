@@ -110,3 +110,8 @@ Activation is complete only after a fresh zero-USDC, zero-ETH solver:
 A grant, signature, relay row, transaction hash, submission, or verifier output
 is not payment evidence. Only `BountySettled` proves protocol settlement, and a
 Base Sepolia settlement still has no monetary value.
+
+
+## Example Usage
+
+Resolved parameter handling for issue #1594.
