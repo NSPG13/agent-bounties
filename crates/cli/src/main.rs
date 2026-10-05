@@ -569,12 +569,12 @@ enum Command {
         #[arg(long)]
         output: Option<String>,
     },
-    /// Plan one autonomous-v2 action (quote, create, authorized_create, claim, authorized_claim,
-    /// submission_authorization, submission_relay, verification_attestation,
-    /// attestation_settlement, platform_fee_forward) from a JSON request. Prints unsigned typed
-    /// data or an unsigned transaction intent; none of it is payment evidence.
+    /// Plan one autonomous-v2 action from a JSON request
     AutonomousV2Plan {
-        /// Request JSON file, or `-` for stdin.
+        /// Request JSON file, or `-` for stdin. Actions: quote, create, authorized_create, claim,
+        /// authorized_claim, submission_authorization, submission_relay, verification_attestation,
+        /// attestation_settlement, platform_fee_forward. Prints unsigned typed data or an unsigned
+        /// transaction intent; none of it is payment evidence.
         #[arg(long)]
         request: String,
     },
