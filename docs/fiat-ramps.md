@@ -30,13 +30,29 @@ are.
 - `STRIPE_SECRET_KEY` and `STRIPE_CRYPTO_ONRAMP_PUBLISHABLE_KEY`, in the same
   Stripe mode (test with test, live with live);
 - `STRIPE_CRYPTO_ONRAMP_ALLOWED_ORIGINS` (default `https://agentbounties.app`);
-- `STRIPE_CRYPTO_ONRAMP_CLIENT_IP_HEADER` (default `x-forwarded-for`). Live
-  sessions require a public customer IP;
+- `STRIPE_CRYPTO_ONRAMP_CLIENT_IP_HEADER` (default `x-forwarded-for`) and
+  `STRIPE_CRYPTO_ONRAMP_TRUSTED_PROXY_HOPS` (default 1). Proxies append to
+  `X-Forwarded-For` and a client can prepend anything, so the client IP is the
+  entry that many trusted proxies from the right. Confirm the hop count by
+  inspecting the header behind your proxy chain. A count that is too high
+  makes all clients share one bucket; it never lets a client choose its own.
+  Live sessions require a public customer IP;
 - `STRIPE_CRYPTO_ONRAMP_MIN_USDC` and `_MAX_USDC` (defaults 1.00 and
   2,500.00);
-- `STRIPE_CRYPTO_ONRAMP_SESSIONS_PER_MINUTE` (default 5 per client);
+- rate limits per minute: `STRIPE_CRYPTO_ONRAMP_SESSIONS_PER_MINUTE` per
+  client IP (or IPv6 /64, default 5), `STRIPE_CRYPTO_ONRAMP_WALLET_SESSIONS_PER_MINUTE`
+  per wallet (default 3) and `STRIPE_CRYPTO_ONRAMP_GLOBAL_SESSIONS_PER_MINUTE`
+  overall (default 30). The global cap bounds Stripe API use however the
+  client IP is derived;
 - `STRIPE_CRYPTO_ONRAMP_NETWORK` and `STRIPE_CRYPTO_ONRAMP_WALLET_KEY` (both
   default `base`).
+
+The Origin check stops cross-site browser requests but is not
+authentication, since scripts can send any Origin. Every input is validated
+before it reaches the rate limiter, the limiter's memory is bounded, each
+session uses a server-generated idempotency id (a caller-chosen one could
+replay another caller's `client_secret`), and Stripe's error bodies stay
+server-side.
 
 **Before activation**
 - Stripe's onramp API is in public preview and requires an approved onramp
@@ -54,6 +70,11 @@ link for the user's own wallet:
   `usd`, and `refundWalletAddress` is the seller's wallet;
 - it uses the same origin allowlist, IP binding, rate limit and amount bounds
   as MoonPay checkout.
+
+Set `MOONPAY_TRUSTED_PROXY_HOPS` (1 to 8) once the proxy chain is confirmed.
+Both MoonPay routes then read the client IP that many trusted proxies from the
+right of `MOONPAY_CLIENT_IP_HEADER`, and nothing else. Unset keeps the legacy
+first entry, which a client can prepend.
 
 MoonPay shows a deposit address. Only the user's wallet signs the USDC
 transfer to it; AgentBounties never moves the funds.

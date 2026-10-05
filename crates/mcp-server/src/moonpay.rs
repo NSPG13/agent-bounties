@@ -127,6 +127,10 @@ struct MoonpayConfig {
     environment: MoonpayEnvironment,
     allowed_origins: Vec<String>,
     client_ip_header: String,
+    /// When set, the client IP is the entry this many trusted proxies from the right of the
+    /// configured header, and no other header is consulted. Unset keeps the legacy first entry,
+    /// which a client can prepend; set it once the proxy chain is confirmed.
+    trusted_proxy_hops: Option<usize>,
     min_fiat_minor: u64,
     max_fiat_minor: u64,
     rate_limit_per_minute: u32,
@@ -167,6 +171,23 @@ impl MoonpayConfig {
             ));
         }
 
+        let trusted_proxy_hops = match env::var("MOONPAY_TRUSTED_PROXY_HOPS") {
+            Ok(value) if !value.trim().is_empty() => Some(
+                value
+                    .trim()
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|hops| (1..=8).contains(hops))
+                    .ok_or_else(|| {
+                        ApiError::configuration(
+                            "moonpay_trusted_proxy_hops_invalid",
+                            "MOONPAY_TRUSTED_PROXY_HOPS must be 1 to 8",
+                        )
+                    })?,
+            ),
+            _ => None,
+        };
+
         let min_fiat_minor = optional_minor_env("MOONPAY_MIN_FIAT_AMOUNT", DEFAULT_MIN_FIAT_MINOR)?;
         let max_fiat_minor = optional_minor_env("MOONPAY_MAX_FIAT_AMOUNT", DEFAULT_MAX_FIAT_MINOR)?;
         if max_fiat_minor < min_fiat_minor {
@@ -200,6 +221,7 @@ impl MoonpayConfig {
             environment,
             allowed_origins,
             client_ip_header,
+            trusted_proxy_hops,
             min_fiat_minor,
             max_fiat_minor,
             rate_limit_per_minute,
@@ -393,7 +415,7 @@ fn prepare_checkout_inner(
     }
 
     let validated = validate_request(&config, &request_origin, request)?;
-    let client_ip = client_ip(headers, &config.client_ip_header)?;
+    let client_ip = client_ip(headers, &config.client_ip_header, config.trusted_proxy_hops)?;
     if config.environment == MoonpayEnvironment::Live && client_ip.is_none() {
         return Err(ApiError::configuration(
             "moonpay_client_ip_unavailable",
@@ -454,7 +476,7 @@ fn prepare_sell_inner(
         ));
     }
     let return_url = validate_return_url(&request.return_url, &request_origin)?;
-    let client_ip = client_ip(headers, &config.client_ip_header)?;
+    let client_ip = client_ip(headers, &config.client_ip_header, config.trusted_proxy_hops)?;
     if config.environment == MoonpayEnvironment::Live {
         match client_ip.as_deref() {
             Some(ip) if is_public_ip(ip)? => {}
@@ -901,7 +923,29 @@ fn valid_header_name(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
 }
 
-fn client_ip(headers: &HeaderMap, configured_header: &str) -> Result<Option<String>, ApiError> {
+fn client_ip(
+    headers: &HeaderMap,
+    configured_header: &str,
+    trusted_proxy_hops: Option<usize>,
+) -> Result<Option<String>, ApiError> {
+    if let Some(hops) = trusted_proxy_hops {
+        let Some(raw) = headers
+            .get(configured_header)
+            .and_then(|value| value.to_str().ok())
+        else {
+            return Ok(None);
+        };
+        return service_runtime::client_ip::forwarded_client_ip(raw, hops)
+            .map(|ip| Some(ip.to_string()))
+            .ok_or_else(|| {
+                ApiError::configuration(
+                    "moonpay_client_ip_invalid",
+                    format!(
+                        "{configured_header} has no valid entry {hops} trusted hops from the right"
+                    ),
+                )
+            });
+    }
     let candidates = [
         configured_header,
         "true-client-ip",
@@ -1041,6 +1085,7 @@ mod tests {
             environment,
             allowed_origins: vec!["https://agentbounties.app".to_string()],
             client_ip_header: DEFAULT_CLIENT_IP_HEADER.to_string(),
+            trusted_proxy_hops: None,
             min_fiat_minor: 100,
             max_fiat_minor: 1_000_000,
             rate_limit_per_minute: 10,
@@ -1189,5 +1234,29 @@ mod tests {
         assert!(!is_public_ip("127.0.0.1").unwrap());
         assert!(!is_public_ip("10.0.0.1").unwrap());
         assert!(!is_public_ip("100.64.0.1").unwrap());
+    }
+
+    #[test]
+    fn trusted_proxy_hops_ignore_client_supplied_prefixes() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("1.2.3.4, 203.0.113.7, 8.8.4.4"),
+        );
+        headers.insert("true-client-ip", HeaderValue::from_static("9.9.9.9"));
+        assert_eq!(
+            client_ip(&headers, "x-forwarded-for", Some(1)).unwrap(),
+            Some("8.8.4.4".to_string())
+        );
+        assert_eq!(
+            client_ip(&headers, "x-forwarded-for", Some(2)).unwrap(),
+            Some("203.0.113.7".to_string())
+        );
+        assert!(client_ip(&headers, "x-forwarded-for", Some(4)).is_err());
+        assert_eq!(
+            client_ip(&headers, "x-forwarded-for", None).unwrap(),
+            Some("1.2.3.4".to_string()),
+            "unset keeps the legacy first entry"
+        );
     }
 }

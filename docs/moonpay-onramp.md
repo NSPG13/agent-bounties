@@ -156,6 +156,7 @@ Set these on the hosted MCP service to activate the prefilled, server-signed par
 | `MOONPAY_ENVIRONMENT` | Yes | `sandbox` or `live` |
 | `MOONPAY_ALLOWED_ORIGINS` | Recommended | Comma-separated exact origins; production default is `https://agentbounties.app` |
 | `MOONPAY_CLIENT_IP_HEADER` | Recommended | Reverse-proxy header containing the customer's public IP; Render default is `x-forwarded-for` |
+| `MOONPAY_TRUSTED_PROXY_HOPS` | Recommended | 1 to 8. Reads the client IP that many trusted proxies from the right of `MOONPAY_CLIENT_IP_HEADER`, ignoring client-prepended entries and other headers. Unset keeps the legacy first entry |
 | `MOONPAY_USDC_BASE_CURRENCY_CODE` | Optional | Dashboard-enabled live code; default `usdc_base` |
 | `MOONPAY_ETH_BASE_CURRENCY_CODE` | Optional | Dashboard-enabled live code; default `eth_base` |
 | `MOONPAY_SANDBOX_USDC_CURRENCY_CODE` | Optional | Default `usdc` |

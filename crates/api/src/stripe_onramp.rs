@@ -3,17 +3,26 @@
 //! A first-party page asks for a session that delivers Base USDC to the user's own wallet. The
 //! wallet address is locked, and Stripe acts as merchant of record. The route is off unless
 //! `ENABLE_STRIPE_CRYPTO_ONRAMP=true`. It only accepts approved origins, binds live sessions to a
-//! public customer IP, bounds amounts, and rate-limits per client. A session, a purchase, or a
-//! wallet balance is never bounty funding; only an indexed `FundingAdded` is.
+//! public customer IP, bounds amounts, and rate-limits per client, per wallet and globally. A
+//! session, a purchase, or a wallet balance is never bounty funding; only an indexed
+//! `FundingAdded` is.
+//!
+//! The Origin header is not authentication: scripts can send any value. The client IP is the one
+//! the outermost trusted proxy recorded, never the client-supplied left of `X-Forwarded-For`, and
+//! the global and per-wallet caps bound Stripe API use however the IP is derived.
 
 use super::*;
 use payments_stripe::onramp::{plan_onramp_session, usdc_amount_cents, StripeOnrampSessionRequest};
+use service_runtime::client_ip::{forwarded_client_ip, is_public_ip, rate_limit_bucket};
 use std::collections::{HashMap, VecDeque};
-use std::net::IpAddr;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 const SCHEMA: &str = "agent-bounties/stripe-crypto-onramp-session-v1";
+/// Distinct rate-limit keys held at once. Beyond it new keys are refused, so attacker-chosen keys
+/// can never grow memory without bound.
+const MAX_RATE_LIMIT_KEYS: usize = 10_000;
+const GLOBAL_KEY: &str = "global";
 static SESSION_RATE_LIMITS: OnceLock<Mutex<HashMap<String, VecDeque<Instant>>>> = OnceLock::new();
 
 fn onramp_error(status: StatusCode, code: &str, message: impl Into<String>) -> AgentActionApiError {
@@ -34,45 +43,46 @@ fn setting(name: &str, default: &str) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
-pub(crate) fn is_public_ip(ip: &IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => {
-            let [first, second, ..] = ip.octets();
-            !(ip.is_private()
-                || ip.is_loopback()
-                || ip.is_link_local()
-                || ip.is_unspecified()
-                || ip.is_broadcast()
-                || ip.is_documentation()
-                || (first == 100 && (64..128).contains(&second)))
-        }
-        IpAddr::V6(ip) => {
-            let first = ip.segments()[0];
-            !(ip.is_loopback()
-                || ip.is_unspecified()
-                || (first & 0xfe00) == 0xfc00
-                || (first & 0xffc0) == 0xfe80)
-        }
-    }
-}
-
-/// Sliding one-minute window per key.
-pub(crate) fn allow_session(key: &str, per_minute: usize, now: Instant) -> bool {
-    let limits = SESSION_RATE_LIMITS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut limits = limits
+/// Sliding one-minute windows. A session is admitted only when every `(key, per_minute)` limit has
+/// room, and is then counted against all of them. Empty windows are dropped, and new keys are
+/// refused once `MAX_RATE_LIMIT_KEYS` are held.
+pub(crate) fn allow_session(limits: &[(String, usize)], now: Instant) -> bool {
+    let windows = SESSION_RATE_LIMITS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut windows = windows
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let window = limits.entry(key.to_string()).or_default();
-    while window
-        .front()
-        .is_some_and(|seen| now.duration_since(*seen) >= Duration::from_secs(60))
+    admit(&mut windows, limits, now, MAX_RATE_LIMIT_KEYS)
+}
+
+fn admit(
+    windows: &mut HashMap<String, VecDeque<Instant>>,
+    limits: &[(String, usize)],
+    now: Instant,
+    max_keys: usize,
+) -> bool {
+    windows.retain(|_, seen| {
+        while seen
+            .front()
+            .is_some_and(|at| now.duration_since(*at) >= Duration::from_secs(60))
+        {
+            seen.pop_front();
+        }
+        !seen.is_empty()
+    });
+    let new_keys = limits
+        .iter()
+        .filter(|(key, _)| !windows.contains_key(key))
+        .count();
+    if windows.len() + new_keys > max_keys
+        || limits
+            .iter()
+            .any(|(key, per_minute)| windows.get(key).map_or(0, VecDeque::len) >= *per_minute)
     {
-        window.pop_front();
-    }
-    if window.len() >= per_minute {
         return false;
     }
-    window.push_back(now);
+    for (key, _) in limits {
+        windows.entry(key.clone()).or_default().push_back(now);
+    }
     true
 }
 
@@ -80,8 +90,6 @@ pub(crate) fn allow_session(key: &str, per_minute: usize, now: Instant) -> bool 
 pub(crate) struct StripeOnrampSessionBody {
     pub wallet_address: String,
     pub destination_amount: String,
-    #[serde(default)]
-    pub request_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -179,43 +187,31 @@ pub(crate) async fn create_stripe_onramp_session(
             ),
         ));
     }
+    let hops = setting("STRIPE_CRYPTO_ONRAMP_TRUSTED_PROXY_HOPS", "1")
+        .parse::<usize>()
+        .unwrap_or(1);
     let client_ip = headers
         .get(setting("STRIPE_CRYPTO_ONRAMP_CLIENT_IP_HEADER", "x-forwarded-for").as_str())
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(',').next())
-        .and_then(|value| value.trim().parse::<IpAddr>().ok());
-    if livemode && !client_ip.as_ref().is_some_and(is_public_ip) {
+        .and_then(|value| forwarded_client_ip(value, hops));
+    if livemode && !client_ip.is_some_and(is_public_ip) {
         return Err(onramp_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "stripe_onramp_client_ip_unavailable",
             "a public customer IP is required for a live onramp session",
         ));
     }
-    let wallet = body.wallet_address.trim().to_ascii_lowercase();
-    let limiter_key = client_ip
-        .map(|ip| ip.to_string())
-        .unwrap_or_else(|| format!("{origin}:{wallet}"));
-    let per_minute = setting("STRIPE_CRYPTO_ONRAMP_SESSIONS_PER_MINUTE", "5")
-        .parse()
-        .unwrap_or(5);
-    if !allow_session(&limiter_key, per_minute, Instant::now()) {
-        return Err(onramp_error(
-            StatusCode::TOO_MANY_REQUESTS,
-            "stripe_onramp_rate_limited",
-            "too many onramp sessions were requested from this client",
-        ));
-    }
     let network = setting("STRIPE_CRYPTO_ONRAMP_NETWORK", "base");
+    // Validate every input before it can reach the rate limiter, so limiter keys are bounded.
+    // The idempotency id is always server-generated: a caller-chosen id could replay another
+    // caller's session, client secret included.
     let intent = plan_onramp_session(&StripeOnrampSessionRequest {
-        wallet_address: wallet.clone(),
+        wallet_address: body.wallet_address.clone(),
         destination_amount: body.destination_amount.clone(),
         customer_ip_address: client_ip.map(|ip| ip.to_string()),
         destination_network: network.clone(),
         wallet_address_key: setting("STRIPE_CRYPTO_ONRAMP_WALLET_KEY", &network),
-        request_id: body
-            .request_id
-            .clone()
-            .unwrap_or_else(|| Uuid::new_v4().simple().to_string()),
+        request_id: Uuid::new_v4().simple().to_string(),
     })
     .map_err(|error| {
         onramp_error(
@@ -224,13 +220,44 @@ pub(crate) async fn create_stripe_onramp_session(
             error.to_string(),
         )
     })?;
+    let wallet = body.wallet_address.trim().to_ascii_lowercase();
+    let limit = |name: &str, default: usize| {
+        setting(name, &default.to_string())
+            .parse::<usize>()
+            .unwrap_or(default)
+    };
+    let mut limits = vec![
+        (
+            GLOBAL_KEY.to_string(),
+            limit("STRIPE_CRYPTO_ONRAMP_GLOBAL_SESSIONS_PER_MINUTE", 30),
+        ),
+        (
+            format!("wallet:{wallet}"),
+            limit("STRIPE_CRYPTO_ONRAMP_WALLET_SESSIONS_PER_MINUTE", 3),
+        ),
+    ];
+    if let Some(ip) = client_ip {
+        limits.push((
+            format!("ip:{}", rate_limit_bucket(ip)),
+            limit("STRIPE_CRYPTO_ONRAMP_SESSIONS_PER_MINUTE", 5),
+        ));
+    }
+    if !allow_session(&limits, Instant::now()) {
+        return Err(onramp_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "stripe_onramp_rate_limited",
+            "too many onramp sessions were requested; retry in a minute",
+        ));
+    }
     let report = execute_stripe_request(&intent, secret_key, &state.stripe_api_base_url)
         .await
-        .map_err(|error| {
+        .map_err(|_| {
+            // Stripe's error body carries request-log links and account details; it stays
+            // server-side.
             onramp_error(
                 StatusCode::BAD_GATEWAY,
                 "stripe_onramp_unavailable",
-                error.to_string(),
+                "Stripe could not create the onramp session",
             )
         })?;
     let session_id = report.stripe_id.clone().filter(|id| id.starts_with("cos_"));
@@ -275,29 +302,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_public_addresses_qualify_for_live_sessions() {
-        for (ip, public) in [
-            ("8.8.8.8", true),
-            ("2001:4860:4860::8888", true),
-            ("10.1.2.3", false),
-            ("192.168.1.1", false),
-            ("100.64.0.1", false),
-            ("127.0.0.1", false),
-            ("::1", false),
-            ("fd00::1", false),
-            ("fe80::1", false),
-        ] {
-            assert_eq!(is_public_ip(&ip.parse().unwrap()), public, "{ip}");
-        }
+    fn session_limits_slide_and_every_limit_must_have_room() {
+        let client = format!("test-ip-{}", Uuid::new_v4());
+        let wallet = format!("test-wallet-{}", Uuid::new_v4());
+        let start = Instant::now();
+        let limits =
+            |client_limit: usize| vec![(client.clone(), client_limit), (wallet.clone(), 2)];
+        assert!(allow_session(&limits(5), start));
+        assert!(allow_session(&limits(5), start));
+        assert!(
+            !allow_session(&limits(5), start + Duration::from_secs(30)),
+            "the wallet cap binds even when the client has room"
+        );
+        assert!(allow_session(&limits(5), start + Duration::from_secs(61)));
     }
 
     #[test]
-    fn session_rate_limit_slides_per_client() {
-        let key = format!("test-{}", Uuid::new_v4());
+    fn limiter_memory_is_bounded_and_expired_windows_are_dropped() {
+        let mut windows = HashMap::new();
         let start = Instant::now();
-        assert!(allow_session(&key, 2, start));
-        assert!(allow_session(&key, 2, start));
-        assert!(!allow_session(&key, 2, start + Duration::from_secs(30)));
-        assert!(allow_session(&key, 2, start + Duration::from_secs(61)));
+        let key = |index: usize| vec![(format!("key-{index}"), 5)];
+        assert!(admit(&mut windows, &key(1), start, 2));
+        assert!(admit(&mut windows, &key(2), start, 2));
+        assert!(
+            !admit(&mut windows, &key(3), start, 2),
+            "a new key is refused once the map is full"
+        );
+        assert!(
+            admit(&mut windows, &key(1), start, 2),
+            "known keys still work"
+        );
+        let later = start + Duration::from_secs(61);
+        assert!(admit(&mut windows, &key(3), later, 2));
+        assert_eq!(windows.len(), 1, "expired windows are removed");
     }
 }

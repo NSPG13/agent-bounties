@@ -24767,7 +24767,7 @@ mod tests {
         }));
         let state = test_state_with_stripe_live(BountyNetwork::default(), stripe);
         let session = stripe_onramp::create_stripe_onramp_session(
-            State(state),
+            State(state.clone()),
             headers("https://agentbounties.app"),
             body(),
         )
@@ -24781,9 +24781,47 @@ mod tests {
         );
         assert_eq!(session.destination_amount, "25.00");
         assert!(!session.bounty_funded);
+
+        // The client IP is the entry the trusted proxy appended, so a client-supplied prefix
+        // never opens a fresh rate-limit bucket.
+        env::set_var("STRIPE_CRYPTO_ONRAMP_SESSIONS_PER_MINUTE", "1");
+        let request = |forwarded: &'static str, wallet: &str| {
+            let mut headers = headers("https://agentbounties.app");
+            headers.insert("x-forwarded-for", HeaderValue::from_static(forwarded));
+            let body = serde_json::from_value::<stripe_onramp::StripeOnrampSessionBody>(
+                serde_json::json!({"wallet_address": wallet, "destination_amount": "25"}),
+            )
+            .unwrap();
+            (headers, Json(body))
+        };
+        let (spoofed, spoofed_body) = request(
+            "1.2.3.4, 8.8.8.8",
+            "0x1111111111111111111111111111111111111111",
+        );
+        assert_eq!(
+            stripe_onramp::create_stripe_onramp_session(State(state), spoofed, spoofed_body)
+                .await
+                .unwrap_err()
+                .0,
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        // A Stripe failure never leaks Stripe's error body to an anonymous caller.
+        let offline =
+            test_state_with_stripe_live(BountyNetwork::default(), "http://127.0.0.1:9".to_string());
+        let (fresh, fresh_body) = request("9.9.9.9", "0x2222222222222222222222222222222222222222");
+        let failure =
+            stripe_onramp::create_stripe_onramp_session(State(offline), fresh, fresh_body)
+                .await
+                .unwrap_err();
+        assert_eq!(failure.0, StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            failure.1 .0.message,
+            "Stripe could not create the onramp session"
+        );
         for name in [
             "ENABLE_STRIPE_CRYPTO_ONRAMP",
             "STRIPE_CRYPTO_ONRAMP_PUBLISHABLE_KEY",
+            "STRIPE_CRYPTO_ONRAMP_SESSIONS_PER_MINUTE",
         ] {
             env::remove_var(name);
         }
