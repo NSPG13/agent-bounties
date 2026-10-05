@@ -31,7 +31,9 @@ use std::collections::{BTreeMap, HashMap};
 use thiserror::Error;
 use uuid::Uuid;
 
+mod invoice_orders;
 mod site_posting_drafts;
+pub use invoice_orders::{InvoiceEventAppend, InvoiceOrderEventRecord, InvoiceOrderRecord};
 pub use site_posting_drafts::{PostingDraftError, SitePostingDraft, SitePostingDraftSummary};
 
 pub const CORE_MIGRATION: &str = include_str!("../../../migrations/0001_core.sql");
@@ -100,6 +102,8 @@ pub const SITE_POSTING_DRAFTS_MIGRATION: &str =
     include_str!("../../../migrations/0036_site_posting_drafts.sql");
 pub const SITE_WALLET_PROVIDER_MIGRATION: &str =
     include_str!("../../../migrations/0037_site_wallet_provider.sql");
+pub const INVOICE_ORDERS_MIGRATION: &str =
+    include_str!("../../../migrations/0038_invoice_orders.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -1511,6 +1515,7 @@ impl PostgresStore {
                 DISTRIBUTION_COMPETITION_BINDINGS_MIGRATION,
                 SITE_POSTING_DRAFTS_MIGRATION,
                 SITE_WALLET_PROVIDER_MIGRATION,
+                INVOICE_ORDERS_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -11763,6 +11768,80 @@ mod tests {
         assert_eq!(
             normalize_distribution_exclusion_class("related"),
             Some("related_party")
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn invoice_order_events_are_sequenced_and_evidence_is_unique_postgres() {
+        let store =
+            PostgresStore::connect(&std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap())
+                .await
+                .unwrap();
+        store.migrate().await.unwrap();
+        let order = format!("ord_{}", Uuid::new_v4().simple());
+        let quoted = serde_json::json!({"kind": "quoted"});
+        assert!(store
+            .create_invoice_order(&order, "Acme", "ap@acme.example", &quoted)
+            .await
+            .unwrap());
+        assert!(!store
+            .create_invoice_order(&order, "Acme", "ap@acme.example", &quoted)
+            .await
+            .unwrap());
+        let evidence = format!("evt_{}", Uuid::new_v4().simple());
+        let paid = serde_json::json!({"kind": "invoice_paid"});
+        assert_eq!(
+            store
+                .append_invoice_order_event(&order, 1, "invoice_paid", &paid, Some(&evidence))
+                .await
+                .unwrap(),
+            InvoiceEventAppend::Appended
+        );
+        assert_eq!(
+            store
+                .append_invoice_order_event(&order, 1, "other", &paid, None)
+                .await
+                .unwrap(),
+            InvoiceEventAppend::SequenceConflict
+        );
+        assert_eq!(
+            store
+                .append_invoice_order_event(&order, 2, "invoice_paid", &paid, Some(&evidence))
+                .await
+                .unwrap(),
+            InvoiceEventAppend::DuplicateEvidence
+        );
+        let events = store.list_invoice_order_events(&order).await.unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| (event.sequence, event.kind.as_str()))
+                .collect::<Vec<_>>(),
+            [(0, "quoted"), (1, "invoice_paid")]
+        );
+        let invoice = format!("in_{}", Uuid::new_v4().simple());
+        store
+            .set_invoice_order_stripe_refs(&order, Some("cus_1"), Some(&invoice), None)
+            .await
+            .unwrap();
+        store
+            .set_invoice_order_stripe_refs(&order, Some("cus_other"), Some("in_other"), None)
+            .await
+            .unwrap();
+        let record = store.get_invoice_order(&order).await.unwrap().unwrap();
+        assert_eq!(
+            record.stripe_customer_id.as_deref(),
+            Some("cus_1"),
+            "ids are never overwritten"
+        );
+        assert_eq!(
+            store
+                .find_invoice_order_id_by_stripe_invoice(&invoice)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some(order.as_str())
         );
     }
 

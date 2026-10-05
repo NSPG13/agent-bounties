@@ -686,6 +686,7 @@ dependencies = [
  "github-app",
  "hex",
  "hmac",
+ "invoicing",
  "ledger",
  "payments-stripe",
  "payments-x402",

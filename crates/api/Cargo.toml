@@ -22,6 +22,7 @@ eval-harness = { path = "../eval-harness" }
 github-app = { path = "../github-app" }
 hex.workspace = true
 hmac.workspace = true
+invoicing = { path = "../invoicing" }
 ledger = { path = "../ledger" }
 payments-stripe = { path = "../payments-stripe" }
 payments-x402 = { path = "../payments-x402" }

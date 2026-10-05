@@ -10,10 +10,11 @@ path:
 The design and its rejected alternatives are in
 [ADR 0006](adr/0006-protocol-v2-platform-fee-and-non-custodial-fiat.md).
 
-This page describes the deterministic core: quote math, Stripe request plans,
-webhook evidence, the order state machine, contractor eligibility, registry
-attestations and 1099 totals. Hosted endpoints, storage and reconciliation
-build on it in a follow-up slice. Live activation waits for:
+This page describes the deterministic core and the hosted operator
+endpoints. The core covers quote math, Stripe request plans, webhook evidence,
+the order state machine, contractor eligibility, registry attestations and
+1099 totals. Everything can run in Stripe test mode. Live activation waits
+for:
 - the US entity's Stripe account;
 - counsel's review of the business terms, the contractor agreement and the
   sales-tax position;
@@ -130,3 +131,64 @@ None of these changes an order's money state:
 - a transaction plan;
 - a signature;
 - a transaction hash.
+
+## Hosted endpoints
+
+Every route below is operator-only and requires `OPERATOR_API_TOKEN`. An
+unset token fails closed here, unlike other operator routes in local
+development. Order state is replayed from the append-only
+`invoice_order_events` log (migration `0038_invoice_orders.sql`). A new event
+is stored only when that replay accepts it.
+
+| Route | Purpose |
+| --- | --- |
+| `POST /v1/invoicing/orders` | Quote and create an order |
+| `GET /v1/invoicing/orders`, `GET /v1/invoicing/orders/{id}` | Order states, events and `next_action` |
+| `POST /v1/invoicing/orders/{id}/invoice` | Create the customer, draft, items, finalize and send. Each Stripe id is stored before the next step, so a retry resumes. The finalized total must equal the quote |
+| `POST /v1/invoicing/orders/{id}/void` | Void an unpaid invoice. `invoice.voided` records it |
+| `POST /v1/invoicing/orders/{id}/funding-plan` | Publish the v2 terms and return the treasury's unsigned creation plan. The terms commit the quote economics, the treasury as creator, the contractor gate and the verifier quorum |
+| `POST /v1/invoicing/orders/{id}/reconcile` | Apply indexed canonical treasury `FundingAdded`, `BountySettled` and treasury `RefundWithdrawn` for the planned bounty |
+| `POST /v1/invoicing/orders/{id}/cancel` | Cancel a paid order. When funded, it returns the treasury's `cancel()` and `withdrawRefund()` calls |
+| `POST /v1/invoicing/orders/{id}/refund` | Issue the credit note once no escrow is at risk. `credit_note.created` marks the order refunded |
+| `PUT /v1/invoicing/contractors/{id}` | Record a contractor: wallet, agreement acceptance, and a tax-form reference only |
+| `POST /v1/invoicing/contractors/{id}/attestation-plan` | Return the attester's EIP-712 payload for an eligible contractor |
+| `POST /v1/invoicing/contractors/{id}/registration-plan` | Plan the relayed `register` call for an attestation that the configured attester signed |
+| `GET /v1/invoicing/contractor-payments?year=` | Annual 1099-NEC totals and foreign-payee totals, plus settlements with no contractor record |
+| `POST /v1/stripe/invoice-webhooks` | Signature-verified Stripe events, using a separate endpoint secret |
+
+**Webhook handling.** Each Stripe event applies at most once; a retry is
+reported as a duplicate. A transition the projection rejects is acknowledged
+with its reason, so Stripe does not retry evidence that can never apply.
+
+## Configuration
+
+Invoicing stays off unless `INVOICING_ENABLED=true` and all of the following
+are set:
+- **Network and v2 factory:** `INVOICING_NETWORK` (default `base-sepolia`),
+  which needs a configured v2 factory (`BASE_SEPOLIA_BOUNTY_V2_*`).
+- **Treasury:** `INVOICING_TREASURY_WALLET`, the creator that signs funding.
+- **Contractor registry:** `INVOICING_CONTRACTOR_REGISTRY` and
+  `INVOICING_CONTRACTOR_ATTESTER`.
+- **Agreements and terms:** `INVOICING_CONTRACTOR_AGREEMENT_SHA256`,
+  `INVOICING_BUSINESS_TERMS_URL` (HTTPS) and `INVOICING_BUSINESS_TERMS_SHA256`.
+- **Verification:** `INVOICING_VERIFIERS` (a comma list),
+  `INVOICING_VERIFIER_THRESHOLD` (default 2), and
+  `INVOICING_VERIFICATION_MODE` (`signed_quorum` or `ai_judge_quorum`).
+- **Stripe:** `STRIPE_SECRET_KEY` and `STRIPE_INVOICE_WEBHOOK_SECRET`. A live
+  key is refused unless `INVOICING_LIVEMODE=true`, and a test key is refused
+  when it is set.
+
+**Optional settings:**
+- `INVOICING_PROCESSING_FEE_BPS` and `INVOICING_PROCESSING_FEE_FIXED_CENTS`
+  (default 0);
+- `INVOICING_MAX_INVOICE_CENTS` (default $10,000);
+- `INVOICING_DAYS_UNTIL_DUE` (default 14);
+- `INVOICING_FUNDING_WINDOW_SECONDS`, `INVOICING_CLAIM_WINDOW_SECONDS` and
+  `INVOICING_VERIFICATION_WINDOW_SECONDS`.
+
+**End-to-end test.** `invoiced_seller_of_record_path_runs_end_to_end_postgres`
+runs the whole path against Postgres and a local Stripe stand-in:
+quote, bank-transfer invoice, signed `invoice.paid` (including a replay),
+treasury funding plan, reconciliation from indexed events, contractor
+attestation and registration, the 1099 summary, and a cancelled order refunded
+by a signed credit note.

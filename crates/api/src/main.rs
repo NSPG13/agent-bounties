@@ -3,6 +3,7 @@ mod account_activity;
 mod discoverability;
 mod distribution;
 mod github_discovery;
+mod invoicing;
 mod open_competition_v2_api;
 mod opportunities;
 mod platform_payouts;
@@ -2608,6 +2609,58 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/base/autonomous-bounties/v2/quote",
             post(quote_autonomous_v2_bounty_route),
+        )
+        .route(
+            "/v1/invoicing/orders",
+            post(invoicing::create_invoice_order).get(invoicing::list_invoice_orders),
+        )
+        .route(
+            "/v1/invoicing/orders/:order_id",
+            get(invoicing::get_invoice_order),
+        )
+        .route(
+            "/v1/invoicing/orders/:order_id/invoice",
+            post(invoicing::issue_invoice),
+        )
+        .route(
+            "/v1/invoicing/orders/:order_id/void",
+            post(invoicing::void_invoice),
+        )
+        .route(
+            "/v1/invoicing/orders/:order_id/funding-plan",
+            post(invoicing::plan_invoice_funding),
+        )
+        .route(
+            "/v1/invoicing/orders/:order_id/reconcile",
+            post(invoicing::reconcile_invoice_order),
+        )
+        .route(
+            "/v1/invoicing/orders/:order_id/cancel",
+            post(invoicing::cancel_invoice_order),
+        )
+        .route(
+            "/v1/invoicing/orders/:order_id/refund",
+            post(invoicing::refund_invoice_order),
+        )
+        .route(
+            "/v1/invoicing/contractors/:contractor_id",
+            axum::routing::put(invoicing::upsert_contractor),
+        )
+        .route(
+            "/v1/invoicing/contractors/:contractor_id/attestation-plan",
+            post(invoicing::plan_contractor_attestation),
+        )
+        .route(
+            "/v1/invoicing/contractors/:contractor_id/registration-plan",
+            post(invoicing::plan_contractor_registration),
+        )
+        .route(
+            "/v1/invoicing/contractor-payments",
+            get(invoicing::contractor_payments),
+        )
+        .route(
+            "/v1/stripe/invoice-webhooks",
+            post(invoicing::reconcile_invoice_webhook),
         )
         .route(
             "/v1/base/autonomous-bounties/v2/creation-plan",
@@ -17480,8 +17533,17 @@ mod tests {
         );
     }
 
+    /// Serializes tests that set process-wide autonomous-v2 and invoicing environment variables.
+    fn autonomous_v2_env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[tokio::test]
     async fn autonomous_v2_quote_requires_a_pinned_configured_factory() {
+        let _env = autonomous_v2_env_lock();
         let prefix = "BASE_SEPOLIA_BOUNTY_V2";
         let names = [
             "FACTORY",
@@ -23842,6 +23904,536 @@ mod tests {
             }
         }))
         .unwrap()
+    }
+
+    /// A local Stripe stand-in for invoicing: it records every request, sums invoice items, and
+    /// finalizes with that total.
+    fn spawn_stripe_invoicing_mock(suffix: String) -> (String, Arc<Mutex<Vec<(String, String)>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
+        let recorded = requests.clone();
+        thread::spawn(move || {
+            let mut item_total = 0u64;
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut raw = Vec::new();
+                let mut buffer = [0u8; 8192];
+                loop {
+                    let read = stream.read(&mut buffer).unwrap_or(0);
+                    raw.extend_from_slice(&buffer[..read]);
+                    let text = String::from_utf8_lossy(&raw).to_string();
+                    if let Some(split) = text.find("\r\n\r\n") {
+                        let length = text[..split]
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|value| value.trim().parse::<usize>().unwrap_or(0))
+                            })
+                            .unwrap_or(0);
+                        if raw.len() >= split + 4 + length || read == 0 {
+                            break;
+                        }
+                    } else if read == 0 {
+                        break;
+                    }
+                }
+                let text = String::from_utf8_lossy(&raw).to_string();
+                let path = text.split_whitespace().nth(1).unwrap_or("").to_string();
+                let body = text.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+                recorded.lock().unwrap().push((path.clone(), body.clone()));
+                let invoice = format!("in_{suffix}");
+                let finalize = format!("/v1/invoices/{invoice}/finalize");
+                let send = format!("/v1/invoices/{invoice}/send");
+                let response = match path.as_str() {
+                    "/v1/customers" => serde_json::json!({"id": format!("cus_{suffix}"), "object": "customer", "livemode": false}),
+                    "/v1/invoices" => serde_json::json!({"id": invoice, "object": "invoice", "status": "draft", "livemode": false}),
+                    "/v1/invoiceitems" => {
+                        item_total += body
+                            .split('&')
+                            .find_map(|pair| pair.strip_prefix("amount="))
+                            .and_then(|value| value.parse::<u64>().ok())
+                            .unwrap_or(0);
+                        serde_json::json!({"id": "ii_test", "object": "invoiceitem", "livemode": false})
+                    }
+                    path if path == finalize || path == send => serde_json::json!({
+                        "id": invoice, "object": "invoice", "status": "open", "livemode": false,
+                        "total": item_total, "amount_due": item_total,
+                        "hosted_invoice_url": "https://invoice.stripe.com/i/test1"
+                    }),
+                    "/v1/credit_notes" => serde_json::json!({"id": "cn_test1", "object": "credit_note", "livemode": false}),
+                    _ => serde_json::json!({"error": {"message": "unexpected path"}}),
+                }
+                .to_string();
+                let status = if response.contains("unexpected path") {
+                    "404 Not Found"
+                } else {
+                    "200 OK"
+                };
+                let _ = stream.write_all(
+                    format!(
+                        "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{response}",
+                        response.len()
+                    )
+                    .as_bytes(),
+                );
+            }
+        });
+        (format!("http://{address}"), requests)
+    }
+
+    fn invoice_webhook(event_type: &str, object: serde_json::Value, id: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "id": id, "object": "event", "type": event_type, "livemode": false,
+            "created": Utc::now().timestamp(), "data": {"object": object}
+        }))
+        .unwrap()
+    }
+
+    fn synthetic_event(
+        log_key: &str,
+        contract: &str,
+        bounty_id: &str,
+        kind: AutonomousBountyEventKind,
+        data: serde_json::Value,
+        block: u64,
+    ) -> AutonomousBountyEvent {
+        AutonomousBountyEvent {
+            id: Uuid::new_v4(),
+            log_key: log_key.to_string(),
+            tx_hash: format!("0x{:064x}", block),
+            block_number: block,
+            log_index: 0,
+            contract_address: contract.to_string(),
+            bounty_id: bounty_id.to_string(),
+            kind,
+            data,
+            occurred_at: chrono::DateTime::from_timestamp(1_780_000_000, 0).unwrap(),
+        }
+    }
+
+    /// Drives the invoiced seller-of-record path end to end against Postgres: quote, bank-transfer
+    /// invoice through a Stripe stand-in, signed invoice.paid (including a replay), treasury
+    /// funding plan, reconciliation from indexed canonical events, contractor attestation and
+    /// registration, the 1099 summary, and a cancelled order refunded by a signed credit note.
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn invoiced_seller_of_record_path_runs_end_to_end_postgres() {
+        let _env = autonomous_v2_env_lock();
+        let store = PostgresStore::connect(&env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap())
+            .await
+            .unwrap();
+        store.migrate().await.unwrap();
+        let fixture: serde_json::Value = serde_json::from_str(AUTONOMOUS_V2_FIXTURE).unwrap();
+        let factory = fixture["factory"].as_str().unwrap().to_string();
+        let treasury = "0x7a11000000000000000000000000000000000001";
+        let contractor_wallet = &format!("0x{}", &Uuid::new_v4().simple().to_string()[..32])
+            .replace("0x", "0x00000000");
+        let attester_key = "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6";
+        let agreement = format!("sha256:{}", "a".repeat(64));
+        let webhook_secret = "whsec_invoice_test";
+        for (name, value) in [
+            ("BASE_SEPOLIA_BOUNTY_V2_FACTORY", factory.clone()),
+            ("BASE_SEPOLIA_BOUNTY_V2_IMPLEMENTATION", fixture["implementation"].as_str().unwrap().to_string()),
+            ("BASE_SEPOLIA_BOUNTY_V2_PLATFORM_FEE_BPS", "750".to_string()),
+            ("BASE_SEPOLIA_BOUNTY_V2_PLATFORM_FEE_RECIPIENT", "0x884834E884d6e93462655A2820140aD03E6747bC".to_string()),
+            ("INVOICING_ENABLED", "true".to_string()),
+            ("INVOICING_NETWORK", "base-sepolia".to_string()),
+            ("INVOICING_TREASURY_WALLET", treasury.to_string()),
+            ("INVOICING_CONTRACTOR_REGISTRY", "0x5FbDB2315678afecb367f032d93F642f64180aa3".to_string()),
+            ("INVOICING_CONTRACTOR_ATTESTER", "0x90F79bf6EB2c4f870365E785982E1f101E93b906".to_string()),
+            ("INVOICING_CONTRACTOR_AGREEMENT_SHA256", agreement.clone()),
+            ("INVOICING_BUSINESS_TERMS_URL", "https://agentbounties.app/terms/business".to_string()),
+            ("INVOICING_BUSINESS_TERMS_SHA256", format!("sha256:{}", "b".repeat(64))),
+            ("INVOICING_VERIFIERS", "0x14dC79964da2C08b23698B3D3cc7Ca32193d9955,0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f".to_string()),
+            ("INVOICING_VERIFIER_THRESHOLD", "2".to_string()),
+            ("STRIPE_INVOICE_WEBHOOK_SECRET", webhook_secret.to_string()),
+        ] {
+            env::set_var(name, value);
+        }
+        let suffix = Uuid::new_v4().simple().to_string();
+        let invoice_id = format!("in_{suffix}");
+        let (stripe_url, stripe_requests) = spawn_stripe_invoicing_mock(suffix);
+        let mut app = Arc::try_unwrap(test_state_with_stripe_live(
+            BountyNetwork::default(),
+            stripe_url,
+        ))
+        .ok()
+        .unwrap();
+        app.store = Some(store.clone());
+        app.operator_api_token = Some("operator-secret".to_string());
+        let state = Arc::new(app);
+        let mut operator = HeaderMap::new();
+        operator.insert(
+            OPERATOR_TOKEN_HEADER,
+            HeaderValue::from_static("operator-secret"),
+        );
+        let order_id = format!("ord_{}", Uuid::new_v4().simple());
+
+        assert!(
+            invoicing::create_invoice_order(
+                State(state.clone()),
+                HeaderMap::new(),
+                Json(
+                    serde_json::from_value(serde_json::json!({
+                        "buyer_name": "Acme", "buyer_email": "ap@acme.example", "title": "Fix CI",
+                        "solver_reward_cents": 10_000, "verifier_reward_cents": 1_000
+                    }))
+                    .unwrap()
+                ),
+            )
+            .await
+            .is_err(),
+            "invoicing requires the operator token"
+        );
+
+        let created = invoicing::create_invoice_order(
+            State(state.clone()),
+            operator.clone(),
+            Json(
+                serde_json::from_value(serde_json::json!({
+                    "order_id": order_id, "buyer_name": "Acme", "buyer_email": "ap@acme.example",
+                    "title": "Fix CI", "solver_reward_cents": 10_000, "verifier_reward_cents": 1_000
+                }))
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(created.state.quote.invoice_total_cents, 11_750);
+        assert_eq!(created.state.quote.funding_target_usdc, 117_500_000);
+
+        let issued = invoicing::issue_invoice(
+            State(state.clone()),
+            operator.clone(),
+            Path(order_id.clone()),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(issued.state.status, ::invoicing::OrderStatus::Invoiced);
+        assert_eq!(
+            issued.order.stripe_invoice_id.as_deref(),
+            Some(invoice_id.as_str())
+        );
+        let paths: Vec<String> = stripe_requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(path, _)| path.clone())
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                "/v1/customers".to_string(),
+                "/v1/invoices".to_string(),
+                "/v1/invoiceitems".to_string(),
+                "/v1/invoiceitems".to_string(),
+                format!("/v1/invoices/{invoice_id}/finalize"),
+                format!("/v1/invoices/{invoice_id}/send"),
+            ]
+        );
+        let draft_body = stripe_requests.lock().unwrap()[1].1.clone();
+        assert!(draft_body
+            .contains("payment_settings%5Bpayment_method_types%5D%5B0%5D=customer_balance"));
+        assert!(!draft_body.contains("card"));
+
+        let paid_body = invoice_webhook(
+            "invoice.paid",
+            serde_json::json!({
+                "id": invoice_id, "object": "invoice", "status": "paid", "amount_paid": 11_750,
+                "amount_remaining": 0, "currency": "usd", "livemode": false,
+                "metadata": {"order_id": order_id, "purpose": "invoiced_outcome"}
+            }),
+            &format!("evt_{}", Uuid::new_v4().simple()),
+        );
+        let deliver = |body: Vec<u8>, secret: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                "stripe-signature",
+                HeaderValue::from_str(&stripe_signature_header(&body, secret.as_bytes())).unwrap(),
+            );
+            invoicing::reconcile_invoice_webhook(State(state.clone()), headers, Bytes::from(body))
+        };
+        assert!(deliver(paid_body.clone(), "wrong-secret").await.is_err());
+        let paid = deliver(paid_body.clone(), webhook_secret).await.unwrap().0;
+        assert!(paid.applied);
+        let replay = deliver(paid_body, webhook_secret).await.unwrap().0;
+        assert!(
+            replay.duplicate && !replay.applied,
+            "a Stripe retry never applies twice"
+        );
+
+        let plan = invoicing::plan_invoice_funding(
+            State(state.clone()),
+            operator.clone(),
+            Path(order_id.clone()),
+            Json(
+                serde_json::from_value(serde_json::json!({
+                    "goal": "Make the CI pipeline pass reliably.",
+                    "acceptance_criteria": ["CI is green on three consecutive runs."]
+                }))
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(plan.state.status, ::invoicing::OrderStatus::FundingPlanned);
+        assert_eq!(plan.creation.quote.target_amount, "117500000");
+        assert_eq!(
+            plan.creation.plan.create_bounty.from.as_deref(),
+            Some(treasury)
+        );
+        assert!(store
+            .get_autonomous_bounty_terms(&plan.terms_hash)
+            .await
+            .unwrap()
+            .is_some());
+        let contract = plan.creation.plan.predicted_bounty_contract.clone();
+        let bounty_id = plan.creation.plan.bounty_id.clone();
+
+        let network = "base-sepolia";
+        for event in [
+            synthetic_event(
+                &format!("{order_id}:created"),
+                &factory,
+                &bounty_id,
+                AutonomousBountyEventKind::CanonicalBountyCreated,
+                serde_json::json!({"bounty_contract": contract}),
+                10,
+            ),
+            synthetic_event(
+                &format!("{order_id}:funded"),
+                &contract,
+                &bounty_id,
+                AutonomousBountyEventKind::FundingAdded,
+                serde_json::json!({"contributor": treasury, "amount": 117_500_000u64}),
+                10,
+            ),
+        ] {
+            store
+                .upsert_autonomous_bounty_event(network, &event)
+                .await
+                .unwrap();
+        }
+        let reconciled = invoicing::reconcile_invoice_order(
+            State(state.clone()),
+            operator.clone(),
+            Path(order_id.clone()),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(
+            reconciled.state.status,
+            ::invoicing::OrderStatus::Funded,
+            "{:?}",
+            reconciled.rejected
+        );
+        store
+            .upsert_autonomous_bounty_event(
+                network,
+                &synthetic_event(
+                    &format!("{order_id}:settled"),
+                    &contract,
+                    &bounty_id,
+                    AutonomousBountyEventKind::BountySettled,
+                    serde_json::json!({
+                        "solver": contractor_wallet, "solver_reward": 100_000_000u64,
+                        "claim_bond_returned": 10_000_000u64, "timeout_bond_bonus": 0u64
+                    }),
+                    20,
+                ),
+            )
+            .await
+            .unwrap();
+        let settled = invoicing::reconcile_invoice_order(
+            State(state.clone()),
+            operator.clone(),
+            Path(order_id.clone()),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(settled.state.status, ::invoicing::OrderStatus::Settled);
+
+        let contractor_id = format!("ctr_{}", Uuid::new_v4().simple());
+        let _ = invoicing::upsert_contractor(
+            State(state.clone()),
+            operator.clone(),
+            Path(contractor_id.clone()),
+            Json(serde_json::from_value(serde_json::json!({
+                "wallet": contractor_wallet, "agreement_sha256": agreement,
+                "agreement_accepted_at": 1_700_000_000u64,
+                "tax_form": {"kind": "w9", "provider": "tax-provider", "provider_reference": "form_1",
+                              "tin_matched": true, "received_at": 1_700_000_000u64}
+            })).unwrap()),
+        )
+        .await
+        .unwrap()
+        .0;
+        let typed = invoicing::plan_contractor_attestation(
+            State(state.clone()),
+            operator.clone(),
+            Path(contractor_id.clone()),
+            Json(
+                serde_json::from_value(serde_json::json!({"nonce": 0, "validity_days": 30}))
+                    .unwrap(),
+            ),
+        )
+        .await
+        .unwrap()
+        .0;
+        let valid_until: u64 = typed.message.valid_until.parse().unwrap();
+        let request = chain_base::ParticipantAttestationRequest {
+            registry: typed.domain.verifying_contract.clone(),
+            wallet: typed.message.wallet.clone(),
+            participant_id: typed.message.participant_id.clone(),
+            source_hash: typed.message.source_hash.clone(),
+            valid_until,
+            nonce: 0,
+        };
+        let digest = chain_base::participant_attestation_digest(network, &request).unwrap();
+        let sign = |key: &str| {
+            let signer: PrivateKeySigner = key.parse().unwrap();
+            format!(
+                "0x{}",
+                hex::encode(
+                    signer
+                        .sign_hash_sync(&B256::from(digest))
+                        .unwrap()
+                        .as_bytes()
+                )
+            )
+        };
+        let registration = |signature: String| {
+            invoicing::plan_contractor_registration(
+                State(state.clone()),
+                operator.clone(),
+                Path(contractor_id.clone()),
+                Json(
+                    serde_json::from_value(serde_json::json!({
+                        "nonce": 0, "valid_until": valid_until, "signature": signature
+                    }))
+                    .unwrap(),
+                ),
+            )
+        };
+        assert!(registration(sign(
+            "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
+        ))
+        .await
+        .is_err());
+        assert_eq!(
+            registration(sign(attester_key)).await.unwrap().0.to,
+            "0x5fbdb2315678afecb367f032d93f642f64180aa3"
+        );
+
+        let report = invoicing::contractor_payments(
+            State(state.clone()),
+            operator.clone(),
+            Query(serde_json::from_value(serde_json::json!({"year": 2026})).unwrap()),
+        )
+        .await
+        .unwrap()
+        .0;
+        let line = report
+            .summary
+            .form_1099_nec
+            .iter()
+            .find(|line| line.contractor_id == contractor_id)
+            .unwrap();
+        assert_eq!(line.total_cents, 10_000);
+        assert!(
+            !line.requires_1099_nec,
+            "$100 is below the 2026 $2,000 threshold"
+        );
+
+        // A second order is cancelled after payment and refunded by a signed credit note.
+        let refund_order = format!("ord_{}", Uuid::new_v4().simple());
+        let refund_invoice = format!("in_{}", Uuid::new_v4().simple());
+        let _ = invoicing::create_invoice_order(
+            State(state.clone()),
+            operator.clone(),
+            Json(serde_json::from_value(serde_json::json!({
+                "order_id": refund_order, "buyer_name": "Acme", "buyer_email": "ap@acme.example",
+                "title": "Docs", "solver_reward_cents": 10_000, "verifier_reward_cents": 1_000
+            })).unwrap()),
+        )
+        .await
+        .unwrap()
+        .0;
+        store
+            .append_invoice_order_event(
+                &refund_order,
+                1,
+                "invoice_issued",
+                &serde_json::json!({"kind": "invoice_issued", "invoice_id": refund_invoice, "total_cents": 11_750}),
+                None,
+            )
+            .await
+            .unwrap();
+        let refund_paid = deliver(
+            invoice_webhook("invoice.paid", serde_json::json!({
+                "id": refund_invoice, "object": "invoice", "status": "paid", "amount_paid": 11_750,
+                "amount_remaining": 0, "currency": "usd", "livemode": false,
+                "metadata": {"order_id": refund_order, "purpose": "invoiced_outcome"}
+            }), &format!("evt_{}", Uuid::new_v4().simple())),
+            webhook_secret,
+        )
+        .await
+        .unwrap()
+        .0;
+        assert!(refund_paid.applied);
+        let cancelled = invoicing::cancel_invoice_order(
+            State(state.clone()),
+            operator.clone(),
+            Path(refund_order.clone()),
+            Json(serde_json::from_value(serde_json::json!({"reason": "buyer withdrew"})).unwrap()),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert!(
+            cancelled.treasury_calls.is_empty(),
+            "nothing was escrowed yet"
+        );
+        let credit = invoicing::refund_invoice_order(
+            State(state.clone()),
+            operator.clone(),
+            Path(refund_order.clone()),
+            Json(
+                serde_json::from_value(
+                    serde_json::json!({"refund": "stripe_refund", "memo": "cancelled"}),
+                )
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(credit.request.body["refund_amount"], 11_750);
+        let refunded = deliver(
+            invoice_webhook("credit_note.created", serde_json::json!({
+                "id": format!("cn_{}", Uuid::new_v4().simple()), "object": "credit_note", "invoice": refund_invoice, "status": "issued",
+                "total": 11_750, "livemode": false,
+                "metadata": {"order_id": refund_order, "purpose": "invoiced_outcome"}
+            }), &format!("evt_{}", Uuid::new_v4().simple())),
+            webhook_secret,
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(
+            refunded.state.unwrap().status,
+            ::invoicing::OrderStatus::Refunded
+        );
+        for name in ["INVOICING_ENABLED", "STRIPE_INVOICE_WEBHOOK_SECRET"] {
+            env::remove_var(name);
+        }
     }
 
     fn stripe_signature_header(payload: &[u8], secret: &[u8]) -> String {
