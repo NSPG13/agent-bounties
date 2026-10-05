@@ -12,14 +12,51 @@ interface CaptureVm {
     function sign(uint256 privateKey, bytes32 digest) external returns (uint8 v, bytes32 r, bytes32 s);
 }
 
-/// @dev Local-only token with a recipient blocklist so the fixture can exercise fee deferral.
+/// @dev Local-only token with a recipient blocklist so the fixture can exercise fee deferral, and
+/// Circle-style EIP-3009 `transferWithAuthorization` under the Base Sepolia USDC domain ("USDC",
+/// "2"). The capture tool copies its code to Base Sepolia's USDC address, so the domain separator
+/// is derived from `address(this)` at call time rather than cached at construction.
 contract CaptureToken {
+    bytes32 private constant DOMAIN_TYPEHASH =
+        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+    bytes32 private constant TRANSFER_WITH_AUTHORIZATION_TYPEHASH = keccak256(
+        "TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
+    );
+
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
     mapping(address => bool) public blocked;
+    mapping(address => mapping(bytes32 => bool)) public authorizationState;
 
     function mint(address to, uint256 amount) external {
         balanceOf[to] += amount;
+    }
+
+    function DOMAIN_SEPARATOR() public view returns (bytes32) {
+        return keccak256(abi.encode(DOMAIN_TYPEHASH, keccak256("USDC"), keccak256("2"), block.chainid, address(this)));
+    }
+
+    function transferWithAuthorization(
+        address from,
+        address to,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external {
+        require(block.timestamp > validAfter && block.timestamp < validBefore, "authorization not valid");
+        require(!authorizationState[from][nonce], "authorization used");
+        bytes32 structHash =
+            keccak256(abi.encode(TRANSFER_WITH_AUTHORIZATION_TYPEHASH, from, to, value, validAfter, validBefore, nonce));
+        address signer = ecrecover(keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR(), structHash)), v, r, s);
+        require(signer != address(0) && signer == from, "invalid authorization signature");
+        require(!blocked[to], "blocked recipient");
+        authorizationState[from][nonce] = true;
+        balanceOf[from] -= value;
+        balanceOf[to] += value;
     }
 
     function setBlocked(address account, bool value) external {

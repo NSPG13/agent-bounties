@@ -11766,6 +11766,85 @@ mod tests {
         );
     }
 
+    /// Every autonomous-v2 event captured from the compiled contracts must survive a Postgres
+    /// round trip with its kind intact, so the feed rebuilt from storage equals the in-memory feed.
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn autonomous_v2_events_round_trip_through_postgres() {
+        const FIXTURE: &str =
+            include_str!("../../chain-base/tests/fixtures/autonomous-v2-loop.json");
+        let fixture: serde_json::Value = serde_json::from_str(FIXTURE).unwrap();
+        let logs: Vec<chain_base::RpcEvmLog> =
+            serde_json::from_value(fixture["logs"].clone()).unwrap();
+        let mut events = chain_base::decode_autonomous_bounty_logs(
+            chain_base::rpc_logs_to_evm_logs(logs).unwrap(),
+        )
+        .unwrap();
+        for event in &mut events {
+            event.occurred_at =
+                DateTime::from_timestamp(1_700_000_000 + event.block_number as i64 * 2, 0).unwrap();
+        }
+        let store =
+            PostgresStore::connect(&std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap())
+                .await
+                .unwrap();
+        store.migrate().await.unwrap();
+        let network = format!("autonomous-v2-{}", Uuid::new_v4());
+        for event in &events {
+            store
+                .upsert_autonomous_bounty_event(&network, event)
+                .await
+                .unwrap();
+        }
+
+        let stored = store.list_autonomous_bounty_events(&network).await.unwrap();
+        assert_eq!(stored.len(), events.len());
+        let kinds = |events: &[AutonomousBountyEvent]| {
+            let mut kinds: Vec<_> = events
+                .iter()
+                .map(|event| (event.log_key.clone(), event.kind))
+                .collect();
+            kinds.sort_by(|left, right| left.0.cmp(&right.0));
+            kinds
+        };
+        assert_eq!(kinds(&stored), kinds(&events));
+        for kind in [
+            AutonomousBountyEventKind::CanonicalBountyPlatformFeeConfigured,
+            AutonomousBountyEventKind::CanonicalBountyClaimEligibilityConfigured,
+            AutonomousBountyEventKind::PlatformFeePaid,
+            AutonomousBountyEventKind::PlatformFeeDeferred,
+            AutonomousBountyEventKind::PlatformFeeWithdrawn,
+        ] {
+            assert!(
+                stored.iter().any(|event| event.kind == kind),
+                "{kind:?} lost in storage"
+            );
+        }
+
+        let feed = |events: Vec<AutonomousBountyEvent>| {
+            serde_json::to_value(
+                chain_base::build_autonomous_bounty_feed(events, Vec::new(), false).unwrap(),
+            )
+            .unwrap()
+        };
+        assert_eq!(feed(stored), feed(events));
+
+        let factory = fixture["factory"].as_str().unwrap();
+        let mut contracts = store
+            .list_canonical_autonomous_bounty_contracts(&network, factory)
+            .await
+            .unwrap();
+        contracts.sort();
+        let mut expected: Vec<String> = fixture["bounties"]
+            .as_object()
+            .unwrap()
+            .values()
+            .map(|value| value.as_str().unwrap().to_string())
+            .collect();
+        expected.sort();
+        assert_eq!(contracts, expected);
+    }
+
     #[tokio::test]
     #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
     async fn scoped_submission_history_reads_only_selected_bounty_postgres() {

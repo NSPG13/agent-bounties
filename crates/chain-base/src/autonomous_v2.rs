@@ -332,6 +332,200 @@ impl AutonomousBountyTxPlanner {
     }
 }
 
+/// One autonomous-v2 planning request, as accepted by `cli autonomous-v2-plan`. Every action
+/// returns unsigned typed data or an unsigned transaction intent; none of them is funding, claim,
+/// submission or settlement evidence.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AutonomousV2PlanRequest {
+    pub network: String,
+    pub factory_contract: String,
+    pub implementation_contract: String,
+    #[serde(flatten)]
+    pub action: AutonomousV2PlanAction,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum AutonomousV2PlanAction {
+    Quote {
+        solver_reward: Money,
+        verifier_reward: Money,
+        factory_fee: AutonomousV2FactoryFee,
+    },
+    Create {
+        create: AutonomousBountyV2Create,
+        factory_fee: AutonomousV2FactoryFee,
+    },
+    AuthorizedCreate {
+        create: AutonomousBountyV2Create,
+        factory_fee: AutonomousV2FactoryFee,
+        signature: AutonomousBountyAuthorizationSignature,
+        #[serde(default)]
+        relayer: Option<String>,
+    },
+    Claim {
+        bounty_contract: String,
+        solver: String,
+        claim_bond: Money,
+        #[serde(default)]
+        authorization_nonce: Option<String>,
+        #[serde(default)]
+        authorization_valid_before: Option<u64>,
+    },
+    AuthorizedClaim {
+        bounty_contract: String,
+        solver: String,
+        claim_bond: Money,
+        authorization_nonce: String,
+        authorization_valid_before: u64,
+        signature: AutonomousBountyAuthorizationSignature,
+        #[serde(default)]
+        relayer: Option<String>,
+    },
+    SubmissionAuthorization {
+        submission: AutonomousBountySubmissionAuthorizationRequest,
+    },
+    SubmissionRelay {
+        bounty_contract: String,
+        submission_hash: String,
+        evidence_hash: String,
+        deadline: u64,
+        signature: String,
+        #[serde(default)]
+        relayer: Option<String>,
+    },
+    VerificationAttestation {
+        attestation: AutonomousVerificationAttestationRequest,
+    },
+    AttestationSettlement {
+        bounty_contract: String,
+        #[serde(default)]
+        caller: Option<String>,
+        attestations: Vec<AutonomousSignedAttestation>,
+    },
+    PlatformFeeForward {
+        bounty_contract: String,
+    },
+}
+
+/// Plans one autonomous-v2 action. Claim plans reuse the shared v1 bounty surface and are
+/// relabelled with the v2 protocol version.
+pub fn plan_autonomous_v2_action(
+    request: &AutonomousV2PlanRequest,
+) -> Result<Value, ChainBaseError> {
+    let planner = AutonomousBountyTxPlanner::new(
+        &request.factory_contract,
+        &request.implementation_contract,
+    )?;
+    let network = request.network.as_str();
+    base_network_descriptor(network)?;
+    match &request.action {
+        AutonomousV2PlanAction::Quote {
+            solver_reward,
+            verifier_reward,
+            factory_fee,
+        } => to_plan_value(quote_autonomous_v2_bounty(
+            autonomous_money_to_uint256(solver_reward, false)?,
+            autonomous_money_to_uint256(verifier_reward, true)?,
+            factory_fee,
+        )?),
+        AutonomousV2PlanAction::Create {
+            create,
+            factory_fee,
+        } => to_plan_value(planner.plan_v2_creation(network, create, factory_fee)?),
+        AutonomousV2PlanAction::AuthorizedCreate {
+            create,
+            factory_fee,
+            signature,
+            relayer,
+        } => to_plan_value(planner.plan_v2_authorized_creation(
+            network,
+            create,
+            factory_fee,
+            signature,
+            relayer.as_deref(),
+        )?),
+        AutonomousV2PlanAction::Claim {
+            bounty_contract,
+            solver,
+            claim_bond,
+            authorization_nonce,
+            authorization_valid_before,
+        } => {
+            let mut plan = planner.plan_claim(
+                network,
+                bounty_contract,
+                solver,
+                autonomous_money_to_uint256(claim_bond, true)?,
+                authorization_nonce.as_deref(),
+                *authorization_valid_before,
+            )?;
+            plan.protocol_version = AUTONOMOUS_V2_PROTOCOL_VERSION.to_string();
+            to_plan_value(plan)
+        }
+        AutonomousV2PlanAction::AuthorizedClaim {
+            bounty_contract,
+            solver,
+            claim_bond,
+            authorization_nonce,
+            authorization_valid_before,
+            signature,
+            relayer,
+        } => {
+            let mut plan = planner.plan_authorized_claim(
+                network,
+                bounty_contract,
+                solver,
+                autonomous_money_to_uint256(claim_bond, false)?,
+                authorization_nonce,
+                *authorization_valid_before,
+                signature,
+                relayer.as_deref(),
+            )?;
+            plan.protocol_version = AUTONOMOUS_V2_PROTOCOL_VERSION.to_string();
+            to_plan_value(plan)
+        }
+        AutonomousV2PlanAction::SubmissionAuthorization { submission } => {
+            to_plan_value(planner.plan_v2_submission_authorization(network, submission)?)
+        }
+        AutonomousV2PlanAction::SubmissionRelay {
+            bounty_contract,
+            submission_hash,
+            evidence_hash,
+            deadline,
+            signature,
+            relayer,
+        } => to_plan_value(planner.plan_signed_submission_relay(
+            bounty_contract,
+            submission_hash,
+            evidence_hash,
+            *deadline,
+            signature,
+            relayer.as_deref(),
+        )?),
+        AutonomousV2PlanAction::VerificationAttestation { attestation } => {
+            to_plan_value(planner.plan_v2_verification_attestation(network, attestation)?)
+        }
+        AutonomousV2PlanAction::AttestationSettlement {
+            bounty_contract,
+            caller,
+            attestations,
+        } => to_plan_value(planner.plan_attestation_settlement(
+            bounty_contract,
+            caller.as_deref(),
+            attestations,
+        )?),
+        AutonomousV2PlanAction::PlatformFeeForward { bounty_contract } => {
+            to_plan_value(planner.plan_v2_platform_fee_forward(bounty_contract)?)
+        }
+    }
+}
+
+fn to_plan_value(plan: impl Serialize) -> Result<Value, ChainBaseError> {
+    serde_json::to_value(plan)
+        .map_err(|error| ChainBaseError::InvalidCanonicalJson(error.to_string()))
+}
+
 fn require_v2_params(params: &[[u8; 32]]) -> Result<(), ChainBaseError> {
     if params.len() != V2_PARAM_WORDS {
         return Err(ChainBaseError::InvalidVerificationConfiguration(
@@ -778,18 +972,18 @@ mod tests {
     #[test]
     fn decodes_every_log_emitted_by_the_compiled_v2_contracts() {
         let events = fixture_events();
-        assert_eq!(events.len(), 43, "every factory and bounty log must decode");
+        assert_eq!(events.len(), 54, "every factory and bounty log must decode");
         let count = |kind| events.iter().filter(|event| event.kind == kind).count();
-        assert_eq!(count(AutonomousBountyEventKind::CanonicalBountyCreated), 4);
+        assert_eq!(count(AutonomousBountyEventKind::CanonicalBountyCreated), 5);
         assert_eq!(
             count(AutonomousBountyEventKind::CanonicalBountyPlatformFeeConfigured),
-            4
+            5
         );
         assert_eq!(
             count(AutonomousBountyEventKind::CanonicalBountyClaimEligibilityConfigured),
             1
         );
-        assert_eq!(count(AutonomousBountyEventKind::PlatformFeePaid), 1);
+        assert_eq!(count(AutonomousBountyEventKind::PlatformFeePaid), 2);
         assert_eq!(count(AutonomousBountyEventKind::PlatformFeeDeferred), 1);
         assert_eq!(count(AutonomousBountyEventKind::PlatformFeeWithdrawn), 1);
         assert_eq!(count(AutonomousBountyEventKind::SubmissionRejected), 1);
@@ -1253,5 +1447,138 @@ mod tests {
             2,
             "v1 bounty with v2 terms: wrong version and v2-only keys"
         );
+    }
+
+    fn plan_request(fixture: &Value, step: &Value) -> AutonomousV2PlanRequest {
+        let mut request = json!({
+            "network": "base-sepolia",
+            "factory_contract": fixture["factory"],
+            "implementation_contract": fixture["implementation"],
+        });
+        for (key, value) in step["request"].as_object().unwrap() {
+            request[key] = value.clone();
+        }
+        serde_json::from_value(request).expect("recorded request parses")
+    }
+
+    fn planned_field(plan: Value, field: &Value) -> Value {
+        match field.as_str() {
+            Some(field) => plan[field].clone(),
+            None => plan,
+        }
+    }
+
+    /// The capture tool drove a quorum bounty from creation to settlement using only
+    /// `cli autonomous-v2-plan` output, `cast wallet sign --data` signatures, and a separate
+    /// relayer. Replanning every recorded request must reproduce exactly the typed data that was
+    /// signed and the calldata the contracts accepted, and the relayed transactions must carry
+    /// the canonical creation, funding, claim, submission, settlement and fee events.
+    #[test]
+    fn gasless_quorum_loop_executes_current_planner_output() {
+        let fixture = fixture();
+        let gasless = &fixture["gasless_loop"];
+        let steps = gasless["steps"].as_array().unwrap();
+        let names: Vec<&str> = steps
+            .iter()
+            .map(|step| step["step"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "authorized_create",
+                "authorized_claim",
+                "submission_relay",
+                "attestation_settlement"
+            ]
+        );
+        let relayer = steps[0]["relay"]["relayer"].as_str().unwrap().to_string();
+        for step in steps {
+            for authorization in step["authorizations"].as_array().unwrap() {
+                let planned = plan_autonomous_v2_action(&plan_request(&fixture, authorization))
+                    .expect("authorization replans");
+                assert_eq!(
+                    planned_field(planned, &authorization["typed_data_field"]),
+                    authorization["typed_data"],
+                    "{} typed data drifted from what was signed",
+                    step["step"]
+                );
+                assert_ne!(authorization["signer"].as_str(), Some(relayer.as_str()));
+            }
+            let relay = &step["relay"];
+            let intent = planned_field(
+                plan_autonomous_v2_action(&plan_request(&fixture, relay)).expect("relay replans"),
+                &relay["intent_field"],
+            );
+            assert_eq!(
+                intent["data"], relay["calldata"],
+                "{} calldata",
+                step["step"]
+            );
+            assert_eq!(intent["to"], relay["to"], "{} destination", step["step"]);
+        }
+
+        let bounty = gasless["bounty"].as_str().unwrap();
+        assert_eq!(bounty, bounty_address("gasless_quorum"));
+        let events = events_for("gasless_quorum");
+        let kinds_in = |step: usize| -> Vec<AutonomousBountyEventKind> {
+            let hash = steps[step]["relay"]["transaction_hash"].as_str().unwrap();
+            events
+                .iter()
+                .filter(|event| event.tx_hash.eq_ignore_ascii_case(hash))
+                .map(|event| event.kind)
+                .collect()
+        };
+        use AutonomousBountyEventKind as Kind;
+        let created = kinds_in(0);
+        for kind in [
+            Kind::CanonicalBountyCreated,
+            Kind::CanonicalBountyPlatformFeeConfigured,
+            Kind::FundingAdded,
+            Kind::BountyBecameClaimable,
+        ] {
+            assert!(created.contains(&kind), "creation relay lacks {kind:?}");
+        }
+        assert_eq!(kinds_in(1), [Kind::BountyClaimed]);
+        assert_eq!(kinds_in(2), [Kind::SubmissionAdded]);
+        // `_settle` pays the fee before it emits `BountySettled`.
+        assert_eq!(kinds_in(3), [Kind::PlatformFeePaid, Kind::BountySettled]);
+
+        let poster = steps[0]["authorizations"][0]["signer"].as_str().unwrap();
+        let solver = steps[1]["authorizations"][0]["signer"].as_str().unwrap();
+        let find = |kind| events.iter().find(|event| event.kind == kind).unwrap();
+        assert_eq!(
+            find(Kind::CanonicalBountyCreated).data["bounty_contract"],
+            bounty
+        );
+        assert_eq!(find(Kind::FundingAdded).data["contributor"], poster);
+        assert_eq!(find(Kind::FundingAdded).data["amount"], 1_175_000);
+        assert_eq!(find(Kind::BountyClaimed).data["solver"], solver);
+        assert_eq!(find(Kind::BountySettled).data["solver"], solver);
+        assert_eq!(find(Kind::BountySettled).data["solver_payout"], 1_100_000);
+        assert_eq!(find(Kind::PlatformFeePaid).data["platform_fee"], 75_000);
+
+        let item = item("gasless_quorum");
+        assert_eq!(item.status, "paid");
+        assert_eq!(item.target_amount, "1175000");
+        assert_eq!(
+            item.platform_fee.map(|fee| fee.status),
+            Some("paid".to_string())
+        );
+    }
+
+    #[test]
+    fn plan_requests_reject_unknown_networks_and_bad_submission_signatures() {
+        let fixture = fixture();
+        let relay = &fixture["gasless_loop"]["steps"][2]["relay"];
+        let mut request = plan_request(&fixture, relay);
+        assert!(plan_autonomous_v2_action(&request).is_ok());
+        request.network = "ethereum".to_string();
+        assert!(plan_autonomous_v2_action(&request).is_err());
+
+        let mut short = plan_request(&fixture, relay);
+        if let AutonomousV2PlanAction::SubmissionRelay { signature, .. } = &mut short.action {
+            signature.truncate(signature.len() - 2);
+        }
+        assert!(plan_autonomous_v2_action(&short).is_err());
     }
 }
