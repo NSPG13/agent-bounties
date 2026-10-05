@@ -30,6 +30,7 @@ mod creator_review;
 mod open_competition;
 mod open_competition_v2;
 mod open_competition_v2_planner;
+mod participant_registry;
 mod standing_meta_v4;
 
 pub use agent_wallet_readiness::*;
@@ -37,6 +38,7 @@ pub use autonomous_v2::*;
 pub use open_competition::*;
 pub use open_competition_v2::*;
 pub use open_competition_v2_planner::*;
+pub use participant_registry::*;
 pub use standing_meta_v4::*;
 
 #[derive(Debug, Error, PartialEq, Eq)]

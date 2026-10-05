@@ -8,6 +8,8 @@ use std::collections::HashSet;
 use thiserror::Error;
 use uuid::Uuid;
 
+pub mod invoicing;
+
 type HmacSha256 = Hmac<Sha256>;
 const WEBHOOK_SIGNATURE_TOLERANCE_SECONDS: u64 = 5 * 60;
 
