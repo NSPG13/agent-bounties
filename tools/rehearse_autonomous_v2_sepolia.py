@@ -20,6 +20,7 @@ import argparse
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import time
@@ -36,6 +37,7 @@ VERIFIER_REWARD = 20_000  # 0.02 USDC, split across a two-verifier quorum
 PLATFORM_FEE = -(-SOLVER_REWARD * FEE_BPS // 10_000)
 TARGET = SOLVER_REWARD + VERIFIER_REWARD + PLATFORM_FEE
 MIN_KEEPER_WEI = 300_000_000_000_000  # 0.0003 ETH covers deployment, transfers and four relays
+SECP256K1_ORDER = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 EVENTS = {
     "CanonicalBountyCreated(bytes32,address,address,bytes32,bytes32,bytes32)": "CanonicalBountyCreated",
     "FundingAdded(bytes32,address,uint256,uint256,uint256)": "FundingAdded",
@@ -67,12 +69,13 @@ class Chain:
     def address(self, key: str) -> str:
         return run("cast", "wallet", "address", "--private-key", key, secret=True).lower()
 
-    def new_key(self) -> str:
-        output = run("cast", "wallet", "new", secret=True)
-        match = re.search(r"Private key:\s*(0x[0-9a-fA-F]{64})", output)
-        if not match:
-            raise RehearsalError("cast wallet new did not return a key")
-        return match.group(1)
+    @staticmethod
+    def new_key() -> str:
+        # A throwaway signer from the OS CSPRNG. It never depends on a Foundry output format.
+        while True:
+            value = secrets.randbits(256)
+            if 0 < value < SECP256K1_ORDER:
+                return f"0x{value:064x}"
 
     def usdc_balance(self, wallet: str) -> int:
         value = run("cast", "call", USDC, "balanceOf(address)(uint256)", wallet, "--rpc-url", self.rpc)
@@ -92,15 +95,30 @@ class Chain:
 
     def deploy_factory(self) -> tuple[str, str, str, int]:
         output = run("forge", "create", "src/AgentBountyFactoryV2.sol:AgentBountyFactoryV2", "--rpc-url", self.rpc,
-                     "--private-key", self.keeper_key, "--broadcast", "--constructor-args", USDC, str(FEE_BPS),
-                     FEE_RECIPIENT, cwd=CONTRACTS, secret=True)
-        factory = re.search(r"Deployed to: (0x[0-9a-fA-F]{40})", output)
-        transaction = re.search(r"Transaction hash: (0x[0-9a-fA-F]{64})", output)
-        if not factory or not transaction:
+                     "--private-key", self.keeper_key, "--broadcast", "--json", "--constructor-args", USDC,
+                     str(FEE_BPS), FEE_RECIPIENT, cwd=CONTRACTS, secret=True)
+        # `--json` is stable across Foundry releases; the human-readable output is not.
+        report = last_json_object(output, "deployedTo")
+        factory = str((report or {}).get("deployedTo", ""))
+        transaction = str((report or {}).get("transactionHash", ""))
+        if not re.fullmatch(r"0x[0-9a-fA-F]{40}", factory) or not re.fullmatch(r"0x[0-9a-fA-F]{64}", transaction):
             raise RehearsalError("forge create did not report the factory deployment")
-        receipt = json.loads(run("cast", "receipt", transaction.group(1), "--rpc-url", self.rpc, "--json"))
-        implementation = run("cast", "call", factory.group(1), "implementation()(address)", "--rpc-url", self.rpc)
-        return factory.group(1).lower(), implementation.lower(), transaction.group(1), int(str(receipt["blockNumber"]), 16)
+        receipt = json.loads(run("cast", "receipt", transaction, "--rpc-url", self.rpc, "--json"))
+        implementation = run("cast", "call", factory, "implementation()(address)", "--rpc-url", self.rpc)
+        return factory.lower(), implementation.lower(), transaction, int(str(receipt["blockNumber"]), 16)
+
+
+def last_json_object(output: str, required_key: str) -> dict | None:
+    """The last JSON object in `output` that has `required_key`, compact or pretty-printed."""
+    decoder = json.JSONDecoder()
+    for start in reversed([index for index, char in enumerate(output) if char == "{"]):
+        try:
+            value, _ = decoder.raw_decode(output[start:])
+        except ValueError:
+            continue
+        if isinstance(value, dict) and required_key in value:
+            return value
+    return None
 
 
 def event_names(receipt: dict) -> list[str]:
