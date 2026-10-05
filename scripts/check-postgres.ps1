@@ -58,6 +58,9 @@ try {
             cargo test -p db tests::discovery_webhook_round_trip_executes_against_migrated_postgres -- --ignored --exact --nocapture
         }
         Invoke-Checked {
+            cargo test -p db tests::autonomous_v2_events_round_trip_through_postgres -- --ignored --exact --nocapture
+        }
+        Invoke-Checked {
             cargo test -p db tests::discoverability_snapshot_idempotency_and_restart_hydration_are_durable -- --ignored --exact --nocapture
         }
         Invoke-Checked {

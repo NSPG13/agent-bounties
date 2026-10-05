@@ -575,9 +575,36 @@ are omitted for v1 items. The fee `status` is one of:
 - `forwarded` (fee received);
 - `refundable`.
 
-`crates/chain-base/tests/fixtures/autonomous-v2-loop.json` holds real logs and
-calldata from the compiled contracts. Regenerate it with
-`python tools/capture_autonomous_v2_fixture.py`.
+**Planning.** `cargo run -p cli -- autonomous-v2-plan --request <file|->` plans
+one action from a JSON request. The request names `network`, `factory_contract`,
+`implementation_contract` and an `action`, plus that action's fields. The
+actions are:
+- `quote`
+- `create`, `authorized_create`
+- `claim`, `authorized_claim`
+- `submission_authorization`, `submission_relay`
+- `verification_attestation`, `attestation_settlement`
+- `platform_fee_forward`
+
+The output is unsigned typed data or an unsigned transaction intent. Neither is
+payment evidence.
+
+**Evidence.** `crates/chain-base/tests/fixtures/autonomous-v2-loop.json` holds
+real logs and calldata from the compiled contracts. It includes a gasless quorum
+loop: the poster, solver and two verifiers only sign typed data with
+`cast wallet sign --data`, and a separate relayer sends every transaction. The
+loop covers four steps:
+- relayed EIP-3009 creation;
+- relayed EIP-3009 claim bond;
+- `submitWithSignature`;
+- `settleWithAttestations`.
+
+Every typed-data payload and calldata in the loop came from
+`autonomous-v2-plan`. The tests replay each recorded request and require
+byte-identical output. Regenerate the fixture with
+`python tools/capture_autonomous_v2_fixture.py`. It needs anvil, forge, cast
+and cargo, and runs only on a local chain with chain ID 84532. Its capture token
+sits at Base Sepolia's USDC address so the EIP-3009 domain matches.
 
 ## Safety Properties
 

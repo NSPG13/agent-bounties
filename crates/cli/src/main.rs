@@ -12,11 +12,12 @@ use chain_base::{
     build_autonomous_bounty_terms_record, eth_get_transaction_receipt_request,
     eth_send_raw_transaction_request, fetch_transaction_receipt,
     generate_open_competition_commitment_envelope, keccak256_canonical_json, normalize_evm_address,
-    verify_autonomous_factory_safe_state, AutonomousBountyCreationBatchPlan,
-    AutonomousBountyCreationPlan, AutonomousBountyTxPlanner, AutonomousFactoryExpectedState,
-    AutonomousFactorySafeObservation, BaseRpcUrlConfig, EvmTransactionIntent,
-    OpenCompetitionCommitmentEnvelope, OpenCompetitionCommitmentInput,
-    AUTONOMOUS_BOUNTY_PROTOCOL_HASH, BASE_MAINNET_USDC_TOKEN_ADDRESS,
+    plan_autonomous_v2_action, verify_autonomous_factory_safe_state,
+    AutonomousBountyCreationBatchPlan, AutonomousBountyCreationPlan, AutonomousBountyTxPlanner,
+    AutonomousFactoryExpectedState, AutonomousFactorySafeObservation, AutonomousV2PlanRequest,
+    BaseRpcUrlConfig, EvmTransactionIntent, OpenCompetitionCommitmentEnvelope,
+    OpenCompetitionCommitmentInput, AUTONOMOUS_BOUNTY_PROTOCOL_HASH,
+    BASE_MAINNET_USDC_TOKEN_ADDRESS,
 };
 #[cfg(test)]
 use clap::CommandFactory;
@@ -568,6 +569,15 @@ enum Command {
         #[arg(long)]
         output: Option<String>,
     },
+    /// Plan one autonomous-v2 action from a JSON request
+    AutonomousV2Plan {
+        /// Request JSON file, or `-` for stdin. Actions: quote, create, authorized_create, claim,
+        /// authorized_claim, submission_authorization, submission_relay, verification_attestation,
+        /// attestation_settlement, platform_fee_forward. Prints unsigned typed data or an unsigned
+        /// transaction intent; none of it is payment evidence.
+        #[arg(long)]
+        request: String,
+    },
     AutonomousMineWorkProof {
         #[arg(long)]
         bounty_id: String,
@@ -1024,6 +1034,7 @@ async fn async_main() -> Result<()> {
             )
             .await
         }
+        Command::AutonomousV2Plan { request } => autonomous_v2_plan(&request),
         Command::AutonomousMineWorkProof {
             bounty_id,
             round,
@@ -1680,6 +1691,22 @@ fn normalize_portable_rpc_url(value: &str) -> Result<String> {
     }
     url.set_fragment(None);
     Ok(url.to_string())
+}
+
+fn autonomous_v2_plan(request: &str) -> Result<()> {
+    let bytes = if request == "-" {
+        let mut buffer = Vec::new();
+        std::io::Read::read_to_end(&mut std::io::stdin(), &mut buffer)
+            .context("read autonomous-v2 plan request from stdin")?;
+        buffer
+    } else {
+        fs::read(request).with_context(|| format!("read {request}"))?
+    };
+    let request: AutonomousV2PlanRequest =
+        serde_json::from_slice(&bytes).context("parse autonomous-v2 plan request")?;
+    let plan = plan_autonomous_v2_action(&request)?;
+    println!("{}", serde_json::to_string_pretty(&plan)?);
+    Ok(())
 }
 
 fn read_json_file(path: &Path) -> Result<serde_json::Value> {

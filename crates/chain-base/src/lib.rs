@@ -1858,6 +1858,42 @@ impl AutonomousBountyTxPlanner {
         })
     }
 
+    /// Relays a solver's signed EIP-712 `Submit` authorization. The bounty checks the signature
+    /// against its active solver and round; a relay hash is not submission evidence.
+    pub fn plan_signed_submission_relay(
+        &self,
+        bounty_contract: &str,
+        submission_hash: &str,
+        evidence_hash: &str,
+        deadline: u64,
+        signature: &str,
+        relayer: Option<&str>,
+    ) -> Result<EvmTransactionIntent, ChainBaseError> {
+        const SIGNATURE: &str = "submitWithSignature(bytes32,bytes32,uint256,bytes)";
+        let signature = parse_hex_bytes(signature)?;
+        if deadline == 0 || signature.len() != 65 || !matches!(signature[64], 27 | 28) {
+            return Err(ChainBaseError::InvalidVerificationConfiguration(
+                "submission relay needs a positive deadline and a 65-byte signature with v 27 or 28"
+                    .to_string(),
+            ));
+        }
+        let mut bytes = selector(SIGNATURE).to_vec();
+        bytes.extend_from_slice(&parse_bytes32(submission_hash)?);
+        bytes.extend_from_slice(&parse_bytes32(evidence_hash)?);
+        bytes.extend_from_slice(&encode_uint256(deadline.into())?);
+        bytes.extend_from_slice(&encode_uint256(4 * 32)?);
+        bytes.extend_from_slice(&encode_uint256(signature.len() as u128)?);
+        bytes.extend_from_slice(&signature);
+        bytes.resize(bytes.len() + (32 - signature.len() % 32) % 32, 0);
+        Ok(EvmTransactionIntent {
+            from: relayer.map(normalize_address).transpose()?,
+            to: normalize_address(bounty_contract)?,
+            value_wei: 0,
+            data: format!("0x{}", hex::encode(bytes)),
+            function: SIGNATURE.to_string(),
+        })
+    }
+
     pub fn plan_submission_authorization(
         &self,
         network: &str,

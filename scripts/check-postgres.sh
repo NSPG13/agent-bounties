@@ -49,6 +49,7 @@ cargo test -p api open_competition_v2_api::tests::postgres_readiness_hold_blocks
 cargo test -p api tests::audience_audit_persists_idempotently_across_processes -- --ignored --exact --nocapture
 cargo test -p api tests::github_issue_api_sync_postgres_rejects_stale_cross_process_activity -- --ignored --exact --nocapture
 cargo test -p db scoped_submission_history_reads_only_selected_bounty_postgres -- --ignored --nocapture
+cargo test -p db tests::autonomous_v2_events_round_trip_through_postgres -- --ignored --exact --nocapture
 cargo test -p api tests::opportunity_exact_unfunded_lookup_crosses_list_window_postgres -- --ignored --exact --nocapture
 cargo test -p api tests::github_issue_api_sync_postgres_serializes_concurrent_initial_sync -- --ignored --exact --nocapture
 cargo test -p api tests::neynar_webhook_persists_one_short_draft_and_one_reply_across_retries -- --ignored --exact --nocapture
