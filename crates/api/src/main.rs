@@ -23915,6 +23915,7 @@ mod tests {
         let recorded = requests.clone();
         thread::spawn(move || {
             let mut item_total = 0u64;
+            let mut finalized = false;
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { continue };
                 let mut raw = Vec::new();
@@ -23940,13 +23941,42 @@ mod tests {
                     }
                 }
                 let text = String::from_utf8_lossy(&raw).to_string();
+                let method = text.split_whitespace().next().unwrap_or("").to_string();
                 let path = text.split_whitespace().nth(1).unwrap_or("").to_string();
                 let body = text.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
-                recorded.lock().unwrap().push((path.clone(), body.clone()));
                 let invoice = format!("in_{suffix}");
                 let finalize = format!("/v1/invoices/{invoice}/finalize");
                 let send = format!("/v1/invoices/{invoice}/send");
+                let retrieve = format!("/v1/invoices/{invoice}");
+                recorded.lock().unwrap().push((
+                    if method == "GET" {
+                        format!("GET {path}")
+                    } else {
+                        path.clone()
+                    },
+                    body.clone(),
+                ));
+                if path == finalize {
+                    finalized = true;
+                }
+                // Any other stored invoice reads as already finalized by an interrupted run.
+                let other_invoice = path
+                    .strip_prefix("/v1/invoices/")
+                    .and_then(|rest| rest.split('/').next())
+                    .filter(|id| id.starts_with("in_") && *id != invoice)
+                    .map(ToString::to_string);
                 let response = match path.as_str() {
+                    path if method == "GET" && path == retrieve => serde_json::json!({
+                        "id": invoice, "object": "invoice",
+                        "status": if finalized { "open" } else { "draft" }, "livemode": false,
+                        "total": item_total, "amount_due": item_total,
+                        "hosted_invoice_url": "https://invoice.stripe.com/i/test1"
+                    }),
+                    _ if other_invoice.is_some() => serde_json::json!({
+                        "id": other_invoice, "object": "invoice", "status": "open",
+                        "livemode": false, "total": 11_750, "amount_due": 11_750,
+                        "hosted_invoice_url": "https://invoice.stripe.com/i/test2"
+                    }),
                     "/v1/customers" => serde_json::json!({"id": format!("cus_{suffix}"), "object": "customer", "livemode": false}),
                     "/v1/invoices" => serde_json::json!({"id": invoice, "object": "invoice", "status": "draft", "livemode": false}),
                     "/v1/invoiceitems" => {
@@ -24139,6 +24169,98 @@ mod tests {
         assert!(draft_body
             .contains("payment_settings%5Bpayment_method_types%5D%5B0%5D=customer_balance"));
         assert!(!draft_body.contains("card"));
+        let resent = invoicing::issue_invoice(
+            State(state.clone()),
+            operator.clone(),
+            Path(order_id.clone()),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(resent.state.status, ::invoicing::OrderStatus::Invoiced);
+        assert_eq!(
+            stripe_requests.lock().unwrap()[6..]
+                .iter()
+                .map(|(path, _)| path.clone())
+                .collect::<Vec<_>>(),
+            [format!("/v1/invoices/{invoice_id}/send")],
+            "a retry after the invoice is recorded only resends it"
+        );
+
+        // An interrupted run left a finalized invoice the order never recorded. A payment that
+        // arrives first is redelivered, and the retried issue reads the invoice back instead of
+        // re-adding items.
+        let resume_order = format!("ord_{}", Uuid::new_v4().simple());
+        let resume_invoice = format!("in_{}", Uuid::new_v4().simple());
+        invoicing::create_invoice_order(
+            State(state.clone()),
+            operator.clone(),
+            Json(serde_json::from_value(serde_json::json!({
+                "order_id": resume_order, "buyer_name": "Acme", "buyer_email": "ap@acme.example",
+                "title": "Fix CI", "solver_reward_cents": 10_000, "verifier_reward_cents": 1_000
+            })).unwrap()),
+        )
+        .await
+        .unwrap();
+        store
+            .set_invoice_order_stripe_refs(
+                &resume_order,
+                Some(&format!("cus_{}", Uuid::new_v4().simple())),
+                Some(&resume_invoice),
+                None,
+            )
+            .await
+            .unwrap();
+        let early_paid = invoice_webhook(
+            "invoice.paid",
+            serde_json::json!({
+                "id": resume_invoice, "object": "invoice", "status": "paid", "amount_paid": 11_750,
+                "amount_remaining": 0, "currency": "usd", "livemode": false,
+                "metadata": {"order_id": resume_order, "purpose": "invoiced_outcome"}
+            }),
+            &format!("evt_{}", Uuid::new_v4().simple()),
+        );
+        let mut early_headers = HeaderMap::new();
+        early_headers.insert(
+            "stripe-signature",
+            HeaderValue::from_str(&stripe_signature_header(
+                &early_paid,
+                webhook_secret.as_bytes(),
+            ))
+            .unwrap(),
+        );
+        assert_eq!(
+            invoicing::reconcile_invoice_webhook(
+                State(state.clone()),
+                early_headers,
+                Bytes::from(early_paid)
+            )
+            .await
+            .unwrap_err()
+            .0,
+            StatusCode::CONFLICT,
+            "an early payment is redelivered by Stripe, not dropped"
+        );
+        let before = stripe_requests.lock().unwrap().len();
+        let resumed = invoicing::issue_invoice(
+            State(state.clone()),
+            operator.clone(),
+            Path(resume_order.clone()),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(resumed.state.status, ::invoicing::OrderStatus::Invoiced);
+        assert_eq!(
+            stripe_requests.lock().unwrap()[before..]
+                .iter()
+                .map(|(path, _)| path.clone())
+                .collect::<Vec<_>>(),
+            [
+                format!("GET /v1/invoices/{resume_invoice}"),
+                format!("/v1/invoices/{resume_invoice}/send"),
+            ]
+        );
 
         let paid_body = invoice_webhook(
             "invoice.paid",
@@ -24351,6 +24473,70 @@ mod tests {
             !line.requires_1099_nec,
             "$100 is below the 2026 $2,000 threshold"
         );
+        assert!(report
+            .replay_errors
+            .iter()
+            .all(|error| error.order_id != order_id));
+
+        // A contractor who changes wallets keeps their history, and the old wallet never moves
+        // to someone else.
+        let new_wallet =
+            format!("0x{}", &Uuid::new_v4().simple().to_string()[..32]).replace("0x", "0x00000000");
+        let moved = invoicing::upsert_contractor(
+            State(state.clone()),
+            operator.clone(),
+            Path(contractor_id.clone()),
+            Json(serde_json::from_value(serde_json::json!({
+                "wallet": new_wallet, "agreement_sha256": agreement,
+                "agreement_accepted_at": 1_700_000_000u64,
+                "tax_form": {"kind": "w9", "provider": "tax-provider", "provider_reference": "form_1",
+                              "tin_matched": true, "received_at": 1_700_000_000u64}
+            })).unwrap()),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(
+            moved.previous_wallets,
+            vec![contractor_wallet.to_lowercase()]
+        );
+        assert_eq!(
+            invoicing::upsert_contractor(
+                State(state.clone()),
+                operator.clone(),
+                Path(format!("ctr_{}", Uuid::new_v4().simple())),
+                Json(
+                    serde_json::from_value(serde_json::json!({
+                        "wallet": contractor_wallet, "agreement_sha256": agreement,
+                        "agreement_accepted_at": 1_700_000_000u64, "tax_form": null
+                    }))
+                    .unwrap()
+                ),
+            )
+            .await
+            .unwrap_err()
+            .0,
+            StatusCode::CONFLICT
+        );
+        let report = invoicing::contractor_payments(
+            State(state.clone()),
+            operator.clone(),
+            Query(serde_json::from_value(serde_json::json!({"year": 2026})).unwrap()),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(
+            report
+                .summary
+                .form_1099_nec
+                .iter()
+                .find(|line| line.contractor_id == contractor_id)
+                .unwrap()
+                .total_cents,
+            10_000,
+            "settlements to an earlier wallet still count"
+        );
 
         // A second order is cancelled after payment and refunded by a signed credit note.
         let refund_order = format!("ord_{}", Uuid::new_v4().simple());
@@ -24388,33 +24574,107 @@ mod tests {
         .unwrap()
         .0;
         assert!(refund_paid.applied);
-        let cancelled = invoicing::cancel_invoice_order(
-            State(state.clone()),
-            operator.clone(),
-            Path(refund_order.clone()),
-            Json(serde_json::from_value(serde_json::json!({"reason": "buyer withdrew"})).unwrap()),
-        )
-        .await
-        .unwrap()
-        .0;
-        assert!(
-            cancelled.treasury_calls.is_empty(),
-            "nothing was escrowed yet"
-        );
-        let credit = invoicing::refund_invoice_order(
+        // Treasury funding is planned; the creation may be mined before anyone reconciles.
+        let refund_plan = invoicing::plan_invoice_funding(
             State(state.clone()),
             operator.clone(),
             Path(refund_order.clone()),
             Json(
-                serde_json::from_value(
-                    serde_json::json!({"refund": "stripe_refund", "memo": "cancelled"}),
-                )
+                serde_json::from_value(serde_json::json!({
+                    "goal": "Write the docs.", "acceptance_criteria": ["Docs build."]
+                }))
                 .unwrap(),
             ),
         )
         .await
         .unwrap()
         .0;
+        let refund_contract = refund_plan.creation.plan.predicted_bounty_contract.clone();
+        let refund_bounty_id = refund_plan.creation.plan.bounty_id.clone();
+        let cancel = || {
+            invoicing::cancel_invoice_order(
+                State(state.clone()),
+                operator.clone(),
+                Path(refund_order.clone()),
+                Json(
+                    serde_json::from_value(serde_json::json!({"reason": "buyer withdrew"}))
+                        .unwrap(),
+                ),
+            )
+        };
+        let refund = || {
+            invoicing::refund_invoice_order(
+                State(state.clone()),
+                operator.clone(),
+                Path(refund_order.clone()),
+                Json(
+                    serde_json::from_value(
+                        serde_json::json!({"refund": "stripe_refund", "memo": "cancelled"}),
+                    )
+                    .unwrap(),
+                ),
+            )
+        };
+        let cancelled = cancel().await.unwrap().0;
+        assert!(
+            cancelled.treasury_calls.is_empty(),
+            "no funding is indexed yet"
+        );
+        assert_eq!(
+            cancelled.state.next_action,
+            "complete_planned_treasury_funding_then_cancel_bounty_and_withdraw_treasury_refund"
+        );
+        assert_eq!(
+            refund().await.unwrap_err().0,
+            StatusCode::CONFLICT,
+            "no buyer refund while the planned escrow may be funded"
+        );
+        for event in [
+            synthetic_event(
+                &format!("{refund_order}:created"),
+                &factory,
+                &refund_bounty_id,
+                AutonomousBountyEventKind::CanonicalBountyCreated,
+                serde_json::json!({"bounty_contract": refund_contract}),
+                30,
+            ),
+            synthetic_event(
+                &format!("{refund_order}:funded"),
+                &refund_contract,
+                &refund_bounty_id,
+                AutonomousBountyEventKind::FundingAdded,
+                serde_json::json!({"contributor": treasury, "amount": 117_500_000u64}),
+                30,
+            ),
+        ] {
+            store
+                .upsert_autonomous_bounty_event(network, &event)
+                .await
+                .unwrap();
+        }
+        let cancelled = cancel().await.unwrap().0;
+        assert!(cancelled.state.funded);
+        assert_eq!(
+            cancelled.treasury_calls.len(),
+            2,
+            "the treasury cancels and withdraws"
+        );
+        assert_eq!(refund().await.unwrap_err().0, StatusCode::CONFLICT);
+        store
+            .upsert_autonomous_bounty_event(
+                network,
+                &synthetic_event(
+                    &format!("{refund_order}:refunded"),
+                    &refund_contract,
+                    &refund_bounty_id,
+                    AutonomousBountyEventKind::RefundWithdrawn,
+                    serde_json::json!({"contributor": treasury, "amount": 117_500_000u64}),
+                    31,
+                ),
+            )
+            .await
+            .unwrap();
+        let credit = refund().await.unwrap().0;
         assert_eq!(credit.request.body["refund_amount"], 11_750);
         let refunded = deliver(
             invoice_webhook("credit_note.created", serde_json::json!({

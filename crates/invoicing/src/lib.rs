@@ -237,6 +237,10 @@ pub struct InvoicePaidEvidence {
     pub amount_remaining_cents: u64,
     pub currency: String,
     pub livemode: bool,
+    /// Set when someone marked the invoice paid in the Stripe Dashboard without Stripe receiving
+    /// the funds. Such an invoice is never payment evidence.
+    #[serde(default)]
+    pub paid_out_of_band: bool,
 }
 
 /// One append-only order event. Stripe events must arrive signature-verified, and chain events
@@ -258,6 +262,7 @@ pub enum OrderEvent {
     InvoiceVoided {
         invoice_id: String,
         stripe_event_id: String,
+        livemode: bool,
     },
     FundingPlanned {
         treasury: String,
@@ -363,10 +368,13 @@ pub struct OrderState {
 
 impl OrderState {
     /// The amount owed to the buyer: positive only after cancellation, once no escrow remains at
-    /// risk, and before a credit note has been issued.
+    /// risk, and before a credit note has been issued. Once treasury funding is planned, the
+    /// creation may already be signed or mined but not yet reconciled, so the absence of
+    /// `FundingAdded` proves nothing: only the treasury's canonical `RefundWithdrawn` from the
+    /// cancelled bounty releases the buyer's refund.
     pub fn refund_due_cents(&self) -> u64 {
         if self.status == OrderStatus::CancelRequested
-            && (!self.funded || self.refunded_to_treasury)
+            && (self.bounty_contract.is_none() || (self.funded && self.refunded_to_treasury))
         {
             self.paid_cents
         } else {
@@ -384,7 +392,12 @@ impl OrderState {
             OrderStatus::CancelRequested if self.refund_due_cents() > 0 => {
                 "issue_credit_note_refund"
             }
-            OrderStatus::CancelRequested => "cancel_bounty_then_withdraw_treasury_refund",
+            OrderStatus::CancelRequested if self.funded => {
+                "cancel_bounty_then_withdraw_treasury_refund"
+            }
+            OrderStatus::CancelRequested => {
+                "complete_planned_treasury_funding_then_cancel_bounty_and_withdraw_treasury_refund"
+            }
             OrderStatus::Settled => "record_contractor_payment",
             OrderStatus::Refunded | OrderStatus::Voided => "none",
         }
@@ -422,8 +435,18 @@ pub fn project_order(
     else {
         return reject("an order log must start with exactly one quote");
     };
-    if quote.platform_fee_bps != policy.platform_fee_bps {
-        return reject("quote fee does not match the configured v2 factory fee");
+    // Replay checks the quote against its own fee terms, so a later factory fee change never
+    // erases history. Invoicing and funding separately require the current factory fee.
+    if quote.platform_fee_bps > MAX_PLATFORM_FEE_BPS
+        || platform_fee_usdc(quote.solver_reward_usdc, quote.platform_fee_bps)?
+            != quote.platform_fee_usdc
+        || quote
+            .solver_reward_usdc
+            .checked_add(quote.verifier_reward_usdc)
+            .and_then(|sum| sum.checked_add(quote.platform_fee_usdc))
+            != Some(quote.funding_target_usdc)
+    {
+        return reject("quote fee terms are internally inconsistent");
     }
     let Some(terms_sha256) = terms_sha256
         .strip_prefix("sha256:")
@@ -502,13 +525,23 @@ fn apply_order_event(
             if evidence.livemode != policy.livemode {
                 return reject("invoice evidence is from the wrong Stripe mode");
             }
+            if evidence.paid_out_of_band {
+                return reject(
+                    "the invoice was marked paid outside Stripe; no funds were received",
+                );
+            }
             state.paid_cents = evidence.amount_paid_cents;
             state.status = Status::Paid;
             Ok(())
         }
-        OrderEvent::InvoiceVoided { invoice_id, .. } => {
+        OrderEvent::InvoiceVoided {
+            invoice_id,
+            livemode,
+            ..
+        } => {
             if state.status != Status::Invoiced
                 || state.invoice_id.as_deref() != Some(invoice_id.as_str())
+                || *livemode != policy.livemode
             {
                 return reject("only this order's unpaid invoice can be voided");
             }
@@ -679,6 +712,11 @@ pub struct TaxFormRecord {
 pub struct ContractorRecord {
     pub contractor_id: String,
     pub wallet: String,
+    /// Earlier wallets. Settlements to them still count toward this contractor's 1099-NEC, and
+    /// none of them may be assigned to another contractor. The registry cannot revoke an
+    /// attestation, so an earlier wallet stays eligible until its attestation expires.
+    #[serde(default)]
+    pub previous_wallets: Vec<String>,
     pub agreement_sha256: String,
     pub agreement_accepted_at: u64,
     pub tax_form: Option<TaxFormRecord>,

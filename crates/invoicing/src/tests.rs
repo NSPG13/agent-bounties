@@ -34,6 +34,7 @@ fn paid(event_id: &str) -> OrderEvent {
         amount_remaining_cents: 0,
         currency: "usd".to_string(),
         livemode: false,
+        paid_out_of_band: false,
     })
 }
 
@@ -273,12 +274,6 @@ fn duplicate_or_replayed_evidence_fails_closed() {
         project(&through_funding()[1..]).is_err(),
         "log must start with a quote"
     );
-
-    let wrong_fee = InvoicePolicy {
-        platform_fee_bps: 500,
-        ..policy()
-    };
-    assert!(project_order(ORDER, &wrong_fee, &through_funding()).is_err());
 }
 
 #[test]
@@ -349,6 +344,106 @@ fn cancellation_after_funding_waits_for_the_treasury_refund() {
 }
 
 #[test]
+fn cancellation_after_planned_funding_never_refunds_until_the_treasury_is_refunded() {
+    // The creation may already be signed or mined but not yet reconciled: a missing FundingAdded
+    // is no proof the escrow is unfunded.
+    let planned = through_funding()[..4].to_vec();
+    let mut events = planned.clone();
+    events.push(OrderEvent::CancellationRequested {
+        reason: "buyer withdrew".to_string(),
+    });
+    let state = project(&events).unwrap();
+    assert_eq!(state.status, OrderStatus::CancelRequested);
+    assert_eq!(
+        state.refund_due_cents(),
+        0,
+        "planned escrow is still at risk"
+    );
+    assert_eq!(
+        state.next_action,
+        "complete_planned_treasury_funding_then_cancel_bounty_and_withdraw_treasury_refund"
+    );
+    let credit = OrderEvent::CreditNoteIssued {
+        credit_note_id: "cn_1".to_string(),
+        invoice_id: "in_1".to_string(),
+        refund_cents: 11_750,
+        stripe_event_id: "evt_cn".to_string(),
+        livemode: false,
+    };
+    let mut early = events.clone();
+    early.push(credit.clone());
+    assert!(
+        project(&early).is_err(),
+        "no buyer refund while funding is planned"
+    );
+
+    // The late funding is observed, the treasury cancels and withdraws, then the buyer is refunded.
+    events.push(through_funding()[4].clone());
+    let state = project(&events).unwrap();
+    assert!(state.funded);
+    assert_eq!(state.refund_due_cents(), 0);
+    assert_eq!(
+        state.next_action,
+        "cancel_bounty_then_withdraw_treasury_refund"
+    );
+    events.push(OrderEvent::RefundObserved {
+        bounty_contract: BOUNTY.to_string(),
+        contributor: TREASURY.to_string(),
+        amount_usdc: quote().funding_target_usdc,
+        log_key: "84532:0xrefund:0".to_string(),
+    });
+    assert_eq!(project(&events).unwrap().refund_due_cents(), 11_750);
+    events.push(credit);
+    assert_eq!(project(&events).unwrap().status, OrderStatus::Refunded);
+
+    // A contractor who settles the late-funded bounty first is paid and the buyer is not refunded.
+    let mut settled = planned;
+    settled.push(OrderEvent::CancellationRequested {
+        reason: "buyer withdrew".to_string(),
+    });
+    settled.push(through_funding()[4].clone());
+    settled.push(OrderEvent::SettlementObserved {
+        bounty_contract: BOUNTY.to_string(),
+        solver: SOLVER.to_string(),
+        reportable_usdc: 100_000_000,
+        settled_at: 1_780_000_000,
+        log_key: "84532:0xsettle:1".to_string(),
+    });
+    let state = project(&settled).unwrap();
+    assert_eq!(state.status, OrderStatus::Settled);
+    assert_eq!(state.refund_due_cents(), 0);
+}
+
+#[test]
+fn out_of_band_payments_are_never_payment_evidence() {
+    let mut events = through_funding()[..2].to_vec();
+    let OrderEvent::InvoicePaid(mut evidence) = paid("evt_paid") else {
+        unreachable!()
+    };
+    evidence.paid_out_of_band = true;
+    events.push(OrderEvent::InvoicePaid(evidence));
+    assert!(project(&events).is_err());
+}
+
+#[test]
+fn replay_survives_a_later_factory_fee_change_but_not_an_inconsistent_quote() {
+    let events = through_funding();
+    let mut later = policy();
+    later.platform_fee_bps = 500;
+    assert!(project_order(ORDER, &later, &events).unwrap().funded);
+    let mut tampered = events.clone();
+    if let OrderEvent::Quoted { quote, .. } = &mut tampered[0] {
+        quote.platform_fee_usdc -= 1;
+    }
+    assert!(project(&tampered).is_err());
+    let mut over_cap = events;
+    if let OrderEvent::Quoted { quote, .. } = &mut over_cap[0] {
+        quote.platform_fee_bps = 1_001;
+    }
+    assert!(project(&over_cap).is_err());
+}
+
+#[test]
 fn a_settlement_that_beats_cancellation_wins() {
     let mut events = through_funding();
     events.push(OrderEvent::CancellationRequested {
@@ -374,9 +469,20 @@ fn unpaid_invoices_are_voided_not_cancelled() {
         reason: "no".to_string(),
     });
     assert!(project(&cancelled).is_err());
+    let mut live_void = events.clone();
+    live_void.push(OrderEvent::InvoiceVoided {
+        invoice_id: "in_1".to_string(),
+        stripe_event_id: "evt_void".to_string(),
+        livemode: true,
+    });
+    assert!(
+        project(&live_void).is_err(),
+        "a void from the other Stripe mode never applies"
+    );
     events.push(OrderEvent::InvoiceVoided {
         invoice_id: "in_1".to_string(),
         stripe_event_id: "evt_void".to_string(),
+        livemode: false,
     });
     assert_eq!(project(&events).unwrap().status, OrderStatus::Voided);
     events.push(paid("evt_paid"));
@@ -392,6 +498,7 @@ fn contractor(kind: TaxFormKind, tin_matched: bool) -> ContractorRecord {
         wallet: "0x5010000000000000000000000000000000000003"
             .to_uppercase()
             .replace("0X", "0x"),
+        previous_wallets: Vec::new(),
         agreement_sha256: TERMS.to_string(),
         agreement_accepted_at: 1_700_000_000,
         tax_form: Some(TaxFormRecord {

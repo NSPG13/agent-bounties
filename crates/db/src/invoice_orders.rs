@@ -132,6 +132,15 @@ impl PostgresStore {
         .collect()
     }
 
+    /// Every order id, oldest first, for reports that must not miss an order.
+    pub async fn list_invoice_order_ids(&self) -> DbResult<Vec<String>> {
+        Ok(
+            sqlx::query_scalar("SELECT order_id FROM invoice_orders ORDER BY created_at, order_id")
+                .fetch_all(&self.pool)
+                .await?,
+        )
+    }
+
     /// Records Stripe object ids as they are created so a retried invoice run resumes instead of
     /// creating duplicates. Ids already set are never overwritten.
     pub async fn set_invoice_order_stripe_refs(

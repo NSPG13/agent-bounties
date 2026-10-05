@@ -188,6 +188,20 @@ impl StripeInvoiceOrder {
     }
 }
 
+/// `GET /v1/invoices/{id}`: reads a stored invoice so a retried issue resumes from its real status.
+pub fn plan_retrieve_invoice(
+    invoice_id: &str,
+) -> Result<StripeRequestIntent, StripeIntegrationError> {
+    let invoice = stripe_id(invoice_id, "in_", "invoice_id")?;
+    Ok(StripeRequestIntent {
+        method: "GET".to_string(),
+        endpoint: format!("{INVOICES_ENDPOINT}/{invoice}"),
+        api_version: STRIPE_API_VERSION.to_string(),
+        idempotency_key: format!("invoice_retrieve:{invoice}"),
+        body: serde_json::json!({}),
+    })
+}
+
 /// `POST /v1/invoices/{id}/finalize`.
 pub fn plan_finalize_invoice(
     order: &str,
@@ -303,6 +317,8 @@ pub enum InvoiceWebhookEvidence {
         amount_remaining_cents: u64,
         currency: String,
         livemode: bool,
+        /// Marked paid in the Dashboard without Stripe receiving funds; never payment evidence.
+        paid_out_of_band: bool,
     },
     InvoiceVoided {
         stripe_event_id: String,
@@ -367,7 +383,8 @@ fn cents_field(object: &serde_json::Value, key: &str) -> Result<u64, StripeInteg
 }
 
 /// Parses a verified webhook body. Returns `Ok(None)` for events that are not about an invoiced
-/// order, which the endpoint should acknowledge without applying.
+/// order, or are tagged but not one of the three applied types (for example `invoice.finalized`),
+/// which the endpoint should acknowledge without applying so Stripe does not retry them.
 pub fn parse_invoice_webhook(
     payload: &[u8],
 ) -> Result<Option<InvoiceWebhookEvidence>, StripeIntegrationError> {
@@ -401,6 +418,10 @@ pub fn parse_invoice_webhook(
             amount_remaining_cents: cents_field(object, "amount_remaining")?,
             currency: string_field(object, "currency")?.to_ascii_lowercase(),
             livemode: event.livemode,
+            paid_out_of_band: object
+                .get("paid_out_of_band")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
         },
         ("invoice.voided", "invoice") => InvoiceWebhookEvidence::InvoiceVoided {
             stripe_event_id: event.id,
@@ -417,11 +438,7 @@ pub fn parse_invoice_webhook(
             total_cents: cents_field(object, "total")?,
             livemode: event.livemode,
         },
-        (event_type, _) => {
-            return Err(StripeIntegrationError::UnsupportedEvent(
-                event_type.to_string(),
-            ))
-        }
+        _ => return Ok(None),
     };
     if !evidence.stripe_event_id().starts_with("evt_") {
         return Err(invalid("id"));
@@ -585,8 +602,18 @@ mod tests {
                 amount_remaining_cents: 0,
                 currency: "usd".to_string(),
                 livemode: false,
+                paid_out_of_band: false,
             }
         );
+        let mut marked_paid = paid_invoice();
+        marked_paid["paid_out_of_band"] = serde_json::json!(true);
+        assert!(matches!(
+            parse_invoice_webhook(&event("invoice.paid", marked_paid)).unwrap(),
+            Some(InvoiceWebhookEvidence::InvoicePaid {
+                paid_out_of_band: true,
+                ..
+            })
+        ));
         let credit = parse_invoice_webhook(&event(
             "credit_note.created",
             serde_json::json!({
@@ -612,6 +639,24 @@ mod tests {
     }
 
     #[test]
+    fn retrieving_an_invoice_is_a_bodyless_get() {
+        let intent = plan_retrieve_invoice("in_456").unwrap();
+        let request =
+            crate::build_stripe_http_request(&intent, "sk_test_123", "https://api.stripe.com/")
+                .unwrap();
+        assert_eq!(request.method, "GET");
+        assert_eq!(request.url, "https://api.stripe.com/v1/invoices/in_456");
+        assert!(request.body.is_empty());
+        assert!(plan_retrieve_invoice("in_456/void").is_err());
+        let mut delete = intent;
+        delete.method = "DELETE".to_string();
+        assert!(
+            crate::build_stripe_http_request(&delete, "sk_test_123", "https://api.stripe.com")
+                .is_err()
+        );
+    }
+
+    #[test]
     fn ignores_untagged_events_and_rejects_inconsistent_ones() {
         let mut untagged = paid_invoice();
         untagged["metadata"] = serde_json::json!({"order_id": "ord_01"});
@@ -625,7 +670,11 @@ mod tests {
         let mut missing_amount = paid_invoice();
         missing_amount["amount_paid"] = serde_json::Value::Null;
         assert!(parse_invoice_webhook(&event("invoice.paid", missing_amount)).is_err());
-        assert!(parse_invoice_webhook(&event("invoice.created", paid_invoice())).is_err());
+        assert_eq!(
+            parse_invoice_webhook(&event("invoice.finalized", paid_invoice())).unwrap(),
+            None,
+            "tagged lifecycle events are acknowledged, not retried"
+        );
         assert!(parse_invoice_webhook(b"not json").is_err());
     }
 }

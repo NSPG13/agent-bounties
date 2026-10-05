@@ -22,9 +22,9 @@ use chain_base::{
     BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
 };
 use payments_stripe::invoicing::{
-    parse_invoice_webhook, plan_credit_note_refund, plan_finalize_invoice, plan_send_invoice,
-    plan_void_invoice, CreditNoteRefund, InvoiceWebhookEvidence, StripeInvoiceLine,
-    StripeInvoiceOrder,
+    parse_invoice_webhook, plan_credit_note_refund, plan_finalize_invoice, plan_retrieve_invoice,
+    plan_send_invoice, plan_void_invoice, CreditNoteRefund, InvoiceWebhookEvidence,
+    StripeInvoiceLine, StripeInvoiceOrder,
 };
 use serde_json::{json, Value};
 
@@ -580,8 +580,10 @@ fn response_id(report: &StripeExecutionReport, prefix: &str) -> InvoicingResult<
         })
 }
 
-/// Creates the customer, draft invoice and line items, finalizes the invoice, and sends it. Each
-/// Stripe id is stored before the next step, so a retry resumes rather than duplicating.
+/// Creates the customer, draft invoice and line items, finalizes the invoice, records it, and
+/// sends it. Each Stripe id is stored before the next step, and a stored invoice is read back
+/// before it is changed, so a retry resumes rather than duplicating. The order records the
+/// invoice before it is sent, so the buyer can never pay an invoice the order does not know.
 pub(crate) async fn issue_invoice(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -589,11 +591,32 @@ pub(crate) async fn issue_invoice(
 ) -> InvoicingResult<Json<InvoiceOrderView>> {
     let (config, store) = require_invoicing_operator(&state, &headers)?;
     let (view, _) = load_order(store, &config, &order_id).await?;
+    let send_error = |error: payments_stripe::StripeIntegrationError| {
+        bad_request("invalid_invoice_order", error.to_string())
+    };
+    if let (OrderStatus::Invoiced, Some(invoice)) =
+        (view.state.status, view.state.invoice_id.as_deref())
+    {
+        // A retry after the invoice was recorded only (re)sends it; sending is idempotent.
+        execute_stripe(
+            &state,
+            &plan_send_invoice(&order_id, invoice).map_err(send_error)?,
+        )
+        .await?;
+        return Ok(Json(load_order(store, &config, &order_id).await?.0));
+    }
     if view.state.status != OrderStatus::Quoted {
         return Err(conflict(
             "invoice_already_issued",
             "only a quoted order can be invoiced",
             &view.state.next_action,
+        ));
+    }
+    if view.state.quote.platform_fee_bps != config.policy.platform_fee_bps {
+        return Err(conflict(
+            "invoice_fee_mismatch",
+            "the configured v2 factory fee no longer matches this quote",
+            "Create a new order at the current fee.",
         ));
     }
     let order = StripeInvoiceOrder {
@@ -631,7 +654,8 @@ pub(crate) async fn issue_invoice(
             customer
         }
     };
-    let invoice = match view.order.stripe_invoice_id.clone() {
+    let stored_invoice = view.order.stripe_invoice_id.clone();
+    let invoice = match stored_invoice.clone() {
         Some(invoice) => invoice,
         None => {
             let report = execute_stripe(
@@ -647,17 +671,47 @@ pub(crate) async fn issue_invoice(
             invoice
         }
     };
-    for item in order
-        .plan_invoice_items(&customer, &invoice)
-        .map_err(plan_error)?
-    {
-        execute_stripe(&state, &item).await?;
-    }
-    let finalized = execute_stripe(
-        &state,
-        &plan_finalize_invoice(&order_id, &invoice).map_err(plan_error)?,
-    )
-    .await?;
+    // A stored invoice may already be finalized by an interrupted run; read its real status
+    // instead of re-adding items, whose idempotency keys may have expired.
+    let existing = match stored_invoice {
+        Some(_) => Some(
+            execute_stripe(
+                &state,
+                &plan_retrieve_invoice(&invoice).map_err(plan_error)?,
+            )
+            .await?,
+        ),
+        None => None,
+    };
+    let existing_status = existing
+        .as_ref()
+        .and_then(|report| report.response.get("status"))
+        .and_then(Value::as_str)
+        .unwrap_or("draft")
+        .to_string();
+    let finalized = match (existing_status.as_str(), existing) {
+        ("draft", _) => {
+            for item in order
+                .plan_invoice_items(&customer, &invoice)
+                .map_err(plan_error)?
+            {
+                execute_stripe(&state, &item).await?;
+            }
+            execute_stripe(
+                &state,
+                &plan_finalize_invoice(&order_id, &invoice).map_err(plan_error)?,
+            )
+            .await?
+        }
+        ("open", Some(report)) => report,
+        (status, _) => {
+            return Err(conflict(
+                "invoice_stray_status",
+                format!("the stored Stripe invoice is {status}, not draft or open"),
+                "Investigate the invoice in Stripe, then create a new order.",
+            ))
+        }
+    };
     let total = finalized
         .response
         .get("total")
@@ -684,23 +738,23 @@ pub(crate) async fn issue_invoice(
         .set_invoice_order_stripe_refs(&order_id, None, None, hosted_url.as_deref())
         .await
         .map_err(internal)?;
-    execute_stripe(
-        &state,
-        &plan_send_invoice(&order_id, &invoice).map_err(plan_error)?,
-    )
-    .await?;
     require_applied(
         append_order_event(
             store,
             &config,
             &order_id,
             OrderEvent::InvoiceIssued {
-                invoice_id: invoice,
+                invoice_id: invoice.clone(),
                 total_cents: total,
             },
         )
         .await?,
     )?;
+    execute_stripe(
+        &state,
+        &plan_send_invoice(&order_id, &invoice).map_err(plan_error)?,
+    )
+    .await?;
     Ok(Json(load_order(store, &config, &order_id).await?.0))
 }
 
@@ -790,6 +844,7 @@ pub(crate) async fn reconcile_invoice_webhook(
             amount_remaining_cents,
             currency,
             livemode,
+            paid_out_of_band,
         } => OrderEvent::InvoicePaid(InvoicePaidEvidence {
             stripe_event_id,
             invoice_id,
@@ -799,14 +854,17 @@ pub(crate) async fn reconcile_invoice_webhook(
             amount_remaining_cents,
             currency,
             livemode,
+            paid_out_of_band,
         }),
         InvoiceWebhookEvidence::InvoiceVoided {
             stripe_event_id,
             invoice_id,
+            livemode,
             ..
         } => OrderEvent::InvoiceVoided {
             invoice_id,
             stripe_event_id,
+            livemode,
         },
         InvoiceWebhookEvidence::CreditNoteCreated {
             stripe_event_id,
@@ -834,9 +892,23 @@ pub(crate) async fn reconcile_invoice_webhook(
             }
         }
     };
-    Ok(Json(
-        append_order_event(store, &config, &order_id, event).await?,
-    ))
+    let early_payment = matches!(event, OrderEvent::InvoicePaid(_));
+    let outcome = append_order_event(store, &config, &order_id, event).await?;
+    if early_payment && !outcome.applied && !outcome.duplicate {
+        // A payment that arrives before the order records its invoice may apply later: answer
+        // non-2xx so Stripe redelivers it instead of the evidence being dropped.
+        let (view, _) = load_order(store, &config, &order_id).await?;
+        if view.state.status == OrderStatus::Quoted {
+            return Err(agent_action_error(
+                StatusCode::CONFLICT,
+                "invoice_payment_not_yet_applicable",
+                "the order has not recorded its invoice yet",
+                true,
+                "Stripe redelivers this event; finish issuing the invoice.",
+            ));
+        }
+    }
+    Ok(Json(outcome))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1033,6 +1105,24 @@ pub(crate) async fn reconcile_invoice_order(
             &view.state.next_action,
         ));
     };
+    let (applied, rejected) =
+        apply_indexed_chain_events(store, &config, &order_id, &contract).await?;
+    Ok(Json(InvoiceReconciliation {
+        state: load_order(store, &config, &order_id).await?.0.state,
+        applied,
+        rejected,
+    }))
+}
+
+/// Appends every indexed canonical event for the order's planned bounty, returning the applied
+/// and rejected log keys. Duplicates are skipped.
+async fn apply_indexed_chain_events(
+    store: &PostgresStore,
+    config: &InvoicingConfig,
+    order_id: &str,
+    contract: &str,
+) -> InvoicingResult<(Vec<String>, Vec<String>)> {
+    let contract = contract.to_string();
     let events = store
         .list_autonomous_bounty_history_for_contract(
             &config.network,
@@ -1072,7 +1162,7 @@ pub(crate) async fn reconcile_invoice_order(
             },
             _ => continue,
         };
-        let outcome = append_order_event(store, &config, &order_id, order_event).await?;
+        let outcome = append_order_event(store, config, order_id, order_event).await?;
         if outcome.applied {
             applied.push(event.log_key.clone());
         } else if !outcome.duplicate {
@@ -1083,11 +1173,7 @@ pub(crate) async fn reconcile_invoice_order(
             ));
         }
     }
-    Ok(Json(InvoiceReconciliation {
-        state: load_order(store, &config, &order_id).await?.0.state,
-        applied,
-        rejected,
-    }))
+    Ok((applied, rejected))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1109,19 +1195,34 @@ pub(crate) async fn cancel_invoice_order(
     Json(request): Json<CancelInvoiceOrderRequest>,
 ) -> InvoicingResult<Json<InvoiceCancellation>> {
     let (config, store) = require_invoicing_operator(&state, &headers)?;
-    let state_after = require_applied(
-        append_order_event(
-            store,
-            &config,
-            &order_id,
-            OrderEvent::CancellationRequested {
-                reason: request.reason,
-            },
-        )
-        .await?,
-    )?;
+    // Decide from the latest indexed chain state, never from a stale projection.
+    let (view, _) = load_order(store, &config, &order_id).await?;
+    if let Some(contract) = view.state.bounty_contract.as_deref() {
+        apply_indexed_chain_events(store, &config, &order_id, contract).await?;
+    }
+    let (view, _) = load_order(store, &config, &order_id).await?;
+    // Repeating a cancellation returns the current treasury calls without a second event.
+    let state_after = if view.state.status == OrderStatus::CancelRequested {
+        view.state
+    } else {
+        require_applied(
+            append_order_event(
+                store,
+                &config,
+                &order_id,
+                OrderEvent::CancellationRequested {
+                    reason: request.reason,
+                },
+            )
+            .await?,
+        )?
+    };
     let mut treasury_calls = Vec::new();
-    if let (true, Some(contract)) = (state_after.funded, state_after.bounty_contract.as_deref()) {
+    if let (true, false, Some(contract)) = (
+        state_after.funded,
+        state_after.refunded_to_treasury,
+        state_after.bounty_contract.as_deref(),
+    ) {
         let plan_error = |error: ChainBaseError| internal(error);
         treasury_calls.push(
             config
@@ -1158,6 +1259,10 @@ pub(crate) async fn refund_invoice_order(
     Json(request): Json<RefundInvoiceOrderRequest>,
 ) -> InvoicingResult<Json<StripeExecutionReport>> {
     let (config, store) = require_invoicing_operator(&state, &headers)?;
+    let (view, _) = load_order(store, &config, &order_id).await?;
+    if let Some(contract) = view.state.bounty_contract.as_deref() {
+        apply_indexed_chain_events(store, &config, &order_id, contract).await?;
+    }
     let (view, _) = load_order(store, &config, &order_id).await?;
     let due = view.state.refund_due_cents();
     let invoice = view
@@ -1202,15 +1307,49 @@ pub(crate) async fn upsert_contractor(
     let (_, store) = require_invoicing_operator(&state, &headers)?;
     let wallet = ::invoicing::normalize_address(&request.wallet)
         .ok_or_else(|| bad_request("invalid_wallet", "wallet is not an address"))?;
-    if contractor_id.is_empty() || contractor_id.len() > 128 {
+    if contractor_id.is_empty()
+        || contractor_id.len() > 128
+        || contractor_id.trim() != contractor_id
+    {
         return Err(bad_request(
             "invalid_contractor_id",
-            "contractor id must be 1 to 128 characters",
+            "contractor id must be 1 to 128 characters without surrounding whitespace",
         ));
+    }
+    // A contractor keeps their wallet history, so settlements to an earlier wallet still count
+    // toward their 1099-NEC, and no wallet ever moves to a different contractor.
+    let others = store
+        .list_invoice_contractors()
+        .await
+        .map_err(internal)?
+        .into_iter()
+        .map(|value| serde_json::from_value::<ContractorRecord>(value).map_err(internal))
+        .collect::<Result<Vec<_>, _>>()?;
+    if others.iter().any(|other| {
+        other.contractor_id != contractor_id
+            && (other.wallet == wallet || other.previous_wallets.contains(&wallet))
+    }) {
+        return Err(conflict(
+            "contractor_wallet_conflict",
+            "this wallet belongs or belonged to another contractor",
+            "Each wallet belongs to one contractor for good.",
+        ));
+    }
+    let mut previous_wallets = Vec::new();
+    if let Some(existing) = others
+        .iter()
+        .find(|other| other.contractor_id == contractor_id)
+    {
+        previous_wallets = existing.previous_wallets.clone();
+        if existing.wallet != wallet && !previous_wallets.contains(&existing.wallet) {
+            previous_wallets.push(existing.wallet.clone());
+        }
+        previous_wallets.retain(|previous| previous != &wallet);
     }
     let record = ContractorRecord {
         contractor_id: contractor_id.clone(),
         wallet: wallet.clone(),
+        previous_wallets,
         agreement_sha256: request.agreement_sha256.to_ascii_lowercase(),
         agreement_accepted_at: request.agreement_accepted_at,
         tax_form: request.tax_form,
@@ -1361,6 +1500,16 @@ pub(crate) struct ContractorPaymentsReport {
     pub summary: ContractorTaxSummary,
     /// Settlements whose solver wallet matches no contractor record. They need manual review.
     pub unmatched_settlements: Vec<String>,
+    /// Orders whose log no longer replays, so their payments may be missing from `summary`.
+    pub replay_errors: Vec<InvoiceReplayError>,
+    /// True only when every order replayed and every settlement matched a contractor.
+    pub complete: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct InvoiceReplayError {
+    pub order_id: String,
+    pub error: String,
 }
 
 pub(crate) async fn contractor_payments(
@@ -1378,17 +1527,30 @@ pub(crate) async fn contractor_payments(
         .collect::<Result<Vec<_>, _>>()?;
     let mut payments = Vec::new();
     let mut unmatched = Vec::new();
-    for order in store.list_invoice_orders(500).await.map_err(internal)? {
-        let Ok((view, _)) = load_order(store, &config, &order.order_id).await else {
-            continue;
+    let mut replay_errors = Vec::new();
+    // Every order, uncapped: a missed settlement would under-report a contractor's 1099-NEC.
+    for order_id in store.list_invoice_order_ids().await.map_err(internal)? {
+        let view = match load_order(store, &config, &order_id).await {
+            Ok((view, _)) => view,
+            Err(error) => {
+                replay_errors.push(InvoiceReplayError {
+                    order_id,
+                    error: error.1 .0.message.clone(),
+                });
+                continue;
+            }
         };
         let Some(settlement) = view.state.settlement else {
             continue;
         };
-        match contractors
-            .iter()
-            .find(|contractor| contractor.wallet.eq_ignore_ascii_case(&settlement.solver))
-        {
+        let order = view.order;
+        match contractors.iter().find(|contractor| {
+            contractor.wallet.eq_ignore_ascii_case(&settlement.solver)
+                || contractor
+                    .previous_wallets
+                    .iter()
+                    .any(|wallet| wallet.eq_ignore_ascii_case(&settlement.solver))
+        }) {
             Some(contractor) => payments.push(ContractorPayment {
                 contractor_id: contractor.contractor_id.clone(),
                 tax_form_kind: contractor
@@ -1415,6 +1577,8 @@ pub(crate) async fn contractor_payments(
             })?;
     Ok(Json(ContractorPaymentsReport {
         summary,
+        complete: unmatched.is_empty() && replay_errors.is_empty(),
         unmatched_settlements: unmatched,
+        replay_errors,
     }))
 }

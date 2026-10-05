@@ -42,6 +42,14 @@ for:
 **Other rules.**
 - An unpaid invoice is voided, not cancelled.
 - A settlement that lands before a cancellation takes effect wins.
+- **No buyer refund while escrow may exist.** Once treasury funding is
+  planned, the creation may already be signed or mined but not yet indexed, so
+  a missing `FundingAdded` proves nothing. The buyer's credit note then waits
+  for the treasury's canonical `RefundWithdrawn` from the cancelled bounty.
+  The operator completes the planned funding if it never ran, then cancels
+  and withdraws. Without this rule the treasury could refund the buyer and
+  still pay a contractor.
+- An invoice marked paid outside Stripe (`paid_out_of_band`) is never payment.
 - Each state names its `next_action`.
 
 ## Money
@@ -55,8 +63,10 @@ for:
 - **Coverage invariant.** The invoice always covers the escrow, and it never
   over-collects a full cent for escrowed amounts. A property test checks this
   over random rewards and fee rates.
-- **Fee rate.** It must equal the v2 factory's immutable fee, or the
-  projection rejects the order.
+- **Fee rate.** It must equal the v2 factory's immutable fee when the invoice
+  is issued and when funding is planned. Replay checks each quote against its
+  own fee terms, so a later factory fee change never erases an order's
+  history or its 1099 totals.
 - **Payment methods.** Invoices accept only US bank transfers
   (`payment_settings.payment_method_types = [customer_balance]`). These
   payments cannot be charged back, so `invoice.paid` is final. Card and ACH
@@ -116,10 +126,14 @@ validated before they are placed in a URL path:
 - `POST /v1/credit_notes`: the full amount, refunded once, either through
   Stripe (`refund_amount`) or recorded outside it (`out_of_band_amount`)
 
+An interrupted run is resumed by reading the stored invoice back before
+anything is added to it.
+
 **Webhooks.** `parse_invoice_webhook` accepts native Stripe events after
 signature verification. It ignores objects not tagged
-`purpose: invoiced_outcome`. It rejects malformed events, mode mismatches and
-unsupported event types.
+`purpose: invoiced_outcome`, and tagged lifecycle events it does not apply
+(such as `invoice.finalized`), so Stripe does not retry them. It rejects
+malformed events and mode mismatches.
 
 ## Never evidence
 
@@ -144,21 +158,30 @@ is stored only when that replay accepts it.
 | --- | --- |
 | `POST /v1/invoicing/orders` | Quote and create an order |
 | `GET /v1/invoicing/orders`, `GET /v1/invoicing/orders/{id}` | Order states, events and `next_action` |
-| `POST /v1/invoicing/orders/{id}/invoice` | Create the customer, draft, items, finalize and send. Each Stripe id is stored before the next step, so a retry resumes. The finalized total must equal the quote |
+| `POST /v1/invoicing/orders/{id}/invoice` | Create the customer, draft and items, finalize, record the invoice, then send. Each Stripe id is stored before the next step. A retry reads a stored invoice back instead of re-adding items, and an already recorded invoice is only resent. The finalized total must equal the quote |
 | `POST /v1/invoicing/orders/{id}/void` | Void an unpaid invoice. `invoice.voided` records it |
 | `POST /v1/invoicing/orders/{id}/funding-plan` | Publish the v2 terms and return the treasury's unsigned creation plan. The terms commit the quote economics, the treasury as creator, the contractor gate and the verifier quorum |
 | `POST /v1/invoicing/orders/{id}/reconcile` | Apply indexed canonical treasury `FundingAdded`, `BountySettled` and treasury `RefundWithdrawn` for the planned bounty |
-| `POST /v1/invoicing/orders/{id}/cancel` | Cancel a paid order. When funded, it returns the treasury's `cancel()` and `withdrawRefund()` calls |
-| `POST /v1/invoicing/orders/{id}/refund` | Issue the credit note once no escrow is at risk. `credit_note.created` marks the order refunded |
-| `PUT /v1/invoicing/contractors/{id}` | Record a contractor: wallet, agreement acceptance, and a tax-form reference only |
+| `POST /v1/invoicing/orders/{id}/cancel` | Cancel a paid order after applying the latest indexed events. When funded and not yet refunded, it returns the treasury's `cancel()` and `withdrawRefund()` calls. Repeating it returns the current calls |
+| `POST /v1/invoicing/orders/{id}/refund` | Apply the latest indexed events, then issue the credit note once no escrow is at risk. `credit_note.created` marks the order refunded |
+| `PUT /v1/invoicing/contractors/{id}` | Record a contractor: wallet, agreement acceptance, and a tax-form reference only. A wallet change keeps the old wallet in `previous_wallets`, and a wallet never moves to another contractor |
 | `POST /v1/invoicing/contractors/{id}/attestation-plan` | Return the attester's EIP-712 payload for an eligible contractor |
 | `POST /v1/invoicing/contractors/{id}/registration-plan` | Plan the relayed `register` call for an attestation that the configured attester signed |
-| `GET /v1/invoicing/contractor-payments?year=` | Annual 1099-NEC totals and foreign-payee totals, plus settlements with no contractor record |
+| `GET /v1/invoicing/contractor-payments?year=` | Annual 1099-NEC totals and foreign-payee totals over every order. Settlements to a contractor's earlier wallets count. `unmatched_settlements` and `replay_errors` list what needs review, and `complete` is true only when both are empty |
 | `POST /v1/stripe/invoice-webhooks` | Signature-verified Stripe events, using a separate endpoint secret |
 
 **Webhook handling.** Each Stripe event applies at most once; a retry is
 reported as a duplicate. A transition the projection rejects is acknowledged
-with its reason, so Stripe does not retry evidence that can never apply.
+with its reason, so Stripe does not retry evidence that can never apply. The
+exception is an `invoice.paid` that arrives before its order records the
+invoice: it gets a retryable 409, so Stripe redelivers it.
+
+**Known limits.**
+- `ParticipantEligibilityRegistry` cannot revoke an attestation. A
+  contractor's earlier wallet stays eligible until its attestation expires, so
+  keep validity short (the plan accepts at most 365 days).
+- Registration proves the attester's approval, not the contractor's control of
+  the wallet. Confirm the wallet with the contractor before attesting it.
 
 ## Configuration
 
@@ -188,7 +211,9 @@ are set:
 
 **End-to-end test.** `invoiced_seller_of_record_path_runs_end_to_end_postgres`
 runs the whole path against Postgres and a local Stripe stand-in:
-quote, bank-transfer invoice, signed `invoice.paid` (including a replay),
-treasury funding plan, reconciliation from indexed events, contractor
-attestation and registration, the 1099 summary, and a cancelled order refunded
-by a signed credit note.
+quote, bank-transfer invoice (including a resent and a resumed issue), signed
+`invoice.paid` (including a replay and an early delivery), treasury funding
+plan, reconciliation from indexed events, contractor attestation and
+registration, a contractor wallet change, the 1099 summary, and a cancelled
+order whose planned funding is completed, cancelled and withdrawn before the
+buyer is refunded by a signed credit note.
