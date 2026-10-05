@@ -5,6 +5,7 @@ members = [
   "crates/broad-verification",
   "crates/app",
   "crates/ledger",
+  "crates/invoicing",
   "crates/risk",
   "crates/bounty-router",
   "crates/verifier-sdk",

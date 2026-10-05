@@ -79,6 +79,11 @@ Provider webhooks and compliance remain necessary for the fiat leg. Once USDC
 reaches the bounty contract, autonomous-v1 settlement is controlled only by the
 immutable verifier policy.
 
+Business buyers who need a vendor invoice use the seller-of-record path instead:
+AgentBounties invoices the outcome through Stripe and funds a contractor-gated v2
+bounty from its own treasury after verified payment. See
+[the invoiced business path](invoice-seller-of-record.md).
+
 ## Fees
 
 Autonomous-v1 has no platform fee.

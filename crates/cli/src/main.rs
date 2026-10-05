@@ -6607,8 +6607,20 @@ fn is_checked_api_path(path: &str) -> bool {
         || matches!(path, "/llms.txt" | "/docs" | "/health")
 }
 
+/// Stripe API paths that docs may cite verbatim. They are Stripe's endpoints, not Agent Bounties
+/// routes.
 fn is_external_api_path(path: &str) -> bool {
-    matches!(path, "/v1/checkout/sessions")
+    matches!(
+        path,
+        "/v1/checkout/sessions"
+            | "/v1/customers"
+            | "/v1/invoices"
+            | "/v1/invoiceitems"
+            | "/v1/invoices/{param}/finalize"
+            | "/v1/invoices/{param}/send"
+            | "/v1/invoices/{param}/void"
+            | "/v1/credit_notes"
+    )
 }
 
 fn normalize_route(path: &str) -> String {

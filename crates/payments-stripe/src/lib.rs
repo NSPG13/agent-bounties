@@ -8,6 +8,8 @@ use std::collections::HashSet;
 use thiserror::Error;
 use uuid::Uuid;
 
+pub mod invoicing;
+
 type HmacSha256 = Hmac<Sha256>;
 const WEBHOOK_SIGNATURE_TOLERANCE_SECONDS: u64 = 5 * 60;
 
@@ -125,14 +127,18 @@ impl StripeHttpTransport for ReqwestStripeHttpTransport {
         &self,
         request: StripeHttpRequest,
     ) -> Result<StripeHttpResponse, StripeIntegrationError> {
-        let response = self
-            .client
-            .post(&request.url)
+        let builder = if request.method == "GET" {
+            self.client.get(&request.url)
+        } else {
+            self.client
+                .post(&request.url)
+                .header("idempotency-key", request.idempotency_key)
+                .header("content-type", request.content_type)
+                .body(request.body)
+        };
+        let response = builder
             .header("authorization", request.authorization_header)
             .header("stripe-version", request.stripe_version)
-            .header("idempotency-key", request.idempotency_key)
-            .header("content-type", request.content_type)
-            .body(request.body)
             .send()
             .await
             .map_err(|error| StripeIntegrationError::HttpTransport(error.to_string()))?;
@@ -422,7 +428,9 @@ pub fn build_stripe_http_request(
     secret_key: &str,
     api_base_url: &str,
 ) -> Result<StripeHttpRequest, StripeIntegrationError> {
-    if !intent.method.eq_ignore_ascii_case("POST") {
+    // GET only reads an object; every write is a POST with an idempotency key.
+    let get = intent.method.eq_ignore_ascii_case("GET");
+    if !get && !intent.method.eq_ignore_ascii_case("POST") {
         return Err(StripeIntegrationError::UnsupportedMethod(
             intent.method.clone(),
         ));
@@ -445,7 +453,9 @@ pub fn build_stripe_http_request(
     } else {
         "application/x-www-form-urlencoded"
     };
-    let body = if intent.endpoint.starts_with("/v2/") {
+    let body = if get {
+        String::new()
+    } else if intent.endpoint.starts_with("/v2/") {
         serde_json::to_string(&intent.body)
             .map_err(|_| StripeIntegrationError::InvalidField("body".to_string()))?
     } else {
@@ -453,7 +463,7 @@ pub fn build_stripe_http_request(
     };
 
     Ok(StripeHttpRequest {
-        method: "POST".to_string(),
+        method: if get { "GET" } else { "POST" }.to_string(),
         url,
         authorization_header: format!("Bearer {}", secret_key.trim()),
         stripe_version: intent.api_version.clone(),

@@ -50,6 +50,8 @@ cargo test -p api tests::audience_audit_persists_idempotently_across_processes -
 cargo test -p api tests::github_issue_api_sync_postgres_rejects_stale_cross_process_activity -- --ignored --exact --nocapture
 cargo test -p db scoped_submission_history_reads_only_selected_bounty_postgres -- --ignored --nocapture
 cargo test -p db tests::autonomous_v2_events_round_trip_through_postgres -- --ignored --exact --nocapture
+cargo test -p db tests::invoice_order_events_are_sequenced_and_evidence_is_unique_postgres -- --ignored --exact --nocapture
+cargo test -p api tests::invoiced_seller_of_record_path_runs_end_to_end_postgres -- --ignored --exact --nocapture
 cargo test -p api tests::opportunity_exact_unfunded_lookup_crosses_list_window_postgres -- --ignored --exact --nocapture
 cargo test -p api tests::github_issue_api_sync_postgres_serializes_concurrent_initial_sync -- --ignored --exact --nocapture
 cargo test -p api tests::neynar_webhook_persists_one_short_draft_and_one_reply_across_retries -- --ignored --exact --nocapture

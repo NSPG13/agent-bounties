@@ -686,6 +686,7 @@ dependencies = [
  "github-app",
  "hex",
  "hmac",
+ "invoicing",
  "ledger",
  "payments-stripe",
  "payments-x402",
@@ -2714,6 +2715,18 @@ dependencies = [
  "hashbrown 0.17.1",
  "serde",
  "serde_core",
+]
+
+[[package]]
+name = "invoicing"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha3 0.10.9",
+ "thiserror",
 ]
 
 [[package]]

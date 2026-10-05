@@ -61,6 +61,12 @@ try {
             cargo test -p db tests::autonomous_v2_events_round_trip_through_postgres -- --ignored --exact --nocapture
         }
         Invoke-Checked {
+            cargo test -p db tests::invoice_order_events_are_sequenced_and_evidence_is_unique_postgres -- --ignored --exact --nocapture
+        }
+        Invoke-Checked {
+            cargo test -p api tests::invoiced_seller_of_record_path_runs_end_to_end_postgres -- --ignored --exact --nocapture
+        }
+        Invoke-Checked {
             cargo test -p db tests::discoverability_snapshot_idempotency_and_restart_hydration_are_durable -- --ignored --exact --nocapture
         }
         Invoke-Checked {

@@ -377,6 +377,47 @@ pub fn validate_autonomous_v2_creation_against_terms(
     Ok(platform_fee)
 }
 
+/// Derives the exact v2 creation request, including any claim gate, from published v2 terms and
+/// checks it against the factory's immutable fee terms.
+pub fn autonomous_v2_create_from_terms(
+    terms: &AutonomousBountyTermsRecord,
+    factory_fee: &AutonomousV2FactoryFee,
+) -> Result<AutonomousBountyV2Create, ChainBaseError> {
+    let (base, network) = create_fields_from_terms(terms)?;
+    let contract_terms = terms.document.contract_terms.as_object().ok_or_else(|| {
+        ChainBaseError::InvalidTermsDocument("published contract_terms are unavailable".to_string())
+    })?;
+    let (claim_eligibility_registry, claim_eligibility_source) = match (
+        contract_terms.get("claim_eligibility_registry"),
+        contract_terms.get("claim_eligibility_source"),
+    ) {
+        (None, None) => (None, None),
+        (Some(_), Some(_)) => (
+            Some(normalize_address(contract_terms_string(
+                contract_terms,
+                "claim_eligibility_registry",
+            )?)?),
+            Some(word_hex(parse_bytes32(contract_terms_string(
+                contract_terms,
+                "claim_eligibility_source",
+            )?)?)),
+        ),
+        _ => {
+            return Err(ChainBaseError::InvalidTermsDocument(
+                "contract_terms claim eligibility registry and source must be set together"
+                    .to_string(),
+            ))
+        }
+    };
+    let create = AutonomousBountyV2Create {
+        base,
+        claim_eligibility_registry,
+        claim_eligibility_source,
+    };
+    validate_autonomous_v2_creation_against_terms(&network, &create, terms, factory_fee)?;
+    Ok(create)
+}
+
 /// v2 public-earning gate: exact v2 terms plus the shared policy, with the fee in the target.
 /// Gated (invoice-contractor) bounties are not open public inventory and are rejected here; plan
 /// them through the invoice treasury path instead.

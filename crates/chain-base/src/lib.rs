@@ -30,6 +30,7 @@ mod creator_review;
 mod open_competition;
 mod open_competition_v2;
 mod open_competition_v2_planner;
+mod participant_registry;
 mod standing_meta_v4;
 
 pub use agent_wallet_readiness::*;
@@ -37,6 +38,7 @@ pub use autonomous_v2::*;
 pub use open_competition::*;
 pub use open_competition_v2::*;
 pub use open_competition_v2_planner::*;
+pub use participant_registry::*;
 pub use standing_meta_v4::*;
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -7020,6 +7022,16 @@ pub(crate) fn validate_public_earning_policy(
 pub fn autonomous_bounty_create_from_terms(
     terms: &AutonomousBountyTermsRecord,
 ) -> Result<AutonomousBountyCreate, ChainBaseError> {
+    let (create, network) = create_fields_from_terms(terms)?;
+    validate_autonomous_creation_against_terms(&network, &create, terms)?;
+    Ok(create)
+}
+
+/// The creation fields committed by published terms, and the committed network, without the
+/// protocol-specific check that the v1 and v2 callers apply.
+pub(crate) fn create_fields_from_terms(
+    terms: &AutonomousBountyTermsRecord,
+) -> Result<(AutonomousBountyCreate, String), ChainBaseError> {
     validate_reconciled_regression_benchmark(&terms.document)?;
     validate_known_deterministic_module_semantics(&terms.document)?;
     let contract_terms = terms.document.contract_terms.as_object().ok_or_else(|| {
@@ -7126,9 +7138,8 @@ pub fn autonomous_bounty_create_from_terms(
         initial_funding: money("initial_funding", true)?,
         creation_nonce: contract_terms_string(contract_terms, "creation_nonce")?.to_string(),
     };
-    let network = contract_terms_string(contract_terms, "network")?;
-    validate_autonomous_creation_against_terms(network, &create, terms)?;
-    Ok(create)
+    let network = contract_terms_string(contract_terms, "network")?.to_string();
+    Ok((create, network))
 }
 
 fn standing_meta_v2_publish_terms_intent(
@@ -8922,6 +8933,13 @@ mod tests {
                 .is_err(),
             "v1 creation must refuse v2 terms"
         );
+        let derived_v2 = autonomous_v2_create_from_terms(&v2_record, &factory_fee).unwrap();
+        assert_eq!(
+            serde_json::to_value(&derived_v2).unwrap(),
+            serde_json::to_value(&v2_create).unwrap()
+        );
+        assert!(autonomous_bounty_create_from_terms(&v2_record).is_err());
+        assert!(autonomous_v2_create_from_terms(&record, &factory_fee).is_err());
         let v1_hashes = AutonomousBountyV2Create {
             base: create.clone(),
             ..v2_create.clone()
