@@ -117,6 +117,21 @@ export interface GetBaseTransactionReceiptRequest {
 }
 
 export type AutonomousBountyCreate = Record<string, unknown>;
+
+/** Fee-inclusive autonomous-v2 quote. Amounts are USDC base units as decimal strings. The poster
+ * funds `target_amount`, which adds `platform_fee` on top of the rewards; the solver reward is
+ * never reduced by the fee. */
+export interface AutonomousBountyV2Quote {
+  protocol_version: string;
+  solver_reward: string;
+  verifier_reward: string;
+  claim_bond: string;
+  platform_fee_bps: number;
+  platform_fee: string;
+  platform_fee_recipient: string;
+  target_amount: string;
+  fee_boundary: string;
+}
 export type AutonomousBountyContribution = Record<string, unknown>;
 export type AutonomousVerificationAttestation = Record<string, unknown>;
 export type AutonomousSignedAttestation = Record<string, unknown>;
@@ -2215,12 +2230,12 @@ export class AgentBountiesClient {
     solverReward: { amount: number; currency: string },
     verifierReward: { amount: number; currency: string },
     network?: string | null,
-  ): Promise<unknown> {
+  ): Promise<AutonomousBountyV2Quote> {
     return this.autonomousPost("v2/quote", {
       network: network ?? null,
       solver_reward: solverReward,
       verifier_reward: verifierReward,
-    });
+    }) as Promise<AutonomousBountyV2Quote>;
   }
 
   /** Unsigned autonomous-v2 creation plan; `create` may add claim_eligibility_registry and claim_eligibility_source. */

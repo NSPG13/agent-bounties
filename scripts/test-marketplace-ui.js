@@ -71,6 +71,11 @@ test("direct task filtering excludes competitions, child funding and unknown mec
   assert.match(marketplace.emptyState("direct"), /No direct tasks/);
   assert.doesNotMatch(marketplace.emptyState("direct"), /post your own|free|guaranteed/i);
   assert.match(marketplace.renderOpportunity(direct, 0, Date.parse(STARTS_AT)), /refundable bond, gas and execution costs/);
+  assert.equal(marketplace.platformFeeLabel(direct), "");
+  assert.doesNotMatch(marketplace.renderOpportunity(direct, 0, Date.parse(STARTS_AT)), /platform fee/);
+  const feeBearing = { ...direct, platform_fee: { amount: amount(0.075), bps: 750, recipient: "0x884834e884d6e93462655a2820140ad03e6747bc", status: "pending", paid_by: "poster", protocol_version: "agent-bounties/autonomous-v2" } };
+  assert.equal(marketplace.platformFeeLabel(feeBearing), "7.5% platform fee (0.075 USDC) paid by the poster");
+  assert.match(marketplace.renderOpportunity(feeBearing, 0, Date.parse(STARTS_AT)), /7\.5% platform fee \(0\.075 USDC\) paid by the poster/);
 });
 
 test("V2 readiness is mechanism-aware and does not depend on a legacy terms hash", () => {

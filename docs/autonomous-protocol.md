@@ -575,6 +575,13 @@ are omitted for v1 items. The fee `status` is one of:
 - `forwarded` (fee received);
 - `refundable`.
 
+The opportunity projection (`/v1/opportunities`, MCP `get_bounty_feed` and the
+ChatGPT widget) repeats the fee as `platform_fee` with the same `bps`,
+`recipient` and `status`, plus `amount` as a USDC money object,
+`paid_by: "poster"` and `protocol_version`. The poster funds the fee on top of
+the rewards, so `reward` is the full solver reward. The site's market cards
+and the widget show the fee only when it is present.
+
 **Planning.** `cargo run -p cli -- autonomous-v2-plan --request <file|->` plans
 one action from a JSON request. The request names `network`, `factory_contract`,
 `implementation_contract` and an `action`, plus that action's fields. The
