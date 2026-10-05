@@ -349,7 +349,7 @@ services:
       - key: MOONPAY_ALLOWED_ORIGINS
         value: https://agentbounties.app
       - key: MOONPAY_CLIENT_IP_HEADER
-        value: x-forwarded-for
+        value: true-client-ip
       - key: MOONPAY_USDC_BASE_CURRENCY_CODE
         value: usdc_base
       - key: MOONPAY_ETH_BASE_CURRENCY_CODE

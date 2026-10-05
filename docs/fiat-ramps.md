@@ -33,10 +33,12 @@ are.
 - `STRIPE_CRYPTO_ONRAMP_CLIENT_IP_HEADER` (default `x-forwarded-for`) and
   `STRIPE_CRYPTO_ONRAMP_TRUSTED_PROXY_HOPS` (default 1). Proxies append to
   `X-Forwarded-For` and a client can prepend anything, so the client IP is the
-  entry that many trusted proxies from the right. Confirm the hop count by
-  inspecting the header behind your proxy chain. A count that is too high
-  makes all clients share one bucket; it never lets a client choose its own.
-  Live sessions require a public customer IP;
+  entry that many trusted proxies from the right. A count that is too low
+  returns a proxy's IP, so every client shares one bucket and live sessions
+  are refused. A count that is too high reaches entries the client wrote. On
+  Render, set the header to `true-client-ip` and keep the count at 1 (see
+  [Client IP on Render](#client-ip-on-render)). Live sessions require a public
+  customer IP;
 - `STRIPE_CRYPTO_ONRAMP_MIN_USDC` and `_MAX_USDC` (defaults 1.00 and
   2,500.00);
 - rate limits per minute: `STRIPE_CRYPTO_ONRAMP_SESSIONS_PER_MINUTE` per
@@ -74,7 +76,30 @@ link for the user's own wallet:
 Set `MOONPAY_TRUSTED_PROXY_HOPS` (1 to 8) once the proxy chain is confirmed.
 Both MoonPay routes then read the client IP that many trusted proxies from the
 right of `MOONPAY_CLIENT_IP_HEADER`, and nothing else. Unset keeps the legacy
-first entry, which a client can prepend.
+behavior: the first entry of `MOONPAY_CLIENT_IP_HEADER`, falling back to other
+headers when it is absent. On Render, set `MOONPAY_CLIENT_IP_HEADER` to
+`true-client-ip`, which makes even the legacy behavior safe.
+
+## Client IP on Render
+
+Measured on 2026-10-05 with an echo service on the same Render edge as
+`api.agentbounties.app` and `mcp.agentbounties.app`. Both hostnames point
+straight at Render; only the `agentbounties.app` site goes through a separate
+Cloudflare proxy.
+
+| Header | What reaches the service | Client can forge it? |
+| --- | --- | --- |
+| `X-Forwarded-For` | `<client-supplied…>, <client>, <Cloudflare edge>, <Render internal 10.x>` | Yes, every entry left of the client |
+| `True-Client-IP`, `CF-Connecting-IP` | `<client>` | No: Render's edge overwrites a forged value |
+| `X-Real-IP` | removed | — |
+
+So on Render:
+- use `true-client-ip`, with a trusted hop count of 1 where one is set;
+- if you use `x-forwarded-for` instead, set the hop count to 3.
+
+`true-client-ip` stays correct if Render changes its internal hops. Behind a
+proxy that does not set and overwrite `True-Client-IP`, a client controls it,
+so measure before using it anywhere else.
 
 MoonPay shows a deposit address. Only the user's wallet signs the USDC
 transfer to it; AgentBounties never moves the funds.
