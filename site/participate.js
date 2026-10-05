@@ -97,7 +97,7 @@
       Submit: fields([["bounty", "address"], ["bountyId", "bytes32"], ["solver", "address"], ["round", "uint64"], ["submissionHash", "bytes32"], ["evidenceHash", "bytes32"], ["policyHash", "bytes32"], ["deadline", "uint256"]]),
     };
     if (typed?.primaryType !== "Submit" || stable(typed.types) !== stable(types)
-      || domain?.name !== "Agent Bounties" || domain.version !== "1" || Number(domain.chainId) !== 8453 || lower(domain.verifyingContract) !== contract
+      || domain?.name !== "Agent Bounties" || domain.version !== (submission.protocol_version === "agent-bounties/autonomous-v2" ? "2" : "1") || Number(domain.chainId) !== 8453 || lower(domain.verifyingContract) !== contract
       || lower(m?.bounty) !== contract || lower(m.solver) !== wallet || lower(m.bountyId) !== lower(submission.bounty_id)
       || String(m.round) !== String(submission.round) || lower(m.submissionHash) !== lower(submission.submission_hash)
       || lower(m.evidenceHash) !== lower(submission.evidence_hash) || lower(m.policyHash) !== lower(submission.policy_hash)

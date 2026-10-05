@@ -909,6 +909,19 @@ test("unavailable sponsor, altered typed authority and foreign relay reply never
   assert.match(wrong.elements.get("[data-work-status]").textContent,/different submission/);
 });
 
+test("a v2 submission is signed only under the v2 domain", async () => {
+  const v2 = await participantFixture("complete");
+  v2.submission.protocol_version = "agent-bounties/autonomous-v2"; v2.submission.signing_payload.domain.version = "2";
+  await v2.click("[data-wallet-connect]"); await v2.click("[data-wallet-confirm]");
+  assert.equal(v2.signatures.length, 1);
+  const v1Domain = await participantFixture("complete"); v1Domain.submission.protocol_version = "agent-bounties/autonomous-v2";
+  const forged = await participantFixture("complete"); forged.submission.signing_payload.domain.version = "2";
+  for (const env of [v1Domain, forged]) {
+    await env.click("[data-wallet-connect]"); await env.click("[data-wallet-confirm]");
+    assert.equal(env.signatures.length, 0); assert.equal(env.sent.length, 0);
+  }
+});
+
 test("a malicious claim amount and a changed review cannot reach signing", async () => {
   const env = await participantFixture(); env.state.wrongAmount = true;
   await env.click("[data-wallet-connect]"); await env.click("[data-wallet-confirm]");

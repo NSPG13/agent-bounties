@@ -4716,7 +4716,15 @@ pub fn build_autonomous_submission_preparation(
         policy_hash: terms.policy_hash.clone(),
         deadline: authorization_deadline,
     };
-    let signing_payload = planner.plan_submission_authorization(network, &authorization_request)?;
+    // A v2 bounty verifies the submission signature under EIP-712 domain version "2"; a v1-domain
+    // signature would be rejected on-chain.
+    let v2 =
+        item.protocol_version.as_deref() == Some(autonomous_v2::AUTONOMOUS_V2_PROTOCOL_VERSION);
+    let signing_payload = if v2 {
+        planner.plan_v2_submission_authorization(network, &authorization_request)?
+    } else {
+        planner.plan_submission_authorization(network, &authorization_request)?
+    };
     let network_descriptor = base_network_descriptor(network)?;
     let unsigned_relay_envelope = json!({
         "schema": "agent-bounties/autonomous-gas-relay-v1",
@@ -4745,7 +4753,12 @@ pub fn build_autonomous_submission_preparation(
         .clone()
         .filter(|url| url.starts_with("https://github.com/") && url.contains("/issues/"));
     Ok(AutonomousBountySubmissionPreparation {
-        protocol_version: "agent-bounties/autonomous-v1".to_string(),
+        protocol_version: if v2 {
+            autonomous_v2::AUTONOMOUS_V2_PROTOCOL_VERSION
+        } else {
+            "agent-bounties/autonomous-v1"
+        }
+        .to_string(),
         network: network_descriptor,
         bounty_contract,
         bounty_id: item.bounty_id.clone(),
@@ -9789,6 +9802,36 @@ mod tests {
         assert_eq!(
             prepared.relay_issue_url.as_deref(),
             Some("https://github.com/NSPG13/agent-bounties/issues/244")
+        );
+        assert_eq!(prepared.protocol_version, "agent-bounties/autonomous-v1");
+        assert_eq!(prepared.signing_payload.domain.version, "1");
+    }
+
+    #[test]
+    fn submission_preparation_signs_v2_bounties_under_the_v2_domain() {
+        let mut item = claimed_submission_fixture(5_000);
+        item.protocol_version = Some(AUTONOMOUS_V2_PROTOCOL_VERSION.to_string());
+        let planner = AutonomousBountyTxPlanner::new(
+            "0x6666666666666666666666666666666666666666",
+            "0x7777777777777777777777777777777777777777",
+        )
+        .unwrap();
+        let prepared = build_autonomous_submission_preparation(
+            &planner,
+            "base-mainnet",
+            &item,
+            "0x3333333333333333333333333333333333333333",
+            "https://github.com/owner/repo/commit/abc",
+            json!({"commit_sha": "abc"}),
+            1_000,
+        )
+        .unwrap();
+        assert_eq!(prepared.protocol_version, AUTONOMOUS_V2_PROTOCOL_VERSION);
+        assert_eq!(prepared.signing_payload.domain.name, "Agent Bounties");
+        assert_eq!(prepared.signing_payload.domain.version, "2");
+        assert_eq!(
+            prepared.signing_payload.domain.verifying_contract,
+            prepared.bounty_contract
         );
     }
 

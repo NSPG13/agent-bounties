@@ -595,15 +595,23 @@ settings are present. A partial setting, fee terms over the cap, or any Base
 mainnet v2 setting is refused. Mainnet v2 is pinned in code only after an
 independently reviewed deployment (#1577).
 - `POST /v1/base/autonomous-bounties/v2/quote` returns the fee-inclusive target
-  for the configured factory.
+  for the configured factory. The MCP tool `quote_autonomous_v2_bounty` does
+  the same.
 - `POST /v1/base/autonomous-bounties/v2/creation-plan` and
   `/v2/authorized-creation-plan` require published v2 terms that commit the
-  factory's exact fee terms. They also apply the v1 public-earning policy, with
-  the fee included in the fully funded target. Claim-gated bounties are refused
-  there; plan them on the invoice treasury path instead.
-- Submission and attestation plans select domain version `"2"` from the
+  factory's exact fee terms. The MCP tools
+  `plan_autonomous_v2_bounty_creation` and
+  `plan_autonomous_v2_bounty_authorized_creation` apply the same checks. They
+  also apply the v1 public-earning policy, with the fee included in the fully
+  funded target. Claim-gated bounties are refused there; plan them on the
+  invoice treasury path instead.
+- Submission preparation, submission authorization and attestation plans
+  (API, MCP and the first-party pages) select domain version `"2"` from the
   indexed bounty's `protocol_version`. A v2 bounty never falls back to the v1
   domain.
+- Agent-native claims never offer `AtomicClaimSponsor` for a v2 bounty: the
+  sponsor pins the v1 factory, so the sponsored claim would revert. The solver
+  posts the bond directly or through a relayed EIP-3009 authorization.
 - Run a second worker with `BASE_INDEXER_PROTOCOL=autonomous-v2`. It reads
   `BASE_SEPOLIA_BOUNTY_V2_FACTORY` and keeps its own cursor; both protocols
   share the event table and feed.

@@ -1,6 +1,6 @@
 {
   "schema_version": "agent-bounties/mcp-tool-registry-v1",
-  "normalized_descriptors_sha256": "aecc20380a3bfa58c4362611d4f5ef7c357ad68c181734407382be57ebbea6b0",
+  "normalized_descriptors_sha256": "5a483295c6bfcd53cd88c020f9b2646109c93e678ee208f7e3698fdbede25b0a",
   "tools": [
     "route_blocked_goal",
     "plan_objective_creation",
@@ -56,6 +56,9 @@
     "prepare_standing_meta_v2_child",
     "plan_autonomous_bounty_creation",
     "plan_autonomous_bounty_authorized_creation",
+    "quote_autonomous_v2_bounty",
+    "plan_autonomous_v2_bounty_creation",
+    "plan_autonomous_v2_bounty_authorized_creation",
     "plan_autonomous_bounty_contribution",
     "plan_autonomous_bounty_authorized_contribution",
     "fund_bounty_with_x402",

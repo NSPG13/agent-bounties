@@ -24,14 +24,16 @@ use chain_base::{
     eth_get_transaction_receipt_request, eth_send_raw_transaction_request,
     fetch_transaction_receipt, normalize_evm_address,
     plan_canonical_child_bounty_terms as build_canonical_child_bounty_terms_plan,
-    standing_meta_v2_parent_context, validate_attestation_request_against_feed,
-    validate_autonomous_cancel_authority, validate_autonomous_creation_for_public_earning,
-    AutonomousBountyAuthorizationSignature, AutonomousBountyContribution, AutonomousBountyCreate,
-    AutonomousBountyFeedItem, AutonomousBountyRecoveryReservations,
-    AutonomousBountySubmissionAuthorizationRequest, AutonomousBountyTxPlanner,
-    AutonomousSignedAttestation, AutonomousVerificationAttestationRequest, BaseRpcUrlConfig,
-    CanonicalChildBountyTermsRequest, EvmLog, PrepareAgentToEarnInput,
-    StandingMetaV2ChildPreparationRequest, AUTONOMOUS_V2_PROTOCOL_VERSION,
+    quote_autonomous_v2_bounty, standing_meta_v2_parent_context,
+    validate_attestation_request_against_feed, validate_autonomous_cancel_authority,
+    validate_autonomous_creation_for_public_earning,
+    validate_autonomous_v2_creation_for_public_earning, AutonomousBountyAuthorizationSignature,
+    AutonomousBountyContribution, AutonomousBountyCreate, AutonomousBountyFeedItem,
+    AutonomousBountyRecoveryReservations, AutonomousBountySubmissionAuthorizationRequest,
+    AutonomousBountyTxPlanner, AutonomousBountyV2Create, AutonomousSignedAttestation,
+    AutonomousVerificationAttestationRequest, BaseRpcUrlConfig, CanonicalChildBountyTermsRequest,
+    EvmLog, PrepareAgentToEarnInput, StandingMetaV2ChildPreparationRequest,
+    AUTONOMOUS_V2_PROTOCOL_VERSION,
 };
 use chrono::Utc;
 use competition_metric_core::{
@@ -1190,6 +1192,49 @@ tool_args! {
 }
 
 tool_args! {
+    struct QuoteAutonomousV2BountyArgs {
+        network: Option<String>, solver_reward: Money, verifier_reward: Money,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "solver_reward": money_property("Amount paid to the successful solver. The platform fee is computed on it and paid by the poster on top.", false),
+            "verifier_reward": money_property("Amount split across precommitted verifiers; may be zero.", true)
+        }),
+        &["solver_reward", "verifier_reward"],
+    );
+}
+
+tool_args! {
+    struct PlanAutonomousV2BountyCreationArgs {
+        network: Option<String>, create: AutonomousBountyV2Create,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "create": autonomous_v2_bounty_create_property()
+        }),
+        &["create"],
+    );
+}
+
+tool_args! {
+    struct PlanAutonomousV2BountyAuthorizedCreationArgs {
+        network: Option<String>, create: AutonomousBountyV2Create,
+        signature: AutonomousBountyAuthorizationSignature, relayer: Option<String>,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "create": autonomous_v2_bounty_create_property(),
+            "signature": authorization_signature_property(),
+            "relayer": nullable_string_property("Optional wallet that will sponsor and submit the v2 factory transaction.")
+        }),
+        &["create", "signature"],
+    );
+}
+
+tool_args! {
     struct PlanAutonomousBountyAuthorizedContributionArgs {
         network: Option<String>, contribution: AutonomousBountyContribution,
         signature: AutonomousBountyAuthorizationSignature, relayer: Option<String>,
@@ -1941,6 +1986,18 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/tools/plan_autonomous_bounty_authorized_creation",
             post(plan_autonomous_bounty_authorized_creation),
+        )
+        .route(
+            "/tools/quote_autonomous_v2_bounty",
+            post(quote_autonomous_v2_bounty_tool),
+        )
+        .route(
+            "/tools/plan_autonomous_v2_bounty_creation",
+            post(plan_autonomous_v2_bounty_creation),
+        )
+        .route(
+            "/tools/plan_autonomous_v2_bounty_authorized_creation",
+            post(plan_autonomous_v2_bounty_authorized_creation),
         )
         .route(
             "/tools/plan_autonomous_bounty_contribution",
@@ -3369,6 +3426,21 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
             PlanAutonomousBountyAuthorizedCreationArgs::input_schema(),
         ),
         tool(
+            "quote_autonomous_v2_bounty",
+            "Quote the fee-inclusive autonomous-v2 funding target: solver + verifier + platform fee.",
+            QuoteAutonomousV2BountyArgs::input_schema(),
+        ),
+        tool(
+            "plan_autonomous_v2_bounty_creation",
+            "Build the autonomous-v2 creation calls and one-signature payload for the fee-inclusive target.",
+            PlanAutonomousV2BountyCreationArgs::input_schema(),
+        ),
+        tool(
+            "plan_autonomous_v2_bounty_authorized_creation",
+            "After signing the v2 creation payload, build the single sponsored create-and-fund transaction.",
+            PlanAutonomousV2BountyAuthorizedCreationArgs::input_schema(),
+        ),
+        tool(
             "plan_autonomous_bounty_contribution",
             "Build ordered calls and one-signature data for a pooled USDC contribution.",
             PlanAutonomousBountyContributionArgs::input_schema(),
@@ -4379,6 +4451,22 @@ fn autonomous_bounty_create_property() -> Value {
         ],
         "additionalProperties": false
     })
+}
+
+fn autonomous_v2_bounty_create_property() -> Value {
+    let mut schema = autonomous_bounty_create_property();
+    schema["description"] = json!("Complete immutable autonomous-v2 bounty policy. Its funding target is solver_reward + verifier_reward + the v2 factory's platform fee; get it from quote_autonomous_v2_bounty before any wallet signs.");
+    schema["properties"]["initial_funding"] = money_property(
+        "Creation-time funding: zero for a crowdfund, or the exact fee-inclusive target from quote_autonomous_v2_bounty.",
+        true,
+    );
+    schema["properties"]["claim_eligibility_registry"] = nullable_string_property(
+        "Leave null. Claim-gated bounties are refused on public-earning creation tools; they are created only through the invoice treasury path.",
+    );
+    schema["properties"]["claim_eligibility_source"] = nullable_string_property(
+        "Leave null. Set only with claim_eligibility_registry, which public-earning creation tools refuse.",
+    );
+    schema
 }
 
 fn authorization_signature_property() -> Value {
@@ -5710,19 +5798,25 @@ fn autonomous_planner_addresses(
     })
 }
 
-/// The configured autonomous-v2 planner for `network`, when a v2 factory is configured there.
-fn configured_autonomous_v2_planner(network: &str) -> Result<AutonomousBountyTxPlanner, String> {
+/// The configured autonomous-v2 deployment for `network`, when a v2 factory is configured there.
+fn configured_autonomous_v2_deployment(
+    network: &str,
+) -> Result<service_runtime::AutonomousV2Deployment, String> {
     let descriptor = base_network_descriptor(network).map_err(|error| error.to_string())?;
     match service_runtime::autonomous_v2_deployment_for_chain(descriptor.chain_id) {
-        Ok(Some(deployment)) => {
-            AutonomousBountyTxPlanner::new(deployment.factory, deployment.implementation)
-                .map_err(|error| error.to_string())
-        }
+        Ok(Some(deployment)) => Ok(deployment),
         Ok(None) => Err("no autonomous-v2 factory is configured for this network".to_string()),
         Err(error) => Err(format!(
             "autonomous-v2 deployment is misconfigured: {error:?}"
         )),
     }
+}
+
+/// The configured autonomous-v2 planner for `network`, when a v2 factory is configured there.
+fn configured_autonomous_v2_planner(network: &str) -> Result<AutonomousBountyTxPlanner, String> {
+    let deployment = configured_autonomous_v2_deployment(network)?;
+    AutonomousBountyTxPlanner::new(deployment.factory, deployment.implementation)
+        .map_err(|error| error.to_string())
 }
 
 /// Canonical factories indexed for `network`: the v1 factory and, when configured, the v2 factory.
@@ -5892,6 +5986,105 @@ async fn plan_autonomous_bounty_authorized_creation(
         Ok(plan) => mcp_json(plan),
         Err(error) => mcp_error(error),
     }
+}
+
+fn usdc_base_units(money: &Money, allow_zero: bool, field: &str) -> Result<u128, String> {
+    u128::try_from(money.amount)
+        .ok()
+        .filter(|value| money.currency.eq_ignore_ascii_case("usdc") && (allow_zero || *value > 0))
+        .ok_or_else(|| format!("{field} must be a non-negative USDC amount"))
+}
+
+async fn quote_autonomous_v2_bounty_tool(
+    Json(args): Json<QuoteAutonomousV2BountyArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    let quote = configured_autonomous_v2_deployment(network).and_then(|deployment| {
+        quote_autonomous_v2_bounty(
+            usdc_base_units(&args.solver_reward, false, "solver_reward")?,
+            usdc_base_units(&args.verifier_reward, true, "verifier_reward")?,
+            &deployment.fee,
+        )
+        .map_err(|error| error.to_string())
+    });
+    match quote {
+        Ok(quote) => mcp_json(quote),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn plan_autonomous_v2_bounty_creation(
+    State(state): State<SharedState>,
+    Json(args): Json<PlanAutonomousV2BountyCreationArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    let deployment = match configured_autonomous_v2_deployment(network) {
+        Ok(deployment) => deployment,
+        Err(error) => return mcp_error(error),
+    };
+    if let Err(error) =
+        require_autonomous_v2_creation_terms(&state, network, &args.create, &deployment).await
+    {
+        return mcp_error(error);
+    }
+    match configured_autonomous_v2_planner(network).and_then(|planner| {
+        planner
+            .plan_v2_creation(network, &args.create, &deployment.fee)
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(plan) => mcp_json(plan),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn plan_autonomous_v2_bounty_authorized_creation(
+    State(state): State<SharedState>,
+    Json(args): Json<PlanAutonomousV2BountyAuthorizedCreationArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    let deployment = match configured_autonomous_v2_deployment(network) {
+        Ok(deployment) => deployment,
+        Err(error) => return mcp_error(error),
+    };
+    if let Err(error) =
+        require_autonomous_v2_creation_terms(&state, network, &args.create, &deployment).await
+    {
+        return mcp_error(error);
+    }
+    match configured_autonomous_v2_planner(network).and_then(|planner| {
+        planner
+            .plan_v2_authorized_creation(
+                network,
+                &args.create,
+                &deployment.fee,
+                &args.signature,
+                args.relayer.as_deref(),
+            )
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(plan) => mcp_json(plan),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn require_autonomous_v2_creation_terms(
+    state: &SharedState,
+    network: &str,
+    create: &AutonomousBountyV2Create,
+    deployment: &service_runtime::AutonomousV2Deployment,
+) -> Result<(), String> {
+    let Some(store) = &state.store else {
+        return Err("DATABASE_URL is required before planning canonical creation".to_string());
+    };
+    let terms = store
+        .get_autonomous_bounty_terms(&create.base.terms_hash)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "published autonomous bounty terms are unavailable".to_string())?;
+    service_runtime::verifier_readiness::require_available(&terms).map_err(str::to_owned)?;
+    validate_autonomous_v2_creation_for_public_earning(network, create, &terms, &deployment.fee)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 async fn require_autonomous_creation_terms(
@@ -6910,7 +7103,12 @@ async fn prepare_autonomous_bounty_submission(
         Ok(value) => value,
         Err(_) => return mcp_error("system clock is before Unix epoch"),
     };
-    match configured_autonomous_planner(network).and_then(|planner| {
+    let planner = if is_autonomous_v2_item(&item) {
+        configured_autonomous_v2_planner(network)
+    } else {
+        configured_autonomous_planner(network)
+    };
+    match planner.and_then(|planner| {
         build_autonomous_submission_preparation(
             &planner,
             network,
@@ -7931,6 +8129,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn v2_quote_tool_prices_the_fee_only_on_a_configured_v2_factory() {
+        let prefix = "BASE_SEPOLIA_BOUNTY_V2";
+        let names = [
+            "FACTORY",
+            "IMPLEMENTATION",
+            "PLATFORM_FEE_BPS",
+            "PLATFORM_FEE_RECIPIENT",
+        ];
+        let args = |network: &str| QuoteAutonomousV2BountyArgs {
+            network: Some(network.to_string()),
+            solver_reward: Money::new(1_000_000, "USDC").unwrap(),
+            verifier_reward: Money::new(100_000, "USDC").unwrap(),
+        };
+        // The process environment is shared by parallel tests: serialize, and restore the prior
+        // values even if an assertion fails.
+        static ENV_LOCK: Mutex<()> = Mutex::new(());
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        struct RestoreEnv(Vec<(String, Option<String>)>);
+        impl Drop for RestoreEnv {
+            fn drop(&mut self) {
+                for (name, value) in &self.0 {
+                    match value {
+                        Some(value) => std::env::set_var(name, value),
+                        None => std::env::remove_var(name),
+                    }
+                }
+            }
+        }
+        let _restore = RestoreEnv(
+            names
+                .iter()
+                .map(|name| {
+                    let name = format!("{prefix}_{name}");
+                    let value = std::env::var(&name).ok();
+                    (name, value)
+                })
+                .collect(),
+        );
+        for name in names {
+            std::env::remove_var(format!("{prefix}_{name}"));
+        }
+        let unconfigured = quote_autonomous_v2_bounty_tool(Json(args("base-sepolia")))
+            .await
+            .0;
+        assert!(unconfigured["error"].is_string(), "{unconfigured}");
+        for (name, value) in names.into_iter().zip([
+            "0xcf7ed3acca5a467e9e704c703e8d87f634fb0fc9",
+            "0xd8058efe0198ae9dd7d563e1b4938dcbc86a1f81",
+            "750",
+            "0x884834E884d6e93462655A2820140aD03E6747bC",
+        ]) {
+            std::env::set_var(format!("{prefix}_{name}"), value);
+        }
+        let quoted = quote_autonomous_v2_bounty_tool(Json(args("base-sepolia")))
+            .await
+            .0;
+        let mainnet = quote_autonomous_v2_bounty_tool(Json(args("base-mainnet")))
+            .await
+            .0;
+        let quote = &quoted["content"][0]["json"];
+        assert_eq!(quote["platform_fee"], "75000", "{quoted}");
+        assert_eq!(quote["target_amount"], "1175000");
+        assert_eq!(
+            quote["platform_fee_recipient"],
+            "0x884834e884d6e93462655a2820140ad03e6747bc"
+        );
+        assert!(
+            mainnet["error"].is_string(),
+            "mainnet v2 stays unavailable until a reviewed deployment is pinned"
+        );
+        let schema = PlanAutonomousV2BountyCreationArgs::input_schema();
+        for field in ["claim_eligibility_registry", "claim_eligibility_source"] {
+            assert!(schema["properties"]["create"]["properties"][field].is_object());
+        }
+    }
+
+    #[tokio::test]
     async fn tool_descriptors_publish_machine_readable_input_schemas() {
         let descriptors = tools().await.0;
         let registry: Value = serde_json::from_str(include_str!("../fixtures/tool-registry.json"))
@@ -7947,7 +8224,7 @@ mod tests {
             .as_array()
             .expect("tool registry contains tools");
 
-        assert_eq!(descriptors.len(), 121);
+        assert_eq!(descriptors.len(), 124);
         assert_eq!(
             descriptors
                 .iter()
