@@ -13,12 +13,12 @@ function environment(options = {}) {
   const now = Math.floor(Date.now() / 1000), terms = { terms_hash: hash("aa"), policy_hash: hash("bb"), document: { acceptance_criteria: ["Files open", "Dimensions match"], contract_terms: { verification_window_seconds: 3600 }, benchmark: { engine: review.ENGINE, delivery_deadline: now + 1000 } } };
   const job = { bounty_contract: contract, bounty_id: hash("cc"), round: 1, solver_wallet: solver, threshold: 1, eligible_verifiers: [creator], terms, verifier_reward: "2000000", current_solver_payout: "20000000", verification_expires_at: now + 3600, submission_evidence: { artifact_hash: hash("dd"), evidence_hash: hash("ee") } };
   const submitted = { kind: "submission_added", id: "submission", contract_address: contract, bounty_id: job.bounty_id, block_number: 1, log_index: 0, data: { round: 1, solver, submission_hash: hash("dd"), evidence_hash: hash("ee") } };
-  const item = { status: "submitted", bounty_contract: contract, bounty_id: job.bounty_id, creator, terms_valid: true, terms_hash: terms.terms_hash, terms, events: [submitted] };
+  const item = { status: "submitted", bounty_contract: contract, bounty_id: job.bounty_id, creator, terms_valid: true, terms_hash: terms.terms_hash, terms, events: [submitted], ...(options.v2 ? { protocol_version: "agent-bounties/autonomous-v2" } : {}) };
   win.AgentBountiesWorkflow = { apiBase: () => "https://api.example.test", createClient: () => ({ async request(path, body) {
     if (path === "/v1/base/gas-sponsorship") return { schema: "agent-bounties/gas-sponsorship-v1", creator_verdict: { available: !options.unavailable, customer_gas_wei: "0" } };
     if (path.includes("/feed?")) return [item];
     if (path.includes("/verification-jobs?")) return [job];
-    if (path.endsWith("verification-attestation-plan")) { const plan = workspace.typedData(body.attestation); if (options.alteredSignature) plan.message.verifier = solver; return plan; }
+    if (path.endsWith("verification-attestation-plan")) { const plan = workspace.typedData(body.attestation, options.planVersion || (options.v2 ? "2" : "1")); if (options.alteredSignature) plan.message.verifier = solver; return plan; }
     if (path.endsWith("attestation-settlement-plan")) return { from: creator, to: options.alteredTransaction ? solver : contract, value_wei: "0", data: workspace.settlementData(body.attestations[0], win.AgentBountiesEvm) };
     if (path.endsWith("creator-verdict-relay")) {
       relays.push(body);
@@ -93,6 +93,16 @@ test("staging cannot sign and changed signature or transaction scopes cannot rea
     const env = environment({ [option]: true }); await env.stage(); assert.equal(env.requests.length, 0);
     await env.click(); assert.equal(env.requests.includes("eth_sendTransaction"), false);
     if (option !== "alteredTransaction") assert.equal(env.requests.includes("eth_signTypedData_v4"), false);
+  }
+});
+test("a v2 bounty's verdict is signed only under the v2 domain", async () => {
+  assert.equal(workspace.domainVersion({ protocol_version: "agent-bounties/autonomous-v2" }), "2");
+  assert.equal(workspace.domainVersion({}), "1");
+  const v2 = environment({ v2: true }); await v2.stage(); await v2.click();
+  assert.equal(v2.requests.filter((method) => method === "eth_signTypedData_v4").length, 1);
+  for (const options of [{ v2: true, planVersion: "1" }, { planVersion: "2" }]) {
+    const env = environment(options); await env.stage(); await env.click();
+    assert.equal(env.requests.includes("eth_signTypedData_v4"), false, "a domain that differs from the bounty's protocol is never signed");
   }
 });
 test("a lost relay response retries only the same signed verdict and is not payment", async () => {

@@ -6,9 +6,11 @@
   "use strict";
   const lower = (value) => String(value || "").toLowerCase();
   const stable = (value) => value && typeof value === "object" ? Array.isArray(value) ? `[${value.map(stable).join(",")}]` : `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stable(value[key])}`).join(",")}}` : JSON.stringify(value);
-  function typedData(request) {
+  // Autonomous-v2 bounties verify verdicts under EIP-712 domain version "2"; v1 bounties under "1".
+  const domainVersion = (item) => item?.protocol_version === "agent-bounties/autonomous-v2" ? "2" : "1";
+  function typedData(request, version = "1") {
     const fields = (entries) => entries.map(([name, type]) => ({ name, type }));
-    return { domain: { name: "Agent Bounties", version: "1", chainId: 8453, verifyingContract: request.bounty_contract }, primaryType: "VerificationAttestation",
+    return { domain: { name: "Agent Bounties", version, chainId: 8453, verifyingContract: request.bounty_contract }, primaryType: "VerificationAttestation",
       types: { EIP712Domain: fields([["name", "string"], ["version", "string"], ["chainId", "uint256"], ["verifyingContract", "address"]]),
         VerificationAttestation: fields([["bounty", "address"], ["bountyId", "bytes32"], ["round", "uint64"], ["verifier", "address"], ["submissionHash", "bytes32"], ["evidenceHash", "bytes32"], ["policyHash", "bytes32"], ["passed", "bool"], ["responseHash", "bytes32"], ["deadline", "uint256"]]) },
       message: { bounty: request.bounty_contract, bountyId: request.bounty_id, round: String(request.round), verifier: request.verifier, submissionHash: request.submission_hash, evidenceHash: request.evidence_hash, policyHash: request.policy_hash, passed: request.passed, responseHash: request.response_hash, deadline: String(request.deadline) } };
@@ -40,7 +42,7 @@
     const contract = lower(new URLSearchParams(win.location.search).get("bountyContract"));
     const key = `agent-bounties.creator-review.v1:${contract}`;
     const output = root.querySelector("output"), confirm = root.querySelector("button");
-    let job = null, staged = null, busy = false, importedDraft = null;
+    let job = null, staged = null, busy = false, importedDraft = null, version = "1";
     const calendarButton = doc.createElement("button"); calendarButton.type = "button"; calendarButton.textContent = "Add review deadline to calendar"; calendarButton.hidden = true;
     root.append(calendarButton);
     calendarButton.addEventListener("click", (event) => {
@@ -65,6 +67,7 @@
       const item = feed.find((entry) => lower(entry.bounty_contract) === contract);
       if (!item?.terms_valid || item.terms.document.benchmark?.engine !== "creator_review_v1") return { status: "not_creator_review" };
       root.hidden = false;
+      version = domainVersion(item);
       const operation = load();
       const submitted = operation && item.events.find((entry) => entry.kind === "submission_added" && lower(entry.contract_address) === contract && entry.bounty_id === item.bounty_id && entry.data.round === operation.request.round
         && lower(entry.data.submission_hash) === lower(operation.request.submission_hash) && lower(entry.data.evidence_hash) === lower(operation.request.evidence_hash));
@@ -138,7 +141,7 @@
           const sponsor = await client.request("/v1/base/gas-sponsorship");
           if (sponsor.schema !== "agent-bounties/gas-sponsorship-v1" || !sponsor.creator_verdict?.available || sponsor.creator_verdict.customer_gas_wei !== "0") throw new Error("Gas sponsorship is unavailable. Your review is saved; recheck before signing. You do not need to buy ETH.");
           const plan = await client.request("/v1/base/autonomous-bounties/verification-attestation-plan", { network: "base-mainnet", attestation: request });
-          if (stable(plan) !== stable(typedData(request))) throw new Error("The requested signature differs from your reviewed verdict.");
+          if (stable(plan) !== stable(typedData(request, version))) throw new Error("The requested signature differs from your reviewed verdict.");
           save({ phase: "signing", request, assessment: staged, report_id });
           const signature = await provider.request({ method: "eth_signTypedData_v4", params: [wallet, JSON.stringify(plan)] });
           attestation = { verifier: wallet, passed: request.passed, response_hash: request.response_hash, deadline: request.deadline, signature };
@@ -166,5 +169,5 @@
     win.AgentBountiesCreatorReviewWorkspace = Object.freeze({ refresh, stage, importDraft });
     (new URLSearchParams(win.location.search).has("reviewReport") ? importDraft(new URLSearchParams(win.location.search).get("reviewReport")) : refresh()).catch((error) => { output.textContent = error.message; });
   }
-  return { typedData, settlementData, assessment, start };
+  return { typedData, domainVersion, settlementData, assessment, start };
 });
