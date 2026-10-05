@@ -1,3 +1,4 @@
+pub mod client_ip;
 pub mod verifier_readiness;
 use anyhow::Context;
 use app::{

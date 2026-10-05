@@ -1791,6 +1791,7 @@ async fn main() -> anyhow::Result<()> {
             "/v1/onramps/moonpay/checkout",
             post(moonpay::prepare_checkout),
         )
+        .route("/v1/offramps/moonpay/sell", post(moonpay::prepare_sell))
         .route("/tools", get(tools))
         .route("/tools/route_blocked_goal", post(route_blocked_goal))
         .route(

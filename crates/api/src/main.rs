@@ -8,6 +8,7 @@ mod open_competition_v2_api;
 mod opportunities;
 mod platform_payouts;
 mod site_auth;
+mod stripe_onramp;
 
 use app::{
     build_audience_report, build_live_money_readiness_report, build_objective_canonical_evidence,
@@ -2661,6 +2662,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/stripe/invoice-webhooks",
             post(invoicing::reconcile_invoice_webhook),
+        )
+        .route(
+            "/v1/onramps/stripe/session",
+            post(stripe_onramp::create_stripe_onramp_session),
         )
         .route(
             "/v1/base/autonomous-bounties/v2/creation-plan",
@@ -24692,6 +24697,132 @@ mod tests {
             ::invoicing::OrderStatus::Refunded
         );
         for name in ["INVOICING_ENABLED", "STRIPE_INVOICE_WEBHOOK_SECRET"] {
+            env::remove_var(name);
+        }
+    }
+
+    #[tokio::test]
+    async fn stripe_onramp_session_is_origin_bound_mode_matched_and_never_funding() {
+        let _env = autonomous_v2_env_lock();
+        let body = || {
+            Json(
+                serde_json::from_value::<stripe_onramp::StripeOnrampSessionBody>(
+                    serde_json::json!({
+                        "wallet_address": "0xDE0B295669a9FD93d5F28D9Ec85E40f4cb697BAe",
+                        "destination_amount": "25"
+                    }),
+                )
+                .unwrap(),
+            )
+        };
+        let headers = |origin: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert(header::ORIGIN, HeaderValue::from_str(origin).unwrap());
+            headers.insert("x-forwarded-for", HeaderValue::from_static("8.8.8.8"));
+            headers
+        };
+        env::remove_var("ENABLE_STRIPE_CRYPTO_ONRAMP");
+        let state =
+            test_state_with_stripe_live(BountyNetwork::default(), "http://127.0.0.1:9".to_string());
+        assert_eq!(
+            stripe_onramp::create_stripe_onramp_session(
+                State(state.clone()),
+                headers("https://agentbounties.app"),
+                body()
+            )
+            .await
+            .unwrap_err()
+            .0,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        env::set_var("ENABLE_STRIPE_CRYPTO_ONRAMP", "true");
+        env::set_var("STRIPE_CRYPTO_ONRAMP_PUBLISHABLE_KEY", "pk_live_mismatch");
+        assert_eq!(
+            stripe_onramp::create_stripe_onramp_session(
+                State(state.clone()),
+                headers("https://agentbounties.app"),
+                body()
+            )
+            .await
+            .unwrap_err()
+            .0,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "a test secret key never pairs with a live publishable key"
+        );
+        env::set_var("STRIPE_CRYPTO_ONRAMP_PUBLISHABLE_KEY", "pk_test_onramp");
+        assert_eq!(
+            stripe_onramp::create_stripe_onramp_session(
+                State(state.clone()),
+                headers("https://evil.example"),
+                body()
+            )
+            .await
+            .unwrap_err()
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        let stripe = spawn_rpc_response(serde_json::json!({
+            "id": "cos_test123", "object": "crypto.onramp_session",
+            "client_secret": "cos_test123_secret_abc", "livemode": false, "status": "initialized"
+        }));
+        let state = test_state_with_stripe_live(BountyNetwork::default(), stripe);
+        let session = stripe_onramp::create_stripe_onramp_session(
+            State(state.clone()),
+            headers("https://agentbounties.app"),
+            body(),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(session.session_id, "cos_test123");
+        assert_eq!(
+            session.wallet_address,
+            "0xde0b295669a9fd93d5f28d9ec85e40f4cb697bae"
+        );
+        assert_eq!(session.destination_amount, "25.00");
+        assert!(!session.bounty_funded);
+
+        // The client IP is the entry the trusted proxy appended, so a client-supplied prefix
+        // never opens a fresh rate-limit bucket.
+        env::set_var("STRIPE_CRYPTO_ONRAMP_SESSIONS_PER_MINUTE", "1");
+        let request = |forwarded: &'static str, wallet: &str| {
+            let mut headers = headers("https://agentbounties.app");
+            headers.insert("x-forwarded-for", HeaderValue::from_static(forwarded));
+            let body = serde_json::from_value::<stripe_onramp::StripeOnrampSessionBody>(
+                serde_json::json!({"wallet_address": wallet, "destination_amount": "25"}),
+            )
+            .unwrap();
+            (headers, Json(body))
+        };
+        let (spoofed, spoofed_body) = request(
+            "1.2.3.4, 8.8.8.8",
+            "0x1111111111111111111111111111111111111111",
+        );
+        assert_eq!(
+            stripe_onramp::create_stripe_onramp_session(State(state), spoofed, spoofed_body)
+                .await
+                .unwrap_err()
+                .0,
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        // A Stripe failure never leaks Stripe's error body to an anonymous caller.
+        let offline =
+            test_state_with_stripe_live(BountyNetwork::default(), "http://127.0.0.1:9".to_string());
+        let (fresh, fresh_body) = request("9.9.9.9", "0x2222222222222222222222222222222222222222");
+        let failure =
+            stripe_onramp::create_stripe_onramp_session(State(offline), fresh, fresh_body)
+                .await
+                .unwrap_err();
+        assert_eq!(failure.0, StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            failure.1 .0.message,
+            "Stripe could not create the onramp session"
+        );
+        for name in [
+            "ENABLE_STRIPE_CRYPTO_ONRAMP",
+            "STRIPE_CRYPTO_ONRAMP_PUBLISHABLE_KEY",
+            "STRIPE_CRYPTO_ONRAMP_SESSIONS_PER_MINUTE",
+        ] {
             env::remove_var(name);
         }
     }

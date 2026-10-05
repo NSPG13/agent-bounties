@@ -30,6 +30,9 @@ const MAX_URL_LENGTH: usize = 4_000;
 const MAX_CURRENCY_CODE_LENGTH: usize = 48;
 const LIVE_CHECKOUT_BASE: &str = "https://buy.moonpay.com/";
 const SANDBOX_CHECKOUT_BASE: &str = "https://buy-sandbox.moonpay.com/";
+const SELL_RESPONSE_SCHEMA: &str = "agent-bounties/moonpay-offramp-sell-v1";
+const LIVE_SELL_BASE: &str = "https://sell.moonpay.com/";
+const SANDBOX_SELL_BASE: &str = "https://sell-sandbox.moonpay.com/";
 
 static CHECKOUT_RATE_LIMITS: OnceLock<Mutex<HashMap<String, VecDeque<Instant>>>> = OnceLock::new();
 
@@ -51,6 +54,13 @@ impl MoonpayEnvironment {
         match self {
             Self::Sandbox => SANDBOX_CHECKOUT_BASE,
             Self::Live => LIVE_CHECKOUT_BASE,
+        }
+    }
+
+    fn sell_base(self) -> &'static str {
+        match self {
+            Self::Sandbox => SANDBOX_SELL_BASE,
+            Self::Live => LIVE_SELL_BASE,
         }
     }
 }
@@ -117,6 +127,10 @@ struct MoonpayConfig {
     environment: MoonpayEnvironment,
     allowed_origins: Vec<String>,
     client_ip_header: String,
+    /// When set, the client IP is the entry this many trusted proxies from the right of the
+    /// configured header, and no other header is consulted. Unset keeps the legacy first entry,
+    /// which a client can prepend; set it once the proxy chain is confirmed.
+    trusted_proxy_hops: Option<usize>,
     min_fiat_minor: u64,
     max_fiat_minor: u64,
     rate_limit_per_minute: u32,
@@ -157,6 +171,23 @@ impl MoonpayConfig {
             ));
         }
 
+        let trusted_proxy_hops = match env::var("MOONPAY_TRUSTED_PROXY_HOPS") {
+            Ok(value) if !value.trim().is_empty() => Some(
+                value
+                    .trim()
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|hops| (1..=8).contains(hops))
+                    .ok_or_else(|| {
+                        ApiError::configuration(
+                            "moonpay_trusted_proxy_hops_invalid",
+                            "MOONPAY_TRUSTED_PROXY_HOPS must be 1 to 8",
+                        )
+                    })?,
+            ),
+            _ => None,
+        };
+
         let min_fiat_minor = optional_minor_env("MOONPAY_MIN_FIAT_AMOUNT", DEFAULT_MIN_FIAT_MINOR)?;
         let max_fiat_minor = optional_minor_env("MOONPAY_MAX_FIAT_AMOUNT", DEFAULT_MAX_FIAT_MINOR)?;
         if max_fiat_minor < min_fiat_minor {
@@ -190,6 +221,7 @@ impl MoonpayConfig {
             environment,
             allowed_origins,
             client_ip_header,
+            trusted_proxy_hops,
             min_fiat_minor,
             max_fiat_minor,
             rate_limit_per_minute,
@@ -227,6 +259,33 @@ pub struct PrepareCheckoutRequest {
     #[serde(default)]
     intent_id: Option<Uuid>,
     bounty_contract: String,
+}
+
+/// A cash-out request: the user's own wallet sells Base USDC it already received from a canonical
+/// settlement. Agent Bounties never holds or sends the USDC.
+#[derive(Debug, Deserialize)]
+pub struct PrepareSellRequest {
+    wallet_address: String,
+    /// USDC to sell, with at most two decimals.
+    base_currency_amount: String,
+    return_url: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SellPlan {
+    schema_version: &'static str,
+    provider: &'static str,
+    environment: &'static str,
+    state: &'static str,
+    asset: &'static str,
+    source_wallet: String,
+    base_currency_amount: String,
+    quote_currency_code: &'static str,
+    external_transaction_id: String,
+    sell_url: String,
+    next_action: &'static str,
+    evidence_boundary: &'static str,
+    sandbox_notice: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -356,7 +415,7 @@ fn prepare_checkout_inner(
     }
 
     let validated = validate_request(&config, &request_origin, request)?;
-    let client_ip = client_ip(headers, &config.client_ip_header)?;
+    let client_ip = client_ip(headers, &config.client_ip_header, config.trusted_proxy_hops)?;
     if config.environment == MoonpayEnvironment::Live && client_ip.is_none() {
         return Err(ApiError::configuration(
             "moonpay_client_ip_unavailable",
@@ -378,6 +437,133 @@ fn prepare_checkout_inner(
     enforce_rate_limit(&limiter_key, config.rate_limit_per_minute)?;
 
     build_checkout_plan(&config, validated, client_ip.as_deref())
+}
+
+pub async fn prepare_sell(headers: HeaderMap, Json(request): Json<PrepareSellRequest>) -> Response {
+    match prepare_sell_inner(&headers, request) {
+        Ok(plan) => json_response(StatusCode::OK, json!(plan)),
+        Err(error) => error.into_response(),
+    }
+}
+
+fn prepare_sell_inner(
+    headers: &HeaderMap,
+    request: PrepareSellRequest,
+) -> Result<SellPlan, ApiError> {
+    let config = MoonpayConfig::from_env()?;
+    let request_origin = request_origin(headers)?;
+    if !config
+        .allowed_origins
+        .iter()
+        .any(|allowed| allowed == &request_origin)
+    {
+        return Err(ApiError::forbidden(
+            "moonpay_origin_not_allowed",
+            "The request origin is not approved for MoonPay sell links.",
+        ));
+    }
+    let wallet_address = normalize_evm_address(&request.wallet_address, "wallet_address")?;
+    let (amount_minor, base_currency_amount) = parse_fiat_amount(&request.base_currency_amount)?;
+    if amount_minor < config.min_fiat_minor || amount_minor > config.max_fiat_minor {
+        return Err(ApiError::bad_request(
+            "moonpay_amount_out_of_bounds",
+            format!(
+                "base_currency_amount must be between {} and {} USDC",
+                format_minor(config.min_fiat_minor),
+                format_minor(config.max_fiat_minor)
+            ),
+            "Choose an amount inside the configured safety bounds.",
+        ));
+    }
+    let return_url = validate_return_url(&request.return_url, &request_origin)?;
+    let client_ip = client_ip(headers, &config.client_ip_header, config.trusted_proxy_hops)?;
+    if config.environment == MoonpayEnvironment::Live {
+        match client_ip.as_deref() {
+            Some(ip) if is_public_ip(ip)? => {}
+            _ => {
+                return Err(ApiError::configuration(
+                    "moonpay_client_ip_unavailable",
+                    "A public customer IP is required to create a live MoonPay sell URL",
+                ))
+            }
+        }
+    }
+    let limiter_key = client_ip
+        .clone()
+        .unwrap_or_else(|| format!("{request_origin}:{wallet_address}:sell"));
+    enforce_rate_limit(&limiter_key, config.rate_limit_per_minute)?;
+    build_sell_plan(
+        &config,
+        wallet_address,
+        base_currency_amount,
+        return_url,
+        client_ip.as_deref(),
+    )
+}
+
+fn build_sell_plan(
+    config: &MoonpayConfig,
+    wallet_address: String,
+    base_currency_amount: String,
+    return_url: String,
+    client_ip: Option<&str>,
+) -> Result<SellPlan, ApiError> {
+    let currency_code = config.currency_code(OnrampAsset::Usdc)?;
+    let external_transaction_id = format!("ab-sell-{}", Uuid::new_v4());
+    let mut sell = Url::parse(config.environment.sell_base()).map_err(|_| {
+        ApiError::configuration(
+            "moonpay_sell_base_invalid",
+            "The MoonPay sell base URL is invalid",
+        )
+    })?;
+    {
+        let mut query = sell.query_pairs_mut();
+        query.append_pair("apiKey", &config.publishable_key);
+        query.append_pair("baseCurrencyCode", &currency_code);
+        query.append_pair("baseCurrencyAmount", &base_currency_amount);
+        query.append_pair("quoteCurrencyCode", "usd");
+        query.append_pair("refundWalletAddress", &wallet_address);
+        query.append_pair("externalTransactionId", &external_transaction_id);
+        query.append_pair("redirectURL", &return_url);
+        if config.environment == MoonpayEnvironment::Live {
+            let ip = client_ip.ok_or_else(|| {
+                ApiError::configuration(
+                    "moonpay_client_ip_unavailable",
+                    "A public customer IP is required to create a live MoonPay sell URL",
+                )
+            })?;
+            query.append_pair("allowedIpAddress", &hmac_base64(&config.secret_key, ip)?);
+        }
+    }
+    let unsigned_query = sell
+        .query()
+        .map(|value| format!("?{value}"))
+        .ok_or_else(|| {
+            ApiError::configuration(
+                "moonpay_sell_query_missing",
+                "The MoonPay sell URL could not be assembled",
+            )
+        })?;
+    let signature = hmac_base64(&config.secret_key, &unsigned_query)?;
+    sell.query_pairs_mut().append_pair("signature", &signature);
+    let is_sandbox = config.environment == MoonpayEnvironment::Sandbox;
+    Ok(SellPlan {
+        schema_version: SELL_RESPONSE_SCHEMA,
+        provider: "moonpay",
+        environment: config.environment.as_str(),
+        state: "sell_ready_usdc_not_yet_sent",
+        asset: "USDC",
+        source_wallet: wallet_address,
+        base_currency_amount,
+        quote_currency_code: "usd",
+        external_transaction_id,
+        sell_url: sell.to_string(),
+        next_action: "Complete the MoonPay sell flow. MoonPay shows a deposit address; only your own wallet signs the USDC transfer to it, and MoonPay pays out to your bank under its terms.",
+        evidence_boundary: "A sell link is not a payout or a bounty event. Your solver payment was proven by the canonical BountySettled event; MoonPay's conversion to fiat happens under MoonPay's terms and KYC.",
+        sandbox_notice: is_sandbox.then_some(
+            "MoonPay sandbox simulates the sell flow with test assets and pays out nothing.",
+        ),
+    })
 }
 
 fn validate_request(
@@ -737,7 +923,29 @@ fn valid_header_name(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
 }
 
-fn client_ip(headers: &HeaderMap, configured_header: &str) -> Result<Option<String>, ApiError> {
+fn client_ip(
+    headers: &HeaderMap,
+    configured_header: &str,
+    trusted_proxy_hops: Option<usize>,
+) -> Result<Option<String>, ApiError> {
+    if let Some(hops) = trusted_proxy_hops {
+        let Some(raw) = headers
+            .get(configured_header)
+            .and_then(|value| value.to_str().ok())
+        else {
+            return Ok(None);
+        };
+        return service_runtime::client_ip::forwarded_client_ip(raw, hops)
+            .map(|ip| Some(ip.to_string()))
+            .ok_or_else(|| {
+                ApiError::configuration(
+                    "moonpay_client_ip_invalid",
+                    format!(
+                        "{configured_header} has no valid entry {hops} trusted hops from the right"
+                    ),
+                )
+            });
+    }
     let candidates = [
         configured_header,
         "true-client-ip",
@@ -877,6 +1085,7 @@ mod tests {
             environment,
             allowed_origins: vec!["https://agentbounties.app".to_string()],
             client_ip_header: DEFAULT_CLIENT_IP_HEADER.to_string(),
+            trusted_proxy_hops: None,
             min_fiat_minor: 100,
             max_fiat_minor: 1_000_000,
             rate_limit_per_minute: 10,
@@ -931,6 +1140,51 @@ mod tests {
     }
 
     #[test]
+    fn live_sell_link_is_ip_bound_signed_last_and_refunds_only_to_the_seller() {
+        let plan = build_sell_plan(
+            &config(MoonpayEnvironment::Live),
+            "0xde0b295669a9fd93d5f28d9ec85e40f4cb697bae".to_string(),
+            "42.50".to_string(),
+            "https://agentbounties.app/onramp.html".to_string(),
+            Some("8.8.8.8"),
+        )
+        .unwrap();
+        let url = Url::parse(&plan.sell_url).unwrap();
+        let query = url.query().unwrap();
+        assert_eq!(url.host_str(), Some("sell.moonpay.com"));
+        assert!(query.contains("baseCurrencyCode=usdc_base"));
+        assert!(query.contains("baseCurrencyAmount=42.50"));
+        assert!(query.contains("quoteCurrencyCode=usd"));
+        assert!(query.contains("refundWalletAddress=0xde0b295669a9fd93d5f28d9ec85e40f4cb697bae"));
+        assert!(query.contains("allowedIpAddress="));
+        let (unsigned, signature) = query.rsplit_once("&signature=").unwrap();
+        let signature: String = url::form_urlencoded::parse(format!("s={signature}").as_bytes())
+            .next()
+            .unwrap()
+            .1
+            .into_owned();
+        assert_eq!(
+            hmac_base64("sk_live_example", &format!("?{unsigned}")).unwrap(),
+            signature
+        );
+        assert!(!plan.sell_url.contains("sk_live_example"));
+        assert_eq!(plan.state, "sell_ready_usdc_not_yet_sent");
+        let sandbox = build_sell_plan(
+            &config(MoonpayEnvironment::Sandbox),
+            "0xde0b295669a9fd93d5f28d9ec85e40f4cb697bae".to_string(),
+            "10.00".to_string(),
+            "https://agentbounties.app/onramp.html".to_string(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            Url::parse(&sandbox.sell_url).unwrap().host_str(),
+            Some("sell-sandbox.moonpay.com")
+        );
+        assert!(sandbox.sandbox_notice.is_some());
+    }
+
+    #[test]
     fn sandbox_checkout_is_test_only_and_supports_gas_asset() {
         let plan = build_checkout_plan(&config(MoonpayEnvironment::Sandbox), request("eth"), None)
             .unwrap();
@@ -980,5 +1234,29 @@ mod tests {
         assert!(!is_public_ip("127.0.0.1").unwrap());
         assert!(!is_public_ip("10.0.0.1").unwrap());
         assert!(!is_public_ip("100.64.0.1").unwrap());
+    }
+
+    #[test]
+    fn trusted_proxy_hops_ignore_client_supplied_prefixes() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("1.2.3.4, 203.0.113.7, 8.8.4.4"),
+        );
+        headers.insert("true-client-ip", HeaderValue::from_static("9.9.9.9"));
+        assert_eq!(
+            client_ip(&headers, "x-forwarded-for", Some(1)).unwrap(),
+            Some("8.8.4.4".to_string())
+        );
+        assert_eq!(
+            client_ip(&headers, "x-forwarded-for", Some(2)).unwrap(),
+            Some("203.0.113.7".to_string())
+        );
+        assert!(client_ip(&headers, "x-forwarded-for", Some(4)).is_err());
+        assert_eq!(
+            client_ip(&headers, "x-forwarded-for", None).unwrap(),
+            Some("1.2.3.4".to_string()),
+            "unset keeps the legacy first entry"
+        );
     }
 }
