@@ -1528,6 +1528,47 @@ class AgentBountiesClient:
             json={"network": network, "create": create},
         )
 
+    def quote_autonomous_v2_bounty(
+        self, solver_reward: dict, verifier_reward: dict, network: str | None = None
+    ):
+        """Fee-inclusive autonomous-v2 target for the network's configured v2 factory."""
+        return self._request(
+            "POST",
+            "/v1/base/autonomous-bounties/v2/quote",
+            json={
+                "network": network,
+                "solver_reward": solver_reward,
+                "verifier_reward": verifier_reward,
+            },
+        )
+
+    def plan_autonomous_v2_bounty_creation(
+        self, create: dict, network: str | None = None
+    ):
+        return self._request(
+            "POST",
+            "/v1/base/autonomous-bounties/v2/creation-plan",
+            json={"network": network, "create": create},
+        )
+
+    def plan_autonomous_v2_bounty_authorized_creation(
+        self,
+        create: dict,
+        signature: dict,
+        network: str | None = None,
+        relayer: str | None = None,
+    ):
+        return self._request(
+            "POST",
+            "/v1/base/autonomous-bounties/v2/authorized-creation-plan",
+            json={
+                "network": network,
+                "create": create,
+                "signature": signature,
+                "relayer": relayer,
+            },
+        )
+
     def plan_autonomous_canonical_child_terms(
         self,
         parent_bounty_id: str,

@@ -185,12 +185,12 @@ async fn main() -> anyhow::Result<()> {
     if protocol == "open-competition-v2-shadow" {
         return run_open_competition_v2_shadow(&store, once).await;
     }
-    if protocol != "autonomous-v1" {
+    if protocol != "autonomous-v1" && protocol != "autonomous-v2" {
         anyhow::bail!(
-            "BASE_INDEXER_PROTOCOL must be autonomous-v1, open-competition-v1, open-competition-v2-beta3, open-competition-v2-broker, open-competition-v2-keeper, or open-competition-v2-shadow"
+            "BASE_INDEXER_PROTOCOL must be autonomous-v1, autonomous-v2, open-competition-v1, open-competition-v2-beta3, open-competition-v2-broker, open-competition-v2-keeper, or open-competition-v2-shadow"
         );
     }
-    let config = AutonomousIndexerConfig::from_env()?;
+    let config = AutonomousIndexerConfig::from_env_for_protocol(&protocol)?;
     let discovery_webhooks = DiscoveryWebhookConfig::from_env()?;
     let recovery_policy = IndexerRecoveryPolicy::from_env()?;
     let mut consecutive_failures = 0u32;

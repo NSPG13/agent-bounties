@@ -2210,6 +2210,41 @@ export class AgentBountiesClient {
     return this.autonomousPost("creation-plan", { network: network ?? null, create });
   }
 
+  /** Fee-inclusive autonomous-v2 target for the network's configured v2 factory (amounts in USDC base units). */
+  async quoteAutonomousV2Bounty(
+    solverReward: { amount: number; currency: string },
+    verifierReward: { amount: number; currency: string },
+    network?: string | null,
+  ): Promise<unknown> {
+    return this.autonomousPost("v2/quote", {
+      network: network ?? null,
+      solver_reward: solverReward,
+      verifier_reward: verifierReward,
+    });
+  }
+
+  /** Unsigned autonomous-v2 creation plan; `create` may add claim_eligibility_registry and claim_eligibility_source. */
+  async planAutonomousV2BountyCreation(
+    create: AutonomousBountyCreate,
+    network?: string | null,
+  ): Promise<unknown> {
+    return this.autonomousPost("v2/creation-plan", { network: network ?? null, create });
+  }
+
+  async planAutonomousV2BountyAuthorizedCreation(
+    create: AutonomousBountyCreate,
+    signature: AutonomousAuthorizationSignature,
+    network?: string | null,
+    relayer?: string | null,
+  ): Promise<unknown> {
+    return this.autonomousPost("v2/authorized-creation-plan", {
+      network: network ?? null,
+      create,
+      signature,
+      relayer: relayer ?? null,
+    });
+  }
+
   async planAutonomousCanonicalChildTerms(
     request: CanonicalChildBountyTermsRequest,
   ): Promise<unknown> {

@@ -589,6 +589,25 @@ actions are:
 The output is unsigned typed data or an unsigned transaction intent. Neither is
 payment evidence.
 
+**Hosting.** The API and MCP server enable v2 on a network only when all four
+`BASE_SEPOLIA_BOUNTY_V2_{FACTORY,IMPLEMENTATION,PLATFORM_FEE_BPS,PLATFORM_FEE_RECIPIENT}`
+settings are present. A partial setting, fee terms over the cap, or any Base
+mainnet v2 setting is refused. Mainnet v2 is pinned in code only after an
+independently reviewed deployment (#1577).
+- `POST /v1/base/autonomous-bounties/v2/quote` returns the fee-inclusive target
+  for the configured factory.
+- `POST /v1/base/autonomous-bounties/v2/creation-plan` and
+  `/v2/authorized-creation-plan` require published v2 terms that commit the
+  factory's exact fee terms. They also apply the v1 public-earning policy, with
+  the fee included in the fully funded target. Claim-gated bounties are refused
+  there; plan them on the invoice treasury path instead.
+- Submission and attestation plans select domain version `"2"` from the
+  indexed bounty's `protocol_version`. A v2 bounty never falls back to the v1
+  domain.
+- Run a second worker with `BASE_INDEXER_PROTOCOL=autonomous-v2`. It reads
+  `BASE_SEPOLIA_BOUNTY_V2_FACTORY` and keeps its own cursor; both protocols
+  share the event table and feed.
+
 **Evidence.** `crates/chain-base/tests/fixtures/autonomous-v2-loop.json` holds
 real logs and calldata from the compiled contracts. It includes a gasless quorum
 loop: the poster, solver and two verifiers only sign typed data with

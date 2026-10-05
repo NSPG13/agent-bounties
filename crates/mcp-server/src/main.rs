@@ -31,7 +31,7 @@ use chain_base::{
     AutonomousBountySubmissionAuthorizationRequest, AutonomousBountyTxPlanner,
     AutonomousSignedAttestation, AutonomousVerificationAttestationRequest, BaseRpcUrlConfig,
     CanonicalChildBountyTermsRequest, EvmLog, PrepareAgentToEarnInput,
-    StandingMetaV2ChildPreparationRequest,
+    StandingMetaV2ChildPreparationRequest, AUTONOMOUS_V2_PROTOCOL_VERSION,
 };
 use chrono::Utc;
 use competition_metric_core::{
@@ -5709,6 +5709,37 @@ fn autonomous_planner_addresses(
     })
 }
 
+/// The configured autonomous-v2 planner for `network`, when a v2 factory is configured there.
+fn configured_autonomous_v2_planner(network: &str) -> Result<AutonomousBountyTxPlanner, String> {
+    let descriptor = base_network_descriptor(network).map_err(|error| error.to_string())?;
+    match service_runtime::autonomous_v2_deployment_for_chain(descriptor.chain_id) {
+        Ok(Some(deployment)) => {
+            AutonomousBountyTxPlanner::new(deployment.factory, deployment.implementation)
+                .map_err(|error| error.to_string())
+        }
+        Ok(None) => Err("no autonomous-v2 factory is configured for this network".to_string()),
+        Err(error) => Err(format!(
+            "autonomous-v2 deployment is misconfigured: {error:?}"
+        )),
+    }
+}
+
+/// Canonical factories indexed for `network`: the v1 factory and, when configured, the v2 factory.
+fn configured_canonical_factories(network: &str) -> Result<Vec<String>, String> {
+    let v1 = configured_autonomous_planner(network).map(|planner| planner.factory_contract);
+    let v2 = configured_autonomous_v2_planner(network).map(|planner| planner.factory_contract);
+    match (v1, v2) {
+        (Ok(v1), Ok(v2)) => Ok(vec![v1, v2]),
+        (Ok(v1), Err(_)) => Ok(vec![v1]),
+        (Err(_), Ok(v2)) => Ok(vec![v2]),
+        (Err(error), Err(_)) => Err(error),
+    }
+}
+
+fn is_autonomous_v2_item(item: &AutonomousBountyFeedItem) -> bool {
+    item.protocol_version.as_deref() == Some(AUTONOMOUS_V2_PROTOCOL_VERSION)
+}
+
 async fn require_indexed_canonical_bounty(
     state: &SharedState,
     network: &str,
@@ -5736,15 +5767,20 @@ async fn indexed_autonomous_bounty(
                 .to_string(),
         );
     };
-    let planner = configured_autonomous_planner(network)?;
+    let factories = configured_canonical_factories(network)?;
     let events = store
         .list_autonomous_bounty_events(network)
         .await
         .map_err(|error| error.to_string())?;
-    let contracts = store
-        .list_canonical_autonomous_bounty_contracts(network, &planner.factory_contract)
-        .await
-        .map_err(|error| error.to_string())?;
+    let mut contracts = Vec::new();
+    for factory in &factories {
+        contracts.extend(
+            store
+                .list_canonical_autonomous_bounty_contracts(network, factory)
+                .await
+                .map_err(|error| error.to_string())?,
+        );
+    }
     if !contracts
         .iter()
         .any(|contract| contract.eq_ignore_ascii_case(bounty_contract))
@@ -6895,16 +6931,31 @@ async fn plan_autonomous_bounty_submission_authorization(
     Json(args): Json<PlanAutonomousBountySubmissionAuthorizationArgs>,
 ) -> Json<serde_json::Value> {
     let network = args.network.as_deref().unwrap_or("base-mainnet");
-    if let Err(error) =
-        require_indexed_canonical_bounty(&state, network, &args.submission.bounty_contract).await
-    {
-        return mcp_error(error);
-    }
-    match configured_autonomous_planner(network).and_then(|planner| {
-        planner
-            .plan_submission_authorization(network, &args.submission)
-            .map_err(|error| error.to_string())
-    }) {
+    let item =
+        match indexed_autonomous_bounty(&state, network, &args.submission.bounty_contract).await {
+            Ok(item) if item.terms_valid => item,
+            Ok(item) => {
+                return mcp_error(format!(
+                    "canonical bounty terms do not match contract commitments: {}",
+                    item.validation_errors.join("; ")
+                ))
+            }
+            Err(error) => return mcp_error(error),
+        };
+    let planned = if is_autonomous_v2_item(&item) {
+        configured_autonomous_v2_planner(network).and_then(|planner| {
+            planner
+                .plan_v2_submission_authorization(network, &args.submission)
+                .map_err(|error| error.to_string())
+        })
+    } else {
+        configured_autonomous_planner(network).and_then(|planner| {
+            planner
+                .plan_submission_authorization(network, &args.submission)
+                .map_err(|error| error.to_string())
+        })
+    };
+    match planned {
         Ok(plan) => mcp_json(plan),
         Err(error) => mcp_error(error),
     }
@@ -6929,11 +6980,20 @@ async fn plan_autonomous_verification_attestation(
     {
         return mcp_error(error);
     }
-    match configured_autonomous_planner(network).and_then(|planner| {
-        planner
-            .plan_verification_attestation(network, &args.attestation)
-            .map_err(|error| error.to_string())
-    }) {
+    let planned = if is_autonomous_v2_item(&item) {
+        configured_autonomous_v2_planner(network).and_then(|planner| {
+            planner
+                .plan_v2_verification_attestation(network, &args.attestation)
+                .map_err(|error| error.to_string())
+        })
+    } else {
+        configured_autonomous_planner(network).and_then(|planner| {
+            planner
+                .plan_verification_attestation(network, &args.attestation)
+                .map_err(|error| error.to_string())
+        })
+    };
+    match planned {
         Ok(plan) => mcp_json(plan),
         Err(error) => mcp_error(error),
     }
