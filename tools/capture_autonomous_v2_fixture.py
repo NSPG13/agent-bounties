@@ -141,7 +141,7 @@ class GaslessLoop:
         bounty, bounty_id = created["predicted_bounty_contract"], created["bounty_id"]
 
         claim = {"bounty_contract": bounty, "solver": solver, "claim_bond": usdc(100_000),
-                 "authorization_nonce": word("gasless claim bond"), "authorization_valid_before": now + 86_400}
+                 "claim_round": 1, "authorization_valid_before": now + 86_400}
         bond = self.authorize({"action": "claim", **claim}, SOLVER_KEY, "eip3009_authorization")
         self.relay("authorized_claim", [bond], {"action": "authorized_claim", **claim,
                                                 "signature": self.split(bond["signature"]),
@@ -209,6 +209,7 @@ def main() -> int:
         created_topic = run("cast", "keccak", "CanonicalBountyCreated(bytes32,address,address,bytes32,bytes32,bytes32)")
         creations = [log for log in logs if log["topics"][0].lower() == created_topic.lower()]
         bounties = {LABELS[int(log["data"][2 + 128: 2 + 192], 16)]: "0x" + log["topics"][2][-40:].lower() for log in creations}
+        bounty_ids = {LABELS[int(log["data"][2 + 128: 2 + 192], 16)]: log["topics"][1].lower() for log in creations}
         if bounties["gasless_quorum"] != gasless_bounty.lower():
             raise RuntimeError("gasless bounty was not created at the planner's predicted address")
         broadcast = json.loads((CONTRACTS / f"broadcast/CaptureAutonomousV2Fixture.s.sol/{CHAIN_ID}/run-latest.json").read_text())
@@ -223,8 +224,9 @@ def main() -> int:
     params, verifiers, funding, nonce = (clean(line) for line in run("cast", "decode-calldata", CREATE, calldata["contractor_gated"]).split("\n"))
     deadline = params.strip("()").split(", ")[7]
     r, s = "0x" + "11" * 32, "0x" + "22" * 32
+    # The factory accepts only an authorization whose nonce is the bounty id.
     reference = run("cast", "calldata", CREATE_WITH_AUTH, creator, params.replace(" ", ""), verifiers, funding, nonce,
-                    f"(0,{deadline},{nonce},27,{r},{s})")
+                    f"(0,{deadline},{bounty_ids['contractor_gated']},27,{r},{s})")
     keep = [{key: log[key] for key in ("address", "topics", "data", "transactionHash", "blockNumber", "logIndex")}
             for log in logs if log["address"].lower() in {factory, *bounties.values()}]
     fixture = {

@@ -145,6 +145,33 @@ The treasury holds only AgentBounties' own funds, which it spends on its own
 orders. It never holds individual users' balances, so the non-custodial path's
 boundary is unchanged.
 
+## Pre-deployment hardening (2026-10-06)
+
+An adversarial pass before mainnet found ways for a third party to strand or
+misroute escrowed funds, and to reject honest module submissions. The factory is
+immutable, so the fixes landed before deployment:
+
+- **Receive-only authorizations.** Funding, claim bonds and relayed creation
+  use EIP-3009 `ReceiveWithAuthorization`. Only the payee contract can execute
+  it, so a published signature cannot move USDC around the contract's
+  accounting. Relayed creation is payable to the factory with
+  `nonce = bountyId`, which binds it to the exact terms.
+- **Round-bound bonds.** A claim bond authorization's nonce is
+  `claimAuthorizationNonce(solver, round)`. It cannot open a later round after
+  its solver lost the race.
+- **Pass-only module verdicts.** `verifyAndSettle` takes a caller-chosen proof,
+  so a failing module verdict now reverts instead of rejecting. Unproven
+  submissions expire and return the bond. Rejection stays in signed quorums.
+- **Bond refunds cannot lock the escrow.** If an expired submission's bond
+  cannot be returned (for example, a token-level block), it is held for a later
+  `withdrawBondRefund`, and the bounty reopens so contributors can still
+  cancel.
+- **ECDSA before ERC-1271**, so EIP-7702 delegated EOAs sign with their key.
+
+The owner waived an independent human review before mainnet (#1577). The
+regression tests and real-USDC fork tests listed under Verification are the
+evidence for these properties.
+
 ## Rejected alternatives
 
 - **Fee charged only on fiat checkout, off-chain.** This keeps the protocol
@@ -211,7 +238,13 @@ covers:
   wallets on `claim`, `claimWithSignature` and `claimWithAuthorization`,
   admitting current contractors, and rejecting inconsistent config;
 - relayed EIP-3009 creation funding the full target, including the fee;
-- a rejected round keeping the fee escrowed;
+- a creation authorization funding only the bounty whose id is its nonce;
+- a bond authorization bound to its payee and round;
+- a malformed proof unable to reject an honest module submission, and an
+  unproven submission expiring with its bond returned;
+- a blocked solver unable to lock the escrow, with the held bond paid later;
+- EIP-7702 delegated EOA signatures and ERC-1271 contract signatures;
+- a rejected quorum round keeping the fee escrowed;
 - the timeout bonus going to the solver, not the fee;
 - cancellation refunding the fee;
 - fee cap and recipient validation;
@@ -221,13 +254,16 @@ covers:
 
 `RUN_MAINNET_FORK=true BASE_MAINNET_RPC_URL=<rpc> forge test --match-contract AgentBountyV2MainnetForkTest`
 runs against real Base USDC at a pinned block, and runs in
-`mainnet-fork-rehearsal.yml`. It proves three things:
+`mainnet-fork-rehearsal.yml`. It proves that:
 
 - real EIP-3009 signatures create, fund and bond a v2 bounty;
 - the fee reaches the launch recipient at payout, although that account
   carries EIP-7702 delegation code;
 - a real Circle blacklist on the recipient defers the fee without blocking the
-  solver, and the fee forwards after un-blacklisting.
+  solver, and the fee forwards after un-blacklisting;
+- a published receive authorization cannot be executed at USDC directly (as a
+  transfer or a receive), funds no other terms, and opens no later round;
+- a real Circle blacklist on the solver cannot lock the escrow.
 
 Slither 0.11.6 reports two medium findings in `AgentBountyV2`. Both are
 triaged as not exploitable:

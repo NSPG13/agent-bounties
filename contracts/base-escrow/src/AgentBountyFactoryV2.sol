@@ -8,6 +8,7 @@ import "./AgentBountyV2.sol";
 /// bounty it creates carries the same visible fee terms. The factory has no owner.
 contract AgentBountyFactoryV2 {
     using SafeBountyToken for address;
+    using SafeBountyReceive for address;
 
     bytes32 public constant SUPPORTED_PROTOCOL_VERSION = keccak256("agent-bounties/autonomous-v2");
 
@@ -138,8 +139,10 @@ contract AgentBountyFactoryV2 {
         );
     }
 
-    /// @notice A relayer can create and fund a predictable bounty from one signed
-    /// Circle USDC EIP-3009 authorization. The destination is bound to the CREATE2 address.
+    /// @notice A relayer can create and fund a bounty from one signed Circle USDC EIP-3009
+    /// `ReceiveWithAuthorization` payable to this factory. Only this factory can execute it, and
+    /// its nonce must equal the bounty id, which commits the creator, nonce, terms and verifiers,
+    /// so the authorization can fund only the bounty it was signed for.
     function createBountyWithAuthorization(
         address creator,
         CreateBountyParams calldata params,
@@ -150,11 +153,11 @@ contract AgentBountyFactoryV2 {
     ) external nonReentrant returns (address bountyAddress, bytes32 bountyId) {
         require(initialFunding > 0, "initial funding zero");
         (AgentBountyV2 bounty, bytes32 id) = _deployBounty(creator, params, verifiers, creationNonce);
+        require(authorization.nonce == id, "authorization nonce not bounty id");
         bountyAddress = address(bounty);
         bountyId = id;
-        settlementToken.safeTransferWithAuthorization(
+        settlementToken.safeReceiveWithAuthorization(
             creator,
-            bountyAddress,
             initialFunding,
             authorization.validAfter,
             authorization.validBefore,
@@ -163,6 +166,7 @@ contract AgentBountyFactoryV2 {
             authorization.r,
             authorization.s
         );
+        settlementToken.safeTransfer(bountyAddress, initialFunding);
         bounty.recordFactoryFunding(creator, initialFunding);
         _emitCanonicalBountyCreated(bountyId, bountyAddress, creator, params, verifiers, initialFunding, creationNonce);
     }

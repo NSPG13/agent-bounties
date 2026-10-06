@@ -18,6 +18,7 @@ function agentBountyV2PlatformFee(uint256 solverReward, uint16 platformFeeBps) p
 /// registry restricts which solver wallets may claim.
 contract AgentBountyV2 is IAgentBountyV2 {
     using SafeBountyToken for address;
+    using SafeBountyReceive for address;
 
     bytes32 public constant PROTOCOL_VERSION = keccak256("agent-bounties/autonomous-v2");
     bytes4 private constant ERC1271_MAGIC_VALUE = 0x1626ba7e;
@@ -37,6 +38,7 @@ contract AgentBountyV2 is IAgentBountyV2 {
     bytes32 private constant ATTESTATION_TYPEHASH = keccak256(
         "VerificationAttestation(address bounty,bytes32 bountyId,uint64 round,address verifier,bytes32 submissionHash,bytes32 evidenceHash,bytes32 policyHash,bool passed,bytes32 responseHash,uint256 deadline)"
     );
+    bytes32 private constant CLAIM_BOND_NONCE_TAG = keccak256("agent-bounties/autonomous-v2/claim-bond");
     uint256 private constant SECP256K1N_DIV_2 = 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0;
 
     enum VerificationMode {
@@ -127,8 +129,10 @@ contract AgentBountyV2 is IAgentBountyV2 {
     uint256 public refundPrincipalTotal;
     bytes32 public submissionHash;
     bytes32 public evidenceHash;
+    uint256 public pendingBondRefundTotal;
 
     mapping(address => uint256) public contributions;
+    mapping(address => uint256) public pendingBondRefunds;
     mapping(address => bool) public isVerifier;
     address[] private _verifiers;
     uint256 private _reentrancy = 1;
@@ -205,6 +209,8 @@ contract AgentBountyV2 is IAgentBountyV2 {
         bytes32 indexed bountyId, uint64 indexed round, address indexed platformFeeRecipient, uint256 platformFee
     );
     event PlatformFeeWithdrawn(bytes32 indexed bountyId, address indexed platformFeeRecipient, uint256 amount);
+    event ClaimBondRefundDeferred(bytes32 indexed bountyId, uint64 indexed round, address indexed solver, uint256 amount);
+    event ClaimBondRefundWithdrawn(bytes32 indexed bountyId, address indexed solver, uint256 amount);
 
     modifier nonReentrant() {
         require(_reentrancy == 1, "reentrant");
@@ -366,7 +372,9 @@ contract AgentBountyV2 is IAgentBountyV2 {
         );
     }
 
-    /// @notice Anyone may relay a contributor's Circle USDC EIP-3009 authorization.
+    /// @notice Anyone may relay a contributor's Circle USDC EIP-3009 `ReceiveWithAuthorization`
+    /// payable to this bounty. Only this contract can execute it, so the funds always arrive with
+    /// the contribution recorded.
     function fundWithAuthorization(
         address contributor,
         uint256 amount,
@@ -381,9 +389,7 @@ contract AgentBountyV2 is IAgentBountyV2 {
         require(block.timestamp <= fundingDeadline, "funding closed");
         require(amount > 0 && amount <= targetAmount - fundedAmount, "bad funding amount");
         _recordFunding(contributor, amount);
-        settlementToken.safeTransferWithAuthorization(
-            contributor, address(this), amount, validAfter, validBefore, nonce, v, r, s
-        );
+        settlementToken.safeReceiveWithAuthorization(contributor, amount, validAfter, validBefore, nonce, v, r, s);
         require(
             IERC20BountyToken(settlementToken).balanceOf(address(this)) >= _requiredTokenBalance(),
             "funding not received"
@@ -408,7 +414,9 @@ contract AgentBountyV2 is IAgentBountyV2 {
         _collectClaimBondFrom(solver_);
     }
 
-    /// @notice Anyone may relay a solver's exact USDC EIP-3009 bond authorization.
+    /// @notice Anyone may relay a solver's exact USDC EIP-3009 `ReceiveWithAuthorization` bond,
+    /// payable to this bounty. Its nonce must equal `claimAuthorizationNonce(solver, round + 1)`,
+    /// so it can open only the round it was signed for and lapses once another claim takes it.
     /// The verifier reserve is paid for either verdict; a rejected solver's bond
     /// replaces that reserve so the bounty remains fully funded for another attempt.
     function claimWithAuthorization(
@@ -422,11 +430,10 @@ contract AgentBountyV2 is IAgentBountyV2 {
     ) external nonReentrant {
         require(verifierReward > 0, "claim bond zero");
         _prepareClaim(solver_);
+        require(nonce == claimAuthorizationNonce(solver_, round + 1), "claim nonce not bound to round");
         activeClaimBond = verifierReward;
         _activateClaim(solver_);
-        settlementToken.safeTransferWithAuthorization(
-            solver_, address(this), verifierReward, validAfter, validBefore, nonce, v, r, s
-        );
+        settlementToken.safeReceiveWithAuthorization(solver_, verifierReward, validAfter, validBefore, nonce, v, r, s);
         require(
             IERC20BountyToken(settlementToken).balanceOf(address(this)) >= _requiredTokenBalance(),
             "claim bond not received"
@@ -451,20 +458,20 @@ contract AgentBountyV2 is IAgentBountyV2 {
     }
 
     /// @notice Anyone may relay a valid deterministic proof. A passing call settles atomically.
+    /// The proof is caller-chosen, so a failing module verdict reverts instead of rejecting:
+    /// otherwise any caller could reject an honest submission with a malformed proof. A
+    /// submission no one can prove expires through `expireSubmission`, which returns the bond.
     function verifyAndSettle(bytes calldata proof) external nonReentrant {
         require(_status == BountyStatus.Submitted, "not submitted");
         require(verificationMode == VerificationMode.DeterministicModule, "not module mode");
         require(block.timestamp <= verificationExpiresAt, "verification expired");
         (bool passed, bytes32 responseHash) = IAgentBountyVerifier(verifierModule)
             .verify(bountyId, round, solver, submissionHash, evidenceHash, policyHash, proof);
+        require(passed, "verification failed");
         bytes32 verificationHash = keccak256(abi.encode(verifierModule, responseHash, keccak256(proof)));
-        address[] memory recipients = new address[](verifierReward > 0 ? 1 : 0);
-        if (verifierReward > 0) recipients[0] = verifierRewardRecipient;
-        if (passed) {
-            _settle(recipients, verificationHash);
-        } else {
-            _reject(recipients, verificationHash);
-        }
+        address[] memory recipients = new address[](1);
+        recipients[0] = verifierRewardRecipient;
+        _settle(recipients, verificationHash);
     }
 
     /// @notice Anyone may relay the precommitted verifier quorum. No settlement signer is used.
@@ -514,6 +521,9 @@ contract AgentBountyV2 is IAgentBountyV2 {
         emit ClaimExpired(bountyId, round, expiredSolver, forfeitedBond, timeoutBondPool);
     }
 
+    /// @notice Returns the bond and reopens the bounty. If the bond transfer fails (for example
+    /// a token-level block on the solver), the bond is held for `withdrawBondRefund` so the
+    /// bounty still reopens and its contributors can still cancel and recover their funds.
     function expireSubmission() external nonReentrant {
         require(_status == BountyStatus.Submitted, "submission not active");
         require(block.timestamp > verificationExpiresAt, "submission not expired");
@@ -521,8 +531,22 @@ contract AgentBountyV2 is IAgentBountyV2 {
         uint256 refundedBond = activeClaimBond;
         activeClaimBond = 0;
         _resetClaim();
-        if (refundedBond > 0) settlementToken.safeTransfer(expiredSolver, refundedBond);
+        if (refundedBond > 0 && !_tryTransfer(expiredSolver, refundedBond)) {
+            pendingBondRefunds[expiredSolver] += refundedBond;
+            pendingBondRefundTotal += refundedBond;
+            emit ClaimBondRefundDeferred(bountyId, round, expiredSolver, refundedBond);
+        }
         emit SubmissionExpired(bountyId, round, expiredSolver, refundedBond);
+    }
+
+    /// @notice Anyone may retry a deferred bond refund. The destination is always the solver.
+    function withdrawBondRefund(address solver_) external nonReentrant returns (uint256 amount) {
+        amount = pendingBondRefunds[solver_];
+        require(amount > 0, "no bond refund");
+        pendingBondRefunds[solver_] = 0;
+        pendingBondRefundTotal -= amount;
+        settlementToken.safeTransfer(solver_, amount);
+        emit ClaimBondRefundWithdrawn(bountyId, solver_, amount);
     }
 
     function cancel() external nonReentrant {
@@ -551,6 +575,11 @@ contract AgentBountyV2 is IAgentBountyV2 {
         uint256 amount = principal + bonus;
         settlementToken.safeTransfer(msg.sender, amount);
         emit RefundWithdrawn(bountyId, msg.sender, principal, bonus, amount);
+    }
+
+    /// @notice The only EIP-3009 nonce `claimWithAuthorization` accepts for this solver and round.
+    function claimAuthorizationNonce(address solver_, uint64 round_) public view returns (bytes32) {
+        return keccak256(abi.encode(CLAIM_BOND_NONCE_TAG, address(this), solver_, round_));
     }
 
     function claimDigest(address solver_, uint64 round_, uint256 deadline) public view returns (bytes32) {
@@ -643,7 +672,7 @@ contract AgentBountyV2 is IAgentBountyV2 {
     }
 
     function _requiredTokenBalance() private view returns (uint256) {
-        return fundedAmount + timeoutBondPool + activeClaimBond + platformFeeAccrued;
+        return fundedAmount + timeoutBondPool + activeClaimBond + platformFeeAccrued + pendingBondRefundTotal;
     }
 
     function _activateClaim(address solver_) private {
@@ -723,14 +752,18 @@ contract AgentBountyV2 is IAgentBountyV2 {
     function _payPlatformFee() private {
         uint256 fee = platformFeeAccrued;
         if (fee == 0) return;
-        (bool ok, bytes memory result) =
-            settlementToken.call(abi.encodeCall(IERC20BountyToken.transfer, (platformFeeRecipient, fee)));
-        if (ok && (result.length == 0 || (result.length == 32 && abi.decode(result, (bool))))) {
+        if (_tryTransfer(platformFeeRecipient, fee)) {
             platformFeeAccrued = 0;
             emit PlatformFeePaid(bountyId, round, platformFeeRecipient, fee);
         } else {
             emit PlatformFeeDeferred(bountyId, round, platformFeeRecipient, fee);
         }
+    }
+
+    function _tryTransfer(address to, uint256 amount) private returns (bool) {
+        (bool ok, bytes memory result) =
+            settlementToken.call(abi.encodeCall(IERC20BountyToken.transfer, (to, amount)));
+        return ok && (result.length == 0 || (result.length == 32 && abi.decode(result, (bool))));
     }
 
     function _resetClaim() private {
@@ -748,21 +781,23 @@ contract AgentBountyV2 is IAgentBountyV2 {
         return keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
     }
 
+    /// @dev ECDSA first, then ERC-1271. An EIP-7702 delegated EOA has code, but its key still
+    /// signs, so its plain signature must not depend on the delegate implementing ERC-1271.
     function _isValidSignatureNow(address signer, bytes32 digest, bytes memory signature) private view returns (bool) {
-        if (signer.code.length > 0) {
-            bytes memory callData = abi.encodeCall(IERC1271.isValidSignature, (digest, signature));
-            bool ok;
-            bytes4 result;
-            uint256 gasLimit = ERC1271_GAS_LIMIT;
-            assembly ("memory-safe") {
-                let output := mload(0x40)
-                mstore(output, 0)
-                ok := staticcall(gasLimit, signer, add(callData, 0x20), mload(callData), output, 0x20)
-                result := mload(output)
-            }
-            return ok && result == ERC1271_MAGIC_VALUE;
+        if (signer == address(0)) return false;
+        if (_recover(digest, signature) == signer) return true;
+        if (signer.code.length == 0) return false;
+        bytes memory callData = abi.encodeCall(IERC1271.isValidSignature, (digest, signature));
+        bool ok;
+        bytes4 result;
+        uint256 gasLimit = ERC1271_GAS_LIMIT;
+        assembly ("memory-safe") {
+            let output := mload(0x40)
+            mstore(output, 0)
+            ok := staticcall(gasLimit, signer, add(callData, 0x20), mload(callData), output, 0x20)
+            result := mload(output)
         }
-        return _recover(digest, signature) == signer;
+        return ok && result == ERC1271_MAGIC_VALUE;
     }
 
     function _recover(bytes32 digest, bytes memory signature) private pure returns (address recovered) {

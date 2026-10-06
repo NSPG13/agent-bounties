@@ -6585,6 +6585,52 @@ pub(crate) fn eip3009_typed_data(
     valid_before: u64,
     nonce: &str,
 ) -> Eip3009AuthorizationTypedData {
+    eip3009_authorization_typed_data(
+        network,
+        "TransferWithAuthorization",
+        from,
+        to,
+        value,
+        valid_after,
+        valid_before,
+        nonce,
+    )
+}
+
+/// Circle USDC `ReceiveWithAuthorization`: only `to` may execute it, so a published signature
+/// cannot be submitted to the token directly. Autonomous-v2 contracts accept only this type.
+pub(crate) fn eip3009_receive_typed_data(
+    network: &BaseNetworkDescriptor,
+    from: &str,
+    to: &str,
+    value: u128,
+    valid_after: u64,
+    valid_before: u64,
+    nonce: &str,
+) -> Eip3009AuthorizationTypedData {
+    eip3009_authorization_typed_data(
+        network,
+        "ReceiveWithAuthorization",
+        from,
+        to,
+        value,
+        valid_after,
+        valid_before,
+        nonce,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn eip3009_authorization_typed_data(
+    network: &BaseNetworkDescriptor,
+    primary_type: &str,
+    from: &str,
+    to: &str,
+    value: u128,
+    valid_after: u64,
+    valid_before: u64,
+    nonce: &str,
+) -> Eip3009AuthorizationTypedData {
     let mut types = BTreeMap::new();
     types.insert(
         "EIP712Domain".to_string(),
@@ -6596,7 +6642,7 @@ pub(crate) fn eip3009_typed_data(
         ],
     );
     types.insert(
-        "TransferWithAuthorization".to_string(),
+        primary_type.to_string(),
         vec![
             eip712_field("from", "address"),
             eip712_field("to", "address"),
@@ -6618,7 +6664,7 @@ pub(crate) fn eip3009_typed_data(
             chain_id: network.chain_id,
             verifying_contract: network.native_usdc_token_address.clone(),
         },
-        primary_type: "TransferWithAuthorization".to_string(),
+        primary_type: primary_type.to_string(),
         message: Eip3009AuthorizationMessage {
             from: from.to_string(),
             to: to.to_string(),

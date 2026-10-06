@@ -222,15 +222,17 @@ impl AutonomousBountyTxPlanner {
         let mut wallet_calls = Vec::with_capacity(2);
         wallet_calls.extend(approve.clone());
         wallet_calls.push(create_bounty.clone());
+        // Payable to the factory with the bounty id as nonce: only the factory can execute it,
+        // and only for the bounty these exact terms produce.
         let eip3009_authorization = (initial_funding > 0).then(|| {
-            eip3009_typed_data(
+            eip3009_receive_typed_data(
                 &network,
                 &creator,
-                &predicted_bounty_contract,
+                &self.factory_contract,
                 initial_funding,
                 0,
                 base.funding_deadline,
-                &base.creation_nonce,
+                &word_hex(bounty_id),
             )
         });
         Ok(AutonomousBountyV2CreationPlan {
@@ -266,6 +268,7 @@ impl AutonomousBountyTxPlanner {
         let params = create.param_words()?;
         let verifiers = normalized_verifiers(&create.base)?;
         let creation_nonce = parse_bytes32(&create.base.creation_nonce)?;
+        let bounty_id = parse_bytes32(&creation.plan.bounty_id)?;
         let v = normalized_signature_v(signature.v)?;
         let relay_transaction = EvmTransactionIntent {
             from: relayer.map(normalize_address).transpose()?,
@@ -277,6 +280,7 @@ impl AutonomousBountyTxPlanner {
                 &verifiers,
                 initial_funding,
                 creation_nonce,
+                bounty_id,
                 create.base.funding_deadline,
                 v,
                 parse_bytes32(&signature.r)?,
@@ -292,6 +296,132 @@ impl AutonomousBountyTxPlanner {
             relay_transaction,
             evidence_boundary: "A valid authorization and relayed transaction hash are not funding evidence. Recognize funding only after the canonical v2 factory creation event and matching FundingAdded log are confirmed.".to_string(),
         })
+    }
+
+    /// Plans a v2 contribution. The optional authorization is a `ReceiveWithAuthorization`
+    /// payable to the bounty, which only the bounty can execute.
+    pub fn plan_v2_contribution(
+        &self,
+        network: &str,
+        contribution: &AutonomousBountyContribution,
+    ) -> Result<AutonomousBountyContributionPlan, ChainBaseError> {
+        let unsigned = AutonomousBountyContribution {
+            authorization_nonce: None,
+            authorization_valid_before: None,
+            ..contribution.clone()
+        };
+        let mut plan = self.plan_contribution(network, &unsigned)?;
+        plan.protocol_version = AUTONOMOUS_V2_PROTOCOL_VERSION.to_string();
+        plan.eip3009_authorization = match (
+            contribution.authorization_nonce.as_deref(),
+            contribution.authorization_valid_before,
+        ) {
+            (None, None) => None,
+            (Some(nonce), Some(valid_before)) if valid_before > 0 => {
+                Some(eip3009_receive_typed_data(
+                    &plan.network,
+                    &normalize_address(&contribution.contributor)?,
+                    &normalize_address(&contribution.bounty_contract)?,
+                    autonomous_money_to_uint256(&contribution.amount, false)?,
+                    0,
+                    valid_before,
+                    &word_hex(parse_bytes32(nonce)?),
+                ))
+            }
+            _ => {
+                return Err(ChainBaseError::InvalidVerificationConfiguration(
+                    "contribution authorization requires both a bytes32 nonce and positive valid-before timestamp"
+                        .to_string(),
+                ))
+            }
+        };
+        Ok(plan)
+    }
+
+    pub fn plan_v2_authorized_contribution(
+        &self,
+        network: &str,
+        contribution: &AutonomousBountyContribution,
+        signature: &AutonomousBountyAuthorizationSignature,
+        relayer: Option<&str>,
+    ) -> Result<AutonomousBountyAuthorizedContributionPlan, ChainBaseError> {
+        let mut plan =
+            self.plan_authorized_contribution(network, contribution, signature, relayer)?;
+        plan.protocol_version = AUTONOMOUS_V2_PROTOCOL_VERSION.to_string();
+        Ok(plan)
+    }
+
+    /// Plans a v2 claim. The optional bond authorization is a `ReceiveWithAuthorization` payable
+    /// to the bounty whose nonce is `claimAuthorizationNonce(solver, claim_round)`, so it can open
+    /// only that round. `claim_round` is the bounty's current `round()` plus one.
+    pub fn plan_v2_claim(
+        &self,
+        network: &str,
+        bounty_contract: &str,
+        solver: &str,
+        claim_bond: u128,
+        claim_round: Option<u64>,
+        authorization_valid_before: Option<u64>,
+    ) -> Result<AutonomousBountyClaimPlan, ChainBaseError> {
+        let mut plan = self.plan_claim(network, bounty_contract, solver, claim_bond, None, None)?;
+        plan.protocol_version = AUTONOMOUS_V2_PROTOCOL_VERSION.to_string();
+        plan.eip3009_authorization = match (claim_round, authorization_valid_before) {
+            (None, None) => None,
+            (Some(round), Some(valid_before)) if claim_bond > 0 && round > 0 && valid_before > 0 => {
+                Some(eip3009_receive_typed_data(
+                    &plan.network,
+                    &plan.solver,
+                    &plan.bounty_contract,
+                    claim_bond,
+                    0,
+                    valid_before,
+                    &autonomous_v2_claim_authorization_nonce(
+                        &plan.bounty_contract,
+                        &plan.solver,
+                        round,
+                    )?,
+                ))
+            }
+            _ => {
+                return Err(ChainBaseError::InvalidVerificationConfiguration(
+                    "v2 claim authorization requires a positive bond, claim round, and valid-before timestamp"
+                        .to_string(),
+                ))
+            }
+        };
+        Ok(plan)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn plan_v2_authorized_claim(
+        &self,
+        network: &str,
+        bounty_contract: &str,
+        solver: &str,
+        claim_bond: u128,
+        claim_round: u64,
+        authorization_valid_before: u64,
+        signature: &AutonomousBountyAuthorizationSignature,
+        relayer: Option<&str>,
+    ) -> Result<AutonomousBountyAuthorizedClaimPlan, ChainBaseError> {
+        if claim_round == 0 {
+            return Err(ChainBaseError::InvalidVerificationConfiguration(
+                "v2 claim round starts at one".to_string(),
+            ));
+        }
+        let nonce = autonomous_v2_claim_authorization_nonce(bounty_contract, solver, claim_round)?;
+        let mut plan = self.plan_authorized_claim(
+            network,
+            bounty_contract,
+            solver,
+            claim_bond,
+            &nonce,
+            authorization_valid_before,
+            signature,
+            relayer,
+        )?;
+        plan.protocol_version = AUTONOMOUS_V2_PROTOCOL_VERSION.to_string();
+        Ok(plan)
     }
 
     /// v2 bounties sign submissions under EIP-712 domain version "2".
@@ -469,10 +599,23 @@ pub enum AutonomousV2PlanAction {
         #[serde(default)]
         relayer: Option<String>,
     },
+    Contribution {
+        contribution: AutonomousBountyContribution,
+    },
+    AuthorizedContribution {
+        contribution: AutonomousBountyContribution,
+        signature: AutonomousBountyAuthorizationSignature,
+        #[serde(default)]
+        relayer: Option<String>,
+    },
+    /// `claim_round` is the bounty's `round()` plus one. A supplied `authorization_nonce` must
+    /// equal the round-bound nonce the contract requires.
     Claim {
         bounty_contract: String,
         solver: String,
         claim_bond: Money,
+        #[serde(default)]
+        claim_round: Option<u64>,
         #[serde(default)]
         authorization_nonce: Option<String>,
         #[serde(default)]
@@ -482,7 +625,9 @@ pub enum AutonomousV2PlanAction {
         bounty_contract: String,
         solver: String,
         claim_bond: Money,
-        authorization_nonce: String,
+        claim_round: u64,
+        #[serde(default)]
+        authorization_nonce: Option<String>,
         authorization_valid_before: u64,
         signature: AutonomousBountyAuthorizationSignature,
         #[serde(default)]
@@ -551,45 +696,66 @@ pub fn plan_autonomous_v2_action(
             signature,
             relayer.as_deref(),
         )?),
+        AutonomousV2PlanAction::Contribution { contribution } => {
+            to_plan_value(planner.plan_v2_contribution(network, contribution)?)
+        }
+        AutonomousV2PlanAction::AuthorizedContribution {
+            contribution,
+            signature,
+            relayer,
+        } => to_plan_value(planner.plan_v2_authorized_contribution(
+            network,
+            contribution,
+            signature,
+            relayer.as_deref(),
+        )?),
         AutonomousV2PlanAction::Claim {
             bounty_contract,
             solver,
             claim_bond,
+            claim_round,
             authorization_nonce,
             authorization_valid_before,
         } => {
-            let mut plan = planner.plan_claim(
+            if let (Some(nonce), Some(round)) = (authorization_nonce, claim_round) {
+                require_v2_claim_nonce(bounty_contract, solver, *round, nonce)?;
+            } else if authorization_nonce.is_some() {
+                return Err(ChainBaseError::InvalidVerificationConfiguration(
+                    "v2 claim authorization nonce is derived from claim_round".to_string(),
+                ));
+            }
+            to_plan_value(planner.plan_v2_claim(
                 network,
                 bounty_contract,
                 solver,
                 autonomous_money_to_uint256(claim_bond, true)?,
-                authorization_nonce.as_deref(),
+                *claim_round,
                 *authorization_valid_before,
-            )?;
-            plan.protocol_version = AUTONOMOUS_V2_PROTOCOL_VERSION.to_string();
-            to_plan_value(plan)
+            )?)
         }
         AutonomousV2PlanAction::AuthorizedClaim {
             bounty_contract,
             solver,
             claim_bond,
+            claim_round,
             authorization_nonce,
             authorization_valid_before,
             signature,
             relayer,
         } => {
-            let mut plan = planner.plan_authorized_claim(
+            if let Some(nonce) = authorization_nonce {
+                require_v2_claim_nonce(bounty_contract, solver, *claim_round, nonce)?;
+            }
+            to_plan_value(planner.plan_v2_authorized_claim(
                 network,
                 bounty_contract,
                 solver,
                 autonomous_money_to_uint256(claim_bond, false)?,
-                authorization_nonce,
+                *claim_round,
                 *authorization_valid_before,
                 signature,
                 relayer.as_deref(),
-            )?;
-            plan.protocol_version = AUTONOMOUS_V2_PROTOCOL_VERSION.to_string();
-            to_plan_value(plan)
+            )?)
         }
         AutonomousV2PlanAction::SubmissionAuthorization { submission } => {
             to_plan_value(planner.plan_v2_submission_authorization(network, submission)?)
@@ -624,6 +790,42 @@ pub fn plan_autonomous_v2_action(
         AutonomousV2PlanAction::PlatformFeeForward { bounty_contract } => {
             to_plan_value(planner.plan_v2_platform_fee_forward(bounty_contract)?)
         }
+    }
+}
+
+/// Domain tag of `AgentBountyV2.claimAuthorizationNonce`.
+pub const AUTONOMOUS_V2_CLAIM_BOND_NONCE_TAG: &str = "agent-bounties/autonomous-v2/claim-bond";
+
+/// `keccak256(abi.encode(keccak256(tag), bounty, solver, uint64 round))`: the only EIP-3009 nonce
+/// `AgentBountyV2.claimWithAuthorization` accepts for that solver and claim round.
+pub fn autonomous_v2_claim_authorization_nonce(
+    bounty_contract: &str,
+    solver: &str,
+    claim_round: u64,
+) -> Result<String, ChainBaseError> {
+    let tag: [u8; 32] = Keccak256::digest(AUTONOMOUS_V2_CLAIM_BOND_NONCE_TAG.as_bytes()).into();
+    let mut encoded = Vec::with_capacity(4 * 32);
+    encoded.extend_from_slice(&tag);
+    encoded.extend_from_slice(&encode_address(bounty_contract)?);
+    encoded.extend_from_slice(&encode_address(solver)?);
+    encoded.extend_from_slice(&encode_uint256(claim_round.into())?);
+    Ok(word_hex(Keccak256::digest(encoded).into()))
+}
+
+fn require_v2_claim_nonce(
+    bounty_contract: &str,
+    solver: &str,
+    claim_round: u64,
+    nonce: &str,
+) -> Result<(), ChainBaseError> {
+    let expected = autonomous_v2_claim_authorization_nonce(bounty_contract, solver, claim_round)?;
+    if word_hex(parse_bytes32(nonce)?) == expected {
+        Ok(())
+    } else {
+        Err(ChainBaseError::InvalidVerificationConfiguration(
+            "v2 claim authorization nonce must equal claimAuthorizationNonce(solver, claim_round)"
+                .to_string(),
+        ))
     }
 }
 
@@ -668,6 +870,7 @@ fn encode_v2_authorized_create_call(
     verifiers: &[[u8; 32]],
     initial_funding: u128,
     creation_nonce: [u8; 32],
+    bounty_id: [u8; 32],
     valid_before: u64,
     v: u8,
     r: [u8; 32],
@@ -685,7 +888,7 @@ fn encode_v2_authorized_create_call(
     bytes.extend_from_slice(&creation_nonce);
     bytes.extend_from_slice(&encode_uint256(0)?);
     bytes.extend_from_slice(&encode_uint256(valid_before.into())?);
-    bytes.extend_from_slice(&creation_nonce);
+    bytes.extend_from_slice(&bounty_id);
     bytes.extend_from_slice(&encode_uint256(v.into())?);
     bytes.extend_from_slice(&r);
     bytes.extend_from_slice(&s);
@@ -1340,7 +1543,7 @@ mod tests {
     fn planned_creation_matches_solidity_calldata_bounty_id_and_address() {
         let fixture = fixture();
         for label in [
-            "paid_after_reject",
+            "fee_deferred_then_forwarded",
             "contractor_gated",
             "cancelled_and_refunded",
         ] {
@@ -1397,7 +1600,7 @@ mod tests {
 
     #[test]
     fn planner_rejects_funding_above_the_fee_inclusive_target_and_half_gates() {
-        let mut create = reconstructed_create("paid_after_reject");
+        let mut create = reconstructed_create("fee_deferred_then_forwarded");
         create.base.initial_funding.amount = 1_175_001;
         assert!(planner()
             .plan_v2_creation("base-sepolia", &create, &factory_fee())
@@ -1670,6 +1873,99 @@ mod tests {
             item.platform_fee.map(|fee| fee.status),
             Some("paid".to_string())
         );
+    }
+
+    #[test]
+    fn v2_authorizations_are_receive_only_and_bound_to_their_target() {
+        let create = reconstructed_create("contractor_gated");
+        let planned = planner()
+            .plan_v2_creation("base-sepolia", &create, &factory_fee())
+            .unwrap();
+        let funding = planned.plan.eip3009_authorization.unwrap();
+        assert_eq!(funding.primary_type, "ReceiveWithAuthorization");
+        assert!(funding.types.contains_key("ReceiveWithAuthorization"));
+        assert!(!funding.types.contains_key("TransferWithAuthorization"));
+        assert_eq!(funding.message.to, fixture()["factory"].as_str().unwrap());
+        assert_eq!(funding.message.nonce, planned.plan.bounty_id);
+
+        let bounty = bounty_address("contractor_gated");
+        let solver = "0x1111111111111111111111111111111111111111";
+        let claim = planner()
+            .plan_v2_claim(
+                "base-sepolia",
+                &bounty,
+                solver,
+                100_000,
+                Some(2),
+                Some(1_900_000_000),
+            )
+            .unwrap();
+        let bond = claim.eip3009_authorization.unwrap();
+        assert_eq!(bond.primary_type, "ReceiveWithAuthorization");
+        assert_eq!(bond.message.to, bounty);
+        assert_eq!(
+            bond.message.nonce,
+            autonomous_v2_claim_authorization_nonce(&bounty, solver, 2).unwrap()
+        );
+        assert_ne!(
+            autonomous_v2_claim_authorization_nonce(&bounty, solver, 1).unwrap(),
+            autonomous_v2_claim_authorization_nonce(&bounty, solver, 2).unwrap(),
+            "each round needs its own authorization"
+        );
+        assert!(planner()
+            .plan_v2_claim(
+                "base-sepolia",
+                &bounty,
+                solver,
+                100_000,
+                None,
+                Some(1_900_000_000)
+            )
+            .is_err());
+
+        let contribution = AutonomousBountyContribution {
+            bounty_contract: bounty.clone(),
+            contributor: solver.to_string(),
+            amount: Money {
+                amount: 1_000,
+                currency: "usdc".to_string(),
+            },
+            authorization_nonce: Some(format!("0x{}", "ab".repeat(32))),
+            authorization_valid_before: Some(1_900_000_000),
+        };
+        let fund = planner()
+            .plan_v2_contribution("base-sepolia", &contribution)
+            .unwrap();
+        assert_eq!(fund.protocol_version, AUTONOMOUS_V2_PROTOCOL_VERSION);
+        let fund = fund.eip3009_authorization.unwrap();
+        assert_eq!(fund.primary_type, "ReceiveWithAuthorization");
+        assert_eq!(fund.message.to, bounty);
+    }
+
+    #[test]
+    fn v2_claim_plans_refuse_a_nonce_that_is_not_round_bound() {
+        let fixture = fixture();
+        let step = &fixture["gasless_loop"]["steps"][1];
+        let request = plan_request(&fixture, &step["relay"]);
+        assert!(plan_autonomous_v2_action(&request).is_ok());
+        let with = |nonce: Option<String>, round: u64| {
+            let mut changed = request.clone();
+            match &mut changed.action {
+                AutonomousV2PlanAction::AuthorizedClaim {
+                    authorization_nonce,
+                    claim_round,
+                    ..
+                } => {
+                    *authorization_nonce = nonce;
+                    *claim_round = round;
+                }
+                _ => panic!("step two relays an authorized claim"),
+            }
+            plan_autonomous_v2_action(&changed)
+        };
+        assert!(with(Some(format!("0x{}", "cd".repeat(32))), 1).is_err());
+        assert!(with(None, 0).is_err());
+        assert!(with(None, 1).is_ok());
     }
 
     #[test]

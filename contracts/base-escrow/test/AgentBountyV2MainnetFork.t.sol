@@ -11,6 +11,7 @@ interface V2ForkVm {
     function addr(uint256 privateKey) external returns (address keyAddr);
     function sign(uint256 privateKey, bytes32 digest) external returns (uint8 v, bytes32 r, bytes32 s);
     function skip(bool skipTest) external;
+    function warp(uint256 timestamp) external;
 }
 
 interface V2ForkUsdc {
@@ -22,6 +23,28 @@ interface V2ForkUsdc {
     function blacklist(address account) external;
     function unBlacklist(address account) external;
     function isBlacklisted(address account) external view returns (bool);
+    function transferWithAuthorization(
+        address from,
+        address to,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external;
+    function receiveWithAuthorization(
+        address from,
+        address to,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external;
 }
 
 contract V2ForkVerdictModule is IAgentBountyVerifier {
@@ -56,8 +79,10 @@ contract AgentBountyV2MainnetForkTest {
     uint256 private constant FEE = 75_000;
     uint256 private constant TARGET = 1_175_000;
 
-    bytes32 private constant TRANSFER_WITH_AUTHORIZATION_TYPEHASH = keccak256(
-        "TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
+    address private constant ATTACKER = 0xBAd0000000000000000000000000000000000Bad;
+
+    bytes32 private constant RECEIVE_WITH_AUTHORIZATION_TYPEHASH = keccak256(
+        "ReceiveWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
     );
 
     V2ForkUsdc private usdc;
@@ -140,6 +165,154 @@ contract AgentBountyV2MainnetForkTest {
         require(usdc.balanceOf(address(bounty)) == 0, "escrow retained USDC");
     }
 
+    /// @dev Regression: a published bond authorization cannot move USDC except through the bounty,
+    /// and cannot open a round it was not signed for.
+    function testRealUsdcPublishedClaimAuthorizationCannotStrandTheBond() public {
+        if (!_selectFork()) return;
+        factory = new AgentBountyFactoryV2(USDC, FEE_BPS, OPERATOR_WALLET);
+        AgentBountyV2 bounty = _createFromOperator(keccak256("published-claim"));
+        address solver = vm.addr(SOLVER_KEY);
+        vm.prank(OPERATOR_WALLET);
+        require(usdc.transfer(solver, VERIFIER_REWARD), "solver bond transfer");
+        AgentBountyFactoryV2.FundingAuthorization memory roundOne = _authorize(
+            SOLVER_KEY, solver, address(bounty), VERIFIER_REWARD, bounty.claimAuthorizationNonce(solver, 1)
+        );
+
+        address winner = address(0x3133);
+        vm.prank(OPERATOR_WALLET);
+        require(usdc.transfer(winner, VERIFIER_REWARD), "winner bond transfer");
+        vm.prank(winner);
+        usdc.approve(address(bounty), VERIFIER_REWARD);
+        vm.prank(winner);
+        bounty.claim();
+
+        vm.prank(ATTACKER);
+        (bool asTransfer,) = USDC.call(
+            abi.encodeCall(
+                V2ForkUsdc.transferWithAuthorization,
+                (solver, address(bounty), VERIFIER_REWARD, 0, roundOne.validBefore, roundOne.nonce, roundOne.v, roundOne.r, roundOne.s)
+            )
+        );
+        require(!asTransfer, "receive authorization executed as a transfer");
+        vm.prank(ATTACKER);
+        (bool asReceive,) = USDC.call(
+            abi.encodeCall(
+                V2ForkUsdc.receiveWithAuthorization,
+                (solver, address(bounty), VERIFIER_REWARD, 0, roundOne.validBefore, roundOne.nonce, roundOne.v, roundOne.r, roundOne.s)
+            )
+        );
+        require(!asReceive, "third party executed a receive authorization");
+
+        vm.warp(block.timestamp + 1 days + 1);
+        bounty.expireClaim();
+        vm.prank(ATTACKER);
+        (bool stale,) = address(bounty).call(
+            abi.encodeCall(
+                AgentBountyV2.claimWithAuthorization,
+                (solver, 0, roundOne.validBefore, roundOne.nonce, roundOne.v, roundOne.r, roundOne.s)
+            )
+        );
+        require(!stale, "round-one authorization opened round two");
+        require(usdc.balanceOf(solver) == VERIFIER_REWARD, "solver bond moved");
+    }
+
+    /// @dev Regression: a published creation authorization cannot strand funds or fund other terms.
+    function testRealUsdcPublishedCreateAuthorizationFundsOnlyItsBounty() public {
+        if (!_selectFork()) return;
+        factory = new AgentBountyFactoryV2(USDC, FEE_BPS, OPERATOR_WALLET);
+        address poster = vm.addr(POSTER_KEY);
+        vm.prank(OPERATOR_WALLET);
+        require(usdc.transfer(poster, TARGET), "poster funding transfer");
+        AgentBountyFactoryV2.CreateBountyParams memory params = _params();
+        bytes32 creationNonce = keccak256("published-create");
+        bytes32 bountyId = factory.bountyIdFor(poster, params, new address[](0), creationNonce);
+        AgentBountyFactoryV2.FundingAuthorization memory authorization =
+            _authorize(POSTER_KEY, poster, address(factory), TARGET, bountyId);
+
+        vm.prank(ATTACKER);
+        (bool asTransfer,) = USDC.call(
+            abi.encodeCall(
+                V2ForkUsdc.transferWithAuthorization,
+                (poster, address(factory), TARGET, 0, authorization.validBefore, bountyId, authorization.v, authorization.r, authorization.s)
+            )
+        );
+        require(!asTransfer, "receive authorization executed as a transfer");
+        vm.prank(ATTACKER);
+        (bool asReceive,) = USDC.call(
+            abi.encodeCall(
+                V2ForkUsdc.receiveWithAuthorization,
+                (poster, address(factory), TARGET, 0, authorization.validBefore, bountyId, authorization.v, authorization.r, authorization.s)
+            )
+        );
+        require(!asReceive, "third party executed a receive authorization");
+        AgentBountyFactoryV2.CreateBountyParams memory altered = _params();
+        altered.verifierRewardRecipient = ATTACKER;
+        vm.prank(ATTACKER);
+        (bool rebound,) = address(factory).call(
+            abi.encodeCall(
+                AgentBountyFactoryV2.createBountyWithAuthorization,
+                (poster, altered, new address[](0), TARGET, creationNonce, authorization)
+            )
+        );
+        require(!rebound, "authorization funded different terms");
+        require(usdc.balanceOf(poster) == TARGET, "poster funds moved");
+
+        vm.prank(RELAYER);
+        (address bountyAddress,) = factory.createBountyWithAuthorization(
+            poster, params, new address[](0), TARGET, creationNonce, authorization
+        );
+        require(AgentBountyV2(bountyAddress).fundedAmount() == TARGET, "named bounty not funded");
+    }
+
+    /// @dev Regression: a Circle-blacklisted solver cannot lock contributors' funds.
+    function testRealUsdcBlacklistedSolverCannotLockTheEscrow() public {
+        if (!_selectFork()) return;
+        factory = new AgentBountyFactoryV2(USDC, FEE_BPS, OPERATOR_WALLET);
+        uint256 operatorBefore = usdc.balanceOf(OPERATOR_WALLET);
+        AgentBountyV2 bounty = _createFromOperator(keccak256("blacklisted-solver"));
+        address solver = vm.addr(SOLVER_KEY);
+        vm.prank(OPERATOR_WALLET);
+        require(usdc.transfer(solver, VERIFIER_REWARD), "solver bond transfer");
+        vm.prank(solver);
+        usdc.approve(address(bounty), VERIFIER_REWARD);
+        vm.prank(solver);
+        bounty.claim();
+        vm.prank(solver);
+        bounty.submit(keccak256("v2-fork-artifact"), keccak256("v2-fork-evidence"));
+
+        address blacklister = usdc.blacklister();
+        vm.prank(blacklister);
+        usdc.blacklist(solver);
+        vm.prank(RELAYER);
+        (bool settled,) = address(bounty).call(abi.encodeCall(AgentBountyV2.verifyAndSettle, (hex"01")));
+        require(!settled, "settled without paying the solver");
+
+        vm.warp(block.timestamp + 1 days + 1);
+        vm.prank(RELAYER);
+        bounty.expireSubmission();
+        require(bounty.pendingBondRefunds(solver) == VERIFIER_REWARD, "bond not held");
+        vm.prank(OPERATOR_WALLET);
+        bounty.cancel();
+        vm.prank(OPERATOR_WALLET);
+        bounty.withdrawRefund();
+        require(usdc.balanceOf(OPERATOR_WALLET) == operatorBefore - VERIFIER_REWARD, "contributor not refunded");
+
+        vm.prank(blacklister);
+        usdc.unBlacklist(solver);
+        vm.prank(RELAYER);
+        require(bounty.withdrawBondRefund(solver) == VERIFIER_REWARD, "bond refund amount");
+        require(usdc.balanceOf(solver) == VERIFIER_REWARD, "solver refunded after unblacklist");
+        require(usdc.balanceOf(address(bounty)) == 0, "escrow retained USDC");
+    }
+
+    function _createFromOperator(bytes32 creationNonce) private returns (AgentBountyV2) {
+        vm.prank(OPERATOR_WALLET);
+        usdc.approve(address(factory), TARGET);
+        vm.prank(OPERATOR_WALLET);
+        (address bountyAddress,) = factory.createBounty(_params(), new address[](0), TARGET, creationNonce);
+        return AgentBountyV2(bountyAddress);
+    }
+
     function _selectFork() private returns (bool) {
         if (!vm.envOr("RUN_MAINNET_FORK", false)) {
             vm.skip(true);
@@ -157,19 +330,22 @@ contract AgentBountyV2MainnetForkTest {
         AgentBountyFactoryV2.CreateBountyParams memory params = _params();
         bytes32 creationNonce = keccak256("v2-fork-create");
         address predicted = factory.predictBountyAddress(poster, params, new address[](0), creationNonce);
+        bytes32 bountyId = factory.bountyIdFor(poster, params, new address[](0), creationNonce);
         AgentBountyFactoryV2.FundingAuthorization memory authorization =
-            _authorize(POSTER_KEY, poster, predicted, TARGET, keccak256("v2-fork-create-auth"));
+            _authorize(POSTER_KEY, poster, address(factory), TARGET, bountyId);
         vm.prank(RELAYER);
         (address bountyAddress,) = factory.createBountyWithAuthorization(
             poster, params, new address[](0), TARGET, creationNonce, authorization
         );
         require(bountyAddress == predicted, "predicted address mismatch");
+        require(usdc.balanceOf(address(factory)) == 0, "factory retained USDC");
         return AgentBountyV2(bountyAddress);
     }
 
     function _claimWithRealAuthorization(AgentBountyV2 bounty, address solver) private {
-        AgentBountyFactoryV2.FundingAuthorization memory bond =
-            _authorize(SOLVER_KEY, solver, address(bounty), VERIFIER_REWARD, keccak256("v2-fork-bond-auth"));
+        AgentBountyFactoryV2.FundingAuthorization memory bond = _authorize(
+            SOLVER_KEY, solver, address(bounty), VERIFIER_REWARD, bounty.claimAuthorizationNonce(solver, bounty.round() + 1)
+        );
         vm.prank(RELAYER);
         bounty.claimWithAuthorization(solver, bond.validAfter, bond.validBefore, bond.nonce, bond.v, bond.r, bond.s);
         require(bounty.solver() == solver, "claim not recorded");
@@ -184,7 +360,7 @@ contract AgentBountyV2MainnetForkTest {
         authorization.nonce = nonce;
         bytes32 structHash = keccak256(
             abi.encode(
-                TRANSFER_WITH_AUTHORIZATION_TYPEHASH,
+                RECEIVE_WITH_AUTHORIZATION_TYPEHASH,
                 from,
                 to,
                 value,
