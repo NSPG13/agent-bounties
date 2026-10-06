@@ -126,7 +126,11 @@ They only sign planner typed data and never hold ETH. The shared keeper deploys,
 funds them with test USDC, and relays every transaction.
 
 **Pass condition.** The run passes only when every step emits its canonical
-events and the fee recipient's USDC balance rises by exactly the platform fee.
+events and the confirmed settlement receipt carries a canonical USDC `Transfer`
+of exactly the platform fee from the bounty to the fee recipient. Evidence comes
+from receipts, not `latest` balances, because public RPC endpoints are
+load-balanced and a read can reach a node that is behind. Reads after writes are
+retried, and the keeper nonce is tracked locally.
 The evidence JSON lists the factory, its deployment block, each transaction,
 and the hosted settings (`BASE_SEPOLIA_BOUNTY_V2_*`, and
 `BASE_INDEXER_PROTOCOL=autonomous-v2` with `BASE_INDEXER_START_BLOCK`).
