@@ -993,6 +993,7 @@ pub(crate) fn project_autonomous_economics(
                     AutonomousBountyEventKind::PlatformFeePaid
                         | AutonomousBountyEventKind::PlatformFeeDeferred
                         | AutonomousBountyEventKind::PlatformFeeWithdrawn
+                        | AutonomousBountyEventKind::SubmissionBondForfeited
                 )
             }))
     {
@@ -1286,6 +1287,31 @@ mod tests {
         }
     }
 
+    #[test]
+    fn unproven_module_submission_moves_its_bond_into_the_timeout_pool() {
+        let unproven = item("unproven_module_forfeited");
+        assert_eq!(unproven.status, "claimable");
+        assert_eq!(unproven.timeout_bond_pool, "100000");
+        assert_eq!(unproven.funded_amount, unproven.target_amount);
+        let expired = unproven
+            .events
+            .iter()
+            .find(|event| event.kind == AutonomousBountyEventKind::SubmissionExpired)
+            .unwrap();
+        assert_eq!(expired.data["claim_bond_refunded"], 0);
+        let forfeited = unproven
+            .events
+            .iter()
+            .find(|event| event.kind == AutonomousBountyEventKind::SubmissionBondForfeited)
+            .unwrap();
+        assert_eq!(forfeited.data["claim_bond_forfeited"], 100_000);
+        assert_eq!(forfeited.data["round"], expired.data["round"]);
+        assert!(
+            forfeited.log_index < expired.log_index,
+            "the forfeit must precede the expiry so the expiry stays the round's latest event"
+        );
+    }
+
     fn contractor_source() -> String {
         word_hex(Keccak256::digest(b"agent-bounties/invoice-contractor-v1").into())
     }
@@ -1293,13 +1319,14 @@ mod tests {
     #[test]
     fn decodes_every_log_emitted_by_the_compiled_v2_contracts() {
         let events = fixture_events();
-        assert_eq!(events.len(), 54, "every factory and bounty log must decode");
+        assert_eq!(events.len(), 65, "every factory and bounty log must decode");
         let count = |kind| events.iter().filter(|event| event.kind == kind).count();
-        assert_eq!(count(AutonomousBountyEventKind::CanonicalBountyCreated), 5);
+        assert_eq!(count(AutonomousBountyEventKind::CanonicalBountyCreated), 6);
         assert_eq!(
             count(AutonomousBountyEventKind::CanonicalBountyPlatformFeeConfigured),
-            5
+            6
         );
+        assert_eq!(count(AutonomousBountyEventKind::SubmissionBondForfeited), 1);
         assert_eq!(
             count(AutonomousBountyEventKind::CanonicalBountyClaimEligibilityConfigured),
             1

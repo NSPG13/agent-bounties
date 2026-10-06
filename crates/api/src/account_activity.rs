@@ -194,6 +194,13 @@ pub fn inbox(evidence: &Value, wallets: &BTreeSet<String>, now: DateTime<Utc>) -
                 let latest = history.last().unwrap();
                 let kind = text(latest, "kind");
                 let data = &latest["data"];
+                // A v2 module round that nobody proved forfeits its bond instead of returning it.
+                let bond_forfeited = kind == "submission_expired"
+                    && events.iter().any(|event| {
+                        text(event, "kind") == "submission_bond_forfeited"
+                            && integer(&event["data"]["round"]) == Some(round)
+                            && text(&event["data"], "solver").eq_ignore_ascii_case(&solver)
+                    });
                 let terminal_count = history
                     .iter()
                     .filter(|event| terminal(text(event, "kind")))
@@ -214,6 +221,7 @@ pub fn inbox(evidence: &Value, wallets: &BTreeSet<String>, now: DateTime<Utc>) -
                 } else {
                     match kind {
                     "bounty_settled" | "competition_settled" => ("paid", "Paid", "none", "View the confirmed settlement."),
+                    "submission_expired" if bond_forfeited => ("completed", "Proof window expired · bond forfeited", "none", "View the confirmed timeout. No passing proof arrived in time, so the bond joined this bounty's timeout pool and the bounty reopened."),
                     "submission_expired" => ("completed", "Review expired · bond returned", "none", "View the confirmed bond return. This round earned no solver reward; the bounty reopened."),
                     "submission_rejected" => ("completed", "Did not pass", "none", "View the confirmed rejection. The bond covers review and the bounty reopened."),
                     "claim_expired" => ("completed", "Claim expired · bond forfeited", "none", "View the confirmed claim timeout. The bounty reopened."),
@@ -280,6 +288,35 @@ mod tests {
                 .with_timezone(&Utc),
         )
     }
+    #[test]
+    fn unproven_module_round_reports_a_forfeited_bond() {
+        let mut forfeited = event("submission_bond_forfeited", 3, 1);
+        forfeited["data"]["claim_bond_forfeited"] = json!(100);
+        let mut expired = event("submission_expired", 3, 1);
+        expired["log_index"] = json!(1);
+        let result = read(vec![
+            event("bounty_claimed", 1, 1),
+            event("submission_added", 2, 1),
+            forfeited,
+            expired.clone(),
+        ]);
+        assert_eq!(
+            result["items"][0]["status"],
+            "Proof window expired · bond forfeited"
+        );
+        assert_eq!(result["items"][0]["payment_state"], "unpaid");
+
+        let returned = read(vec![
+            event("bounty_claimed", 1, 1),
+            event("submission_added", 2, 1),
+            expired,
+        ]);
+        assert_eq!(
+            returned["items"][0]["status"],
+            "Review expired · bond returned"
+        );
+    }
+
     #[test]
     fn review_expiry_is_an_unpaid_past_round_and_does_not_change_the_next_claim() {
         let submitted = event("submission_added", 2, 1);

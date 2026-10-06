@@ -138,6 +138,16 @@ contract V2Actor {
     }
 }
 
+/// @dev Reclaims a module bounty the moment its junk submission expires, all in one transaction.
+contract V2CyclingGriefer {
+    function cycle(AgentBountyV2 bounty, V2TestToken token) external {
+        if (bounty.bountyStatus() == AgentBountyV2.BountyStatus.Submitted) bounty.expireSubmission();
+        token.approve(address(bounty), bounty.verifierReward());
+        bounty.claim();
+        bounty.submit(keccak256("junk"), keccak256("junk-evidence"));
+    }
+}
+
 /// @dev Deterministic module whose verdict is the first proof byte: 0x01 passes, anything else fails.
 contract V2VerdictModule is IAgentBountyVerifier {
     function verify(bytes32, uint64, address, bytes32, bytes32, bytes32, bytes calldata proof)
@@ -304,7 +314,37 @@ contract AgentBountyV2Test {
         require(token.balanceOf(address(solver)) == SOLVER_REWARD + VERIFIER_REWARD, "honest solver unpaid");
     }
 
-    function testUnprovenModuleSubmissionExpiresAndReturnsTheBond() public {
+    /// @dev Regression: returning an unproven module bond let a solver repeat claim, junk
+    /// submission and expiry for free, so contributors could never cancel.
+    function testJunkSubmissionCyclesForfeitEveryBond() public {
+        AgentBountyV2 bounty = _create(SOLVER_REWARD, VERIFIER_REWARD, EXPECTED_TARGET);
+        V2CyclingGriefer griefer = new V2CyclingGriefer();
+        token.mint(address(griefer), 3 * VERIFIER_REWARD);
+        griefer.cycle(bounty, token);
+        for (uint256 i = 0; i < 2; i++) {
+            vm.warp(block.timestamp + 1 days + 1);
+            griefer.cycle(bounty, token);
+        }
+        require(bounty.timeoutBondPool() == 2 * VERIFIER_REWARD, "each expired junk round pays its bond");
+
+        vm.warp(block.timestamp + 1 days + 1);
+        (bool cycled,) = address(griefer).call(abi.encodeCall(V2CyclingGriefer.cycle, (bounty, token)));
+        require(!cycled, "griefer cycled without a bond");
+        bounty.expireSubmission();
+        require(token.balanceOf(address(griefer)) == 0, "griefer kept a bond");
+        require(bounty.timeoutBondPool() == 3 * VERIFIER_REWARD, "every bond forfeited");
+
+        uint256 beforeRefund = token.balanceOf(address(this));
+        bounty.cancel();
+        bounty.withdrawRefund();
+        require(
+            token.balanceOf(address(this)) == beforeRefund + EXPECTED_TARGET + 3 * VERIFIER_REWARD,
+            "contributor recovers the target and the forfeited bonds"
+        );
+        require(token.balanceOf(address(bounty)) == 0, "bounty retained funds");
+    }
+
+    function testUnprovenModuleSubmissionForfeitsTheBond() public {
         AgentBountyV2 bounty = _create(SOLVER_REWARD, VERIFIER_REWARD, EXPECTED_TARGET);
         V2Actor solver = _claimAndSubmit(bounty);
         vm.warp(block.timestamp + 1 days + 1);
@@ -312,18 +352,60 @@ contract AgentBountyV2Test {
         bounty.expireSubmission();
 
         require(bounty.bountyStatus() == AgentBountyV2.BountyStatus.Claimable, "expiry must reopen");
-        require(token.balanceOf(address(solver)) == VERIFIER_REWARD, "bond returned on verification timeout");
+        require(token.balanceOf(address(solver)) == 0, "unproven bond must not be returned");
+        require(bounty.timeoutBondPool() == VERIFIER_REWARD, "bond joins the timeout pool");
         require(bounty.fundedAmount() == EXPECTED_TARGET, "target must stay funded");
+        require(bounty.pendingBondRefundTotal() == 0, "nothing held for refund");
+
+        V2Actor accepted = _claimAndSubmit(bounty);
+        bounty.verifyAndSettle(hex"01");
+        require(
+            token.balanceOf(address(accepted)) == SOLVER_REWARD + 2 * VERIFIER_REWARD,
+            "accepted solver receives the reward, its bond and the forfeited bond"
+        );
+        require(token.balanceOf(address(bounty)) == 0, "bounty retained funds");
+    }
+
+    function testUnprovenQuorumSubmissionExpiresAndReturnsTheBond() public {
+        AgentBountyV2 bounty = _createQuorum();
+        V2Actor solver = _claimAndSubmit(bounty);
+        vm.warp(block.timestamp + 1 days + 1);
+
+        bounty.expireSubmission();
+
+        require(bounty.bountyStatus() == AgentBountyV2.BountyStatus.Claimable, "expiry must reopen");
+        require(token.balanceOf(address(solver)) == VERIFIER_REWARD, "bond returned on verifier timeout");
+        require(bounty.timeoutBondPool() == 0, "verifier timeout must not forfeit");
         require(token.balanceOf(address(bounty)) == EXPECTED_TARGET, "escrow holds exactly the target");
     }
 
-    /// @dev Regression: a token-level block on the solver must not lock contributors' funds.
-    function testBlockedSolverCannotLockTheEscrow() public {
+    /// @dev Regression: a token-level block on a module solver must not lock contributors' funds.
+    function testBlockedModuleSolverCannotLockTheEscrow() public {
         AgentBountyV2 bounty = _create(SOLVER_REWARD, VERIFIER_REWARD, EXPECTED_TARGET);
         V2Actor solver = _claimAndSubmit(bounty);
         token.setBlocked(address(solver), true);
         (bool settled,) = address(bounty).call(abi.encodeCall(AgentBountyV2.verifyAndSettle, (hex"01")));
         require(!settled, "settled without paying the solver");
+
+        vm.warp(block.timestamp + 1 days + 1);
+        bounty.expireSubmission();
+        require(bounty.bountyStatus() == AgentBountyV2.BountyStatus.Claimable, "expiry must reopen");
+
+        uint256 beforeRefund = token.balanceOf(address(this));
+        bounty.cancel();
+        bounty.withdrawRefund();
+        require(
+            token.balanceOf(address(this)) == beforeRefund + EXPECTED_TARGET + VERIFIER_REWARD,
+            "contributor refund includes the forfeited bond"
+        );
+        require(token.balanceOf(address(bounty)) == 0, "bounty retained funds");
+    }
+
+    /// @dev Regression: a token-level block on a quorum solver must not lock contributors' funds.
+    function testBlockedQuorumSolverCannotLockTheEscrow() public {
+        AgentBountyV2 bounty = _createQuorum();
+        V2Actor solver = _claimAndSubmit(bounty);
+        token.setBlocked(address(solver), true);
 
         vm.warp(block.timestamp + 1 days + 1);
         bounty.expireSubmission();
@@ -346,14 +428,14 @@ contract AgentBountyV2Test {
     }
 
     function testHeldBondDoesNotBlockTheNextSettlement() public {
-        AgentBountyV2 bounty = _create(SOLVER_REWARD, VERIFIER_REWARD, EXPECTED_TARGET);
+        AgentBountyV2 bounty = _createQuorum();
         V2Actor blockedSolver = _claimAndSubmit(bounty);
         token.setBlocked(address(blockedSolver), true);
         vm.warp(block.timestamp + 1 days + 1);
         bounty.expireSubmission();
 
         V2Actor solver = _claimAndSubmit(bounty);
-        bounty.verifyAndSettle(hex"01");
+        bounty.settleWithAttestations(_quorumVerdict(bounty, true));
 
         require(token.balanceOf(address(solver)) == SOLVER_REWARD + VERIFIER_REWARD, "next solver unpaid");
         require(token.balanceOf(FEE_RECIPIENT) == EXPECTED_FEE, "fee unpaid");
@@ -372,23 +454,22 @@ contract AgentBountyV2Test {
         V2Actor winner = _newSolver(bounty);
         winner.claim(bounty);
 
-        (bool lostRace,) = address(bounty).call(
-            abi.encodeCall(AgentBountyV2.claimWithAuthorization, (late, 0, validBefore, roundOne, 27, 0, 0))
-        );
+        (bool lostRace,) = address(bounty)
+            .call(abi.encodeCall(AgentBountyV2.claimWithAuthorization, (late, 0, validBefore, roundOne, 27, 0, 0)));
         require(!lostRace, "authorization claimed an active bounty");
-        (bool direct,) = address(token).call(
-            abi.encodeCall(
-                V2TestToken.receiveWithAuthorization,
-                (late, address(bounty), VERIFIER_REWARD, 0, validBefore, roundOne, 27, 0, 0)
-            )
-        );
+        (bool direct,) = address(token)
+            .call(
+                abi.encodeCall(
+                    V2TestToken.receiveWithAuthorization,
+                    (late, address(bounty), VERIFIER_REWARD, 0, validBefore, roundOne, 27, 0, 0)
+                )
+            );
         require(!direct, "third party executed a receive authorization");
 
         vm.warp(block.timestamp + 1 days + 1);
         bounty.expireClaim();
-        (bool stale,) = address(bounty).call(
-            abi.encodeCall(AgentBountyV2.claimWithAuthorization, (late, 0, validBefore, roundOne, 27, 0, 0))
-        );
+        (bool stale,) = address(bounty)
+            .call(abi.encodeCall(AgentBountyV2.claimWithAuthorization, (late, 0, validBefore, roundOne, 27, 0, 0)));
         require(!stale, "round-one authorization opened round two");
         require(token.balanceOf(late) == VERIFIER_REWARD, "bond moved without a claim");
 
@@ -419,9 +500,8 @@ contract AgentBountyV2Test {
         token.approve(address(bounty), VERIFIER_REWARD);
         uint256 deadline = block.timestamp + 1 hours;
 
-        (bool unapproved,) = address(bounty).call(
-            abi.encodeCall(AgentBountyV2.claimWithSignature, (address(wallet), deadline, hex""))
-        );
+        (bool unapproved,) =
+            address(bounty).call(abi.encodeCall(AgentBountyV2.claimWithSignature, (address(wallet), deadline, hex"")));
         require(!unapproved, "unapproved contract signature accepted");
 
         wallet.approveDigest(bounty.claimDigest(address(wallet), 1, deadline));
@@ -600,9 +680,8 @@ contract AgentBountyV2Test {
         address poster = address(0xB0B);
         token.mint(poster, EXPECTED_TARGET);
         creationNonceCounter += 1;
-        AgentBountyFactoryV2.CreateBountyParams memory params = _params(
-            SOLVER_REWARD, VERIFIER_REWARD, uint64(block.timestamp + 1 days), address(0), bytes32(0)
-        );
+        AgentBountyFactoryV2.CreateBountyParams memory params =
+            _params(SOLVER_REWARD, VERIFIER_REWARD, uint64(block.timestamp + 1 days), address(0), bytes32(0));
         address predicted =
             factory.predictBountyAddress(poster, params, new address[](0), bytes32(creationNonceCounter));
         bytes32 id = factory.bountyIdFor(poster, params, new address[](0), bytes32(creationNonceCounter));
@@ -628,39 +707,41 @@ contract AgentBountyV2Test {
         address poster = address(0xB0B);
         token.mint(poster, EXPECTED_TARGET);
         bytes32 creationNonce = keccak256("bound-create");
-        AgentBountyFactoryV2.CreateBountyParams memory params = _params(
-            SOLVER_REWARD, VERIFIER_REWARD, uint64(block.timestamp + 1 days), address(0), bytes32(0)
-        );
+        AgentBountyFactoryV2.CreateBountyParams memory params =
+            _params(SOLVER_REWARD, VERIFIER_REWARD, uint64(block.timestamp + 1 days), address(0), bytes32(0));
         bytes32 id = factory.bountyIdFor(poster, params, new address[](0), creationNonce);
         AgentBountyFactoryV2.FundingAuthorization memory authorization = AgentBountyFactoryV2.FundingAuthorization({
             validAfter: 0, validBefore: block.timestamp + 1 hours, nonce: id, v: 27, r: 0, s: 0
         });
 
-        (bool direct,) = address(token).call(
-            abi.encodeCall(
-                V2TestToken.receiveWithAuthorization,
-                (poster, address(factory), EXPECTED_TARGET, 0, block.timestamp + 1 hours, id, 27, 0, 0)
-            )
-        );
+        (bool direct,) = address(token)
+            .call(
+                abi.encodeCall(
+                    V2TestToken.receiveWithAuthorization,
+                    (poster, address(factory), EXPECTED_TARGET, 0, block.timestamp + 1 hours, id, 27, 0, 0)
+                )
+            );
         require(!direct, "third party executed a receive authorization");
 
         AgentBountyFactoryV2.CreateBountyParams memory altered =
             _params(SOLVER_REWARD, VERIFIER_REWARD, params.fundingDeadline, address(0), bytes32(0));
         altered.verifierRewardRecipient = address(0xA77AC4);
-        (bool rebound,) = address(factory).call(
-            abi.encodeCall(
-                AgentBountyFactoryV2.createBountyWithAuthorization,
-                (poster, altered, new address[](0), EXPECTED_TARGET, creationNonce, authorization)
-            )
-        );
+        (bool rebound,) = address(factory)
+            .call(
+                abi.encodeCall(
+                    AgentBountyFactoryV2.createBountyWithAuthorization,
+                    (poster, altered, new address[](0), EXPECTED_TARGET, creationNonce, authorization)
+                )
+            );
         require(!rebound, "authorization funded different terms");
         authorization.nonce = keccak256("unbound");
-        (bool unbound,) = address(factory).call(
-            abi.encodeCall(
-                AgentBountyFactoryV2.createBountyWithAuthorization,
-                (poster, params, new address[](0), EXPECTED_TARGET, creationNonce, authorization)
-            )
-        );
+        (bool unbound,) = address(factory)
+            .call(
+                abi.encodeCall(
+                    AgentBountyFactoryV2.createBountyWithAuthorization,
+                    (poster, params, new address[](0), EXPECTED_TARGET, creationNonce, authorization)
+                )
+            );
         require(!unbound, "nonce not bound to the bounty id");
         require(token.balanceOf(poster) == EXPECTED_TARGET, "funds moved without the named bounty");
 
@@ -685,9 +766,8 @@ contract AgentBountyV2Test {
         uint256 deadline = block.timestamp + 1 hours;
         bytes memory signature = _claimSignature(bounty, contractor, deadline);
 
-        (bool unregistered,) = address(bounty).call(
-            abi.encodeCall(AgentBountyV2.claimWithSignature, (contractor, deadline, signature))
-        );
+        (bool unregistered,) =
+            address(bounty).call(abi.encodeCall(AgentBountyV2.claimWithSignature, (contractor, deadline, signature)));
         require(!unregistered, "unregistered signed claim accepted");
 
         _attest(registry, ATTESTER_KEY, contractor, CONTRACTOR_SOURCE, 30 days);
@@ -703,12 +783,13 @@ contract AgentBountyV2Test {
         token.mint(contractor, VERIFIER_REWARD);
 
         bytes32 nonce = bounty.claimAuthorizationNonce(contractor, 1);
-        (bool unregistered,) = address(bounty).call(
-            abi.encodeCall(
-                AgentBountyV2.claimWithAuthorization,
-                (contractor, 0, block.timestamp + 1 hours, nonce, 27, bytes32(0), bytes32(0))
-            )
-        );
+        (bool unregistered,) = address(bounty)
+            .call(
+                abi.encodeCall(
+                    AgentBountyV2.claimWithAuthorization,
+                    (contractor, 0, block.timestamp + 1 hours, nonce, 27, bytes32(0), bytes32(0))
+                )
+            );
         require(!unregistered, "unregistered authorized claim accepted");
 
         _attest(registry, ATTESTER_KEY, contractor, CONTRACTOR_SOURCE, 30 days);
@@ -728,11 +809,9 @@ contract AgentBountyV2Test {
         );
     }
 
-    function _claimSignature(AgentBountyV2 bounty, address solver, uint256 deadline)
-        private
-        returns (bytes memory)
-    {
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(CONTRACTOR_KEY, bounty.claimDigest(solver, bounty.round() + 1, deadline));
+    function _claimSignature(AgentBountyV2 bounty, address solver, uint256 deadline) private returns (bytes memory) {
+        (uint8 v, bytes32 r, bytes32 s) =
+            vm.sign(CONTRACTOR_KEY, bounty.claimDigest(solver, bounty.round() + 1, deadline));
         return abi.encodePacked(r, s, v);
     }
 
@@ -903,8 +982,7 @@ contract AgentBountyV2Test {
     ) private {
         bytes32 participantId = keccak256(abi.encode(wallet));
         uint64 validUntil = uint64(block.timestamp) + validFor;
-        bytes32 digest =
-            registry.attestationDigest(wallet, participantId, source, validUntil, registry.nonces(wallet));
+        bytes32 digest = registry.attestationDigest(wallet, participantId, source, validUntil, registry.nonces(wallet));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(attesterKey, digest);
         registry.register(wallet, participantId, source, validUntil, abi.encodePacked(r, s, v));
     }

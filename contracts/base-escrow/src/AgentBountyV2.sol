@@ -209,7 +209,16 @@ contract AgentBountyV2 is IAgentBountyV2 {
         bytes32 indexed bountyId, uint64 indexed round, address indexed platformFeeRecipient, uint256 platformFee
     );
     event PlatformFeeWithdrawn(bytes32 indexed bountyId, address indexed platformFeeRecipient, uint256 amount);
-    event ClaimBondRefundDeferred(bytes32 indexed bountyId, uint64 indexed round, address indexed solver, uint256 amount);
+    event ClaimBondRefundDeferred(
+        bytes32 indexed bountyId, uint64 indexed round, address indexed solver, uint256 amount
+    );
+    event SubmissionBondForfeited(
+        bytes32 indexed bountyId,
+        uint64 indexed round,
+        address indexed solver,
+        uint256 claimBondForfeited,
+        uint256 timeoutBondPool
+    );
     event ClaimBondRefundWithdrawn(bytes32 indexed bountyId, address indexed solver, uint256 amount);
 
     modifier nonReentrant() {
@@ -460,7 +469,8 @@ contract AgentBountyV2 is IAgentBountyV2 {
     /// @notice Anyone may relay a valid deterministic proof. A passing call settles atomically.
     /// The proof is caller-chosen, so a failing module verdict reverts instead of rejecting:
     /// otherwise any caller could reject an honest submission with a malformed proof. A
-    /// submission no one can prove expires through `expireSubmission`, which returns the bond.
+    /// submission no one proves before `verificationExpiresAt` forfeits its bond through
+    /// `expireSubmission`, because anyone, the solver included, can relay a passing proof.
     function verifyAndSettle(bytes calldata proof) external nonReentrant {
         require(_status == BountyStatus.Submitted, "not submitted");
         require(verificationMode == VerificationMode.DeterministicModule, "not module mode");
@@ -521,16 +531,28 @@ contract AgentBountyV2 is IAgentBountyV2 {
         emit ClaimExpired(bountyId, round, expiredSolver, forfeitedBond, timeoutBondPool);
     }
 
-    /// @notice Returns the bond and reopens the bounty. If the bond transfer fails (for example
-    /// a token-level block on the solver), the bond is held for `withdrawBondRefund` so the
-    /// bounty still reopens and its contributors can still cancel and recover their funds.
+    /// @notice Reopens the bounty after its verification window.
+    /// Module mode: no passing proof arrived, so the bond is forfeited to `timeoutBondPool`, like
+    /// an unsubmitted claim. Returning it would let a solver repeat claim, junk submission and
+    /// expiry at no cost and keep the bounty from ever becoming cancellable.
+    /// Quorum mode: the committed verifiers did not finish, so the bond is returned. If that
+    /// transfer fails (for example a token-level block on the solver), the bond is held for
+    /// `withdrawBondRefund` so the bounty still reopens and contributors can still cancel.
     function expireSubmission() external nonReentrant {
         require(_status == BountyStatus.Submitted, "submission not active");
         require(block.timestamp > verificationExpiresAt, "submission not expired");
         address expiredSolver = solver;
-        uint256 refundedBond = activeClaimBond;
+        uint256 bond = activeClaimBond;
         activeClaimBond = 0;
         _resetClaim();
+        if (verificationMode == VerificationMode.DeterministicModule) {
+            require(timeoutBondPool <= type(uint128).max - bond, "timeout pool too large");
+            timeoutBondPool += bond;
+            emit SubmissionBondForfeited(bountyId, round, expiredSolver, bond, timeoutBondPool);
+            emit SubmissionExpired(bountyId, round, expiredSolver, 0);
+            return;
+        }
+        uint256 refundedBond = bond;
         if (refundedBond > 0 && !_tryTransfer(expiredSolver, refundedBond)) {
             pendingBondRefunds[expiredSolver] += refundedBond;
             pendingBondRefundTotal += refundedBond;
@@ -761,8 +783,7 @@ contract AgentBountyV2 is IAgentBountyV2 {
     }
 
     function _tryTransfer(address to, uint256 amount) private returns (bool) {
-        (bool ok, bytes memory result) =
-            settlementToken.call(abi.encodeCall(IERC20BountyToken.transfer, (to, amount)));
+        (bool ok, bytes memory result) = settlementToken.call(abi.encodeCall(IERC20BountyToken.transfer, (to, amount)));
         return ok && (result.length == 0 || (result.length == 32 && abi.decode(result, (bool))));
     }
 

@@ -30,7 +30,7 @@ PARAMS = "(uint256,uint256,bytes32,bytes32,bytes32,bytes32,bytes32,uint64,uint64
 CREATE = f"createBounty({PARAMS},address[],uint256,bytes32)"
 CREATE_WITH_AUTH = f"createBountyWithAuthorization(address,{PARAMS},address[],uint256,bytes32,(uint256,uint256,bytes32,uint8,bytes32,bytes32))"
 LABELS = {1: "paid_after_reject", 2: "fee_deferred_then_forwarded", 3: "contractor_gated", 4: "cancelled_and_refunded",
-          5: "gasless_quorum"}
+          5: "gasless_quorum", 6: "unproven_module_forfeited"}
 BASE_SEPOLIA_USDC = "0x036cbd53842c5426634e7929541ec2318f3dcf7e"
 # Anvil's default development keys. Never use them outside a local chain.
 DEPLOYER_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
@@ -205,10 +205,22 @@ def main() -> int:
         work.mkdir(parents=True, exist_ok=True)
         gasless = GaslessLoop(target / "debug" / "cli", factory, implementation, work)
         gasless_bounty = gasless.run_loop()
-        logs = json.loads(run("cast", "logs", "--rpc-url", RPC, "--from-block", "0", "--json"))
         created_topic = run("cast", "keccak", "CanonicalBountyCreated(bytes32,address,address,bytes32,bytes32,bytes32)")
+
+        def created_bounties() -> tuple[list[dict[str, object]], dict[str, str]]:
+            logs = json.loads(run("cast", "logs", "--rpc-url", RPC, "--from-block", "0", "--json"))
+            creations = [log for log in logs if log["topics"][0].lower() == created_topic.lower()]
+            return logs, {LABELS[int(log["data"][2 + 128: 2 + 192], 16)]: "0x" + log["topics"][2][-40:].lower()
+                          for log in creations}
+
+        # Nobody proves the module submission, so after its verification window the bond is forfeited.
+        _, bounties = created_bounties()
+        run("cast", "rpc", "evm_increaseTime", str(86_400 + 2), "--rpc-url", RPC)
+        run("cast", "rpc", "evm_mine", "--rpc-url", RPC)
+        run("cast", "send", bounties["unproven_module_forfeited"], "expireSubmission()", "--private-key", RELAYER_KEY,
+            "--rpc-url", RPC, quiet=True)
+        logs, bounties = created_bounties()
         creations = [log for log in logs if log["topics"][0].lower() == created_topic.lower()]
-        bounties = {LABELS[int(log["data"][2 + 128: 2 + 192], 16)]: "0x" + log["topics"][2][-40:].lower() for log in creations}
         bounty_ids = {LABELS[int(log["data"][2 + 128: 2 + 192], 16)]: log["topics"][1].lower() for log in creations}
         if bounties["gasless_quorum"] != gasless_bounty.lower():
             raise RuntimeError("gasless bounty was not created at the planner's predicted address")

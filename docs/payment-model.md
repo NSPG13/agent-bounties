@@ -21,7 +21,7 @@ Claiming transfers a bond equal to the verifier reward into the bounty.
 | --- | --- | --- | --- |
 | Pass | Base reward + returned bond + timeout bonus | Verifier reward | Settled, zero protocol balance |
 | Fail | Bond forfeited | Same verifier reward | Fully funded and claimable again |
-| Verification timeout | Bond returned | No reward | Fully funded and claimable again |
+| Verification timeout | Bond returned (autonomous-v2 module mode: bond forfeited to the timeout pool) | No reward | Fully funded and claimable again |
 | Claim timeout without submission | Bond becomes completion bonus | No reward | Fully funded and claimable again |
 | Cancellation | Contributor principal + pro-rata timeout bonus | None | Pull refunds |
 

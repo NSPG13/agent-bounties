@@ -150,6 +150,9 @@ contract CaptureAutonomousV2Fixture {
         AgentBountyV2 gated = _create(3, TARGET, address(registry), CONTRACTOR_SOURCE);
         // 4. Partially funded, then cancelled by its creator and refunded.
         AgentBountyV2 cancelled = _create(4, 500_000, address(0), bytes32(0));
+        // 6. Module submission nobody proves; the driver expires it after the window (nonce 5 is
+        //    the gasless loop).
+        AgentBountyV2 unproven = _create(6, TARGET, address(0), bytes32(0));
         vm.stopBroadcast();
 
         _claimAndSubmit(SECOND_SOLVER_KEY, paid);
@@ -181,6 +184,8 @@ contract CaptureAutonomousV2Fixture {
         cancelled.cancel();
         cancelled.withdrawRefund();
         vm.stopBroadcast();
+
+        _claimAndSubmit(SOLVER_KEY, unproven);
     }
 
     function _create(uint256 nonce, uint256 initialFunding, address eligibilityRegistry, bytes32 eligibilitySource)

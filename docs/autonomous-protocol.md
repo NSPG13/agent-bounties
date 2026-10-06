@@ -532,10 +532,16 @@ use the v2 planners. v2 is not deployed yet.
   opens only the round it was signed for.
 - `verifyAndSettle` settles on a passing module verdict and reverts on a
   failing one. The proof is caller-chosen, so a failing verdict cannot be
-  final. A submission nobody can prove expires and returns the bond.
-  Rejection exists only in quorum modes, where precommitted verifiers sign it.
-- If returning an expired submission's bond fails, the bond is held
-  (`ClaimBondRefundDeferred`), the bounty still reopens, and
+  final. Rejection exists only in quorum modes, where precommitted verifiers
+  sign it.
+- A module submission nobody proves within the verification window forfeits
+  its bond to `timeoutBondPool`, like a claim timeout. `expireSubmission`
+  emits `SubmissionBondForfeited` and then `SubmissionExpired` with zero
+  refunded. Anyone, the solver included, can relay the passing proof. If the
+  bond were returned, a solver could repeat claim, junk submission and expiry
+  for free, and the bounty would never become cancellable.
+- A quorum verification timeout still returns the bond. If that transfer fails,
+  the bond is held (`ClaimBondRefundDeferred`), the bounty still reopens, and
   `withdrawBondRefund(solver)` pays the same solver later. Settlement still
   pays the solver in the same transaction, so `BountySettled` remains solver
   payment evidence.
