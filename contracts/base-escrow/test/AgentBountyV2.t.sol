@@ -457,6 +457,57 @@ contract AgentBountyV2Test {
         require(!requestedTwice, "a second request was recorded");
     }
 
+    /// @dev A creator without ETH cancels through a relayed signature, and a stranger pushes each
+    /// refund to its contributor.
+    function testCreatorCancelsBySignatureAndRefundsArePushedGaslessly() public {
+        (AgentBountyV2 bounty, address creatorWallet) = _createFromKey(CREATOR_KEY);
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes memory signature = _sign(CREATOR_KEY, bounty.cancelDigest(deadline));
+
+        vm.prank(address(0x5E1A7));
+        bounty.cancelWithSignature(deadline, signature);
+        require(bounty.bountyStatus() == AgentBountyV2.BountyStatus.Cancelled, "signed cancel");
+
+        vm.prank(address(0x5E1A7));
+        bounty.withdrawRefundFor(creatorWallet);
+        require(token.balanceOf(creatorWallet) == EXPECTED_TARGET, "refund paid to the contributor");
+        require(token.balanceOf(address(0x5E1A7)) == 0, "relayer received nothing");
+        (bool again,) = address(bounty).call(abi.encodeCall(AgentBountyV2.withdrawRefundFor, (creatorWallet)));
+        require(!again, "refund paid twice");
+        (bool replayed,) =
+            address(bounty).call(abi.encodeCall(AgentBountyV2.cancelWithSignature, (deadline, signature)));
+        require(!replayed, "cancel signature replayed");
+    }
+
+    function testCreatorSignatureRecordsACancelRequestDuringARound() public {
+        (AgentBountyV2 bounty,) = _createFromKey(CREATOR_KEY);
+        V2Actor solver = _claimAndSubmit(bounty);
+        uint256 deadline = block.timestamp + 1 hours;
+
+        bounty.cancelWithSignature(deadline, _sign(CREATOR_KEY, bounty.cancelDigest(deadline)));
+
+        require(bounty.cancelRequested(), "signed request recorded");
+        bounty.verifyAndSettle(hex"01");
+        require(token.balanceOf(address(solver)) == SOLVER_REWARD + VERIFIER_REWARD, "active round still pays");
+    }
+
+    function testCancelSignatureMustComeFromTheCreatorBeforeItsDeadline() public {
+        (AgentBountyV2 bounty,) = _createFromKey(CREATOR_KEY);
+        uint256 deadline = block.timestamp + 1 hours;
+        (bool stranger,) = address(bounty)
+            .call(
+                abi.encodeCall(
+                    AgentBountyV2.cancelWithSignature, (deadline, _sign(VERIFIER_KEY_A, bounty.cancelDigest(deadline)))
+                )
+            );
+        require(!stranger, "a non-creator signature cancelled");
+        bytes memory signature = _sign(CREATOR_KEY, bounty.cancelDigest(deadline));
+        vm.warp(deadline + 1);
+        (bool expired,) = address(bounty).call(abi.encodeCall(AgentBountyV2.cancelWithSignature, (deadline, signature)));
+        require(!expired, "an expired signature cancelled");
+        require(bounty.bountyStatus() == AgentBountyV2.BountyStatus.Claimable, "bounty untouched");
+    }
+
     /// @dev Regression: a published bond authorization can neither be executed directly at the
     /// token nor reused for a later round.
     function testClaimAuthorizationIsBoundToItsRoundAndPayee() public {
@@ -907,6 +958,25 @@ contract AgentBountyV2Test {
         return AgentBountyV2(bountyAddress);
     }
 
+    function _createFromKey(uint256 creatorKey) private returns (AgentBountyV2 bounty, address creatorWallet) {
+        creatorWallet = vm.addr(creatorKey);
+        token.mint(creatorWallet, EXPECTED_TARGET);
+        vm.prank(creatorWallet);
+        token.approve(address(factory), EXPECTED_TARGET);
+        creationNonceCounter += 1;
+        AgentBountyFactoryV2.CreateBountyParams memory params =
+            _params(SOLVER_REWARD, VERIFIER_REWARD, uint64(block.timestamp + 1 days), address(0), bytes32(0));
+        vm.prank(creatorWallet);
+        (address bountyAddress,) =
+            factory.createBounty(params, new address[](0), EXPECTED_TARGET, bytes32(creationNonceCounter));
+        bounty = AgentBountyV2(bountyAddress);
+    }
+
+    function _sign(uint256 key, bytes32 digest) private returns (bytes memory) {
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(key, digest);
+        return abi.encodePacked(r, s, v);
+    }
+
     function _params(
         uint256 solverReward,
         uint256 verifierReward,
@@ -935,6 +1005,7 @@ contract AgentBountyV2Test {
     }
 
     uint256 constant VERIFIER_KEY_A = 0xA11CE;
+    uint256 constant CREATOR_KEY = 0xC4EA7;
     uint256 constant VERIFIER_KEY_B = 0xB0B5;
 
     function _createQuorum() private returns (AgentBountyV2) {

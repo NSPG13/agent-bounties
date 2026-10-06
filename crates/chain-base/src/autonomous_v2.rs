@@ -446,6 +446,123 @@ impl AutonomousBountyTxPlanner {
         Ok(typed)
     }
 
+    /// The creator's gasless cancel: EIP-712 `Cancel` under domain version "2". Relayed through
+    /// `plan_v2_cancel_relay`, it cancels an idle bounty or records a cancel request during a
+    /// round, exactly like `cancel()` sent by the creator.
+    pub fn plan_v2_cancel_authorization(
+        &self,
+        network: &str,
+        request: &AutonomousV2CancelAuthorizationRequest,
+    ) -> Result<AutonomousV2CancelAuthorizationTypedData, ChainBaseError> {
+        if request.deadline == 0 {
+            return Err(ChainBaseError::InvalidVerificationConfiguration(
+                "cancel authorization deadline must be positive".to_string(),
+            ));
+        }
+        let network = base_network_descriptor(network)?;
+        let bounty = normalize_address(&request.bounty_contract)?;
+        let mut types = BTreeMap::new();
+        types.insert(
+            "EIP712Domain".to_string(),
+            vec![
+                eip712_field("name", "string"),
+                eip712_field("version", "string"),
+                eip712_field("chainId", "uint256"),
+                eip712_field("verifyingContract", "address"),
+            ],
+        );
+        types.insert(
+            "Cancel".to_string(),
+            vec![
+                eip712_field("bounty", "address"),
+                eip712_field("bountyId", "bytes32"),
+                eip712_field("creator", "address"),
+                eip712_field("deadline", "uint256"),
+            ],
+        );
+        Ok(AutonomousV2CancelAuthorizationTypedData {
+            types,
+            domain: Eip712DomainData {
+                name: "Agent Bounties".to_string(),
+                version: AUTONOMOUS_V2_EIP712_DOMAIN_VERSION.to_string(),
+                chain_id: network.chain_id,
+                verifying_contract: bounty.clone(),
+            },
+            primary_type: "Cancel".to_string(),
+            message: AutonomousV2CancelAuthorizationMessage {
+                bounty,
+                bounty_id: word_hex(parse_bytes32(&request.bounty_id)?),
+                creator: normalize_address(&request.creator)?,
+                deadline: request.deadline.to_string(),
+            },
+        })
+    }
+
+    /// Relays a creator's signed cancel. Anyone may send it.
+    pub fn plan_v2_cancel_relay(
+        &self,
+        bounty_contract: &str,
+        deadline: u64,
+        signature: &str,
+        relayer: Option<&str>,
+    ) -> Result<EvmTransactionIntent, ChainBaseError> {
+        const SIGNATURE: &str = "cancelWithSignature(uint256,bytes)";
+        let signature = parse_hex_bytes(signature)?;
+        if deadline == 0 || signature.len() != 65 || !matches!(signature[64], 27 | 28) {
+            return Err(ChainBaseError::InvalidVerificationConfiguration(
+                "cancel relay needs a positive deadline and a 65-byte signature with v 27 or 28"
+                    .to_string(),
+            ));
+        }
+        let mut bytes = selector(SIGNATURE).to_vec();
+        bytes.extend_from_slice(&encode_uint256(deadline.into())?);
+        bytes.extend_from_slice(&encode_uint256(2 * 32)?);
+        bytes.extend_from_slice(&encode_uint256(signature.len() as u128)?);
+        bytes.extend_from_slice(&signature);
+        bytes.resize(bytes.len() + (32 - signature.len() % 32) % 32, 0);
+        Ok(EvmTransactionIntent {
+            from: relayer.map(normalize_address).transpose()?,
+            to: normalize_address(bounty_contract)?,
+            value_wei: 0,
+            data: format!("0x{}", hex::encode(bytes)),
+            function: SIGNATURE.to_string(),
+        })
+    }
+
+    /// Pushes a cancelled bounty's refund. Anyone may send it; the bounty pays only `contributor`.
+    pub fn plan_v2_refund_withdrawal_for(
+        &self,
+        bounty_contract: &str,
+        contributor: &str,
+    ) -> Result<EvmTransactionIntent, ChainBaseError> {
+        Ok(EvmTransactionIntent {
+            from: None,
+            to: normalize_address(bounty_contract)?,
+            value_wei: 0,
+            data: encode_call(
+                "withdrawRefundFor(address)",
+                vec![encode_address(contributor)?],
+            ),
+            function: "withdrawRefundFor(address)".to_string(),
+        })
+    }
+
+    /// Retries a held verification-timeout bond refund. Anyone may send it; the bounty pays only
+    /// `solver`.
+    pub fn plan_v2_bond_refund_withdrawal(
+        &self,
+        bounty_contract: &str,
+        solver: &str,
+    ) -> Result<EvmTransactionIntent, ChainBaseError> {
+        Ok(EvmTransactionIntent {
+            from: None,
+            to: normalize_address(bounty_contract)?,
+            value_wei: 0,
+            data: encode_call("withdrawBondRefund(address)", vec![encode_address(solver)?]),
+            function: "withdrawBondRefund(address)".to_string(),
+        })
+    }
+
     /// Forwards a fee whose settlement-time transfer failed. Anyone may send it; the bounty pays
     /// only its fixed recipient.
     pub fn plan_v2_platform_fee_forward(
@@ -568,6 +685,32 @@ pub fn validate_autonomous_v2_creation_for_public_earning(
     Ok(platform_fee)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutonomousV2CancelAuthorizationRequest {
+    pub bounty_contract: String,
+    pub bounty_id: String,
+    pub creator: String,
+    pub deadline: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutonomousV2CancelAuthorizationMessage {
+    pub bounty: String,
+    pub bounty_id: String,
+    pub creator: String,
+    pub deadline: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutonomousV2CancelAuthorizationTypedData {
+    pub types: BTreeMap<String, Vec<Eip712TypeField>>,
+    pub domain: Eip712DomainData,
+    pub primary_type: String,
+    pub message: AutonomousV2CancelAuthorizationMessage,
+}
+
 /// One autonomous-v2 planning request, as accepted by `cli autonomous-v2-plan`. Every action
 /// returns unsigned typed data or an unsigned transaction intent; none of them is funding, claim,
 /// submission or settlement evidence.
@@ -656,6 +799,24 @@ pub enum AutonomousV2PlanAction {
     },
     PlatformFeeForward {
         bounty_contract: String,
+    },
+    CancelAuthorization {
+        cancel: AutonomousV2CancelAuthorizationRequest,
+    },
+    CancelRelay {
+        bounty_contract: String,
+        deadline: u64,
+        signature: String,
+        #[serde(default)]
+        relayer: Option<String>,
+    },
+    RefundWithdrawal {
+        bounty_contract: String,
+        contributor: String,
+    },
+    BondRefundWithdrawal {
+        bounty_contract: String,
+        solver: String,
     },
 }
 
@@ -790,6 +951,28 @@ pub fn plan_autonomous_v2_action(
         AutonomousV2PlanAction::PlatformFeeForward { bounty_contract } => {
             to_plan_value(planner.plan_v2_platform_fee_forward(bounty_contract)?)
         }
+        AutonomousV2PlanAction::CancelAuthorization { cancel } => {
+            to_plan_value(planner.plan_v2_cancel_authorization(network, cancel)?)
+        }
+        AutonomousV2PlanAction::CancelRelay {
+            bounty_contract,
+            deadline,
+            signature,
+            relayer,
+        } => to_plan_value(planner.plan_v2_cancel_relay(
+            bounty_contract,
+            *deadline,
+            signature,
+            relayer.as_deref(),
+        )?),
+        AutonomousV2PlanAction::RefundWithdrawal {
+            bounty_contract,
+            contributor,
+        } => to_plan_value(planner.plan_v2_refund_withdrawal_for(bounty_contract, contributor)?),
+        AutonomousV2PlanAction::BondRefundWithdrawal {
+            bounty_contract,
+            solver,
+        } => to_plan_value(planner.plan_v2_bond_refund_withdrawal(bounty_contract, solver)?),
     }
 }
 
@@ -1316,7 +1499,7 @@ mod tests {
     #[test]
     fn decodes_every_log_emitted_by_the_compiled_v2_contracts() {
         let events = fixture_events();
-        assert_eq!(events.len(), 65, "every factory and bounty log must decode");
+        assert_eq!(events.len(), 66, "every factory and bounty log must decode");
         let count = |kind| events.iter().filter(|event| event.kind == kind).count();
         assert_eq!(count(AutonomousBountyEventKind::CanonicalBountyCreated), 6);
         assert_eq!(
@@ -1817,6 +2000,87 @@ mod tests {
     /// relayer. Replanning every recorded request must reproduce exactly the typed data that was
     /// signed and the calldata the contracts accepted, and the relayed transactions must carry
     /// the canonical creation, funding, claim, submission, settlement and fee events.
+    /// The creator only signs: a relayer sends the cancel request and pushes the refund, both
+    /// from current planner output, on the compiled contracts.
+    #[test]
+    fn gasless_cancel_and_refund_execute_current_planner_output() {
+        let fixture = fixture();
+        let gasless = &fixture["gasless_cancel"];
+        let steps = gasless["steps"].as_array().unwrap();
+        let names: Vec<&str> = steps
+            .iter()
+            .map(|step| step["step"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["cancel_request", "refund_push"]);
+        let creator = gasless["creator"].as_str().unwrap();
+        for step in steps {
+            for authorization in step["authorizations"].as_array().unwrap() {
+                let planned = plan_autonomous_v2_action(&plan_request(&fixture, authorization))
+                    .expect("authorization replans");
+                assert_eq!(
+                    planned_field(planned, &authorization["typed_data_field"]),
+                    authorization["typed_data"],
+                    "{} typed data drifted from what was signed",
+                    step["step"]
+                );
+                assert!(authorization["signer"]
+                    .as_str()
+                    .unwrap()
+                    .eq_ignore_ascii_case(creator));
+                assert_eq!(authorization["typed_data"]["domain"]["version"], "2");
+            }
+            let relay = &step["relay"];
+            assert!(!relay["relayer"]
+                .as_str()
+                .unwrap()
+                .eq_ignore_ascii_case(creator));
+            let intent = planned_field(
+                plan_autonomous_v2_action(&plan_request(&fixture, relay)).expect("relay replans"),
+                &relay["intent_field"],
+            );
+            assert_eq!(
+                intent["data"], relay["calldata"],
+                "{} calldata",
+                step["step"]
+            );
+            assert_eq!(intent["to"], relay["to"], "{} destination", step["step"]);
+        }
+
+        let bounty = gasless["bounty"].as_str().unwrap();
+        assert_eq!(bounty, bounty_address("cancel_requested_then_expired"));
+        let requested_topic = event_topic("CancellationRequested(bytes32,uint64,address)");
+        let cancel_hash = steps[0]["relay"]["transaction_hash"].as_str().unwrap();
+        let request_log = fixture["logs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|log| {
+                log["transactionHash"]
+                    .as_str()
+                    .unwrap()
+                    .eq_ignore_ascii_case(cancel_hash)
+            })
+            .expect("the relayed cancel emitted a log");
+        assert_eq!(request_log["topics"][0], requested_topic);
+        assert!(request_log["topics"][3]
+            .as_str()
+            .unwrap()
+            .ends_with(&creator.to_ascii_lowercase()[2..]));
+
+        let refund_hash = steps[1]["relay"]["transaction_hash"].as_str().unwrap();
+        let refunds: Vec<_> = events_for("cancel_requested_then_expired")
+            .into_iter()
+            .filter(|event| event.tx_hash.eq_ignore_ascii_case(refund_hash))
+            .collect();
+        assert_eq!(refunds.len(), 1);
+        assert_eq!(refunds[0].kind, AutonomousBountyEventKind::RefundWithdrawn);
+        assert!(refunds[0].data["contributor"]
+            .as_str()
+            .unwrap()
+            .eq_ignore_ascii_case(creator));
+        assert_eq!(refunds[0].data["amount"], fixture["target_amount"]);
+    }
+
     #[test]
     fn gasless_quorum_loop_executes_current_planner_output() {
         let fixture = fixture();

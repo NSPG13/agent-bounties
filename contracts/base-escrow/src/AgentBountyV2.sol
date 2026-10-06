@@ -35,6 +35,8 @@ contract AgentBountyV2 is IAgentBountyV2 {
     bytes32 private constant SUBMIT_TYPEHASH = keccak256(
         "Submit(address bounty,bytes32 bountyId,address solver,uint64 round,bytes32 submissionHash,bytes32 evidenceHash,bytes32 policyHash,uint256 deadline)"
     );
+    bytes32 private constant CANCEL_TYPEHASH =
+        keccak256("Cancel(address bounty,bytes32 bountyId,address creator,uint256 deadline)");
     bytes32 private constant ATTESTATION_TYPEHASH = keccak256(
         "VerificationAttestation(address bounty,bytes32 bountyId,uint64 round,address verifier,bytes32 submissionHash,bytes32 evidenceHash,bytes32 policyHash,bool passed,bytes32 responseHash,uint256 deadline)"
     );
@@ -563,31 +565,31 @@ contract AgentBountyV2 is IAgentBountyV2 {
     /// The creator may cancel at any time; anyone may after the funding deadline.
     function cancel() external nonReentrant {
         require(msg.sender == creator || block.timestamp > fundingDeadline, "not authorized");
-        if (_status == BountyStatus.Claimed || _status == BountyStatus.Submitted) {
-            require(!cancelRequested, "cancel already requested");
-            cancelRequested = true;
-            emit CancellationRequested(bountyId, round, msg.sender);
-            return;
-        }
-        require(_status == BountyStatus.Open || _status == BountyStatus.Claimable, "not cancellable");
-        _cancel();
+        _cancelOrRequest(msg.sender);
+    }
+
+    /// @notice Anyone may relay the creator's signed cancel, so a creator needs no gas. It acts
+    /// exactly like `cancel()` from the creator: an idle bounty cancels, and an active round
+    /// records a cancel request. A used signature cannot act twice, because the bounty is then
+    /// cancelled or already has a request.
+    function cancelWithSignature(uint256 deadline, bytes calldata signature) external nonReentrant {
+        require(block.timestamp <= deadline, "cancel signature expired");
+        require(_isValidSignatureNow(creator, cancelDigest(deadline), signature), "invalid cancel signature");
+        _cancelOrRequest(creator);
     }
 
     function withdrawRefund() external nonReentrant {
-        require(_status == BountyStatus.Cancelled, "not cancelled");
-        uint256 principal = contributions[msg.sender];
-        require(principal > 0, "no refund");
-        uint256 bonus = 0;
-        if (refundBonusRemaining > 0) {
-            bonus =
-                principal == fundedAmount ? refundBonusRemaining : principal * refundBonusPool / refundPrincipalTotal;
-            refundBonusRemaining -= bonus;
-        }
-        contributions[msg.sender] = 0;
-        fundedAmount -= principal;
-        uint256 amount = principal + bonus;
-        settlementToken.safeTransfer(msg.sender, amount);
-        emit RefundWithdrawn(bountyId, msg.sender, principal, bonus, amount);
+        _withdrawRefund(msg.sender);
+    }
+
+    /// @notice Anyone may push a contributor's refund, so a contributor needs no gas. The payee is
+    /// always the contributor.
+    function withdrawRefundFor(address contributor) external nonReentrant {
+        _withdrawRefund(contributor);
+    }
+
+    function cancelDigest(uint256 deadline) public view returns (bytes32) {
+        return _hashTypedData(keccak256(abi.encode(CANCEL_TYPEHASH, address(this), bountyId, creator, deadline)));
     }
 
     /// @notice The only EIP-3009 nonce `claimWithAuthorization` accepts for this solver and round.
@@ -745,6 +747,34 @@ contract AgentBountyV2 is IAgentBountyV2 {
         _payVerifierReward(verifierRecipients);
         emit SubmissionRejected(bountyId, round, rejectedSolver, verifierReward, forfeitedBond, verificationHash);
         _cancelIfRequested();
+    }
+
+    function _cancelOrRequest(address requester) private {
+        if (_status == BountyStatus.Claimed || _status == BountyStatus.Submitted) {
+            require(!cancelRequested, "cancel already requested");
+            cancelRequested = true;
+            emit CancellationRequested(bountyId, round, requester);
+            return;
+        }
+        require(_status == BountyStatus.Open || _status == BountyStatus.Claimable, "not cancellable");
+        _cancel();
+    }
+
+    function _withdrawRefund(address contributor) private {
+        require(_status == BountyStatus.Cancelled, "not cancelled");
+        uint256 principal = contributions[contributor];
+        require(principal > 0, "no refund");
+        uint256 bonus = 0;
+        if (refundBonusRemaining > 0) {
+            bonus =
+                principal == fundedAmount ? refundBonusRemaining : principal * refundBonusPool / refundPrincipalTotal;
+            refundBonusRemaining -= bonus;
+        }
+        contributions[contributor] = 0;
+        fundedAmount -= principal;
+        uint256 amount = principal + bonus;
+        settlementToken.safeTransfer(contributor, amount);
+        emit RefundWithdrawn(bountyId, contributor, principal, bonus, amount);
     }
 
     /// @dev Runs after the round's own event, so indexers see the round end before the cancellation.

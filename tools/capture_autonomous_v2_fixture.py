@@ -213,12 +213,27 @@ def main() -> int:
             return logs, {LABELS[int(log["data"][2 + 128: 2 + 192], 16)]: "0x" + log["topics"][2][-40:].lower()
                           for log in creations}
 
-        # The cancel request lets the round run out; its expiry returns the bond and cancels the bounty.
-        _, bounties = created_bounties()
+        # A gasless cancel: the creator only signs, and the relayer sends the cancel request, the
+        # round's expiry (which returns the bond and cancels the bounty) and the refund push.
+        logs, bounties = created_bounties()
+        requested = bounties["cancel_requested_then_expired"]
+        requested_id = next(log["topics"][1].lower() for log in logs if log["topics"][0].lower() == created_topic.lower()
+                            and "0x" + log["topics"][2][-40:].lower() == requested)
+        creator_wallet = address_of(DEPLOYER_KEY)
+        cancel = GaslessLoop(target / "debug" / "cli", factory, implementation, work)
+        deadline = int(run("cast", "block", "latest", "--field", "timestamp", "--rpc-url", RPC)) + 3_600
+        signed = cancel.authorize({"action": "cancel_authorization", "cancel": {
+            "bounty_contract": requested, "bounty_id": requested_id, "creator": creator_wallet, "deadline": deadline}},
+            DEPLOYER_KEY)
+        cancel.relay("cancel_request", [signed], {"action": "cancel_relay", "bounty_contract": requested,
+                                                  "deadline": deadline, "signature": signed["signature"],
+                                                  "relayer": cancel.relayer})
         run("cast", "rpc", "evm_increaseTime", str(86_400 + 2), "--rpc-url", RPC)
         run("cast", "rpc", "evm_mine", "--rpc-url", RPC)
-        run("cast", "send", bounties["cancel_requested_then_expired"], "expireSubmission()", "--private-key",
-            RELAYER_KEY, "--rpc-url", RPC, quiet=True)
+        run("cast", "send", requested, "expireSubmission()", "--private-key", RELAYER_KEY, "--rpc-url", RPC,
+            quiet=True)
+        cancel.relay("refund_push", [], {"action": "refund_withdrawal", "bounty_contract": requested,
+                                         "contributor": creator_wallet})
         logs, bounties = created_bounties()
         creations = [log for log in logs if log["topics"][0].lower() == created_topic.lower()]
         bounty_ids = {LABELS[int(log["data"][2 + 128: 2 + 192], 16)]: log["topics"][1].lower() for log in creations}
@@ -260,6 +275,9 @@ def main() -> int:
         "settlement_token": BASE_SEPOLIA_USDC,
         "gasless_loop": {"scenario": "gasless_quorum", "bounty": gasless_bounty.lower(),
                          "signer": "cast wallet sign --data (EIP-712)", "steps": gasless.steps},
+        "gasless_cancel": {"scenario": "cancel_requested_then_expired", "bounty": requested,
+                           "creator": creator_wallet, "signer": "cast wallet sign --data (EIP-712)",
+                           "steps": cancel.steps},
         "logs": keep,
     }
     FIXTURE.write_text(json.dumps(fixture, indent=2) + "\n")

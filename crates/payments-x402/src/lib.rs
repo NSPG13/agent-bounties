@@ -20,6 +20,15 @@ const MAX_CLOCK_SKEW_SECONDS: u64 = 30;
 const EIP712_DOMAIN_TYPE: &str =
     "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)";
 const TRANSFER_WITH_AUTHORIZATION_TYPE: &str = "TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)";
+const RECEIVE_WITH_AUTHORIZATION_TYPE: &str = "ReceiveWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)";
+
+/// The EIP-3009 primary type a signature authorizes. Autonomous-v2 bounties accept only
+/// `Receive`, which only the payee contract can execute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Eip3009Kind {
+    Transfer,
+    Receive,
+}
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum X402Error {
@@ -484,6 +493,16 @@ pub fn validate_funding_payload(
     required: &PaymentRequired,
     now_unix_seconds: u64,
 ) -> Result<ValidatedFundingAuthorization, X402Error> {
+    validate_funding_payload_as(payload, required, now_unix_seconds, Eip3009Kind::Transfer)
+}
+
+/// `validate_funding_payload` for a signature over the given EIP-3009 primary type.
+pub fn validate_funding_payload_as(
+    payload: &PaymentPayload,
+    required: &PaymentRequired,
+    now_unix_seconds: u64,
+    kind: Eip3009Kind,
+) -> Result<ValidatedFundingAuthorization, X402Error> {
     if payload.x402_version != X402_VERSION {
         return Err(X402Error::UnsupportedVersion(payload.x402_version));
     }
@@ -550,7 +569,7 @@ pub fn validate_funding_payload(
     let nonce = normalize_word(&authorization_payload.authorization.nonce)
         .map_err(|_| X402Error::InvalidNonce)?;
     let (v, r, s) = split_signature(&authorization_payload.signature)?;
-    let digest = eip3009_authorization_digest(expected, &authorization_payload.authorization)?;
+    let digest = eip3009_typed_digest(expected, &authorization_payload.authorization, kind)?;
     let signature = authorization_payload
         .signature
         .parse::<Signature>()
@@ -673,6 +692,14 @@ fn eip3009_authorization_digest(
     requirements: &PaymentRequirements,
     authorization: &Eip3009Authorization,
 ) -> Result<B256, X402Error> {
+    eip3009_typed_digest(requirements, authorization, Eip3009Kind::Transfer)
+}
+
+fn eip3009_typed_digest(
+    requirements: &PaymentRequirements,
+    authorization: &Eip3009Authorization,
+    kind: Eip3009Kind,
+) -> Result<B256, X402Error> {
     let chain_id = requirements
         .network
         .strip_prefix("eip155:")
@@ -735,7 +762,10 @@ fn eip3009_authorization_digest(
     );
     let authorization_hash = keccak256(
         (
-            keccak256(TRANSFER_WITH_AUTHORIZATION_TYPE),
+            keccak256(match kind {
+                Eip3009Kind::Transfer => TRANSFER_WITH_AUTHORIZATION_TYPE,
+                Eip3009Kind::Receive => RECEIVE_WITH_AUTHORIZATION_TYPE,
+            }),
             from,
             to,
             value,
@@ -903,6 +933,41 @@ mod tests {
             &quote,
         )
         .unwrap()
+    }
+
+    /// `cast wallet sign --data` over the same domain and message as `ReceiveWithAuthorization`.
+    const FOUNDRY_RECEIVE_TYPED_DATA_SIGNATURE: &str = "0x690fbdb97d2312e566ef96e1528616fb082410710630a9cb1fa19b908dfc5f3e4ce9549bc958186ee8829031c5b7ccf1a707c1e5ba0a505d6f37ace78284dd201c";
+
+    #[test]
+    fn receive_authorizations_are_checked_against_their_own_primary_type() {
+        let required = challenge();
+        let digest =
+            eip3009_typed_digest(&required.accepts[0], &authorization(), Eip3009Kind::Receive)
+                .unwrap();
+        let signer = TEST_PRIVATE_KEY.parse::<PrivateKeySigner>().unwrap();
+        assert_eq!(
+            signer.sign_hash_sync(&digest).unwrap().to_string(),
+            FOUNDRY_RECEIVE_TYPED_DATA_SIGNATURE
+        );
+        let mut receive = payment(&required);
+        receive.payload["signature"] = json!(FOUNDRY_RECEIVE_TYPED_DATA_SIGNATURE);
+        assert!(
+            validate_funding_payload_as(&receive, &required, 1_000, Eip3009Kind::Receive).is_ok()
+        );
+        assert!(
+            validate_funding_payload(&receive, &required, 1_000).is_err(),
+            "a receive signature must not pass as a transfer"
+        );
+        assert!(
+            validate_funding_payload_as(
+                &payment(&required),
+                &required,
+                1_000,
+                Eip3009Kind::Receive
+            )
+            .is_err(),
+            "a transfer signature must not pass as a receive"
+        );
     }
 
     #[test]

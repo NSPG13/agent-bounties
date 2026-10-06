@@ -12426,6 +12426,12 @@ async fn agent_native_claim(
         &nonce,
         valid_before,
         signature,
+        if v2_claim.is_some() {
+            payments_x402::Eip3009Kind::Receive
+        } else {
+            payments_x402::Eip3009Kind::Transfer
+        },
+        u64::try_from(Utc::now().timestamp()).unwrap_or_default(),
     )?;
 
     let mut sponsorship = store
@@ -12461,6 +12467,7 @@ async fn agent_native_claim(
             &nonce,
             valid_before,
             signature,
+            v2_claim.as_ref().map(|(round, _)| *round),
         )
         .await?
     };
@@ -13127,6 +13134,8 @@ fn map_agent_claim_db_error(error: DbError) -> AgentClaimProblem {
     }
 }
 
+/// `kind` is `Receive` for an autonomous-v2 bond, which never accepts a transfer authorization.
+#[allow(clippy::too_many_arguments)]
 fn validate_claim_authorization_signature(
     network: &BaseNetworkDescriptor,
     bounty_contract: &str,
@@ -13135,8 +13144,9 @@ fn validate_claim_authorization_signature(
     nonce: &str,
     valid_before: u64,
     signature: &AutonomousBountyAuthorizationSignature,
+    kind: payments_x402::Eip3009Kind,
+    now: u64,
 ) -> Result<(), AgentClaimProblem> {
-    let now = u64::try_from(Utc::now().timestamp()).unwrap_or_default();
     let timeout = valid_before.saturating_sub(now);
     if timeout < 6 {
         return Err(agent_claim_problem(
@@ -13195,7 +13205,7 @@ fn validate_claim_authorization_signature(
         })?,
         extensions: required.extensions.clone(),
     };
-    validate_funding_payload(&payload, &required, now).map_err(|_| {
+    payments_x402::validate_funding_payload_as(&payload, &required, now, kind).map_err(|_| {
         agent_claim_problem(
             StatusCode::UNPROCESSABLE_ENTITY,
             "authorization_invalid",
@@ -13702,6 +13712,9 @@ fn validate_atomic_sponsored_claim_intent(
     Ok(())
 }
 
+/// `v2_round` is the round an autonomous-v2 bond authorization is bound to; v2 claims are built
+/// by the v2 planner, so they need no autonomous-v1 deployment on the network.
+#[allow(clippy::too_many_arguments)]
 async fn relay_agent_native_claim(
     state: &SharedState,
     candidate: &ClaimCandidate,
@@ -13709,6 +13722,7 @@ async fn relay_agent_native_claim(
     nonce: &str,
     valid_before: u64,
     signature: &AutonomousBountyAuthorizationSignature,
+    v2_round: Option<u64>,
 ) -> Result<ClaimCandidate, AgentClaimProblem> {
     if candidate.status == ClaimCandidateStatus::Relaying {
         return reconcile_agent_native_claim(state, candidate.clone(), claim_bond).await;
@@ -13727,7 +13741,11 @@ async fn relay_agent_native_claim(
                 "Use the direct wallet_calls from plan_autonomous_bounty_claim.",
             )
         })?;
-    let planner = configured_autonomous_planner(&candidate.network).map_err(|status| {
+    let planner = match v2_round {
+        Some(_) => configured_autonomous_v2_planner(&candidate.network).map(|(planner, _)| planner),
+        None => configured_autonomous_planner(&candidate.network),
+    }
+    .map_err(|status| {
         agent_claim_problem(
             status,
             "planner_unavailable",
@@ -13736,8 +13754,19 @@ async fn relay_agent_native_claim(
             "Do not sign arbitrary calldata; retry later.",
         )
     })?;
-    let plan = planner
-        .plan_authorized_claim(
+    let relayer_address = relayer.address();
+    let plan = match v2_round {
+        Some(round) => planner.plan_v2_authorized_claim(
+            &candidate.network,
+            &candidate.bounty_contract,
+            &candidate.solver_wallet,
+            u128::from(claim_bond),
+            round,
+            valid_before,
+            signature,
+            Some(&relayer_address),
+        ),
+        None => planner.plan_authorized_claim(
             &candidate.network,
             &candidate.bounty_contract,
             &candidate.solver_wallet,
@@ -13745,17 +13774,18 @@ async fn relay_agent_native_claim(
             nonce,
             valid_before,
             signature,
-            Some(&relayer.address()),
+            Some(&relayer_address),
+        ),
+    }
+    .map_err(|_| {
+        agent_claim_problem(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "claim_plan_invalid",
+            "relay_claim",
+            "the signed claim could not be converted into the exact relay transaction",
+            "Sign only the returned signing_payload and retry with the same idempotency_key.",
         )
-        .map_err(|_| {
-            agent_claim_problem(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "claim_plan_invalid",
-                "relay_claim",
-                "the signed claim could not be converted into the exact relay transaction",
-                "Sign only the returned signing_payload and retry with the same idempotency_key.",
-            )
-        })?;
+    })?;
     validate_agent_claim_relay_intent(
         &plan.relay_transaction,
         &candidate.bounty_contract,
@@ -17645,6 +17675,40 @@ mod tests {
             decode_autonomous_bounty_logs(chain_base::rpc_logs_to_evm_logs(logs).unwrap()).unwrap();
         let feed = build_autonomous_bounty_feed(events, Vec::new(), false).unwrap();
         (fixture, feed)
+    }
+
+    /// The hosted claim relay must accept the v2 receive signature the bounty itself accepted, and
+    /// refuse it when checked as a v1 transfer authorization.
+    #[test]
+    fn hosted_claim_relay_checks_v2_bonds_as_receive_authorizations() {
+        let (fixture, _) = autonomous_v2_fixture_feed();
+        let signed = &fixture["gasless_loop"]["steps"][1]["authorizations"][0];
+        let message = &signed["typed_data"]["message"];
+        let raw = signed["signature"]
+            .as_str()
+            .unwrap()
+            .trim_start_matches("0x");
+        let signature = AutonomousBountyAuthorizationSignature {
+            v: u8::from_str_radix(&raw[128..130], 16).unwrap(),
+            r: format!("0x{}", &raw[..64]),
+            s: format!("0x{}", &raw[64..128]),
+        };
+        let valid_before: u64 = message["validBefore"].as_str().unwrap().parse().unwrap();
+        let check = |kind| {
+            validate_claim_authorization_signature(
+                &base_network_descriptor("base-sepolia").unwrap(),
+                message["to"].as_str().unwrap(),
+                message["from"].as_str().unwrap(),
+                message["value"].as_str().unwrap().parse().unwrap(),
+                message["nonce"].as_str().unwrap(),
+                valid_before,
+                &signature,
+                kind,
+                valid_before - 60,
+            )
+        };
+        assert!(check(payments_x402::Eip3009Kind::Receive).is_ok());
+        assert!(check(payments_x402::Eip3009Kind::Transfer).is_err());
     }
 
     #[test]

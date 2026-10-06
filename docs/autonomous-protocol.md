@@ -543,6 +543,21 @@ use the v2 planners. v2 is not deployed yet.
   the bounty in the same transaction, after the round's own event. No new
   round can start in between, so no solver can keep contributors from
   recovering their funds.
+- Every user action has a form a relayer such as the keeper can send, so users
+  need no ETH:
+  - creation, funding and the claim bond use receive authorizations;
+  - submissions use `submitWithSignature`;
+  - the creator's cancel uses `cancelWithSignature(deadline, signature)` over
+    EIP-712 `Cancel(address bounty,bytes32 bountyId,address creator,uint256
+    deadline)`, domain version "2". It acts exactly like `cancel()` sent by the
+    creator.
+  - a refund uses `withdrawRefundFor(contributor)`, which always pays the
+    contributor.
+  - verification, expiry, `withdrawBondRefund(solver)` and
+    `withdrawPlatformFee()` are permissionless.
+
+  `autonomous-v2-plan` plans the new calls with the `cancel_authorization`,
+  `cancel_relay`, `refund_withdrawal` and `bond_refund_withdrawal` actions.
 - If returning an expired submission's bond fails, the bond is held
   (`ClaimBondRefundDeferred`), the bounty still reopens, and
   `withdrawBondRefund(solver)` pays the same solver later. Settlement still
@@ -621,6 +636,8 @@ actions are:
 - `quote`
 - `create`, `authorized_create`
 - `contribution`, `authorized_contribution`
+- `cancel_authorization`, `cancel_relay`, `refund_withdrawal`,
+  `bond_refund_withdrawal`
 - `claim`, `authorized_claim`, where `claim_round` is the bounty's `round()`
   plus one and fixes the bond authorization nonce
 - `submission_authorization`, `submission_relay`

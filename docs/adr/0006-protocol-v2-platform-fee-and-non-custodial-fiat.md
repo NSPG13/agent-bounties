@@ -171,6 +171,11 @@ immutable, so the fixes landed before deployment:
   any time, and anyone may after the funding deadline. The alternative,
   forfeiting an unproven module bond, was rejected: a broken module or an
   absent relayer would cost an honest solver the bond.
+- **Every user action can be relayed.** The keeper relays automatic
+  verification, and users should need no ETH. v1 left two actions to the user's
+  own wallet. v2 adds `cancelWithSignature` (the creator signs EIP-712 `Cancel`)
+  and `withdrawRefundFor(contributor)` (anyone pushes a refund to its
+  contributor).
 - **Bond refunds cannot lock the escrow.** If an expired submission's bond
   cannot be returned (for example, a token-level block), it is held for a later
   `withdrawBondRefund`, and the bounty reopens so contributors can still
@@ -252,6 +257,9 @@ covers:
 - a malformed proof unable to reject an honest module submission, and an
   unproven submission expiring with its bond returned;
 - a blocked solver unable to lock the escrow, with the held bond paid later;
+- a creator cancelling through a relayed signature, with a stranger pushing
+  the refund to the contributor, and non-creator, expired or replayed cancel
+  signatures refused;
 - a solver cycling junk rounds unable to keep contributors from cancelling,
   with each timed-out bond returned;
 - a cancel request letting the active round pay a passing solver, and
