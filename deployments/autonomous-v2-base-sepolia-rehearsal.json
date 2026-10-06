@@ -1,0 +1,113 @@
+{
+  "schema_version": "agent-bounties/autonomous-v2-sepolia-rehearsal-v1",
+  "network": "base-sepolia",
+  "chain_id": 84532,
+  "source_commit": "555d99f2b12f6de8d166b742093698736860be7e",
+  "workflow_run": "https://github.com/NSPG13/agent-bounties/actions/runs/37491127675",
+  "factory": "0x81a1712493e8a0ed2bdff77f2d4493a7ff930af1",
+  "implementation": "0x7fb24acfd445e8140d1ad81fa5a2646ed2246914",
+  "deployment_transaction": "0xd2c0e58f771ec39abacdac6600b2ab02f9ce4896a5613ba3b4fb8c9a6b1bee91",
+  "deployment_block": 47766887,
+  "deployer": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+  "platform_fee_bps": 750,
+  "platform_fee_recipient": "0x884834e884d6e93462655a2820140ad03e6747bc",
+  "economics": {
+    "solver_reward": 100000,
+    "verifier_reward": 20000,
+    "platform_fee": 7500,
+    "target": 127500
+  },
+  "participants": {
+    "poster": "0xa03dfef9ed05228f4f0e50d8c5e6e4f4db8aee57",
+    "solver": "0x999ca92af59b4253fdb4e022edcee634c05880b7",
+    "verifiers": [
+      "0x1892887d3b3393f329691ed5c78a0d3ede48df99",
+      "0x8f90e93d3b4d19f3e0852a4fdb5784e039bf5ea9"
+    ],
+    "relayer": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc"
+  },
+  "participant_funding_transactions": [
+    "0xa5ce47e981ec285c4bf10b1dea1c6b446bd35d4207f259133d85329e2d6da4b7",
+    "0x6f5e459ef8e1e3867f6d7c47989eaa4405300a64cee111486dedc75a339f424e"
+  ],
+  "bounty": "0x883705ea2843b12d45012116fa687692609b95fb",
+  "bounty_id": "0xf691fd798928e34b46183145b2ac85c21cb961189c091ae61eaf251e3dae1fc0",
+  "steps": [
+    {
+      "step": "authorized_create",
+      "transaction_hash": "0xa6b8419ac4abf353829c419b1be98fc328731453977eda7c34fc1f003122823b",
+      "block": 47766890,
+      "events": [
+        "0x98de5035",
+        "0xddf252ad",
+        "FundingAdded",
+        "0x8b181e59",
+        "CanonicalBountyCreated",
+        "0x2bb66ee0",
+        "0xcc79b905",
+        "0x5f4d0239",
+        "0x33e7f511"
+      ]
+    },
+    {
+      "step": "authorized_claim",
+      "transaction_hash": "0x3cd67fbbcdd69df278c34f432fdb394930120c9d62694be6b0c63653ea14056b",
+      "block": 47766891,
+      "events": [
+        "BountyClaimed",
+        "0x98de5035",
+        "0xddf252ad"
+      ]
+    },
+    {
+      "step": "submission_relay",
+      "transaction_hash": "0x4fa665ec9fa89142d4b20fb3fb7ba3e21d05ec9cf42c4351ac3a4c9287a564ee",
+      "block": 47766891,
+      "events": [
+        "SubmissionAdded"
+      ]
+    },
+    {
+      "step": "attestation_settlement",
+      "transaction_hash": "0x82d403f0d517882e8494701f7a3e386c913bffca07404668670ebadc4910fd60",
+      "block": 47766892,
+      "events": [
+        "0xddf252ad",
+        "0xddf252ad",
+        "0xddf252ad",
+        "0xddf252ad",
+        "PlatformFeePaid",
+        "BountySettled"
+      ]
+    }
+  ],
+  "platform_fee_transferred": 7500,
+  "missing_events": [],
+  "status": "passed",
+  "configuration": {
+    "BASE_SEPOLIA_BOUNTY_V2_FACTORY": "0x81a1712493e8a0ed2bdff77f2d4493a7ff930af1",
+    "BASE_SEPOLIA_BOUNTY_V2_IMPLEMENTATION": "0x7fb24acfd445e8140d1ad81fa5a2646ed2246914",
+    "BASE_SEPOLIA_BOUNTY_V2_PLATFORM_FEE_BPS": "750",
+    "BASE_SEPOLIA_BOUNTY_V2_PLATFORM_FEE_RECIPIENT": "0x884834e884d6e93462655a2820140ad03e6747bc",
+    "BASE_INDEXER_PROTOCOL": "autonomous-v2",
+    "BASE_INDEXER_NETWORK": "base-sepolia",
+    "BASE_INDEXER_START_BLOCK": "47766887"
+  },
+  "evidence_boundary": "Only these canonical events prove funding and settlement; the fee is the canonical USDC Transfer from the bounty to the fee recipient in the confirmed settlement receipt.",
+  "independent_checks": {
+    "factory_platform_fee_bps": 750,
+    "factory_platform_fee_recipient": "0x884834e884d6e93462655a2820140ad03e6747bc",
+    "factory_is_canonical_bounty": true,
+    "bounty_protocol_version": "keccak256(agent-bounties/autonomous-v2)",
+    "bounty_status": "Settled (4)",
+    "platform_fee_paid_event_amount": 7500
+  },
+  "superseded_deployments": [
+    {
+      "factory": "0x33413020250cfdffd42bfc472415a2198f36941b",
+      "implementation": "0xe821db1abf28a46f789d88051ae52fcf48de13e5",
+      "workflow_run": "https://github.com/NSPG13/agent-bounties/actions/runs/37489002813",
+      "reason": "Deployed by the first live run, which stopped before creating a bounty: a lagging node on the load-balanced RPC reported no code at the new address (fixed in #1605). Unused; do not configure it."
+    }
+  ]
+}
