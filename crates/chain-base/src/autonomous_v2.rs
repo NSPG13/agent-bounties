@@ -993,7 +993,6 @@ pub(crate) fn project_autonomous_economics(
                     AutonomousBountyEventKind::PlatformFeePaid
                         | AutonomousBountyEventKind::PlatformFeeDeferred
                         | AutonomousBountyEventKind::PlatformFeeWithdrawn
-                        | AutonomousBountyEventKind::SubmissionBondForfeited
                 )
             }))
     {
@@ -1288,27 +1287,25 @@ mod tests {
     }
 
     #[test]
-    fn unproven_module_submission_moves_its_bond_into_the_timeout_pool() {
-        let unproven = item("unproven_module_forfeited");
-        assert_eq!(unproven.status, "claimable");
-        assert_eq!(unproven.timeout_bond_pool, "100000");
-        assert_eq!(unproven.funded_amount, unproven.target_amount);
-        let expired = unproven
-            .events
-            .iter()
-            .find(|event| event.kind == AutonomousBountyEventKind::SubmissionExpired)
-            .unwrap();
-        assert_eq!(expired.data["claim_bond_refunded"], 0);
-        let forfeited = unproven
-            .events
-            .iter()
-            .find(|event| event.kind == AutonomousBountyEventKind::SubmissionBondForfeited)
-            .unwrap();
-        assert_eq!(forfeited.data["claim_bond_forfeited"], 100_000);
-        assert_eq!(forfeited.data["round"], expired.data["round"]);
+    fn a_cancel_request_cancels_the_bounty_when_its_round_expires() {
+        let requested = item("cancel_requested_then_expired");
+        assert_eq!(requested.status, "cancelled");
+        let position = |kind| {
+            requested
+                .events
+                .iter()
+                .position(|event| event.kind == kind)
+                .unwrap()
+        };
+        let expired = &requested.events[position(AutonomousBountyEventKind::SubmissionExpired)];
+        assert_eq!(
+            expired.data["claim_bond_refunded"], 100_000,
+            "a verification timeout returns the bond"
+        );
         assert!(
-            forfeited.log_index < expired.log_index,
-            "the forfeit must precede the expiry so the expiry stays the round's latest event"
+            position(AutonomousBountyEventKind::SubmissionExpired)
+                < position(AutonomousBountyEventKind::BountyCancelled),
+            "the round must end before the bounty cancels"
         );
     }
 
@@ -1326,7 +1323,6 @@ mod tests {
             count(AutonomousBountyEventKind::CanonicalBountyPlatformFeeConfigured),
             6
         );
-        assert_eq!(count(AutonomousBountyEventKind::SubmissionBondForfeited), 1);
         assert_eq!(
             count(AutonomousBountyEventKind::CanonicalBountyClaimEligibilityConfigured),
             1

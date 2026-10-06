@@ -73,11 +73,7 @@ digital work, and receive settlement through trusted payment rails.
 - The solver bond equals one positive verifier reward. Pass and fail verdicts
   pay verifiers equally; rejection must leave the bounty fully funded.
 - Claim timeout forfeits the bond to the completion/refund bonus pool;
-  verification timeout returns it. Exception: an autonomous-v2
-  deterministic-module submission that nobody proves within the verification
-  window forfeits its bond to the same pool. Anyone, the solver included, can
-  relay the passing proof, so returning the bond would make junk submissions
-  free and let a solver keep the bounty from ever becoming cancellable.
+  verification timeout returns it.
 - Only a confirmed canonical `BountySettled` event proves solver payment.
 - Stripe ledger credits require verified webhook reconciliation.
 - Advisory AI filters cannot authorize payment. A precommitted AI-judge quorum

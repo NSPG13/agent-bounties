@@ -130,6 +130,9 @@ contract AgentBountyV2 is IAgentBountyV2 {
     bytes32 public submissionHash;
     bytes32 public evidenceHash;
     uint256 public pendingBondRefundTotal;
+    /// @notice Set by `cancel()` during an active round: no further round starts, and the bounty
+    /// cancels as soon as this round ends without settling.
+    bool public cancelRequested;
 
     mapping(address => uint256) public contributions;
     mapping(address => uint256) public pendingBondRefunds;
@@ -195,6 +198,7 @@ contract AgentBountyV2 is IAgentBountyV2 {
         bytes32 indexed bountyId, uint64 indexed round, address indexed solver, uint256 claimBondRefunded
     );
     event BountyCancelled(bytes32 indexed bountyId, uint256 timeoutBondRefundPool);
+    event CancellationRequested(bytes32 indexed bountyId, uint64 indexed round, address indexed requester);
     event RefundWithdrawn(
         bytes32 indexed bountyId,
         address indexed contributor,
@@ -211,13 +215,6 @@ contract AgentBountyV2 is IAgentBountyV2 {
     event PlatformFeeWithdrawn(bytes32 indexed bountyId, address indexed platformFeeRecipient, uint256 amount);
     event ClaimBondRefundDeferred(
         bytes32 indexed bountyId, uint64 indexed round, address indexed solver, uint256 amount
-    );
-    event SubmissionBondForfeited(
-        bytes32 indexed bountyId,
-        uint64 indexed round,
-        address indexed solver,
-        uint256 claimBondForfeited,
-        uint256 timeoutBondPool
     );
     event ClaimBondRefundWithdrawn(bytes32 indexed bountyId, address indexed solver, uint256 amount);
 
@@ -469,8 +466,7 @@ contract AgentBountyV2 is IAgentBountyV2 {
     /// @notice Anyone may relay a valid deterministic proof. A passing call settles atomically.
     /// The proof is caller-chosen, so a failing module verdict reverts instead of rejecting:
     /// otherwise any caller could reject an honest submission with a malformed proof. A
-    /// submission no one proves before `verificationExpiresAt` forfeits its bond through
-    /// `expireSubmission`, because anyone, the solver included, can relay a passing proof.
+    /// submission no one can prove expires through `expireSubmission`, which returns the bond.
     function verifyAndSettle(bytes calldata proof) external nonReentrant {
         require(_status == BountyStatus.Submitted, "not submitted");
         require(verificationMode == VerificationMode.DeterministicModule, "not module mode");
@@ -529,36 +525,26 @@ contract AgentBountyV2 is IAgentBountyV2 {
         timeoutBondPool += forfeitedBond;
         _resetClaim();
         emit ClaimExpired(bountyId, round, expiredSolver, forfeitedBond, timeoutBondPool);
+        _cancelIfRequested();
     }
 
-    /// @notice Reopens the bounty after its verification window.
-    /// Module mode: no passing proof arrived, so the bond is forfeited to `timeoutBondPool`, like
-    /// an unsubmitted claim. Returning it would let a solver repeat claim, junk submission and
-    /// expiry at no cost and keep the bounty from ever becoming cancellable.
-    /// Quorum mode: the committed verifiers did not finish, so the bond is returned. If that
-    /// transfer fails (for example a token-level block on the solver), the bond is held for
-    /// `withdrawBondRefund` so the bounty still reopens and contributors can still cancel.
+    /// @notice Returns the bond and reopens the bounty. If the bond transfer fails (for example
+    /// a token-level block on the solver), the bond is held for `withdrawBondRefund` so the
+    /// bounty still reopens and its contributors can still cancel and recover their funds.
     function expireSubmission() external nonReentrant {
         require(_status == BountyStatus.Submitted, "submission not active");
         require(block.timestamp > verificationExpiresAt, "submission not expired");
         address expiredSolver = solver;
-        uint256 bond = activeClaimBond;
+        uint256 refundedBond = activeClaimBond;
         activeClaimBond = 0;
         _resetClaim();
-        if (verificationMode == VerificationMode.DeterministicModule) {
-            require(timeoutBondPool <= type(uint128).max - bond, "timeout pool too large");
-            timeoutBondPool += bond;
-            emit SubmissionBondForfeited(bountyId, round, expiredSolver, bond, timeoutBondPool);
-            emit SubmissionExpired(bountyId, round, expiredSolver, 0);
-            return;
-        }
-        uint256 refundedBond = bond;
         if (refundedBond > 0 && !_tryTransfer(expiredSolver, refundedBond)) {
             pendingBondRefunds[expiredSolver] += refundedBond;
             pendingBondRefundTotal += refundedBond;
             emit ClaimBondRefundDeferred(bountyId, round, expiredSolver, refundedBond);
         }
         emit SubmissionExpired(bountyId, round, expiredSolver, refundedBond);
+        _cancelIfRequested();
     }
 
     /// @notice Anyone may retry a deferred bond refund. The destination is always the solver.
@@ -571,15 +557,20 @@ contract AgentBountyV2 is IAgentBountyV2 {
         emit ClaimBondRefundWithdrawn(bountyId, solver_, amount);
     }
 
+    /// @notice Cancels an idle bounty. During an active round it records a cancel request instead:
+    /// the round still finishes normally (a pass pays the solver), and an expiry or rejection then
+    /// cancels the bounty. No solver can keep a bounty from becoming cancellable by cycling rounds.
+    /// The creator may cancel at any time; anyone may after the funding deadline.
     function cancel() external nonReentrant {
-        require(_status == BountyStatus.Open || _status == BountyStatus.Claimable, "not cancellable");
         require(msg.sender == creator || block.timestamp > fundingDeadline, "not authorized");
-        _status = BountyStatus.Cancelled;
-        refundPrincipalTotal = fundedAmount;
-        refundBonusPool = timeoutBondPool;
-        refundBonusRemaining = timeoutBondPool;
-        timeoutBondPool = 0;
-        emit BountyCancelled(bountyId, refundBonusPool);
+        if (_status == BountyStatus.Claimed || _status == BountyStatus.Submitted) {
+            require(!cancelRequested, "cancel already requested");
+            cancelRequested = true;
+            emit CancellationRequested(bountyId, round, msg.sender);
+            return;
+        }
+        require(_status == BountyStatus.Open || _status == BountyStatus.Claimable, "not cancellable");
+        _cancel();
     }
 
     function withdrawRefund() external nonReentrant {
@@ -753,6 +744,21 @@ contract AgentBountyV2 is IAgentBountyV2 {
         _resetClaim();
         _payVerifierReward(verifierRecipients);
         emit SubmissionRejected(bountyId, round, rejectedSolver, verifierReward, forfeitedBond, verificationHash);
+        _cancelIfRequested();
+    }
+
+    /// @dev Runs after the round's own event, so indexers see the round end before the cancellation.
+    function _cancelIfRequested() private {
+        if (cancelRequested) _cancel();
+    }
+
+    function _cancel() private {
+        _status = BountyStatus.Cancelled;
+        refundPrincipalTotal = fundedAmount;
+        refundBonusPool = timeoutBondPool;
+        refundBonusRemaining = timeoutBondPool;
+        timeoutBondPool = 0;
+        emit BountyCancelled(bountyId, refundBonusPool);
     }
 
     function _payVerifierReward(address[] memory verifierRecipients) private {

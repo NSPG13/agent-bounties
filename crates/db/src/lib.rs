@@ -10893,7 +10893,6 @@ fn autonomous_event_kind_storage_name(kind: AutonomousBountyEventKind) -> &'stat
         AutonomousBountyEventKind::PlatformFeePaid => "platform_fee_paid",
         AutonomousBountyEventKind::PlatformFeeDeferred => "platform_fee_deferred",
         AutonomousBountyEventKind::PlatformFeeWithdrawn => "platform_fee_withdrawn",
-        AutonomousBountyEventKind::SubmissionBondForfeited => "submission_bond_forfeited",
     }
 }
 

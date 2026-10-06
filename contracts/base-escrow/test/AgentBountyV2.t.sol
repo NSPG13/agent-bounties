@@ -314,37 +314,7 @@ contract AgentBountyV2Test {
         require(token.balanceOf(address(solver)) == SOLVER_REWARD + VERIFIER_REWARD, "honest solver unpaid");
     }
 
-    /// @dev Regression: returning an unproven module bond let a solver repeat claim, junk
-    /// submission and expiry for free, so contributors could never cancel.
-    function testJunkSubmissionCyclesForfeitEveryBond() public {
-        AgentBountyV2 bounty = _create(SOLVER_REWARD, VERIFIER_REWARD, EXPECTED_TARGET);
-        V2CyclingGriefer griefer = new V2CyclingGriefer();
-        token.mint(address(griefer), 3 * VERIFIER_REWARD);
-        griefer.cycle(bounty, token);
-        for (uint256 i = 0; i < 2; i++) {
-            vm.warp(block.timestamp + 1 days + 1);
-            griefer.cycle(bounty, token);
-        }
-        require(bounty.timeoutBondPool() == 2 * VERIFIER_REWARD, "each expired junk round pays its bond");
-
-        vm.warp(block.timestamp + 1 days + 1);
-        (bool cycled,) = address(griefer).call(abi.encodeCall(V2CyclingGriefer.cycle, (bounty, token)));
-        require(!cycled, "griefer cycled without a bond");
-        bounty.expireSubmission();
-        require(token.balanceOf(address(griefer)) == 0, "griefer kept a bond");
-        require(bounty.timeoutBondPool() == 3 * VERIFIER_REWARD, "every bond forfeited");
-
-        uint256 beforeRefund = token.balanceOf(address(this));
-        bounty.cancel();
-        bounty.withdrawRefund();
-        require(
-            token.balanceOf(address(this)) == beforeRefund + EXPECTED_TARGET + 3 * VERIFIER_REWARD,
-            "contributor recovers the target and the forfeited bonds"
-        );
-        require(token.balanceOf(address(bounty)) == 0, "bounty retained funds");
-    }
-
-    function testUnprovenModuleSubmissionForfeitsTheBond() public {
+    function testUnprovenModuleSubmissionExpiresAndReturnsTheBond() public {
         AgentBountyV2 bounty = _create(SOLVER_REWARD, VERIFIER_REWARD, EXPECTED_TARGET);
         V2Actor solver = _claimAndSubmit(bounty);
         vm.warp(block.timestamp + 1 days + 1);
@@ -352,60 +322,18 @@ contract AgentBountyV2Test {
         bounty.expireSubmission();
 
         require(bounty.bountyStatus() == AgentBountyV2.BountyStatus.Claimable, "expiry must reopen");
-        require(token.balanceOf(address(solver)) == 0, "unproven bond must not be returned");
-        require(bounty.timeoutBondPool() == VERIFIER_REWARD, "bond joins the timeout pool");
+        require(token.balanceOf(address(solver)) == VERIFIER_REWARD, "bond returned on verification timeout");
         require(bounty.fundedAmount() == EXPECTED_TARGET, "target must stay funded");
-        require(bounty.pendingBondRefundTotal() == 0, "nothing held for refund");
-
-        V2Actor accepted = _claimAndSubmit(bounty);
-        bounty.verifyAndSettle(hex"01");
-        require(
-            token.balanceOf(address(accepted)) == SOLVER_REWARD + 2 * VERIFIER_REWARD,
-            "accepted solver receives the reward, its bond and the forfeited bond"
-        );
-        require(token.balanceOf(address(bounty)) == 0, "bounty retained funds");
-    }
-
-    function testUnprovenQuorumSubmissionExpiresAndReturnsTheBond() public {
-        AgentBountyV2 bounty = _createQuorum();
-        V2Actor solver = _claimAndSubmit(bounty);
-        vm.warp(block.timestamp + 1 days + 1);
-
-        bounty.expireSubmission();
-
-        require(bounty.bountyStatus() == AgentBountyV2.BountyStatus.Claimable, "expiry must reopen");
-        require(token.balanceOf(address(solver)) == VERIFIER_REWARD, "bond returned on verifier timeout");
-        require(bounty.timeoutBondPool() == 0, "verifier timeout must not forfeit");
         require(token.balanceOf(address(bounty)) == EXPECTED_TARGET, "escrow holds exactly the target");
     }
 
-    /// @dev Regression: a token-level block on a module solver must not lock contributors' funds.
-    function testBlockedModuleSolverCannotLockTheEscrow() public {
+    /// @dev Regression: a token-level block on the solver must not lock contributors' funds.
+    function testBlockedSolverCannotLockTheEscrow() public {
         AgentBountyV2 bounty = _create(SOLVER_REWARD, VERIFIER_REWARD, EXPECTED_TARGET);
         V2Actor solver = _claimAndSubmit(bounty);
         token.setBlocked(address(solver), true);
         (bool settled,) = address(bounty).call(abi.encodeCall(AgentBountyV2.verifyAndSettle, (hex"01")));
         require(!settled, "settled without paying the solver");
-
-        vm.warp(block.timestamp + 1 days + 1);
-        bounty.expireSubmission();
-        require(bounty.bountyStatus() == AgentBountyV2.BountyStatus.Claimable, "expiry must reopen");
-
-        uint256 beforeRefund = token.balanceOf(address(this));
-        bounty.cancel();
-        bounty.withdrawRefund();
-        require(
-            token.balanceOf(address(this)) == beforeRefund + EXPECTED_TARGET + VERIFIER_REWARD,
-            "contributor refund includes the forfeited bond"
-        );
-        require(token.balanceOf(address(bounty)) == 0, "bounty retained funds");
-    }
-
-    /// @dev Regression: a token-level block on a quorum solver must not lock contributors' funds.
-    function testBlockedQuorumSolverCannotLockTheEscrow() public {
-        AgentBountyV2 bounty = _createQuorum();
-        V2Actor solver = _claimAndSubmit(bounty);
-        token.setBlocked(address(solver), true);
 
         vm.warp(block.timestamp + 1 days + 1);
         bounty.expireSubmission();
@@ -428,18 +356,105 @@ contract AgentBountyV2Test {
     }
 
     function testHeldBondDoesNotBlockTheNextSettlement() public {
-        AgentBountyV2 bounty = _createQuorum();
+        AgentBountyV2 bounty = _create(SOLVER_REWARD, VERIFIER_REWARD, EXPECTED_TARGET);
         V2Actor blockedSolver = _claimAndSubmit(bounty);
         token.setBlocked(address(blockedSolver), true);
         vm.warp(block.timestamp + 1 days + 1);
         bounty.expireSubmission();
 
         V2Actor solver = _claimAndSubmit(bounty);
-        bounty.settleWithAttestations(_quorumVerdict(bounty, true));
+        bounty.verifyAndSettle(hex"01");
 
         require(token.balanceOf(address(solver)) == SOLVER_REWARD + VERIFIER_REWARD, "next solver unpaid");
         require(token.balanceOf(FEE_RECIPIENT) == EXPECTED_FEE, "fee unpaid");
         require(token.balanceOf(address(bounty)) == VERIFIER_REWARD, "held bond must stay escrowed");
+    }
+
+    /// @dev Regression: a solver that cycles claim, junk submission and expiry must not keep
+    /// contributors from recovering their funds. A verification timeout still returns its bond.
+    function testCyclingSolverCannotKeepContributorsFromCancelling() public {
+        AgentBountyV2 bounty = _create(SOLVER_REWARD, VERIFIER_REWARD, EXPECTED_TARGET);
+        V2CyclingGriefer griefer = new V2CyclingGriefer();
+        token.mint(address(griefer), VERIFIER_REWARD);
+        griefer.cycle(bounty, token);
+        vm.warp(block.timestamp + 1 days + 1);
+        griefer.cycle(bounty, token);
+        require(bounty.round() == 2, "griefer cycled");
+
+        vm.prank(address(0xC0FFEE));
+        bounty.cancel();
+        require(bounty.cancelRequested(), "anyone may request after the funding deadline");
+        require(bounty.bountyStatus() == AgentBountyV2.BountyStatus.Submitted, "active round continues");
+
+        vm.warp(block.timestamp + 1 days + 1);
+        (bool cycled,) = address(griefer).call(abi.encodeCall(V2CyclingGriefer.cycle, (bounty, token)));
+        require(!cycled, "a new round started after a cancel request");
+        bounty.expireSubmission();
+        require(bounty.bountyStatus() == AgentBountyV2.BountyStatus.Cancelled, "expiry must cancel");
+        require(token.balanceOf(address(griefer)) == VERIFIER_REWARD, "verification timeout returns the bond");
+
+        uint256 beforeRefund = token.balanceOf(address(this));
+        bounty.withdrawRefund();
+        require(token.balanceOf(address(this)) == beforeRefund + EXPECTED_TARGET, "contributor refunded");
+        require(token.balanceOf(address(bounty)) == 0, "bounty retained funds");
+    }
+
+    function testCancelRequestLetsTheActiveRoundFinishAndPay() public {
+        AgentBountyV2 bounty = _create(SOLVER_REWARD, VERIFIER_REWARD, EXPECTED_TARGET);
+        V2Actor solver = _claimAndSubmit(bounty);
+        bounty.cancel();
+        require(bounty.cancelRequested(), "creator may request during a round");
+
+        bounty.verifyAndSettle(hex"01");
+
+        require(bounty.bountyStatus() == AgentBountyV2.BountyStatus.Settled, "a passing round still settles");
+        require(token.balanceOf(address(solver)) == SOLVER_REWARD + VERIFIER_REWARD, "solver paid");
+        require(token.balanceOf(FEE_RECIPIENT) == EXPECTED_FEE, "fee paid");
+    }
+
+    function testCancelRequestAfterClaimTimeoutRefundsTheForfeitedBond() public {
+        AgentBountyV2 bounty = _create(SOLVER_REWARD, VERIFIER_REWARD, EXPECTED_TARGET);
+        V2Actor solver = _newSolver(bounty);
+        solver.claim(bounty);
+        bounty.cancel();
+        vm.warp(block.timestamp + 1 days + 1);
+
+        bounty.expireClaim();
+
+        require(bounty.bountyStatus() == AgentBountyV2.BountyStatus.Cancelled, "claim timeout must cancel");
+        uint256 beforeRefund = token.balanceOf(address(this));
+        bounty.withdrawRefund();
+        require(
+            token.balanceOf(address(this)) == beforeRefund + EXPECTED_TARGET + VERIFIER_REWARD,
+            "refund includes the bond forfeited by the unsubmitted claim"
+        );
+        require(token.balanceOf(address(bounty)) == 0, "bounty retained funds");
+    }
+
+    function testQuorumRejectionWithCancelRequestRefundsTheFullTarget() public {
+        AgentBountyV2 bounty = _createQuorum();
+        _claimAndSubmit(bounty);
+        bounty.cancel();
+
+        bounty.settleWithAttestations(_quorumVerdict(bounty, false));
+
+        require(bounty.bountyStatus() == AgentBountyV2.BountyStatus.Cancelled, "rejection must cancel");
+        require(token.balanceOf(vm.addr(VERIFIER_KEY_A)) == VERIFIER_REWARD / 2, "verifier paid for the verdict");
+        uint256 beforeRefund = token.balanceOf(address(this));
+        bounty.withdrawRefund();
+        require(token.balanceOf(address(this)) == beforeRefund + EXPECTED_TARGET, "the bond kept the target whole");
+        require(token.balanceOf(address(bounty)) == 0, "bounty retained funds");
+    }
+
+    function testOnlyTheCreatorRequestsCancelBeforeTheFundingDeadline() public {
+        AgentBountyV2 bounty = _create(SOLVER_REWARD, VERIFIER_REWARD, EXPECTED_TARGET);
+        _claimAndSubmit(bounty);
+        vm.prank(address(0xC0FFEE));
+        (bool strangerRequested,) = address(bounty).call(abi.encodeCall(AgentBountyV2.cancel, ()));
+        require(!strangerRequested, "a stranger requested before the funding deadline");
+        bounty.cancel();
+        (bool requestedTwice,) = address(bounty).call(abi.encodeCall(AgentBountyV2.cancel, ()));
+        require(!requestedTwice, "a second request was recorded");
     }
 
     /// @dev Regression: a published bond authorization can neither be executed directly at the

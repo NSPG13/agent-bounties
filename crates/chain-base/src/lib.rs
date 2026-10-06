@@ -3808,8 +3808,6 @@ pub enum AutonomousBountyEventKind {
     PlatformFeeDeferred,
     /// autonomous-v2 bounty: a deferred fee was forwarded to the recipient.
     PlatformFeeWithdrawn,
-    /// autonomous-v2 module bounty: an unproven submission's bond moved to the timeout pool.
-    SubmissionBondForfeited,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -5074,7 +5072,6 @@ pub fn autonomous_bounty_event_topics() -> Vec<String> {
         event_topic("PlatformFeePaid(bytes32,uint64,address,uint256)"),
         event_topic("PlatformFeeDeferred(bytes32,uint64,address,uint256)"),
         event_topic("PlatformFeeWithdrawn(bytes32,address,uint256)"),
-        event_topic("SubmissionBondForfeited(bytes32,uint64,address,uint256,uint256)"),
     ]
 }
 
@@ -5269,21 +5266,6 @@ impl AutonomousBountyLogDecoder {
                     json!({
                         "round": topic_u64(&log, 2, "ClaimExpired")?,
                         "solver": address_from_word(topic_word(&log, 3, "ClaimExpired")?),
-                        "claim_bond_forfeited": word_to_u128(words[0])?,
-                        "timeout_bond_pool": word_to_u128(words[1])?,
-                    }),
-                )
-            }
-            AutonomousEventSignature::SubmissionBondForfeited => {
-                let name = "SubmissionBondForfeited";
-                require_topic_count(&log, 4, name)?;
-                let words = decode_words(&log.data, 2, name)?;
-                (
-                    AutonomousBountyEventKind::SubmissionBondForfeited,
-                    word_hex(topic_word(&log, 1, name)?),
-                    json!({
-                        "round": topic_u64(&log, 2, name)?,
-                        "solver": address_from_word(topic_word(&log, 3, name)?),
                         "claim_bond_forfeited": word_to_u128(words[0])?,
                         "timeout_bond_pool": word_to_u128(words[1])?,
                     }),
@@ -5554,15 +5536,13 @@ pub fn build_autonomous_bounty_feed(
                         )
                     })?;
                 }
-                AutonomousBountyEventKind::ClaimExpired
-                | AutonomousBountyEventKind::SubmissionBondForfeited => {
+                AutonomousBountyEventKind::ClaimExpired => {
                     status = "claimable";
                     timeout_bond_pool =
                         event.data["timeout_bond_pool"].as_u64().ok_or_else(|| {
-                            ChainBaseError::InvalidLogData(format!(
-                                "{:?} missing timeout_bond_pool",
-                                event.kind
-                            ))
+                            ChainBaseError::InvalidLogData(
+                                "ClaimExpired missing timeout_bond_pool".to_string(),
+                            )
                         })?;
                 }
                 AutonomousBountyEventKind::BountyBecameClaimable
@@ -6289,7 +6269,6 @@ enum AutonomousEventSignature {
     PlatformFeePaid,
     PlatformFeeDeferred,
     PlatformFeeWithdrawn,
-    SubmissionBondForfeited,
 }
 
 fn autonomous_event_signature(topic: &str) -> Option<AutonomousEventSignature> {
@@ -6374,10 +6353,6 @@ fn autonomous_event_signature(topic: &str) -> Option<AutonomousEventSignature> {
         (
             "PlatformFeeWithdrawn(bytes32,address,uint256)",
             AutonomousEventSignature::PlatformFeeWithdrawn,
-        ),
-        (
-            "SubmissionBondForfeited(bytes32,uint64,address,uint256,uint256)",
-            AutonomousEventSignature::SubmissionBondForfeited,
         ),
     ];
     signatures
@@ -10222,9 +10197,8 @@ mod tests {
         let request = query.rpc_request(9);
         assert_eq!(request.params[0].from_block, "0x64");
         assert_eq!(request.params[0].to_block, "0x78");
-        // 15 autonomous-v1 topics, the 5 autonomous-v2 fee and gate topics, and the v2 module
-        // bond forfeit.
-        assert_eq!(request.params[0].topics[0].len(), 21);
+        // 15 autonomous-v1 topics plus the 5 autonomous-v2 fee and gate topics.
+        assert_eq!(request.params[0].topics[0].len(), 20);
         assert_eq!(
             request.params[0].address,
             EthGetLogsAddressFilter::One(query.contract)

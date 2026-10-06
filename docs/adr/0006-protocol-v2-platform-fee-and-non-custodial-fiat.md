@@ -160,19 +160,21 @@ immutable, so the fixes landed before deployment:
   `claimAuthorizationNonce(solver, round)`. It cannot open a later round after
   its solver lost the race.
 - **Pass-only module verdicts.** `verifyAndSettle` takes a caller-chosen proof,
-  so a failing module verdict now reverts instead of rejecting. Rejection
-  stays in signed quorums.
-- **Unproven module bonds are forfeited.** A module submission nobody proves
-  within the verification window forfeits its bond to `timeoutBondPool`
-  (`SubmissionBondForfeited`). Returning it would let a solver repeat claim,
-  junk submission and expiry at no cost, and keep the bounty from ever
-  becoming cancellable. The solver can always relay its own passing proof.
-  This narrows the v1 rule that a verification timeout returns the bond to
-  quorum mode, where the committed verifiers are the ones who did not finish.
-- **Bond refunds cannot lock the escrow.** If a quorum timeout's bond cannot be
-  returned (for example, a token-level block), it is held for a later
+  so a failing module verdict now reverts instead of rejecting. Unproven
+  submissions expire and return the bond. Rejection stays in signed quorums.
+- **Cancel requests end griefing rounds.** Junk module submissions cannot be
+  rejected, and a verification timeout returns the bond, because a solver must
+  never lose money when verification does not run. A solver could therefore
+  cycle claim, junk submission and expiry for free. To stop that, `cancel()`
+  during an active round records a request: the round finishes normally, and
+  its expiry or rejection then cancels the bounty. The creator may request at
+  any time, and anyone may after the funding deadline. The alternative,
+  forfeiting an unproven module bond, was rejected: a broken module or an
+  absent relayer would cost an honest solver the bond.
+- **Bond refunds cannot lock the escrow.** If an expired submission's bond
+  cannot be returned (for example, a token-level block), it is held for a later
   `withdrawBondRefund`, and the bounty reopens so contributors can still
-  cancel. The module path makes no transfer at expiry.
+  cancel.
 - **ECDSA before ERC-1271**, so EIP-7702 delegated EOAs sign with their key.
 
 The owner waived an independent human review before mainnet (#1577). The
@@ -247,12 +249,14 @@ covers:
 - relayed EIP-3009 creation funding the full target, including the fee;
 - a creation authorization funding only the bounty whose id is its nonce;
 - a bond authorization bound to its payee and round;
-- a malformed proof unable to reject an honest module submission;
-- an unproven module submission forfeiting its bond to the timeout pool, so
-  repeated junk submissions cost a bond each and contributors can cancel;
-- a quorum verification timeout returning the bond;
-- a blocked module or quorum solver unable to lock the escrow, with a held
-  quorum bond paid later;
+- a malformed proof unable to reject an honest module submission, and an
+  unproven submission expiring with its bond returned;
+- a blocked solver unable to lock the escrow, with the held bond paid later;
+- a solver cycling junk rounds unable to keep contributors from cancelling,
+  with each timed-out bond returned;
+- a cancel request letting the active round pay a passing solver, and
+  cancelling after a claim timeout or a quorum rejection with the target
+  refunded in full;
 - EIP-7702 delegated EOA signatures and ERC-1271 contract signatures;
 - a rejected quorum round keeping the fee escrowed;
 - the timeout bonus going to the solver, not the fee;
@@ -273,8 +277,7 @@ runs against real Base USDC at a pinned block, and runs in
   solver, and the fee forwards after un-blacklisting;
 - a published receive authorization cannot be executed at USDC directly (as a
   transfer or a receive), funds no other terms, and opens no later round;
-- a real Circle blacklist on a module solver cannot lock the escrow; the
-  unproven bond is forfeited and refunded to contributors on cancellation.
+- a real Circle blacklist on the solver cannot lock the escrow.
 
 Slither 0.11.6 reports two medium findings in `AgentBountyV2`. Both are
 triaged as not exploitable:
