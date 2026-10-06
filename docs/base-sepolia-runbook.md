@@ -144,5 +144,22 @@ and the hosted settings (`BASE_SEPOLIA_BOUNTY_V2_*`, and
   keeper needs about 0.0003 Base Sepolia ETH and 0.15 test USDC. The tool
   refuses to start, and reports the shortfall, when it holds less.
 
+**Latest live result.** Passed on 2026-10-06 ([run
+37491127675](https://github.com/NSPG13/agent-bounties/actions/runs/37491127675)).
+
+| Item | Value |
+| --- | --- |
+| Factory | `0x81a1712493e8a0ed2bdff77f2d4493a7ff930af1` |
+| Factory deployment block | 47766887 |
+| Bounty | `0x883705ea2843b12d45012116fa687692609b95fb` |
+| Settlement block | 47766892 |
+| `PlatformFeePaid` | 7,500 |
+| Keeper gas | about 0.00005 ETH |
+
+All four relayed steps emitted their canonical events.
+`deployments/autonomous-v2-base-sepolia-rehearsal.json` holds every
+transaction, these checks (repeated directly on-chain) and the factory left
+by the first, lag-failed run, which must not be configured.
+
 A Base Sepolia settlement still has no monetary value. Mainnet deployment waits
 for the independent review in #1577.
