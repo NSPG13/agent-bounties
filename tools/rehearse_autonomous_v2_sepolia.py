@@ -7,8 +7,12 @@ solver and two verifiers are fresh in-memory wallets that only sign `cli autonom
 data with `cast wallet sign --data`; they never hold ETH. The tool records:
 - the deployment;
 - every relayed transaction and the canonical events it emitted;
-- the fee recipient's balance change;
+- the platform fee, from the USDC Transfer to the fee recipient in the settlement receipt;
 - the API and indexer settings for this factory.
+
+Public RPC endpoints are load-balanced, so a read can reach a node that has not seen the last
+write. Reads that follow a write are retried, the keeper nonce is tracked locally, and every
+pass condition comes from confirmed receipts rather than `latest` state.
 
 Base Sepolia only. Private keys are never printed or written. Requires forge, cast and cargo on
 PATH.
@@ -38,6 +42,9 @@ PLATFORM_FEE = -(-SOLVER_REWARD * FEE_BPS // 10_000)
 TARGET = SOLVER_REWARD + VERIFIER_REWARD + PLATFORM_FEE
 MIN_KEEPER_WEI = 300_000_000_000_000  # 0.0003 ETH covers deployment, transfers and four relays
 SECP256K1_ORDER = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+READ_ATTEMPTS = 30
+READ_DELAY_SECONDS = 2
 EVENTS = {
     "CanonicalBountyCreated(bytes32,address,address,bytes32,bytes32,bytes32)": "CanonicalBountyCreated",
     "FundingAdded(bytes32,address,uint256,uint256,uint256)": "FundingAdded",
@@ -61,10 +68,35 @@ def run(*args: str, cwd: Path = ROOT, secret: bool = False) -> str:
     return result.stdout.strip()
 
 
+def run_read(*args: str) -> str:
+    """A read-only call, retried while a lagging RPC node catches up with our last write."""
+    for attempt in range(READ_ATTEMPTS):
+        try:
+            return run(*args)
+        except RehearsalError:
+            if attempt == READ_ATTEMPTS - 1:
+                raise
+            time.sleep(READ_DELAY_SECONDS)
+    raise AssertionError("unreachable")
+
+
 class Chain:
     def __init__(self, rpc: str, keeper_key: str) -> None:
         self.rpc, self.keeper_key = rpc, keeper_key
         self.keeper = self.address(keeper_key)
+        self.nonce: int | None = None
+
+    def next_nonce(self) -> str:
+        # Track the nonce locally: a lagging node can report a stale one between our own sends. The
+        # starting value is the highest of a few reads, in case one hits a lagging node.
+        if self.nonce is None:
+            reads = []
+            for _ in range(3):
+                reads.append(int(run_read("cast", "nonce", self.keeper, "--block", "pending", "--rpc-url", self.rpc)))
+                time.sleep(1)
+            self.nonce = max(reads)
+        nonce, self.nonce = self.nonce, self.nonce + 1
+        return str(nonce)
 
     def address(self, key: str) -> str:
         return run("cast", "wallet", "address", "--private-key", key, secret=True).lower()
@@ -78,33 +110,38 @@ class Chain:
                 return f"0x{value:064x}"
 
     def usdc_balance(self, wallet: str) -> int:
-        value = run("cast", "call", USDC, "balanceOf(address)(uint256)", wallet, "--rpc-url", self.rpc)
+        value = run_read("cast", "call", USDC, "balanceOf(address)(uint256)", wallet, "--rpc-url", self.rpc)
         return int(value.split()[0])
 
     def send(self, to: str, data: str) -> dict:
         receipt = json.loads(run("cast", "send", "--rpc-url", self.rpc, "--private-key", self.keeper_key, "--json",
-                                 to, "--data", data, secret=True))
+                                 "--nonce", self.next_nonce(), to, "--data", data, secret=True))
         if int(str(receipt["status"]), 16) != 1:
             raise RehearsalError(f"transaction to {to} reverted: {receipt['transactionHash']}")
         return receipt
 
     def transfer_usdc(self, wallet: str, amount: int) -> str:
         receipt = json.loads(run("cast", "send", "--rpc-url", self.rpc, "--private-key", self.keeper_key, "--json",
-                                 USDC, "transfer(address,uint256)", wallet, str(amount), secret=True))
+                                 "--nonce", self.next_nonce(), USDC, "transfer(address,uint256)", wallet,
+                                 str(amount), secret=True))
+        if int(str(receipt["status"]), 16) != 1:
+            raise RehearsalError(f"USDC transfer to {wallet} reverted: {receipt['transactionHash']}")
         return receipt["transactionHash"]
 
     def deploy_factory(self) -> tuple[str, str, str, int]:
         output = run("forge", "create", "src/AgentBountyFactoryV2.sol:AgentBountyFactoryV2", "--rpc-url", self.rpc,
-                     "--private-key", self.keeper_key, "--broadcast", "--json", "--constructor-args", USDC,
-                     str(FEE_BPS), FEE_RECIPIENT, cwd=CONTRACTS, secret=True)
+                     "--private-key", self.keeper_key, "--broadcast", "--json", "--nonce", self.next_nonce(),
+                     "--constructor-args", USDC, str(FEE_BPS), FEE_RECIPIENT, cwd=CONTRACTS, secret=True)
         # `--json` is stable across Foundry releases; the human-readable output is not.
         report = last_json_object(output, "deployedTo")
         factory = str((report or {}).get("deployedTo", ""))
         transaction = str((report or {}).get("transactionHash", ""))
         if not re.fullmatch(r"0x[0-9a-fA-F]{40}", factory) or not re.fullmatch(r"0x[0-9a-fA-F]{64}", transaction):
             raise RehearsalError("forge create did not report the factory deployment")
-        receipt = json.loads(run("cast", "receipt", transaction, "--rpc-url", self.rpc, "--json"))
-        implementation = run("cast", "call", factory, "implementation()(address)", "--rpc-url", self.rpc)
+        receipt = json.loads(run_read("cast", "receipt", transaction, "--rpc-url", self.rpc, "--json"))
+        if int(str(receipt["status"]), 16) != 1:
+            raise RehearsalError(f"factory deployment reverted: {transaction}")
+        implementation = run_read("cast", "call", factory, "implementation()(address)", "--rpc-url", self.rpc)
         return factory.lower(), implementation.lower(), transaction, int(str(receipt["blockNumber"]), 16)
 
 
@@ -119,6 +156,21 @@ def last_json_object(output: str, required_key: str) -> dict | None:
         if isinstance(value, dict) and required_key in value:
             return value
     return None
+
+
+def usdc_transferred(receipt: dict, source: str, recipient: str) -> int:
+    """USDC moved from `source` to `recipient` in a confirmed receipt, from the canonical token's logs."""
+    def topic_address(topic: str) -> str:
+        return "0x" + topic[-40:].lower()
+
+    total = 0
+    for log in receipt["logs"]:
+        topics = log.get("topics") or []
+        if (str(log.get("address", "")).lower() == USDC and len(topics) == 3
+                and topics[0].lower() == TRANSFER_TOPIC and topic_address(topics[1]) == source.lower()
+                and topic_address(topics[2]) == recipient.lower()):
+            total += int(str(log["data"]), 16)
+    return total
 
 
 def event_names(receipt: dict) -> list[str]:
@@ -167,7 +219,6 @@ def main(argv: list[str] | None = None) -> int:
     work = ROOT / "target" / "rehearse-autonomous-v2"
     work.mkdir(parents=True, exist_ok=True)
 
-    fee_before = chain.usdc_balance(FEE_RECIPIENT)
     factory, implementation, deployment_tx, deployment_block = chain.deploy_factory()
     base = {"network": "base-sepolia", "factory_contract": factory, "implementation_contract": implementation}
     factory_fee = {"platform_fee_bps": FEE_BPS, "platform_fee_recipient": FEE_RECIPIENT}
@@ -207,11 +258,13 @@ def main(argv: list[str] | None = None) -> int:
         "verifiers": verifiers, "threshold": 2, "initial_funding": usdc(TARGET), "creation_nonce": word("nonce"),
     }
     steps = []
+    receipts: dict[str, dict] = {}
 
     def relay(name: str, request: dict, pointer: str | None = None) -> dict:
         planned = plan(request)
         intent = planned[pointer] if pointer else planned
         receipt = chain.send(intent["to"], intent["data"])
+        receipts[name] = receipt
         steps.append({"step": name, "transaction_hash": receipt["transactionHash"],
                       "block": int(str(receipt["blockNumber"]), 16), "events": event_names(receipt)})
         return planned
@@ -247,8 +300,7 @@ def main(argv: list[str] | None = None) -> int:
     relay("attestation_settlement", {"action": "attestation_settlement", "bounty_contract": bounty,
                                      "caller": chain.keeper, "attestations": attestations})
 
-    time.sleep(2)
-    fee_after = chain.usdc_balance(FEE_RECIPIENT)
+    fee_transferred = usdc_transferred(receipts["attestation_settlement"], bounty, FEE_RECIPIENT)
     expected = {
         "authorized_create": ["CanonicalBountyCreated", "FundingAdded"],
         "authorized_claim": ["BountyClaimed"],
@@ -274,9 +326,9 @@ def main(argv: list[str] | None = None) -> int:
         "bounty": bounty,
         "bounty_id": bounty_id,
         "steps": steps,
-        "fee_recipient_usdc_delta": fee_after - fee_before,
+        "platform_fee_transferred": fee_transferred,
         "missing_events": missing,
-        "status": "passed" if not missing and fee_after - fee_before == PLATFORM_FEE else "failed",
+        "status": "passed" if not missing and fee_transferred == PLATFORM_FEE else "failed",
         "configuration": {
             "BASE_SEPOLIA_BOUNTY_V2_FACTORY": factory,
             "BASE_SEPOLIA_BOUNTY_V2_IMPLEMENTATION": implementation,
@@ -286,11 +338,11 @@ def main(argv: list[str] | None = None) -> int:
             "BASE_INDEXER_NETWORK": "base-sepolia",
             "BASE_INDEXER_START_BLOCK": str(deployment_block),
         },
-        "evidence_boundary": "Only these canonical events prove funding and settlement; the fee delta is read from the USDC contract.",
+        "evidence_boundary": "Only these canonical events prove funding and settlement; the fee is the canonical USDC Transfer from the bounty to the fee recipient in the confirmed settlement receipt.",
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(evidence, indent=2) + "\n")
-    print(json.dumps({key: evidence[key] for key in ("status", "factory", "bounty", "fee_recipient_usdc_delta",
+    print(json.dumps({key: evidence[key] for key in ("status", "factory", "bounty", "platform_fee_transferred",
                                                       "missing_events")}, indent=2))
     return 0 if evidence["status"] == "passed" else 1
 

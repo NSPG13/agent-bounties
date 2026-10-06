@@ -79,7 +79,7 @@ jobs:
       cancel-in-progress: false
     env:
       BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
-      BASE_SEPOLIA_RPC_URL: https://sepolia.base.org
+      BASE_SEPOLIA_RPC_URL: ${{ vars.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
