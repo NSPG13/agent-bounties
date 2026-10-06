@@ -625,9 +625,15 @@ payment evidence.
 `BASE_SEPOLIA_BOUNTY_V2_{FACTORY,IMPLEMENTATION,PLATFORM_FEE_BPS,PLATFORM_FEE_RECIPIENT}`
 settings are present. A partial setting, fee terms over the cap, or any Base
 mainnet v2 setting is refused. Mainnet v2 is pinned in code only from the
-deployment record of the guarded mainnet workflow (#1577). Hosted contribution
-and claim plans still use the v1 authorization planner; keep hosted v2
-unconfigured until they select the v2 planners for v2 bounties.
+deployment record of the guarded mainnet workflow (#1577).
+- Contribution and claim plans (API, MCP and the agent-native claim flow)
+  select the v2 planners from the indexed bounty's `protocol_version`. A v2
+  bond nonce is derived from the next round in the indexed `BountyClaimed`
+  history, and an authorized claim whose nonce differs is refused. A lagging
+  index yields a stale round, which the bounty rejects on-chain.
+- x402 funding refuses v2 bounties: its scheme signs a transfer authorization.
+- The participate page does not sign v2 bond or funding authorizations yet; it
+  points to the MCP and API planners.
 - `POST /v1/base/autonomous-bounties/v2/quote` returns the fee-inclusive target
   for the configured factory. The MCP tool `quote_autonomous_v2_bounty` does
   the same.

@@ -812,6 +812,18 @@ pub fn autonomous_v2_claim_authorization_nonce(
     Ok(word_hex(Keccak256::digest(encoded).into()))
 }
 
+/// The round the next claim opens: one past the highest indexed `BountyClaimed` round. An index
+/// that lags the chain yields a stale round, whose bond authorization the bounty then rejects.
+pub fn autonomous_v2_next_claim_round(item: &AutonomousBountyFeedItem) -> u64 {
+    item.events
+        .iter()
+        .filter(|event| event.kind == AutonomousBountyEventKind::BountyClaimed)
+        .filter_map(|event| event.data["round"].as_u64())
+        .max()
+        .unwrap_or(0)
+        + 1
+}
+
 fn require_v2_claim_nonce(
     bounty_contract: &str,
     solver: &str,

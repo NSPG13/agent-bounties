@@ -271,6 +271,8 @@
       const actionKey = { solve: "claim", fund: "contribution", complete: "submission" }[intent.action];
       const gas = await client.request("/v1/base/gas-sponsorship");
       if (!actionKey || gas?.[actionKey]?.available !== true || gas[actionKey].customer_gas_wei !== "0") throw new Error("Gas sponsorship is temporarily unavailable. Keep this review and retry; no paid wallet transaction is needed.");
+      // v2 bounties accept only USDC receive authorizations, which this page's sponsored relay does not sign yet.
+      if ((intent.action === "solve" || intent.action === "fund") && item.protocol_version === "agent-bounties/autonomous-v2") throw new Error("This page cannot sign v2 bond or funding authorizations yet. Use the MCP or API planners for this bounty. No signature was requested.");
       if (intent.action === "solve") {
         const body = { idempotency_key: `participate:${intentId}:${wallet}`, network, bounty_contract: contract, solver_wallet: wallet, request_bond_sponsorship: false };
         const plan = await claimRequest(body);
