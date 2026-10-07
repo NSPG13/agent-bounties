@@ -1,0 +1,19 @@
+name: Autonomous Auto-Verify
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Discover and Mine
+        run: python scripts/auto_verify_autonomous_bounties.py
+  settle:
+    needs: discover
+    runs-on: ubuntu-latest
+    steps:
+      - name: Settle
+        run: python scripts/relay_autonomous_action.py
