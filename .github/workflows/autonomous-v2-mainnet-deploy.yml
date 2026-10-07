@@ -1,0 +1,105 @@
+name: Autonomous-v2 Base mainnet deploy
+
+# Deploys AgentBountyFactoryV2 to Base mainnet with the launch fee terms (750 bps to
+# 0x884834E884d6e93462655A2820140aD03E6747bC). The deterministic gates and a read-only preflight
+# run on every relevant pull request without secrets. Only a manual dispatch from main that types
+# the exact confirmation runs the keeper-signed deployment, after the gates pass in the same run.
+# The script refuses a key other than the pinned keeper and refuses once a deployment is recorded.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type deploy-autonomous-v2-mainnet to deploy AgentBountyFactoryV2 to Base mainnet
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - ".github/workflows/autonomous-v2-mainnet-deploy.yml"
+      - "scripts/deploy_autonomous_v2_mainnet.py"
+      - "scripts/test_deploy_autonomous_v2_mainnet.py"
+      - "contracts/base-escrow/src/AgentBountyV2.sol"
+      - "contracts/base-escrow/src/AgentBountyFactoryV2.sol"
+      - "contracts/base-escrow/src/IAgentBountyV2.sol"
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic-gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - name: Deployment helper tests
+        run: python -m unittest scripts.test_deploy_autonomous_v2_mainnet -v
+      - name: Autonomous-v2 contract tests
+        run: forge test --root contracts/base-escrow --match-contract AgentBountyV2Test --fuzz-runs 1000
+      - name: Real-USDC Base mainnet fork tests
+        env:
+          RUN_MAINNET_FORK: "true"
+        run: forge test --root contracts/base-escrow --match-contract AgentBountyV2MainnetForkTest -vv
+      - name: Read-only Base mainnet preflight
+        run: python scripts/deploy_autonomous_v2_mainnet.py plan --output target/autonomous-v2-mainnet-plan.json
+      - name: Summarize
+        if: always()
+        run: |
+          if [ -f target/autonomous-v2-mainnet-plan.json ]; then
+            {
+              echo '## Autonomous-v2 Base mainnet preflight'
+              echo '```json'
+              cat target/autonomous-v2-mainnet-plan.json
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: autonomous-v2-mainnet-plan
+          path: target/autonomous-v2-mainnet-plan.json
+          if-no-files-found: ignore
+
+  base-mainnet-deploy:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.confirm == 'deploy-autonomous-v2-mainnet'
+    needs: deterministic-gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    concurrency:
+      group: agent-bounties-shared-base-keeper
+      cancel-in-progress: false
+    env:
+      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+      BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - name: Deploy and verify AgentBountyFactoryV2 on Base mainnet
+        run: python scripts/deploy_autonomous_v2_mainnet.py deploy --output target/autonomous-v2-base-mainnet.json
+      - name: Summarize
+        if: always()
+        run: |
+          if [ -f target/autonomous-v2-base-mainnet.json ]; then
+            {
+              echo '## Autonomous-v2 Base mainnet deployment'
+              echo '```json'
+              cat target/autonomous-v2-base-mainnet.json
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: autonomous-v2-base-mainnet-deployment
+          path: target/autonomous-v2-base-mainnet.json
+          if-no-files-found: ignore

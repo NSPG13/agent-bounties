@@ -571,9 +571,11 @@ enum Command {
     },
     /// Plan one autonomous-v2 action from a JSON request
     AutonomousV2Plan {
-        /// Request JSON file, or `-` for stdin. Actions: quote, create, authorized_create, claim,
-        /// authorized_claim, submission_authorization, submission_relay, verification_attestation,
-        /// attestation_settlement, platform_fee_forward. Prints unsigned typed data or an unsigned
+        /// Request JSON file, or `-` for stdin. Actions: quote, create, authorized_create,
+        /// contribution, authorized_contribution, claim, authorized_claim,
+        /// submission_authorization, submission_relay, verification_attestation,
+        /// attestation_settlement, platform_fee_forward, cancel_authorization, cancel_relay,
+        /// refund_withdrawal, bond_refund_withdrawal. Prints unsigned typed data or an unsigned
         /// transaction intent; none of it is payment evidence.
         #[arg(long)]
         request: String,

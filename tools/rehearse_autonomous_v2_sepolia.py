@@ -260,6 +260,12 @@ def main(argv: list[str] | None = None) -> int:
     steps = []
     receipts: dict[str, dict] = {}
 
+    def receive_only(typed: dict, payee: str) -> dict:
+        # A transfer authorization is executable by anyone at the token; v2 must never ask for one.
+        if typed.get("primaryType") != "ReceiveWithAuthorization" or typed["message"]["to"].lower() != payee.lower():
+            raise RehearsalError("planner asked for a USDC authorization other than a receive payable to " + payee)
+        return typed
+
     def relay(name: str, request: dict, pointer: str | None = None) -> dict:
         planned = plan(request)
         intent = planned[pointer] if pointer else planned
@@ -269,14 +275,15 @@ def main(argv: list[str] | None = None) -> int:
                       "block": int(str(receipt["blockNumber"]), 16), "events": event_names(receipt)})
         return planned
 
-    typed = plan({"action": "create", "create": create, "factory_fee": factory_fee})["eip3009_authorization"]
+    typed = receive_only(plan({"action": "create", "create": create, "factory_fee": factory_fee})["eip3009_authorization"],
+                         factory)
     created = relay("authorized_create", {"action": "authorized_create", "create": create, "factory_fee": factory_fee,
                                           "signature": split(sign(typed, poster_key)), "relayer": chain.keeper},
                     "relay_transaction")
     bounty, bounty_id = created["predicted_bounty_contract"], created["bounty_id"]
     claim = {"bounty_contract": bounty, "solver": solver, "claim_bond": usdc(VERIFIER_REWARD),
-             "authorization_nonce": word("claim bond"), "authorization_valid_before": now + 3_600}
-    typed = plan({"action": "claim", **claim})["eip3009_authorization"]
+             "claim_round": 1, "authorization_valid_before": now + 3_600}
+    typed = receive_only(plan({"action": "claim", **claim})["eip3009_authorization"], bounty)
     relay("authorized_claim", {"action": "authorized_claim", **claim, "signature": split(sign(typed, solver_key)),
                                "relayer": chain.keeper}, "relay_transaction")
     submission = {"bounty_contract": bounty, "bounty_id": bounty_id, "round": 1, "solver": solver,

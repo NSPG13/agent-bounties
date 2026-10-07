@@ -222,15 +222,17 @@ impl AutonomousBountyTxPlanner {
         let mut wallet_calls = Vec::with_capacity(2);
         wallet_calls.extend(approve.clone());
         wallet_calls.push(create_bounty.clone());
+        // Payable to the factory with the bounty id as nonce: only the factory can execute it,
+        // and only for the bounty these exact terms produce.
         let eip3009_authorization = (initial_funding > 0).then(|| {
-            eip3009_typed_data(
+            eip3009_receive_typed_data(
                 &network,
                 &creator,
-                &predicted_bounty_contract,
+                &self.factory_contract,
                 initial_funding,
                 0,
                 base.funding_deadline,
-                &base.creation_nonce,
+                &word_hex(bounty_id),
             )
         });
         Ok(AutonomousBountyV2CreationPlan {
@@ -266,6 +268,7 @@ impl AutonomousBountyTxPlanner {
         let params = create.param_words()?;
         let verifiers = normalized_verifiers(&create.base)?;
         let creation_nonce = parse_bytes32(&create.base.creation_nonce)?;
+        let bounty_id = parse_bytes32(&creation.plan.bounty_id)?;
         let v = normalized_signature_v(signature.v)?;
         let relay_transaction = EvmTransactionIntent {
             from: relayer.map(normalize_address).transpose()?,
@@ -277,6 +280,7 @@ impl AutonomousBountyTxPlanner {
                 &verifiers,
                 initial_funding,
                 creation_nonce,
+                bounty_id,
                 create.base.funding_deadline,
                 v,
                 parse_bytes32(&signature.r)?,
@@ -292,6 +296,132 @@ impl AutonomousBountyTxPlanner {
             relay_transaction,
             evidence_boundary: "A valid authorization and relayed transaction hash are not funding evidence. Recognize funding only after the canonical v2 factory creation event and matching FundingAdded log are confirmed.".to_string(),
         })
+    }
+
+    /// Plans a v2 contribution. The optional authorization is a `ReceiveWithAuthorization`
+    /// payable to the bounty, which only the bounty can execute.
+    pub fn plan_v2_contribution(
+        &self,
+        network: &str,
+        contribution: &AutonomousBountyContribution,
+    ) -> Result<AutonomousBountyContributionPlan, ChainBaseError> {
+        let unsigned = AutonomousBountyContribution {
+            authorization_nonce: None,
+            authorization_valid_before: None,
+            ..contribution.clone()
+        };
+        let mut plan = self.plan_contribution(network, &unsigned)?;
+        plan.protocol_version = AUTONOMOUS_V2_PROTOCOL_VERSION.to_string();
+        plan.eip3009_authorization = match (
+            contribution.authorization_nonce.as_deref(),
+            contribution.authorization_valid_before,
+        ) {
+            (None, None) => None,
+            (Some(nonce), Some(valid_before)) if valid_before > 0 => {
+                Some(eip3009_receive_typed_data(
+                    &plan.network,
+                    &normalize_address(&contribution.contributor)?,
+                    &normalize_address(&contribution.bounty_contract)?,
+                    autonomous_money_to_uint256(&contribution.amount, false)?,
+                    0,
+                    valid_before,
+                    &word_hex(parse_bytes32(nonce)?),
+                ))
+            }
+            _ => {
+                return Err(ChainBaseError::InvalidVerificationConfiguration(
+                    "contribution authorization requires both a bytes32 nonce and positive valid-before timestamp"
+                        .to_string(),
+                ))
+            }
+        };
+        Ok(plan)
+    }
+
+    pub fn plan_v2_authorized_contribution(
+        &self,
+        network: &str,
+        contribution: &AutonomousBountyContribution,
+        signature: &AutonomousBountyAuthorizationSignature,
+        relayer: Option<&str>,
+    ) -> Result<AutonomousBountyAuthorizedContributionPlan, ChainBaseError> {
+        let mut plan =
+            self.plan_authorized_contribution(network, contribution, signature, relayer)?;
+        plan.protocol_version = AUTONOMOUS_V2_PROTOCOL_VERSION.to_string();
+        Ok(plan)
+    }
+
+    /// Plans a v2 claim. The optional bond authorization is a `ReceiveWithAuthorization` payable
+    /// to the bounty whose nonce is `claimAuthorizationNonce(solver, claim_round)`, so it can open
+    /// only that round. `claim_round` is the bounty's current `round()` plus one.
+    pub fn plan_v2_claim(
+        &self,
+        network: &str,
+        bounty_contract: &str,
+        solver: &str,
+        claim_bond: u128,
+        claim_round: Option<u64>,
+        authorization_valid_before: Option<u64>,
+    ) -> Result<AutonomousBountyClaimPlan, ChainBaseError> {
+        let mut plan = self.plan_claim(network, bounty_contract, solver, claim_bond, None, None)?;
+        plan.protocol_version = AUTONOMOUS_V2_PROTOCOL_VERSION.to_string();
+        plan.eip3009_authorization = match (claim_round, authorization_valid_before) {
+            (None, None) => None,
+            (Some(round), Some(valid_before)) if claim_bond > 0 && round > 0 && valid_before > 0 => {
+                Some(eip3009_receive_typed_data(
+                    &plan.network,
+                    &plan.solver,
+                    &plan.bounty_contract,
+                    claim_bond,
+                    0,
+                    valid_before,
+                    &autonomous_v2_claim_authorization_nonce(
+                        &plan.bounty_contract,
+                        &plan.solver,
+                        round,
+                    )?,
+                ))
+            }
+            _ => {
+                return Err(ChainBaseError::InvalidVerificationConfiguration(
+                    "v2 claim authorization requires a positive bond, claim round, and valid-before timestamp"
+                        .to_string(),
+                ))
+            }
+        };
+        Ok(plan)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn plan_v2_authorized_claim(
+        &self,
+        network: &str,
+        bounty_contract: &str,
+        solver: &str,
+        claim_bond: u128,
+        claim_round: u64,
+        authorization_valid_before: u64,
+        signature: &AutonomousBountyAuthorizationSignature,
+        relayer: Option<&str>,
+    ) -> Result<AutonomousBountyAuthorizedClaimPlan, ChainBaseError> {
+        if claim_round == 0 {
+            return Err(ChainBaseError::InvalidVerificationConfiguration(
+                "v2 claim round starts at one".to_string(),
+            ));
+        }
+        let nonce = autonomous_v2_claim_authorization_nonce(bounty_contract, solver, claim_round)?;
+        let mut plan = self.plan_authorized_claim(
+            network,
+            bounty_contract,
+            solver,
+            claim_bond,
+            &nonce,
+            authorization_valid_before,
+            signature,
+            relayer,
+        )?;
+        plan.protocol_version = AUTONOMOUS_V2_PROTOCOL_VERSION.to_string();
+        Ok(plan)
     }
 
     /// v2 bounties sign submissions under EIP-712 domain version "2".
@@ -314,6 +444,123 @@ impl AutonomousBountyTxPlanner {
         let mut typed = self.plan_verification_attestation(network, request)?;
         typed.domain.version = AUTONOMOUS_V2_EIP712_DOMAIN_VERSION.to_string();
         Ok(typed)
+    }
+
+    /// The creator's gasless cancel: EIP-712 `Cancel` under domain version "2". Relayed through
+    /// `plan_v2_cancel_relay`, it cancels an idle bounty or records a cancel request during a
+    /// round, exactly like `cancel()` sent by the creator.
+    pub fn plan_v2_cancel_authorization(
+        &self,
+        network: &str,
+        request: &AutonomousV2CancelAuthorizationRequest,
+    ) -> Result<AutonomousV2CancelAuthorizationTypedData, ChainBaseError> {
+        if request.deadline == 0 {
+            return Err(ChainBaseError::InvalidVerificationConfiguration(
+                "cancel authorization deadline must be positive".to_string(),
+            ));
+        }
+        let network = base_network_descriptor(network)?;
+        let bounty = normalize_address(&request.bounty_contract)?;
+        let mut types = BTreeMap::new();
+        types.insert(
+            "EIP712Domain".to_string(),
+            vec![
+                eip712_field("name", "string"),
+                eip712_field("version", "string"),
+                eip712_field("chainId", "uint256"),
+                eip712_field("verifyingContract", "address"),
+            ],
+        );
+        types.insert(
+            "Cancel".to_string(),
+            vec![
+                eip712_field("bounty", "address"),
+                eip712_field("bountyId", "bytes32"),
+                eip712_field("creator", "address"),
+                eip712_field("deadline", "uint256"),
+            ],
+        );
+        Ok(AutonomousV2CancelAuthorizationTypedData {
+            types,
+            domain: Eip712DomainData {
+                name: "Agent Bounties".to_string(),
+                version: AUTONOMOUS_V2_EIP712_DOMAIN_VERSION.to_string(),
+                chain_id: network.chain_id,
+                verifying_contract: bounty.clone(),
+            },
+            primary_type: "Cancel".to_string(),
+            message: AutonomousV2CancelAuthorizationMessage {
+                bounty,
+                bounty_id: word_hex(parse_bytes32(&request.bounty_id)?),
+                creator: normalize_address(&request.creator)?,
+                deadline: request.deadline.to_string(),
+            },
+        })
+    }
+
+    /// Relays a creator's signed cancel. Anyone may send it.
+    pub fn plan_v2_cancel_relay(
+        &self,
+        bounty_contract: &str,
+        deadline: u64,
+        signature: &str,
+        relayer: Option<&str>,
+    ) -> Result<EvmTransactionIntent, ChainBaseError> {
+        const SIGNATURE: &str = "cancelWithSignature(uint256,bytes)";
+        let signature = parse_hex_bytes(signature)?;
+        if deadline == 0 || signature.len() != 65 || !matches!(signature[64], 27 | 28) {
+            return Err(ChainBaseError::InvalidVerificationConfiguration(
+                "cancel relay needs a positive deadline and a 65-byte signature with v 27 or 28"
+                    .to_string(),
+            ));
+        }
+        let mut bytes = selector(SIGNATURE).to_vec();
+        bytes.extend_from_slice(&encode_uint256(deadline.into())?);
+        bytes.extend_from_slice(&encode_uint256(2 * 32)?);
+        bytes.extend_from_slice(&encode_uint256(signature.len() as u128)?);
+        bytes.extend_from_slice(&signature);
+        bytes.resize(bytes.len() + (32 - signature.len() % 32) % 32, 0);
+        Ok(EvmTransactionIntent {
+            from: relayer.map(normalize_address).transpose()?,
+            to: normalize_address(bounty_contract)?,
+            value_wei: 0,
+            data: format!("0x{}", hex::encode(bytes)),
+            function: SIGNATURE.to_string(),
+        })
+    }
+
+    /// Pushes a cancelled bounty's refund. Anyone may send it; the bounty pays only `contributor`.
+    pub fn plan_v2_refund_withdrawal_for(
+        &self,
+        bounty_contract: &str,
+        contributor: &str,
+    ) -> Result<EvmTransactionIntent, ChainBaseError> {
+        Ok(EvmTransactionIntent {
+            from: None,
+            to: normalize_address(bounty_contract)?,
+            value_wei: 0,
+            data: encode_call(
+                "withdrawRefundFor(address)",
+                vec![encode_address(contributor)?],
+            ),
+            function: "withdrawRefundFor(address)".to_string(),
+        })
+    }
+
+    /// Retries a held verification-timeout bond refund. Anyone may send it; the bounty pays only
+    /// `solver`.
+    pub fn plan_v2_bond_refund_withdrawal(
+        &self,
+        bounty_contract: &str,
+        solver: &str,
+    ) -> Result<EvmTransactionIntent, ChainBaseError> {
+        Ok(EvmTransactionIntent {
+            from: None,
+            to: normalize_address(bounty_contract)?,
+            value_wei: 0,
+            data: encode_call("withdrawBondRefund(address)", vec![encode_address(solver)?]),
+            function: "withdrawBondRefund(address)".to_string(),
+        })
     }
 
     /// Forwards a fee whose settlement-time transfer failed. Anyone may send it; the bounty pays
@@ -438,6 +685,32 @@ pub fn validate_autonomous_v2_creation_for_public_earning(
     Ok(platform_fee)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutonomousV2CancelAuthorizationRequest {
+    pub bounty_contract: String,
+    pub bounty_id: String,
+    pub creator: String,
+    pub deadline: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutonomousV2CancelAuthorizationMessage {
+    pub bounty: String,
+    pub bounty_id: String,
+    pub creator: String,
+    pub deadline: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutonomousV2CancelAuthorizationTypedData {
+    pub types: BTreeMap<String, Vec<Eip712TypeField>>,
+    pub domain: Eip712DomainData,
+    pub primary_type: String,
+    pub message: AutonomousV2CancelAuthorizationMessage,
+}
+
 /// One autonomous-v2 planning request, as accepted by `cli autonomous-v2-plan`. Every action
 /// returns unsigned typed data or an unsigned transaction intent; none of them is funding, claim,
 /// submission or settlement evidence.
@@ -469,10 +742,23 @@ pub enum AutonomousV2PlanAction {
         #[serde(default)]
         relayer: Option<String>,
     },
+    Contribution {
+        contribution: AutonomousBountyContribution,
+    },
+    AuthorizedContribution {
+        contribution: AutonomousBountyContribution,
+        signature: AutonomousBountyAuthorizationSignature,
+        #[serde(default)]
+        relayer: Option<String>,
+    },
+    /// `claim_round` is the bounty's `round()` plus one. A supplied `authorization_nonce` must
+    /// equal the round-bound nonce the contract requires.
     Claim {
         bounty_contract: String,
         solver: String,
         claim_bond: Money,
+        #[serde(default)]
+        claim_round: Option<u64>,
         #[serde(default)]
         authorization_nonce: Option<String>,
         #[serde(default)]
@@ -482,7 +768,9 @@ pub enum AutonomousV2PlanAction {
         bounty_contract: String,
         solver: String,
         claim_bond: Money,
-        authorization_nonce: String,
+        claim_round: u64,
+        #[serde(default)]
+        authorization_nonce: Option<String>,
         authorization_valid_before: u64,
         signature: AutonomousBountyAuthorizationSignature,
         #[serde(default)]
@@ -511,6 +799,24 @@ pub enum AutonomousV2PlanAction {
     },
     PlatformFeeForward {
         bounty_contract: String,
+    },
+    CancelAuthorization {
+        cancel: AutonomousV2CancelAuthorizationRequest,
+    },
+    CancelRelay {
+        bounty_contract: String,
+        deadline: u64,
+        signature: String,
+        #[serde(default)]
+        relayer: Option<String>,
+    },
+    RefundWithdrawal {
+        bounty_contract: String,
+        contributor: String,
+    },
+    BondRefundWithdrawal {
+        bounty_contract: String,
+        solver: String,
     },
 }
 
@@ -551,45 +857,66 @@ pub fn plan_autonomous_v2_action(
             signature,
             relayer.as_deref(),
         )?),
+        AutonomousV2PlanAction::Contribution { contribution } => {
+            to_plan_value(planner.plan_v2_contribution(network, contribution)?)
+        }
+        AutonomousV2PlanAction::AuthorizedContribution {
+            contribution,
+            signature,
+            relayer,
+        } => to_plan_value(planner.plan_v2_authorized_contribution(
+            network,
+            contribution,
+            signature,
+            relayer.as_deref(),
+        )?),
         AutonomousV2PlanAction::Claim {
             bounty_contract,
             solver,
             claim_bond,
+            claim_round,
             authorization_nonce,
             authorization_valid_before,
         } => {
-            let mut plan = planner.plan_claim(
+            if let (Some(nonce), Some(round)) = (authorization_nonce, claim_round) {
+                require_v2_claim_nonce(bounty_contract, solver, *round, nonce)?;
+            } else if authorization_nonce.is_some() {
+                return Err(ChainBaseError::InvalidVerificationConfiguration(
+                    "v2 claim authorization nonce is derived from claim_round".to_string(),
+                ));
+            }
+            to_plan_value(planner.plan_v2_claim(
                 network,
                 bounty_contract,
                 solver,
                 autonomous_money_to_uint256(claim_bond, true)?,
-                authorization_nonce.as_deref(),
+                *claim_round,
                 *authorization_valid_before,
-            )?;
-            plan.protocol_version = AUTONOMOUS_V2_PROTOCOL_VERSION.to_string();
-            to_plan_value(plan)
+            )?)
         }
         AutonomousV2PlanAction::AuthorizedClaim {
             bounty_contract,
             solver,
             claim_bond,
+            claim_round,
             authorization_nonce,
             authorization_valid_before,
             signature,
             relayer,
         } => {
-            let mut plan = planner.plan_authorized_claim(
+            if let Some(nonce) = authorization_nonce {
+                require_v2_claim_nonce(bounty_contract, solver, *claim_round, nonce)?;
+            }
+            to_plan_value(planner.plan_v2_authorized_claim(
                 network,
                 bounty_contract,
                 solver,
                 autonomous_money_to_uint256(claim_bond, false)?,
-                authorization_nonce,
+                *claim_round,
                 *authorization_valid_before,
                 signature,
                 relayer.as_deref(),
-            )?;
-            plan.protocol_version = AUTONOMOUS_V2_PROTOCOL_VERSION.to_string();
-            to_plan_value(plan)
+            )?)
         }
         AutonomousV2PlanAction::SubmissionAuthorization { submission } => {
             to_plan_value(planner.plan_v2_submission_authorization(network, submission)?)
@@ -624,6 +951,76 @@ pub fn plan_autonomous_v2_action(
         AutonomousV2PlanAction::PlatformFeeForward { bounty_contract } => {
             to_plan_value(planner.plan_v2_platform_fee_forward(bounty_contract)?)
         }
+        AutonomousV2PlanAction::CancelAuthorization { cancel } => {
+            to_plan_value(planner.plan_v2_cancel_authorization(network, cancel)?)
+        }
+        AutonomousV2PlanAction::CancelRelay {
+            bounty_contract,
+            deadline,
+            signature,
+            relayer,
+        } => to_plan_value(planner.plan_v2_cancel_relay(
+            bounty_contract,
+            *deadline,
+            signature,
+            relayer.as_deref(),
+        )?),
+        AutonomousV2PlanAction::RefundWithdrawal {
+            bounty_contract,
+            contributor,
+        } => to_plan_value(planner.plan_v2_refund_withdrawal_for(bounty_contract, contributor)?),
+        AutonomousV2PlanAction::BondRefundWithdrawal {
+            bounty_contract,
+            solver,
+        } => to_plan_value(planner.plan_v2_bond_refund_withdrawal(bounty_contract, solver)?),
+    }
+}
+
+/// Domain tag of `AgentBountyV2.claimAuthorizationNonce`.
+pub const AUTONOMOUS_V2_CLAIM_BOND_NONCE_TAG: &str = "agent-bounties/autonomous-v2/claim-bond";
+
+/// `keccak256(abi.encode(keccak256(tag), bounty, solver, uint64 round))`: the only EIP-3009 nonce
+/// `AgentBountyV2.claimWithAuthorization` accepts for that solver and claim round.
+pub fn autonomous_v2_claim_authorization_nonce(
+    bounty_contract: &str,
+    solver: &str,
+    claim_round: u64,
+) -> Result<String, ChainBaseError> {
+    let tag: [u8; 32] = Keccak256::digest(AUTONOMOUS_V2_CLAIM_BOND_NONCE_TAG.as_bytes()).into();
+    let mut encoded = Vec::with_capacity(4 * 32);
+    encoded.extend_from_slice(&tag);
+    encoded.extend_from_slice(&encode_address(bounty_contract)?);
+    encoded.extend_from_slice(&encode_address(solver)?);
+    encoded.extend_from_slice(&encode_uint256(claim_round.into())?);
+    Ok(word_hex(Keccak256::digest(encoded).into()))
+}
+
+/// The round the next claim opens: one past the highest indexed `BountyClaimed` round. An index
+/// that lags the chain yields a stale round, whose bond authorization the bounty then rejects.
+pub fn autonomous_v2_next_claim_round(item: &AutonomousBountyFeedItem) -> u64 {
+    item.events
+        .iter()
+        .filter(|event| event.kind == AutonomousBountyEventKind::BountyClaimed)
+        .filter_map(|event| event.data["round"].as_u64())
+        .max()
+        .unwrap_or(0)
+        + 1
+}
+
+fn require_v2_claim_nonce(
+    bounty_contract: &str,
+    solver: &str,
+    claim_round: u64,
+    nonce: &str,
+) -> Result<(), ChainBaseError> {
+    let expected = autonomous_v2_claim_authorization_nonce(bounty_contract, solver, claim_round)?;
+    if word_hex(parse_bytes32(nonce)?) == expected {
+        Ok(())
+    } else {
+        Err(ChainBaseError::InvalidVerificationConfiguration(
+            "v2 claim authorization nonce must equal claimAuthorizationNonce(solver, claim_round)"
+                .to_string(),
+        ))
     }
 }
 
@@ -668,6 +1065,7 @@ fn encode_v2_authorized_create_call(
     verifiers: &[[u8; 32]],
     initial_funding: u128,
     creation_nonce: [u8; 32],
+    bounty_id: [u8; 32],
     valid_before: u64,
     v: u8,
     r: [u8; 32],
@@ -685,7 +1083,7 @@ fn encode_v2_authorized_create_call(
     bytes.extend_from_slice(&creation_nonce);
     bytes.extend_from_slice(&encode_uint256(0)?);
     bytes.extend_from_slice(&encode_uint256(valid_before.into())?);
-    bytes.extend_from_slice(&creation_nonce);
+    bytes.extend_from_slice(&bounty_id);
     bytes.extend_from_slice(&encode_uint256(v.into())?);
     bytes.extend_from_slice(&r);
     bytes.extend_from_slice(&s);
@@ -1071,6 +1469,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_cancel_request_cancels_the_bounty_when_its_round_expires() {
+        let requested = item("cancel_requested_then_expired");
+        assert_eq!(requested.status, "cancelled");
+        let position = |kind| {
+            requested
+                .events
+                .iter()
+                .position(|event| event.kind == kind)
+                .unwrap()
+        };
+        let expired = &requested.events[position(AutonomousBountyEventKind::SubmissionExpired)];
+        assert_eq!(
+            expired.data["claim_bond_refunded"], 100_000,
+            "a verification timeout returns the bond"
+        );
+        assert!(
+            position(AutonomousBountyEventKind::SubmissionExpired)
+                < position(AutonomousBountyEventKind::BountyCancelled),
+            "the round must end before the bounty cancels"
+        );
+    }
+
     fn contractor_source() -> String {
         word_hex(Keccak256::digest(b"agent-bounties/invoice-contractor-v1").into())
     }
@@ -1078,12 +1499,12 @@ mod tests {
     #[test]
     fn decodes_every_log_emitted_by_the_compiled_v2_contracts() {
         let events = fixture_events();
-        assert_eq!(events.len(), 54, "every factory and bounty log must decode");
+        assert_eq!(events.len(), 66, "every factory and bounty log must decode");
         let count = |kind| events.iter().filter(|event| event.kind == kind).count();
-        assert_eq!(count(AutonomousBountyEventKind::CanonicalBountyCreated), 5);
+        assert_eq!(count(AutonomousBountyEventKind::CanonicalBountyCreated), 6);
         assert_eq!(
             count(AutonomousBountyEventKind::CanonicalBountyPlatformFeeConfigured),
-            5
+            6
         );
         assert_eq!(
             count(AutonomousBountyEventKind::CanonicalBountyClaimEligibilityConfigured),
@@ -1340,7 +1761,7 @@ mod tests {
     fn planned_creation_matches_solidity_calldata_bounty_id_and_address() {
         let fixture = fixture();
         for label in [
-            "paid_after_reject",
+            "fee_deferred_then_forwarded",
             "contractor_gated",
             "cancelled_and_refunded",
         ] {
@@ -1397,7 +1818,7 @@ mod tests {
 
     #[test]
     fn planner_rejects_funding_above_the_fee_inclusive_target_and_half_gates() {
-        let mut create = reconstructed_create("paid_after_reject");
+        let mut create = reconstructed_create("fee_deferred_then_forwarded");
         create.base.initial_funding.amount = 1_175_001;
         assert!(planner()
             .plan_v2_creation("base-sepolia", &create, &factory_fee())
@@ -1579,6 +2000,87 @@ mod tests {
     /// relayer. Replanning every recorded request must reproduce exactly the typed data that was
     /// signed and the calldata the contracts accepted, and the relayed transactions must carry
     /// the canonical creation, funding, claim, submission, settlement and fee events.
+    /// The creator only signs: a relayer sends the cancel request and pushes the refund, both
+    /// from current planner output, on the compiled contracts.
+    #[test]
+    fn gasless_cancel_and_refund_execute_current_planner_output() {
+        let fixture = fixture();
+        let gasless = &fixture["gasless_cancel"];
+        let steps = gasless["steps"].as_array().unwrap();
+        let names: Vec<&str> = steps
+            .iter()
+            .map(|step| step["step"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["cancel_request", "refund_push"]);
+        let creator = gasless["creator"].as_str().unwrap();
+        for step in steps {
+            for authorization in step["authorizations"].as_array().unwrap() {
+                let planned = plan_autonomous_v2_action(&plan_request(&fixture, authorization))
+                    .expect("authorization replans");
+                assert_eq!(
+                    planned_field(planned, &authorization["typed_data_field"]),
+                    authorization["typed_data"],
+                    "{} typed data drifted from what was signed",
+                    step["step"]
+                );
+                assert!(authorization["signer"]
+                    .as_str()
+                    .unwrap()
+                    .eq_ignore_ascii_case(creator));
+                assert_eq!(authorization["typed_data"]["domain"]["version"], "2");
+            }
+            let relay = &step["relay"];
+            assert!(!relay["relayer"]
+                .as_str()
+                .unwrap()
+                .eq_ignore_ascii_case(creator));
+            let intent = planned_field(
+                plan_autonomous_v2_action(&plan_request(&fixture, relay)).expect("relay replans"),
+                &relay["intent_field"],
+            );
+            assert_eq!(
+                intent["data"], relay["calldata"],
+                "{} calldata",
+                step["step"]
+            );
+            assert_eq!(intent["to"], relay["to"], "{} destination", step["step"]);
+        }
+
+        let bounty = gasless["bounty"].as_str().unwrap();
+        assert_eq!(bounty, bounty_address("cancel_requested_then_expired"));
+        let requested_topic = event_topic("CancellationRequested(bytes32,uint64,address)");
+        let cancel_hash = steps[0]["relay"]["transaction_hash"].as_str().unwrap();
+        let request_log = fixture["logs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|log| {
+                log["transactionHash"]
+                    .as_str()
+                    .unwrap()
+                    .eq_ignore_ascii_case(cancel_hash)
+            })
+            .expect("the relayed cancel emitted a log");
+        assert_eq!(request_log["topics"][0], requested_topic);
+        assert!(request_log["topics"][3]
+            .as_str()
+            .unwrap()
+            .ends_with(&creator.to_ascii_lowercase()[2..]));
+
+        let refund_hash = steps[1]["relay"]["transaction_hash"].as_str().unwrap();
+        let refunds: Vec<_> = events_for("cancel_requested_then_expired")
+            .into_iter()
+            .filter(|event| event.tx_hash.eq_ignore_ascii_case(refund_hash))
+            .collect();
+        assert_eq!(refunds.len(), 1);
+        assert_eq!(refunds[0].kind, AutonomousBountyEventKind::RefundWithdrawn);
+        assert!(refunds[0].data["contributor"]
+            .as_str()
+            .unwrap()
+            .eq_ignore_ascii_case(creator));
+        assert_eq!(refunds[0].data["amount"], fixture["target_amount"]);
+    }
+
     #[test]
     fn gasless_quorum_loop_executes_current_planner_output() {
         let fixture = fixture();
@@ -1670,6 +2172,99 @@ mod tests {
             item.platform_fee.map(|fee| fee.status),
             Some("paid".to_string())
         );
+    }
+
+    #[test]
+    fn v2_authorizations_are_receive_only_and_bound_to_their_target() {
+        let create = reconstructed_create("contractor_gated");
+        let planned = planner()
+            .plan_v2_creation("base-sepolia", &create, &factory_fee())
+            .unwrap();
+        let funding = planned.plan.eip3009_authorization.unwrap();
+        assert_eq!(funding.primary_type, "ReceiveWithAuthorization");
+        assert!(funding.types.contains_key("ReceiveWithAuthorization"));
+        assert!(!funding.types.contains_key("TransferWithAuthorization"));
+        assert_eq!(funding.message.to, fixture()["factory"].as_str().unwrap());
+        assert_eq!(funding.message.nonce, planned.plan.bounty_id);
+
+        let bounty = bounty_address("contractor_gated");
+        let solver = "0x1111111111111111111111111111111111111111";
+        let claim = planner()
+            .plan_v2_claim(
+                "base-sepolia",
+                &bounty,
+                solver,
+                100_000,
+                Some(2),
+                Some(1_900_000_000),
+            )
+            .unwrap();
+        let bond = claim.eip3009_authorization.unwrap();
+        assert_eq!(bond.primary_type, "ReceiveWithAuthorization");
+        assert_eq!(bond.message.to, bounty);
+        assert_eq!(
+            bond.message.nonce,
+            autonomous_v2_claim_authorization_nonce(&bounty, solver, 2).unwrap()
+        );
+        assert_ne!(
+            autonomous_v2_claim_authorization_nonce(&bounty, solver, 1).unwrap(),
+            autonomous_v2_claim_authorization_nonce(&bounty, solver, 2).unwrap(),
+            "each round needs its own authorization"
+        );
+        assert!(planner()
+            .plan_v2_claim(
+                "base-sepolia",
+                &bounty,
+                solver,
+                100_000,
+                None,
+                Some(1_900_000_000)
+            )
+            .is_err());
+
+        let contribution = AutonomousBountyContribution {
+            bounty_contract: bounty.clone(),
+            contributor: solver.to_string(),
+            amount: Money {
+                amount: 1_000,
+                currency: "usdc".to_string(),
+            },
+            authorization_nonce: Some(format!("0x{}", "ab".repeat(32))),
+            authorization_valid_before: Some(1_900_000_000),
+        };
+        let fund = planner()
+            .plan_v2_contribution("base-sepolia", &contribution)
+            .unwrap();
+        assert_eq!(fund.protocol_version, AUTONOMOUS_V2_PROTOCOL_VERSION);
+        let fund = fund.eip3009_authorization.unwrap();
+        assert_eq!(fund.primary_type, "ReceiveWithAuthorization");
+        assert_eq!(fund.message.to, bounty);
+    }
+
+    #[test]
+    fn v2_claim_plans_refuse_a_nonce_that_is_not_round_bound() {
+        let fixture = fixture();
+        let step = &fixture["gasless_loop"]["steps"][1];
+        let request = plan_request(&fixture, &step["relay"]);
+        assert!(plan_autonomous_v2_action(&request).is_ok());
+        let with = |nonce: Option<String>, round: u64| {
+            let mut changed = request.clone();
+            match &mut changed.action {
+                AutonomousV2PlanAction::AuthorizedClaim {
+                    authorization_nonce,
+                    claim_round,
+                    ..
+                } => {
+                    *authorization_nonce = nonce;
+                    *claim_round = round;
+                }
+                _ => panic!("step two relays an authorized claim"),
+            }
+            plan_autonomous_v2_action(&changed)
+        };
+        assert!(with(Some(format!("0x{}", "cd".repeat(32))), 1).is_err());
+        assert!(with(None, 0).is_err());
+        assert!(with(None, 1).is_ok());
     }
 
     #[test]

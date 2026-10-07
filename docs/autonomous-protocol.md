@@ -515,9 +515,56 @@ contract registration never crosses this boundary.
 
 `agent-bounties/autonomous-v2` (`AgentBountyV2`, `AgentBountyFactoryV2`,
 [ADR 0006](adr/0006-protocol-v2-platform-fee-and-non-custodial-fiat.md)) keeps
-the v1 bounty surface and adds two things. Contribution, claim, submission,
-settlement, expiry, cancellation and refund calls are unchanged, so the same
-planners serve both versions. v2 is not deployed yet.
+the v1 bounty surface and adds a platform fee and a claim gate. It also hardens
+how funds and verdicts arrive (below), so contribution and claim authorizations
+use the v2 planners. v2 is not deployed yet.
+
+**Authorization and verdict hardening**
+- Every v2 USDC authorization is an EIP-3009 `ReceiveWithAuthorization`, which
+  only its payee contract can execute. v2 never accepts
+  `TransferWithAuthorization`.
+- `createBountyWithAuthorization`: payable to the factory, with
+  `nonce = bountyId`. The bounty id commits the creator, creation nonce, terms
+  and verifiers, so the authorization funds only that bounty.
+- `fundWithAuthorization`: payable to the bounty.
+- `claimWithAuthorization`: payable to the bounty, with
+  `nonce = claimAuthorizationNonce(solver, round + 1)`. A bond authorization
+  opens only the round it was signed for.
+- `verifyAndSettle` settles on a passing module verdict and reverts on a
+  failing one. The proof is caller-chosen, so a failing verdict cannot be
+  final. A submission nobody can prove expires and returns the bond.
+  Rejection exists only in quorum modes, where precommitted verifiers sign it.
+- A verification timeout returns the bond in every mode: a solver never loses
+  money because verification did not run. A module solver can therefore
+  submit junk and get the bond back, so `cancel()` also works during an active
+  round. The creator may call it at any time, and anyone may after the funding
+  deadline. It records `CancellationRequested` and the round finishes
+  normally: a pass still pays the solver. An expiry or rejection then cancels
+  the bounty in the same transaction, after the round's own event. No new
+  round can start in between, so no solver can keep contributors from
+  recovering their funds.
+- Every user action has a form a relayer such as the keeper can send, so users
+  need no ETH:
+  - creation, funding and the claim bond use receive authorizations;
+  - submissions use `submitWithSignature`;
+  - the creator's cancel uses `cancelWithSignature(deadline, signature)` over
+    EIP-712 `Cancel(address bounty,bytes32 bountyId,address creator,uint256
+    deadline)`, domain version "2". It acts exactly like `cancel()` sent by the
+    creator.
+  - a refund uses `withdrawRefundFor(contributor)`, which always pays the
+    contributor.
+  - verification, expiry, `withdrawBondRefund(solver)` and
+    `withdrawPlatformFee()` are permissionless.
+
+  `autonomous-v2-plan` plans the new calls with the `cancel_authorization`,
+  `cancel_relay`, `refund_withdrawal` and `bond_refund_withdrawal` actions.
+- If returning an expired submission's bond fails, the bond is held
+  (`ClaimBondRefundDeferred`), the bounty still reopens, and
+  `withdrawBondRefund(solver)` pays the same solver later. Settlement still
+  pays the solver in the same transaction, so `BountySettled` remains solver
+  payment evidence.
+- Signatures are checked with ECDSA first, then ERC-1271, so an EIP-7702
+  delegated EOA's own key signs without its delegate implementing ERC-1271.
 
 **Platform fee**
 - `platformFee = ceil(solverReward * platformFeeBps / 10_000)`. The rate and
@@ -588,7 +635,11 @@ one action from a JSON request. The request names `network`, `factory_contract`,
 actions are:
 - `quote`
 - `create`, `authorized_create`
-- `claim`, `authorized_claim`
+- `contribution`, `authorized_contribution`
+- `cancel_authorization`, `cancel_relay`, `refund_withdrawal`,
+  `bond_refund_withdrawal`
+- `claim`, `authorized_claim`, where `claim_round` is the bounty's `round()`
+  plus one and fixes the bond authorization nonce
 - `submission_authorization`, `submission_relay`
 - `verification_attestation`, `attestation_settlement`
 - `platform_fee_forward`
@@ -599,8 +650,16 @@ payment evidence.
 **Hosting.** The API and MCP server enable v2 on a network only when all four
 `BASE_SEPOLIA_BOUNTY_V2_{FACTORY,IMPLEMENTATION,PLATFORM_FEE_BPS,PLATFORM_FEE_RECIPIENT}`
 settings are present. A partial setting, fee terms over the cap, or any Base
-mainnet v2 setting is refused. Mainnet v2 is pinned in code only after an
-independently reviewed deployment (#1577).
+mainnet v2 setting is refused. Mainnet v2 is pinned in code only from the
+deployment record of the guarded mainnet workflow (#1577).
+- Contribution and claim plans (API, MCP and the agent-native claim flow)
+  select the v2 planners from the indexed bounty's `protocol_version`. A v2
+  bond nonce is derived from the next round in the indexed `BountyClaimed`
+  history, and an authorized claim whose nonce differs is refused. A lagging
+  index yields a stale round, which the bounty rejects on-chain.
+- x402 funding refuses v2 bounties: its scheme signs a transfer authorization.
+- The participate page does not sign v2 bond or funding authorizations yet; it
+  points to the MCP and API planners.
 - `POST /v1/base/autonomous-bounties/v2/quote` returns the fee-inclusive target
   for the configured factory. The MCP tool `quote_autonomous_v2_bounty` does
   the same.
@@ -618,7 +677,8 @@ independently reviewed deployment (#1577).
   domain.
 - Agent-native claims never offer `AtomicClaimSponsor` for a v2 bounty: the
   sponsor pins the v1 factory, so the sponsored claim would revert. The solver
-  posts the bond directly or through a relayed EIP-3009 authorization.
+  posts the bond directly or through a relayed EIP-3009 receive
+  authorization.
 - Run a second worker with `BASE_INDEXER_PROTOCOL=autonomous-v2`. It reads
   `BASE_SEPOLIA_BOUNTY_V2_FACTORY` and keeps its own cursor; both protocols
   share the event table and feed.
@@ -628,8 +688,8 @@ real logs and calldata from the compiled contracts. It includes a gasless quorum
 loop: the poster, solver and two verifiers only sign typed data with
 `cast wallet sign --data`, and a separate relayer sends every transaction. The
 loop covers four steps:
-- relayed EIP-3009 creation;
-- relayed EIP-3009 claim bond;
+- relayed EIP-3009 receive creation through the factory;
+- relayed EIP-3009 receive claim bond for round one;
 - `submitWithSignature`;
 - `settleWithAttestations`.
 
@@ -638,7 +698,10 @@ Every typed-data payload and calldata in the loop came from
 byte-identical output. Regenerate the fixture with
 `python tools/capture_autonomous_v2_fixture.py`. It needs anvil, forge, cast
 and cargo, and runs only on a local chain with chain ID 84532. Its capture token
-sits at Base Sepolia's USDC address so the EIP-3009 domain matches.
+sits at Base Sepolia's USDC address so the EIP-3009 domain matches, and checks
+each receive authorization's signature and payee. The rejected-then-paid
+scenario uses a two-verifier signed quorum, because a module verdict can only
+pass.
 
 ## Safety Properties
 

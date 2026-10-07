@@ -13,14 +13,14 @@ interface CaptureVm {
 }
 
 /// @dev Local-only token with a recipient blocklist so the fixture can exercise fee deferral, and
-/// Circle-style EIP-3009 `transferWithAuthorization` under the Base Sepolia USDC domain ("USDC",
+/// Circle-style EIP-3009 `receiveWithAuthorization` under the Base Sepolia USDC domain ("USDC",
 /// "2"). The capture tool copies its code to Base Sepolia's USDC address, so the domain separator
 /// is derived from `address(this)` at call time rather than cached at construction.
 contract CaptureToken {
     bytes32 private constant DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
-    bytes32 private constant TRANSFER_WITH_AUTHORIZATION_TYPEHASH = keccak256(
-        "TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
+    bytes32 private constant RECEIVE_WITH_AUTHORIZATION_TYPEHASH = keccak256(
+        "ReceiveWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
     );
 
     mapping(address => uint256) public balanceOf;
@@ -36,7 +36,7 @@ contract CaptureToken {
         return keccak256(abi.encode(DOMAIN_TYPEHASH, keccak256("USDC"), keccak256("2"), block.chainid, address(this)));
     }
 
-    function transferWithAuthorization(
+    function receiveWithAuthorization(
         address from,
         address to,
         uint256 value,
@@ -47,10 +47,11 @@ contract CaptureToken {
         bytes32 r,
         bytes32 s
     ) external {
+        require(to == msg.sender, "caller must be the payee");
         require(block.timestamp > validAfter && block.timestamp < validBefore, "authorization not valid");
         require(!authorizationState[from][nonce], "authorization used");
         bytes32 structHash =
-            keccak256(abi.encode(TRANSFER_WITH_AUTHORIZATION_TYPEHASH, from, to, value, validAfter, validBefore, nonce));
+            keccak256(abi.encode(RECEIVE_WITH_AUTHORIZATION_TYPEHASH, from, to, value, validAfter, validBefore, nonce));
         address signer = ecrecover(keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR(), structHash)), v, r, s);
         require(signer != address(0) && signer == from, "invalid authorization signature");
         require(!blocked[to], "blocked recipient");
@@ -110,6 +111,8 @@ contract CaptureAutonomousV2Fixture {
     uint256 private constant SOLVER_KEY = 0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d;
     uint256 private constant SECOND_SOLVER_KEY = 0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a;
     uint256 private constant ATTESTER_KEY = 0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6;
+    uint256 private constant VERIFIER_A_KEY = 0x4bbbf85ce3377467afe5d46f804f221813b2bb87f24d81f60f1fcdbf7cbf4356;
+    uint256 private constant VERIFIER_B_KEY = 0xdbda1821b80551c9d65939329250298aa3472ba22feea921c0cf5d620ea67b97;
     address private constant FEE_RECIPIENT = 0xfEE0000000000000000000000000000000000fee;
     address private constant VERIFIER_RECIPIENT = 0x7000000000000000000000000000000000000007;
     bytes32 private constant CONTRACTOR_SOURCE = keccak256("agent-bounties/invoice-contractor-v1");
@@ -139,23 +142,28 @@ contract CaptureAutonomousV2Fixture {
         token.mint(solver, 10 * VERIFIER_REWARD);
         token.mint(secondSolver, 10 * VERIFIER_REWARD);
         token.approve(address(factory), type(uint256).max);
-        // 1. Paid at payout after one rejected round.
-        AgentBountyV2 paid = _create(1, TARGET, address(0), bytes32(0));
+        // 1. Signed quorum: paid at payout after one rejected round. A module verdict can only pass.
+        AgentBountyV2 paid = _createQuorum(1);
         // 2. Fee deferred by a blocked recipient, then forwarded.
         AgentBountyV2 deferred = _create(2, TARGET, address(0), bytes32(0));
         // 3. Contractor-gated bounty.
         AgentBountyV2 gated = _create(3, TARGET, address(registry), CONTRACTOR_SOURCE);
         // 4. Partially funded, then cancelled by its creator and refunded.
         AgentBountyV2 cancelled = _create(4, 500_000, address(0), bytes32(0));
+        // 6. The driver relays the creator's signed cancel during this round, expires the round,
+        //    which cancels the bounty, and pushes the refund (nonce 5 is the gasless loop).
+        AgentBountyV2 requested = _create(6, TARGET, address(0), bytes32(0));
         vm.stopBroadcast();
 
         _claimAndSubmit(SECOND_SOLVER_KEY, paid);
+        AgentBountyV2.Attestation[] memory rejection = _verdict(paid, false);
         vm.startBroadcast(CREATOR_KEY);
-        paid.verifyAndSettle(hex"00");
+        paid.settleWithAttestations(rejection);
         vm.stopBroadcast();
         _claimAndSubmit(SOLVER_KEY, paid);
+        AgentBountyV2.Attestation[] memory acceptance = _verdict(paid, true);
         vm.startBroadcast(CREATOR_KEY);
-        paid.verifyAndSettle(hex"01");
+        paid.settleWithAttestations(acceptance);
 
         token.setBlocked(FEE_RECIPIENT, true);
         vm.stopBroadcast();
@@ -176,13 +184,25 @@ contract CaptureAutonomousV2Fixture {
         cancelled.cancel();
         cancelled.withdrawRefund();
         vm.stopBroadcast();
+
+        _claimAndSubmit(SOLVER_KEY, requested);
     }
 
     function _create(uint256 nonce, uint256 initialFunding, address eligibilityRegistry, bytes32 eligibilitySource)
         private
         returns (AgentBountyV2)
     {
-        AgentBountyFactoryV2.CreateBountyParams memory params = AgentBountyFactoryV2.CreateBountyParams({
+        AgentBountyFactoryV2.CreateBountyParams memory params = _params(nonce, eligibilityRegistry, eligibilitySource);
+        (address bountyAddress,) = factory.createBounty(params, new address[](0), initialFunding, bytes32(nonce));
+        return AgentBountyV2(bountyAddress);
+    }
+
+    function _params(uint256 nonce, address eligibilityRegistry, bytes32 eligibilitySource)
+        private
+        view
+        returns (AgentBountyFactoryV2.CreateBountyParams memory)
+    {
+        return AgentBountyFactoryV2.CreateBountyParams({
             solverReward: SOLVER_REWARD,
             verifierReward: VERIFIER_REWARD,
             termsHash: keccak256(abi.encode("terms", nonce)),
@@ -200,8 +220,41 @@ contract CaptureAutonomousV2Fixture {
             claimEligibilityRegistry: eligibilityRegistry,
             claimEligibilitySource: eligibilitySource
         });
-        (address bountyAddress,) = factory.createBounty(params, new address[](0), initialFunding, bytes32(nonce));
+    }
+
+    function _createQuorum(uint256 nonce) private returns (AgentBountyV2) {
+        AgentBountyFactoryV2.CreateBountyParams memory params = _params(nonce, address(0), bytes32(0));
+        params.verificationMode = AgentBountyV2.VerificationMode.SignedQuorum;
+        params.verifierModule = address(0);
+        params.verifierRewardRecipient = address(0);
+        params.threshold = 2;
+        address[] memory verifiers = new address[](2);
+        verifiers[0] = vm.addr(VERIFIER_A_KEY);
+        verifiers[1] = vm.addr(VERIFIER_B_KEY);
+        (address bountyAddress,) = factory.createBounty(params, verifiers, TARGET, bytes32(nonce));
         return AgentBountyV2(bountyAddress);
+    }
+
+    function _verdict(AgentBountyV2 bounty, bool passed)
+        private
+        returns (AgentBountyV2.Attestation[] memory attestations)
+    {
+        attestations = new AgentBountyV2.Attestation[](2);
+        uint256[2] memory keys = [VERIFIER_A_KEY, VERIFIER_B_KEY];
+        for (uint256 i = 0; i < 2; i++) {
+            address verifier = vm.addr(keys[i]);
+            bytes32 responseHash = keccak256(abi.encode("verdict", bounty.round(), passed));
+            uint256 deadline = block.timestamp + 1 days;
+            (uint8 v, bytes32 r, bytes32 s) =
+                vm.sign(keys[i], bounty.attestationDigest(verifier, passed, responseHash, deadline));
+            attestations[i] = AgentBountyV2.Attestation({
+                verifier: verifier,
+                passed: passed,
+                responseHash: responseHash,
+                deadline: deadline,
+                signature: abi.encodePacked(r, s, v)
+            });
+        }
     }
 
     function _claimAndSubmit(uint256 solverKey, AgentBountyV2 bounty) private {

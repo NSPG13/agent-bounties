@@ -17,7 +17,8 @@ use axum::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use bounty_router::BountyRouter;
 use chain_base::{
-    autonomous_bounty_is_earning_ready, base_network_descriptor, broadcast_signed_transaction,
+    autonomous_bounty_is_earning_ready, autonomous_v2_claim_authorization_nonce,
+    autonomous_v2_next_claim_round, base_network_descriptor, broadcast_signed_transaction,
     build_autonomous_bounty_feed, build_autonomous_bounty_terms_record,
     build_autonomous_submission_evidence_record, build_autonomous_submission_preparation,
     build_autonomous_verification_jobs, decode_autonomous_bounty_logs,
@@ -5840,9 +5841,31 @@ async fn require_indexed_canonical_bounty(
     network: &str,
     bounty_contract: &str,
 ) -> Result<(), String> {
+    indexed_canonical_bounty(state, network, bounty_contract)
+        .await
+        .map(|_| ())
+}
+
+/// A v2 bond authorization must carry `claimAuthorizationNonce(solver, round)`, so plans derive
+/// the round from indexed claim history instead of accepting a caller nonce.
+fn v2_claim_authorization(
+    item: &AutonomousBountyFeedItem,
+    solver: &str,
+) -> Result<(u64, String), String> {
+    let round = autonomous_v2_next_claim_round(item);
+    autonomous_v2_claim_authorization_nonce(&item.bounty_contract, solver, round)
+        .map(|nonce| (round, nonce))
+        .map_err(|error| error.to_string())
+}
+
+async fn indexed_canonical_bounty(
+    state: &SharedState,
+    network: &str,
+    bounty_contract: &str,
+) -> Result<AutonomousBountyFeedItem, String> {
     let item = indexed_autonomous_bounty(state, network, bounty_contract).await?;
     if item.terms_valid {
-        Ok(())
+        Ok(item)
     } else {
         Err(format!(
             "canonical bounty terms do not match contract commitments: {}",
@@ -6110,16 +6133,25 @@ async fn plan_autonomous_bounty_contribution(
     Json(args): Json<PlanAutonomousBountyContributionArgs>,
 ) -> Json<serde_json::Value> {
     let network = args.network.as_deref().unwrap_or("base-mainnet");
-    if let Err(error) =
-        require_indexed_canonical_bounty(&state, network, &args.contribution.bounty_contract).await
-    {
-        return mcp_error(error);
-    }
-    match configured_autonomous_planner(network).and_then(|planner| {
-        planner
-            .plan_contribution(network, &args.contribution)
-            .map_err(|error| error.to_string())
-    }) {
+    let item =
+        match indexed_canonical_bounty(&state, network, &args.contribution.bounty_contract).await {
+            Ok(item) => item,
+            Err(error) => return mcp_error(error),
+        };
+    let planned = if is_autonomous_v2_item(&item) {
+        configured_autonomous_v2_planner(network).and_then(|planner| {
+            planner
+                .plan_v2_contribution(network, &args.contribution)
+                .map_err(|error| error.to_string())
+        })
+    } else {
+        configured_autonomous_planner(network).and_then(|planner| {
+            planner
+                .plan_contribution(network, &args.contribution)
+                .map_err(|error| error.to_string())
+        })
+    };
+    match planned {
         Ok(plan) => mcp_json(plan),
         Err(error) => mcp_error(error),
     }
@@ -6130,21 +6162,35 @@ async fn plan_autonomous_bounty_authorized_contribution(
     Json(args): Json<PlanAutonomousBountyAuthorizedContributionArgs>,
 ) -> Json<serde_json::Value> {
     let network = args.network.as_deref().unwrap_or("base-mainnet");
-    if let Err(error) =
-        require_indexed_canonical_bounty(&state, network, &args.contribution.bounty_contract).await
-    {
-        return mcp_error(error);
-    }
-    match configured_autonomous_planner(network).and_then(|planner| {
-        planner
-            .plan_authorized_contribution(
-                network,
-                &args.contribution,
-                &args.signature,
-                args.relayer.as_deref(),
-            )
-            .map_err(|error| error.to_string())
-    }) {
+    let item =
+        match indexed_canonical_bounty(&state, network, &args.contribution.bounty_contract).await {
+            Ok(item) => item,
+            Err(error) => return mcp_error(error),
+        };
+    let planned = if is_autonomous_v2_item(&item) {
+        configured_autonomous_v2_planner(network).and_then(|planner| {
+            planner
+                .plan_v2_authorized_contribution(
+                    network,
+                    &args.contribution,
+                    &args.signature,
+                    args.relayer.as_deref(),
+                )
+                .map_err(|error| error.to_string())
+        })
+    } else {
+        configured_autonomous_planner(network).and_then(|planner| {
+            planner
+                .plan_authorized_contribution(
+                    network,
+                    &args.contribution,
+                    &args.signature,
+                    args.relayer.as_deref(),
+                )
+                .map_err(|error| error.to_string())
+        })
+    };
+    match planned {
         Ok(plan) => mcp_json(plan),
         Err(error) => mcp_error(error),
     }
@@ -6997,18 +7043,36 @@ async fn plan_autonomous_bounty_claim(
         Ok(value) => value,
         Err(_) => return mcp_error("indexed claim bond is invalid"),
     };
-    match configured_autonomous_planner(network).and_then(|planner| {
-        planner
-            .plan_claim(
-                network,
-                &args.bounty_contract,
-                &args.solver,
-                claim_bond,
-                args.authorization_nonce.as_deref(),
-                args.authorization_valid_before,
-            )
-            .map_err(|error| error.to_string())
-    }) {
+    let planned = if is_autonomous_v2_item(&item) {
+        v2_claim_authorization(&item, &args.solver).and_then(|(round, _)| {
+            configured_autonomous_v2_planner(network).and_then(|planner| {
+                planner
+                    .plan_v2_claim(
+                        network,
+                        &args.bounty_contract,
+                        &args.solver,
+                        claim_bond,
+                        args.authorization_valid_before.map(|_| round),
+                        args.authorization_valid_before,
+                    )
+                    .map_err(|error| error.to_string())
+            })
+        })
+    } else {
+        configured_autonomous_planner(network).and_then(|planner| {
+            planner
+                .plan_claim(
+                    network,
+                    &args.bounty_contract,
+                    &args.solver,
+                    claim_bond,
+                    args.authorization_nonce.as_deref(),
+                    args.authorization_valid_before,
+                )
+                .map_err(|error| error.to_string())
+        })
+    };
+    match planned {
         Ok(plan) => mcp_json(plan),
         Err(error) => mcp_error(error),
     }
@@ -7030,20 +7094,43 @@ async fn plan_autonomous_bounty_authorized_claim(
         Ok(value) => value,
         Err(_) => return mcp_error("indexed claim bond is invalid"),
     };
-    match configured_autonomous_planner(network).and_then(|planner| {
-        planner
-            .plan_authorized_claim(
-                network,
-                &args.bounty_contract,
-                &args.solver,
-                claim_bond,
-                &args.authorization_nonce,
-                args.authorization_valid_before,
-                &args.signature,
-                args.relayer.as_deref(),
-            )
-            .map_err(|error| error.to_string())
-    }) {
+    let planned = if is_autonomous_v2_item(&item) {
+        v2_claim_authorization(&item, &args.solver).and_then(|(round, nonce)| {
+            if !args.authorization_nonce.eq_ignore_ascii_case(&nonce) {
+                return Err("a v2 bond authorization is bound to the next claim round; sign a fresh claim plan".to_string());
+            }
+            configured_autonomous_v2_planner(network).and_then(|planner| {
+                planner
+                    .plan_v2_authorized_claim(
+                        network,
+                        &args.bounty_contract,
+                        &args.solver,
+                        claim_bond,
+                        round,
+                        args.authorization_valid_before,
+                        &args.signature,
+                        args.relayer.as_deref(),
+                    )
+                    .map_err(|error| error.to_string())
+            })
+        })
+    } else {
+        configured_autonomous_planner(network).and_then(|planner| {
+            planner
+                .plan_authorized_claim(
+                    network,
+                    &args.bounty_contract,
+                    &args.solver,
+                    claim_bond,
+                    &args.authorization_nonce,
+                    args.authorization_valid_before,
+                    &args.signature,
+                    args.relayer.as_deref(),
+                )
+                .map_err(|error| error.to_string())
+        })
+    };
+    match planned {
         Ok(plan) => mcp_json(plan),
         Err(error) => mcp_error(error),
     }

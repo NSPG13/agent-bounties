@@ -39,7 +39,8 @@ use bounty_router::{BountyRouter, RouteDecision};
 use chain_base::{
     attach_open_competition_commit_calls, attach_open_competition_entrant_relay_signature,
     attach_open_competition_reveal_call, attach_open_competition_withdrawal_call,
-    autonomous_bounty_is_earning_ready, base_network_descriptor, broadcast_signed_transaction,
+    autonomous_bounty_is_earning_ready, autonomous_v2_claim_authorization_nonce,
+    autonomous_v2_next_claim_round, base_network_descriptor, broadcast_signed_transaction,
     build_autonomous_bounty_feed, build_autonomous_bounty_terms_record,
     build_autonomous_submission_evidence_record, build_autonomous_submission_preparation,
     build_autonomous_verification_jobs, built_in_open_competition_verifier_catalog,
@@ -10238,6 +10239,11 @@ async fn x402_base_bounty_funding(
     if !item.terms_valid {
         return Err(StatusCode::CONFLICT);
     }
+    // The x402 funding scheme signs a USDC transfer authorization, which a v2 bounty never
+    // accepts: anyone could execute it at the token and strand the funds outside the escrow.
+    if is_autonomous_v2_item(&item) {
+        return Err(StatusCode::CONFLICT);
+    }
     let amount = resolve_x402_funding_amount(
         &item.status,
         &item.target_amount,
@@ -11309,12 +11315,34 @@ async fn require_indexed_canonical_bounty(
     network: &str,
     bounty_contract: &str,
 ) -> Result<(), StatusCode> {
+    indexed_canonical_bounty(state, network, bounty_contract)
+        .await
+        .map(|_| ())
+}
+
+async fn indexed_canonical_bounty(
+    state: &SharedState,
+    network: &str,
+    bounty_contract: &str,
+) -> Result<AutonomousBountyFeedItem, StatusCode> {
     let item = indexed_autonomous_bounty(state, network, bounty_contract).await?;
     if item.terms_valid {
-        Ok(())
+        Ok(item)
     } else {
         Err(StatusCode::CONFLICT)
     }
+}
+
+/// A v2 bond authorization must carry `claimAuthorizationNonce(solver, round)`, so hosted plans
+/// derive the round from indexed claim history instead of accepting a caller or random nonce.
+fn v2_claim_authorization(
+    item: &AutonomousBountyFeedItem,
+    solver: &str,
+) -> Result<(u64, String), StatusCode> {
+    let round = autonomous_v2_next_claim_round(item);
+    let nonce = autonomous_v2_claim_authorization_nonce(&item.bounty_contract, solver, round)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    Ok((round, nonce))
 }
 
 async fn indexed_autonomous_bounty(
@@ -11645,8 +11673,15 @@ async fn plan_autonomous_bounty_contribution(
     Json(request): Json<PlanAutonomousBountyContributionRequest>,
 ) -> Result<Json<AutonomousBountyContributionPlan>, StatusCode> {
     let network = request.network.as_deref().unwrap_or("base-mainnet");
-    require_indexed_canonical_bounty(&state, network, &request.contribution.bounty_contract)
-        .await?;
+    let item =
+        indexed_canonical_bounty(&state, network, &request.contribution.bounty_contract).await?;
+    if is_autonomous_v2_item(&item) {
+        return configured_autonomous_v2_planner(network)?
+            .0
+            .plan_v2_contribution(network, &request.contribution)
+            .map(Json)
+            .map_err(|_| StatusCode::BAD_REQUEST);
+    }
     configured_autonomous_planner(network)?
         .plan_contribution(network, &request.contribution)
         .map(Json)
@@ -11659,8 +11694,20 @@ async fn plan_autonomous_bounty_authorized_contribution(
     Json(request): Json<PlanAutonomousBountyAuthorizedContributionRequest>,
 ) -> Result<Json<AutonomousBountyAuthorizedContributionPlan>, StatusCode> {
     let network = request.network.as_deref().unwrap_or("base-mainnet");
-    require_indexed_canonical_bounty(&state, network, &request.contribution.bounty_contract)
-        .await?;
+    let item =
+        indexed_canonical_bounty(&state, network, &request.contribution.bounty_contract).await?;
+    if is_autonomous_v2_item(&item) {
+        return configured_autonomous_v2_planner(network)?
+            .0
+            .plan_v2_authorized_contribution(
+                network,
+                &request.contribution,
+                &request.signature,
+                request.relayer.as_deref(),
+            )
+            .map(Json)
+            .map_err(|_| StatusCode::BAD_REQUEST);
+    }
     configured_autonomous_planner(network)?
         .plan_authorized_contribution(
             network,
@@ -11707,6 +11754,31 @@ async fn plan_autonomous_bounty_claim(
             "Do not sign; report the malformed indexed bond.",
         )
     })?;
+    if is_autonomous_v2_item(&item) {
+        let (round, _) = v2_claim_authorization(&item, &request.solver).map_err(|status| {
+            status_agent_action_error(status, "Correct the public solver wallet and retry.")
+        })?;
+        return configured_autonomous_v2_planner(network)
+            .map_err(|status| {
+                status_agent_action_error(status, "Retry after the planner is healthy.")
+            })?
+            .0
+            .plan_v2_claim(
+                network,
+                &request.bounty_contract,
+                &request.solver,
+                claim_bond,
+                request.authorization_valid_before.map(|_| round),
+                request.authorization_valid_before,
+            )
+            .map(Json)
+            .map_err(|_| {
+                status_agent_action_error(
+                    StatusCode::BAD_REQUEST,
+                    "Correct the public wallet inputs and retry without signing arbitrary calldata.",
+                )
+            });
+    }
     configured_autonomous_planner(network)
         .map_err(|status| status_agent_action_error(status, "Retry after the planner is healthy."))?
         .plan_claim(
@@ -11761,6 +11833,39 @@ async fn plan_autonomous_bounty_authorized_claim(
             "Do not sign; report the malformed indexed bond.",
         )
     })?;
+    if is_autonomous_v2_item(&item) {
+        let (round, nonce) = v2_claim_authorization(&item, &request.solver).map_err(|status| {
+            status_agent_action_error(status, "Correct the public solver wallet and retry.")
+        })?;
+        if !request.authorization_nonce.eq_ignore_ascii_case(&nonce) {
+            return Err(status_agent_action_error(
+                StatusCode::CONFLICT,
+                "Sign a fresh claim plan: a v2 bond authorization is bound to the next claim round.",
+            ));
+        }
+        return configured_autonomous_v2_planner(network)
+            .map_err(|status| {
+                status_agent_action_error(status, "Retry after the planner is healthy.")
+            })?
+            .0
+            .plan_v2_authorized_claim(
+                network,
+                &request.bounty_contract,
+                &request.solver,
+                claim_bond,
+                round,
+                request.authorization_valid_before,
+                &request.signature,
+                request.relayer.as_deref(),
+            )
+            .map(Json)
+            .map_err(|_| {
+                status_agent_action_error(
+                    StatusCode::BAD_REQUEST,
+                    "Correct the bounded authorization inputs and retry without signing arbitrary calldata.",
+                )
+            });
+    }
     configured_autonomous_planner(network)
         .map_err(|status| status_agent_action_error(status, "Retry after the planner is healthy."))?
         .plan_authorized_claim(
@@ -12201,8 +12306,26 @@ async fn agent_native_claim(
     }
 
     let mut candidate = reservation.candidate.clone();
+    let v2_claim = if is_autonomous_v2_item(&item) {
+        Some(
+            v2_claim_authorization(&item, &solver_wallet).map_err(|status| {
+                agent_claim_problem(
+                    status,
+                    "authorization_plan_failed",
+                    "prepare_authorization",
+                    "the round-bound v2 bond authorization could not be derived",
+                    "Do not sign; retry from fresh canonical inventory.",
+                )
+            })?,
+        )
+    } else {
+        None
+    };
     if candidate.authorization_nonce.is_none() {
-        let (nonce, valid_before) = claim_authorization_window(&candidate)?;
+        let (random_nonce, valid_before) = claim_authorization_window(&candidate)?;
+        let nonce = v2_claim
+            .as_ref()
+            .map_or(random_nonce, |(_, bound)| bound.clone());
         candidate = store
             .set_claim_candidate_authorization(candidate.id, &nonce, valid_before)
             .await
@@ -12226,8 +12349,25 @@ async fn agent_native_claim(
             "Retry with the same idempotency_key.",
         )
     })?;
-    let claim_plan = configured_autonomous_planner(network)
-        .and_then(|planner| {
+    let claim_plan = match &v2_claim {
+        // The stored nonce must still be the bound nonce for the next round; a candidate prepared
+        // before another claim landed must not ask the solver to sign an authorization that lapsed.
+        Some((round, bound)) if nonce.eq_ignore_ascii_case(bound) => {
+            configured_autonomous_v2_planner(network).and_then(|(planner, _)| {
+                planner
+                    .plan_v2_claim(
+                        network,
+                        &bounty_contract,
+                        &solver_wallet,
+                        u128::from(claim_bond),
+                        Some(*round),
+                        Some(valid_before),
+                    )
+                    .map_err(|_| StatusCode::BAD_REQUEST)
+            })
+        }
+        Some(_) => Err(StatusCode::CONFLICT),
+        None => configured_autonomous_planner(network).and_then(|planner| {
             planner
                 .plan_claim(
                     network,
@@ -12238,16 +12378,17 @@ async fn agent_native_claim(
                     Some(valid_before),
                 )
                 .map_err(|_| StatusCode::BAD_REQUEST)
-        })
-        .map_err(|status| {
-            agent_claim_problem(
-                status,
-                "authorization_plan_failed",
-                "prepare_authorization",
-                "the exact bounded USDC authorization could not be prepared",
-                "Do not sign; retry from fresh canonical inventory.",
-            )
-        })?;
+        }),
+    }
+    .map_err(|status| {
+        agent_claim_problem(
+            status,
+            "authorization_plan_failed",
+            "prepare_authorization",
+            "the exact bounded USDC authorization could not be prepared",
+            "Do not sign; retry from fresh canonical inventory.",
+        )
+    })?;
     let signing_payload = claim_plan.eip3009_authorization.clone().ok_or_else(|| {
         agent_claim_problem(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -12285,6 +12426,12 @@ async fn agent_native_claim(
         &nonce,
         valid_before,
         signature,
+        if v2_claim.is_some() {
+            payments_x402::Eip3009Kind::Receive
+        } else {
+            payments_x402::Eip3009Kind::Transfer
+        },
+        u64::try_from(Utc::now().timestamp()).unwrap_or_default(),
     )?;
 
     let mut sponsorship = store
@@ -12320,6 +12467,7 @@ async fn agent_native_claim(
             &nonce,
             valid_before,
             signature,
+            v2_claim.as_ref().map(|(round, _)| *round),
         )
         .await?
     };
@@ -12986,6 +13134,8 @@ fn map_agent_claim_db_error(error: DbError) -> AgentClaimProblem {
     }
 }
 
+/// `kind` is `Receive` for an autonomous-v2 bond, which never accepts a transfer authorization.
+#[allow(clippy::too_many_arguments)]
 fn validate_claim_authorization_signature(
     network: &BaseNetworkDescriptor,
     bounty_contract: &str,
@@ -12994,8 +13144,9 @@ fn validate_claim_authorization_signature(
     nonce: &str,
     valid_before: u64,
     signature: &AutonomousBountyAuthorizationSignature,
+    kind: payments_x402::Eip3009Kind,
+    now: u64,
 ) -> Result<(), AgentClaimProblem> {
-    let now = u64::try_from(Utc::now().timestamp()).unwrap_or_default();
     let timeout = valid_before.saturating_sub(now);
     if timeout < 6 {
         return Err(agent_claim_problem(
@@ -13054,7 +13205,7 @@ fn validate_claim_authorization_signature(
         })?,
         extensions: required.extensions.clone(),
     };
-    validate_funding_payload(&payload, &required, now).map_err(|_| {
+    payments_x402::validate_funding_payload_as(&payload, &required, now, kind).map_err(|_| {
         agent_claim_problem(
             StatusCode::UNPROCESSABLE_ENTITY,
             "authorization_invalid",
@@ -13561,6 +13712,9 @@ fn validate_atomic_sponsored_claim_intent(
     Ok(())
 }
 
+/// `v2_round` is the round an autonomous-v2 bond authorization is bound to; v2 claims are built
+/// by the v2 planner, so they need no autonomous-v1 deployment on the network.
+#[allow(clippy::too_many_arguments)]
 async fn relay_agent_native_claim(
     state: &SharedState,
     candidate: &ClaimCandidate,
@@ -13568,6 +13722,7 @@ async fn relay_agent_native_claim(
     nonce: &str,
     valid_before: u64,
     signature: &AutonomousBountyAuthorizationSignature,
+    v2_round: Option<u64>,
 ) -> Result<ClaimCandidate, AgentClaimProblem> {
     if candidate.status == ClaimCandidateStatus::Relaying {
         return reconcile_agent_native_claim(state, candidate.clone(), claim_bond).await;
@@ -13586,7 +13741,11 @@ async fn relay_agent_native_claim(
                 "Use the direct wallet_calls from plan_autonomous_bounty_claim.",
             )
         })?;
-    let planner = configured_autonomous_planner(&candidate.network).map_err(|status| {
+    let planner = match v2_round {
+        Some(_) => configured_autonomous_v2_planner(&candidate.network).map(|(planner, _)| planner),
+        None => configured_autonomous_planner(&candidate.network),
+    }
+    .map_err(|status| {
         agent_claim_problem(
             status,
             "planner_unavailable",
@@ -13595,8 +13754,19 @@ async fn relay_agent_native_claim(
             "Do not sign arbitrary calldata; retry later.",
         )
     })?;
-    let plan = planner
-        .plan_authorized_claim(
+    let relayer_address = relayer.address();
+    let plan = match v2_round {
+        Some(round) => planner.plan_v2_authorized_claim(
+            &candidate.network,
+            &candidate.bounty_contract,
+            &candidate.solver_wallet,
+            u128::from(claim_bond),
+            round,
+            valid_before,
+            signature,
+            Some(&relayer_address),
+        ),
+        None => planner.plan_authorized_claim(
             &candidate.network,
             &candidate.bounty_contract,
             &candidate.solver_wallet,
@@ -13604,17 +13774,18 @@ async fn relay_agent_native_claim(
             nonce,
             valid_before,
             signature,
-            Some(&relayer.address()),
+            Some(&relayer_address),
+        ),
+    }
+    .map_err(|_| {
+        agent_claim_problem(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "claim_plan_invalid",
+            "relay_claim",
+            "the signed claim could not be converted into the exact relay transaction",
+            "Sign only the returned signing_payload and retry with the same idempotency_key.",
         )
-        .map_err(|_| {
-            agent_claim_problem(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "claim_plan_invalid",
-                "relay_claim",
-                "the signed claim could not be converted into the exact relay transaction",
-                "Sign only the returned signing_payload and retry with the same idempotency_key.",
-            )
-        })?;
+    })?;
     validate_agent_claim_relay_intent(
         &plan.relay_transaction,
         &candidate.bounty_contract,
@@ -17504,6 +17675,67 @@ mod tests {
             decode_autonomous_bounty_logs(chain_base::rpc_logs_to_evm_logs(logs).unwrap()).unwrap();
         let feed = build_autonomous_bounty_feed(events, Vec::new(), false).unwrap();
         (fixture, feed)
+    }
+
+    /// The hosted claim relay must accept the v2 receive signature the bounty itself accepted, and
+    /// refuse it when checked as a v1 transfer authorization.
+    #[test]
+    fn hosted_claim_relay_checks_v2_bonds_as_receive_authorizations() {
+        let (fixture, _) = autonomous_v2_fixture_feed();
+        let signed = &fixture["gasless_loop"]["steps"][1]["authorizations"][0];
+        let message = &signed["typed_data"]["message"];
+        let raw = signed["signature"]
+            .as_str()
+            .unwrap()
+            .trim_start_matches("0x");
+        let signature = AutonomousBountyAuthorizationSignature {
+            v: u8::from_str_radix(&raw[128..130], 16).unwrap(),
+            r: format!("0x{}", &raw[..64]),
+            s: format!("0x{}", &raw[64..128]),
+        };
+        let valid_before: u64 = message["validBefore"].as_str().unwrap().parse().unwrap();
+        let check = |kind| {
+            validate_claim_authorization_signature(
+                &base_network_descriptor("base-sepolia").unwrap(),
+                message["to"].as_str().unwrap(),
+                message["from"].as_str().unwrap(),
+                message["value"].as_str().unwrap().parse().unwrap(),
+                message["nonce"].as_str().unwrap(),
+                valid_before,
+                &signature,
+                kind,
+                valid_before - 60,
+            )
+        };
+        assert!(check(payments_x402::Eip3009Kind::Receive).is_ok());
+        assert!(check(payments_x402::Eip3009Kind::Transfer).is_err());
+    }
+
+    #[test]
+    fn hosted_v2_bond_authorizations_use_the_next_round_nonce() {
+        let (fixture, feed) = autonomous_v2_fixture_feed();
+        let bounty = fixture["gasless_loop"]["bounty"].as_str().unwrap();
+        let claimed = feed
+            .iter()
+            .find(|item| item.bounty_contract == bounty)
+            .unwrap()
+            .clone();
+        let signed = &fixture["gasless_loop"]["steps"][1]["authorizations"][0];
+        let solver = signed["signer"].as_str().unwrap();
+        let mut before_claim = claimed.clone();
+        before_claim
+            .events
+            .retain(|event| event.kind != chain_base::AutonomousBountyEventKind::BountyClaimed);
+        let (round, nonce) = v2_claim_authorization(&before_claim, solver).unwrap();
+        assert_eq!(round, 1);
+        assert_eq!(
+            nonce,
+            signed["typed_data"]["message"]["nonce"].as_str().unwrap(),
+            "the hosted nonce must be the one the bounty accepted"
+        );
+        let (next_round, next_nonce) = v2_claim_authorization(&claimed, solver).unwrap();
+        assert_eq!(next_round, 2);
+        assert_ne!(next_nonce, nonce, "a later round needs a new authorization");
     }
 
     #[test]

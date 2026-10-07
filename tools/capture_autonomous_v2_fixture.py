@@ -30,7 +30,7 @@ PARAMS = "(uint256,uint256,bytes32,bytes32,bytes32,bytes32,bytes32,uint64,uint64
 CREATE = f"createBounty({PARAMS},address[],uint256,bytes32)"
 CREATE_WITH_AUTH = f"createBountyWithAuthorization(address,{PARAMS},address[],uint256,bytes32,(uint256,uint256,bytes32,uint8,bytes32,bytes32))"
 LABELS = {1: "paid_after_reject", 2: "fee_deferred_then_forwarded", 3: "contractor_gated", 4: "cancelled_and_refunded",
-          5: "gasless_quorum"}
+          5: "gasless_quorum", 6: "cancel_requested_then_expired"}
 BASE_SEPOLIA_USDC = "0x036cbd53842c5426634e7929541ec2318f3dcf7e"
 # Anvil's default development keys. Never use them outside a local chain.
 DEPLOYER_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
@@ -141,7 +141,7 @@ class GaslessLoop:
         bounty, bounty_id = created["predicted_bounty_contract"], created["bounty_id"]
 
         claim = {"bounty_contract": bounty, "solver": solver, "claim_bond": usdc(100_000),
-                 "authorization_nonce": word("gasless claim bond"), "authorization_valid_before": now + 86_400}
+                 "claim_round": 1, "authorization_valid_before": now + 86_400}
         bond = self.authorize({"action": "claim", **claim}, SOLVER_KEY, "eip3009_authorization")
         self.relay("authorized_claim", [bond], {"action": "authorized_claim", **claim,
                                                 "signature": self.split(bond["signature"]),
@@ -205,10 +205,38 @@ def main() -> int:
         work.mkdir(parents=True, exist_ok=True)
         gasless = GaslessLoop(target / "debug" / "cli", factory, implementation, work)
         gasless_bounty = gasless.run_loop()
-        logs = json.loads(run("cast", "logs", "--rpc-url", RPC, "--from-block", "0", "--json"))
         created_topic = run("cast", "keccak", "CanonicalBountyCreated(bytes32,address,address,bytes32,bytes32,bytes32)")
+
+        def created_bounties() -> tuple[list[dict[str, object]], dict[str, str]]:
+            logs = json.loads(run("cast", "logs", "--rpc-url", RPC, "--from-block", "0", "--json"))
+            creations = [log for log in logs if log["topics"][0].lower() == created_topic.lower()]
+            return logs, {LABELS[int(log["data"][2 + 128: 2 + 192], 16)]: "0x" + log["topics"][2][-40:].lower()
+                          for log in creations}
+
+        # A gasless cancel: the creator only signs, and the relayer sends the cancel request, the
+        # round's expiry (which returns the bond and cancels the bounty) and the refund push.
+        logs, bounties = created_bounties()
+        requested = bounties["cancel_requested_then_expired"]
+        requested_id = next(log["topics"][1].lower() for log in logs if log["topics"][0].lower() == created_topic.lower()
+                            and "0x" + log["topics"][2][-40:].lower() == requested)
+        creator_wallet = address_of(DEPLOYER_KEY)
+        cancel = GaslessLoop(target / "debug" / "cli", factory, implementation, work)
+        deadline = int(run("cast", "block", "latest", "--field", "timestamp", "--rpc-url", RPC)) + 3_600
+        signed = cancel.authorize({"action": "cancel_authorization", "cancel": {
+            "bounty_contract": requested, "bounty_id": requested_id, "creator": creator_wallet, "deadline": deadline}},
+            DEPLOYER_KEY)
+        cancel.relay("cancel_request", [signed], {"action": "cancel_relay", "bounty_contract": requested,
+                                                  "deadline": deadline, "signature": signed["signature"],
+                                                  "relayer": cancel.relayer})
+        run("cast", "rpc", "evm_increaseTime", str(86_400 + 2), "--rpc-url", RPC)
+        run("cast", "rpc", "evm_mine", "--rpc-url", RPC)
+        run("cast", "send", requested, "expireSubmission()", "--private-key", RELAYER_KEY, "--rpc-url", RPC,
+            quiet=True)
+        cancel.relay("refund_push", [], {"action": "refund_withdrawal", "bounty_contract": requested,
+                                         "contributor": creator_wallet})
+        logs, bounties = created_bounties()
         creations = [log for log in logs if log["topics"][0].lower() == created_topic.lower()]
-        bounties = {LABELS[int(log["data"][2 + 128: 2 + 192], 16)]: "0x" + log["topics"][2][-40:].lower() for log in creations}
+        bounty_ids = {LABELS[int(log["data"][2 + 128: 2 + 192], 16)]: log["topics"][1].lower() for log in creations}
         if bounties["gasless_quorum"] != gasless_bounty.lower():
             raise RuntimeError("gasless bounty was not created at the planner's predicted address")
         broadcast = json.loads((CONTRACTS / f"broadcast/CaptureAutonomousV2Fixture.s.sol/{CHAIN_ID}/run-latest.json").read_text())
@@ -223,8 +251,9 @@ def main() -> int:
     params, verifiers, funding, nonce = (clean(line) for line in run("cast", "decode-calldata", CREATE, calldata["contractor_gated"]).split("\n"))
     deadline = params.strip("()").split(", ")[7]
     r, s = "0x" + "11" * 32, "0x" + "22" * 32
+    # The factory accepts only an authorization whose nonce is the bounty id.
     reference = run("cast", "calldata", CREATE_WITH_AUTH, creator, params.replace(" ", ""), verifiers, funding, nonce,
-                    f"(0,{deadline},{nonce},27,{r},{s})")
+                    f"(0,{deadline},{bounty_ids['contractor_gated']},27,{r},{s})")
     keep = [{key: log[key] for key in ("address", "topics", "data", "transactionHash", "blockNumber", "logIndex")}
             for log in logs if log["address"].lower() in {factory, *bounties.values()}]
     fixture = {
@@ -246,6 +275,9 @@ def main() -> int:
         "settlement_token": BASE_SEPOLIA_USDC,
         "gasless_loop": {"scenario": "gasless_quorum", "bounty": gasless_bounty.lower(),
                          "signer": "cast wallet sign --data (EIP-712)", "steps": gasless.steps},
+        "gasless_cancel": {"scenario": "cancel_requested_then_expired", "bounty": requested,
+                           "creator": creator_wallet, "signer": "cast wallet sign --data (EIP-712)",
+                           "steps": cancel.steps},
         "logs": keep,
     }
     FIXTURE.write_text(json.dumps(fixture, indent=2) + "\n")
