@@ -1134,9 +1134,14 @@ mod tests {
 
     #[test]
     fn base_mainnet_v2_accepts_only_the_recorded_deployment() {
-        let record: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../deployments/autonomous-v2-base-mainnet.json"
-        ))
+        // Read at run time, so the record is not a compile-time input of verifier builds.
+        let record: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../deployments/autonomous-v2-base-mainnet.json"),
+            )
+            .unwrap(),
+        )
         .unwrap();
         let settings = &record["configuration"];
         let setting = |name: &str| settings[name].as_str().map(str::to_uppercase);
