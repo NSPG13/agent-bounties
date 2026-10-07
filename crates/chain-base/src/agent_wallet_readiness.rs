@@ -850,7 +850,7 @@ mod tests {
     }
 
     fn address_word(address: &str) -> String {
-        format!("0x{}{}", "0".repeat(24), &address[2..].to_ascii_lowercase())
+        format!("0x{}{}", "0".repeat(24), address[2..].to_ascii_lowercase())
     }
 
     fn multicall_result(words: Vec<String>) -> String {

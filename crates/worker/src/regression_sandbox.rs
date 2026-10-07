@@ -1001,6 +1001,56 @@ fn validate_evm_address(field: &str, value: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Exercises the real bounded executor. These fixed diagnostic controls are not
+/// bounty jobs and can never produce a payment verdict or candidate artifact.
+pub async fn check_regression_runner_health() -> anyhow::Result<()> {
+    let root = std::env::temp_dir().join(format!("ab-runner-health-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&root)?;
+    let result = async {
+        let benchmark = root.join("benchmark"); let good = root.join("good"); let bad = root.join("bad");
+        for path in [&benchmark, &good, &bad] { fs::create_dir(path)?; }
+        fs::write(good.join("result.txt"), b"healthy")?;
+        fs::write(bad.join("result.txt"), b"failing-control")?;
+        // The exact executor supplies readonly mounts, cgroups, network=none,
+        // dropped capabilities and no-new-privileges. Probe those constraints.
+        fs::write(benchmark.join("health.py"), br#"import os, pathlib, sys
+assert os.getuid() == 65532
+status = dict(line.split(':',1) for line in pathlib.Path('/proc/self/status').read_text().splitlines() if ':' in line)
+assert int(status['CapEff'].strip(),16) == 0
+assert status['NoNewPrivs'].strip() == '1'
+assert set(os.listdir('/sys/class/net')) == {'lo'}
+for root in ['/workspace','/benchmark','/']:
+    try:
+        pathlib.Path(root, 'health-write-must-fail').write_text('x')
+    except OSError:
+        pass
+    else:
+        raise AssertionError('filesystem unexpectedly writable')
+sys.exit(0 if pathlib.Path('/workspace/result.txt').read_text() == 'healthy' else 1)
+"#)?;
+        let benchmark_digest = snapshot_directory(&benchmark, 1_048_576, 100)?.digest;
+        let mut seen = HashSet::new();
+        for profile in &verifier_sdk::regression_profile_registry()?.profiles {
+            if profile.status != "approved" { continue; }
+            let mut policy: RegressionSandboxPolicy = serde_json::from_value(profile.runner_manifest.clone())?;
+            if !seen.insert(serde_json::to_string(&policy)?) { continue; }
+            policy.benchmark_digest = benchmark_digest.clone();
+            policy.command = vec!["python".into(),"/benchmark/health.py".into()];
+            policy.timeout_seconds = policy.timeout_seconds.min(20);
+            for (source,expected_exit) in [(&good,0),(&bad,1)] {
+                let digest=snapshot_directory(source,1024,1)?.digest;
+                let executor=DockerCliRegressionExecutor::new("docker",source,&benchmark)?;
+                let result=executor.execute(&policy,&digest).await?;
+                if result.exit_code != expected_exit { return Err(anyhow!("runner diagnostic control failed")); }
+            }
+        }
+        if seen.is_empty() { return Err(anyhow!("no approved runner profile")); }
+        Ok(())
+    }.await;
+    remove_tree_best_effort(&root);
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1491,54 +1541,4 @@ mod tests {
         fs::create_dir_all(&path).unwrap();
         path
     }
-}
-
-/// Exercises the real bounded executor. These fixed diagnostic controls are not
-/// bounty jobs and can never produce a payment verdict or candidate artifact.
-pub async fn check_regression_runner_health() -> anyhow::Result<()> {
-    let root = std::env::temp_dir().join(format!("ab-runner-health-{}", uuid::Uuid::new_v4()));
-    fs::create_dir(&root)?;
-    let result = async {
-        let benchmark = root.join("benchmark"); let good = root.join("good"); let bad = root.join("bad");
-        for path in [&benchmark, &good, &bad] { fs::create_dir(path)?; }
-        fs::write(good.join("result.txt"), b"healthy")?;
-        fs::write(bad.join("result.txt"), b"failing-control")?;
-        // The exact executor supplies readonly mounts, cgroups, network=none,
-        // dropped capabilities and no-new-privileges. Probe those constraints.
-        fs::write(benchmark.join("health.py"), br#"import os, pathlib, sys
-assert os.getuid() == 65532
-status = dict(line.split(':',1) for line in pathlib.Path('/proc/self/status').read_text().splitlines() if ':' in line)
-assert int(status['CapEff'].strip(),16) == 0
-assert status['NoNewPrivs'].strip() == '1'
-assert set(os.listdir('/sys/class/net')) == {'lo'}
-for root in ['/workspace','/benchmark','/']:
-    try:
-        pathlib.Path(root, 'health-write-must-fail').write_text('x')
-    except OSError:
-        pass
-    else:
-        raise AssertionError('filesystem unexpectedly writable')
-sys.exit(0 if pathlib.Path('/workspace/result.txt').read_text() == 'healthy' else 1)
-"#)?;
-        let benchmark_digest = snapshot_directory(&benchmark, 1_048_576, 100)?.digest;
-        let mut seen = HashSet::new();
-        for profile in &verifier_sdk::regression_profile_registry()?.profiles {
-            if profile.status != "approved" { continue; }
-            let mut policy: RegressionSandboxPolicy = serde_json::from_value(profile.runner_manifest.clone())?;
-            if !seen.insert(serde_json::to_string(&policy)?) { continue; }
-            policy.benchmark_digest = benchmark_digest.clone();
-            policy.command = vec!["python".into(),"/benchmark/health.py".into()];
-            policy.timeout_seconds = policy.timeout_seconds.min(20);
-            for (source,expected_exit) in [(&good,0),(&bad,1)] {
-                let digest=snapshot_directory(source,1024,1)?.digest;
-                let executor=DockerCliRegressionExecutor::new("docker",source,&benchmark)?;
-                let result=executor.execute(&policy,&digest).await?;
-                if result.exit_code != expected_exit { return Err(anyhow!("runner diagnostic control failed")); }
-            }
-        }
-        if seen.is_empty() { return Err(anyhow!("no approved runner profile")); }
-        Ok(())
-    }.await;
-    remove_tree_best_effort(&root);
-    result
 }
