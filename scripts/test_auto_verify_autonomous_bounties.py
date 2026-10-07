@@ -33,6 +33,7 @@ def job(**overrides: object) -> dict[str, object]:
             "policy_hash": POLICY_HASH,
             "document": {
                 "benchmark": {"engine": auto.ENGINE, "difficulty_bits": 16},
+                "contract_terms": {"protocol_version": auto.PROTOCOL_VERSION},
             },
         },
         "submission_evidence": {
@@ -103,7 +104,22 @@ class DiscoverTests(unittest.TestCase):
             "network is not base-mainnet": job(network="base-sepolia"),
             "deterministic verification requires threshold 1": job(threshold=2),
             "benchmark is not the 16-bit leading-zero-work engine": job(
-                terms={"policy_hash": POLICY_HASH, "document": {"benchmark": {"engine": auto.ENGINE, "difficulty_bits": 24}}}
+                terms={
+                    "policy_hash": POLICY_HASH,
+                    "document": {
+                        "benchmark": {"engine": auto.ENGINE, "difficulty_bits": 24},
+                        "contract_terms": {"protocol_version": auto.PROTOCOL_VERSION},
+                    },
+                }
+            ),
+            "not an autonomous-v1 bounty": job(
+                terms={
+                    "policy_hash": POLICY_HASH,
+                    "document": {
+                        "benchmark": {"engine": auto.ENGINE, "difficulty_bits": 16},
+                        "contract_terms": {"protocol_version": "agent-bounties/autonomous-v2"},
+                    },
+                }
             ),
             "verification window closes too soon": job(
                 verification_expires_at=NOW + auto.MIN_REMAINING_SECONDS
@@ -137,6 +153,22 @@ class DiscoverTests(unittest.TestCase):
             [(f"0x{index:040x}", "deferred to the next run") for index in (2, 1)],
         )
 
+    def test_v2_jobs_never_take_run_slots_from_v1_jobs(self) -> None:
+        v2_terms = {
+            "policy_hash": POLICY_HASH,
+            "document": {
+                "benchmark": {"engine": auto.ENGINE, "difficulty_bits": 16},
+                "contract_terms": {"protocol_version": "agent-bounties/autonomous-v2"},
+            },
+        }
+        jobs = [
+            job(bounty_contract=f"0x{index:040x}", verification_expires_at=NOW + 1_000, terms=v2_terms)
+            for index in range(1, 6)
+        ]
+        jobs.append(job(verification_expires_at=NOW + 3_000))
+        envelopes, _ = auto.discover(jobs, now=NOW, max_jobs=5, hash_fn=zero_hash)
+        self.assertEqual([item["bounty_contract"] for item in envelopes], [CONTRACT])
+
     def test_duplicate_contracts_are_settled_once(self) -> None:
         envelopes, skipped = auto.discover([job(), job(round=4)], now=NOW, hash_fn=zero_hash)
         self.assertEqual(len(envelopes), 1)
@@ -148,6 +180,87 @@ class DiscoverTests(unittest.TestCase):
         )
         self.assertEqual(envelopes, [])
         self.assertIn("32-byte", skipped[0]["reason"])
+
+
+RECENT = "2027-01-15T08:00:00Z"
+RECENT_NOW = 1_800_000_000.0  # 2027-01-15T08:00:00Z
+RELAY_WORKFLOW = ".github/workflows/autonomous-gas-relay.yml"
+AUTO_WORKFLOW = ".github/workflows/autonomous-auto-verify.yml"
+
+
+def run_pages(*pages: list[dict[str, object]], total: int | None = None):
+    """Fake GitHub listing: the same pages for every status, with a fixed total."""
+
+    count = sum(len(page) for page in pages) if total is None else total
+    calls: list[str] = []
+
+    def fetch(url: str, token: str) -> dict[str, object]:
+        calls.append(url)
+        page = int(url.rsplit("page=", 1)[1])
+        runs = pages[page - 1] if page <= len(pages) else []
+        status = url.split("status=", 1)[1].split("&", 1)[0]
+        return {"total_count": count, "workflow_runs": runs if status == "in_progress" else []}
+
+    return fetch, calls
+
+
+class KeeperLockTests(unittest.TestCase):
+    def test_lock_workflows_are_read_from_the_repository(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        workflows = auto.keeper_lock_workflows(root)
+        self.assertIn(RELAY_WORKFLOW, workflows)
+        self.assertIn(AUTO_WORKFLOW, workflows)
+        self.assertNotIn(".github/workflows/ci.yml", workflows)
+
+    def test_other_active_keeper_runs_block_the_hand_off(self) -> None:
+        fetch, _ = run_pages(
+            [
+                {"id": 7, "path": AUTO_WORKFLOW, "created_at": RECENT},
+                {"id": 8, "path": ".github/workflows/ci.yml", "created_at": RECENT},
+                {"id": 9, "path": RELAY_WORKFLOW, "created_at": RECENT},
+                # Queued for more than a day: a phantom that holds no lock.
+                {"id": 10, "path": RELAY_WORKFLOW, "created_at": "2027-01-14T07:59:59Z"},
+            ]
+        )
+        busy = auto.busy_keeper_runs(
+            "NSPG13/agent-bounties",
+            "token",
+            7,
+            {RELAY_WORKFLOW, AUTO_WORKFLOW},
+            now=RECENT_NOW,
+            fetch=fetch,
+        )
+        # The current run, non-keeper workflows and phantoms do not count.
+        self.assertEqual(busy, [{"id": 9, "path": RELAY_WORKFLOW, "status": "in_progress"}])
+
+    def test_every_active_status_is_inspected(self) -> None:
+        fetch, calls = run_pages([])
+        self.assertEqual(
+            auto.busy_keeper_runs("o/r", "t", 1, {RELAY_WORKFLOW}, now=RECENT_NOW, fetch=fetch), []
+        )
+        self.assertEqual(
+            [url.split("status=", 1)[1].split("&", 1)[0] for url in calls],
+            list(auto.ACTIVE_RUN_STATUSES),
+        )
+
+    def test_listing_is_paginated_and_fails_closed(self) -> None:
+        page = [
+            {"id": index, "path": ".github/workflows/ci.yml", "created_at": RECENT}
+            for index in range(100)
+        ]
+        fetch, _ = run_pages(page, [{"id": 500, "path": RELAY_WORKFLOW, "created_at": RECENT}])
+        check = lambda fetch: auto.busy_keeper_runs(  # noqa: E731
+            "o/r", "t", 1, {RELAY_WORKFLOW}, now=RECENT_NOW, fetch=fetch
+        )
+        self.assertEqual([item["id"] for item in check(fetch)], [500])
+        endless, _ = run_pages(*([page] * 6), total=10_000)
+        with self.assertRaisesRegex(auto.AutoVerifyError, "too many active"):
+            check(endless)
+        with self.assertRaisesRegex(auto.AutoVerifyError, "malformed"):
+            check(lambda *_: {"workflow_runs": []})
+        undated, _ = run_pages([{"id": 3, "path": RELAY_WORKFLOW, "created_at": "soon"}])
+        with self.assertRaisesRegex(auto.AutoVerifyError, "malformed"):
+            check(undated)
 
 
 class EnvelopeTests(unittest.TestCase):
@@ -292,6 +405,46 @@ class MainTests(unittest.TestCase):
             envelopes = json.loads(lines[1].removeprefix("envelopes="))
             self.assertEqual(envelopes[0]["proof"], "0x" + (7).to_bytes(32, "big").hex())
             self.assertEqual(auto.parse_envelopes(json.dumps(envelopes))[0]["round"], 3)
+
+    def discover_with_lock(self, environ: dict[str, str], busy: list[dict[str, object]]):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            output = root / "github_output"
+            with mock.patch.object(auto, "fetch_jobs", return_value=[job()]), mock.patch.object(
+                auto.time, "time", return_value=NOW
+            ), mock.patch.object(auto, "mine_nonce", return_value=7), mock.patch.object(
+                auto, "busy_keeper_runs", return_value=busy
+            ) as checked, mock.patch.dict(auto.os.environ, environ, clear=True):
+                code = auto.main(
+                    [
+                        "discover",
+                        "--github-output",
+                        str(output),
+                        "--report",
+                        str(root / "d.json"),
+                        "--require-idle-keeper-lock",
+                    ]
+                )
+            lines = output.read_text().splitlines() if output.exists() else []
+            report = json.loads((root / "d.json").read_text())
+        return code, lines, report, checked
+
+    def test_busy_keeper_lock_defers_all_work(self) -> None:
+        environ = {"GH_TOKEN": "t", "GITHUB_REPOSITORY": "o/r", "GITHUB_RUN_ID": "7"}
+        busy = [{"id": 9, "path": RELAY_WORKFLOW, "status": "pending"}]
+        code, lines, report, checked = self.discover_with_lock(environ, busy)
+        self.assertEqual(code, 0)
+        self.assertEqual(lines, ["count=0", "envelopes=[]"])
+        self.assertEqual(report["outcome"], "deferred_keeper_lock_busy")
+        self.assertEqual(checked.call_args.args[:3], ("o/r", "t", 7))
+        self.assertIn(AUTO_WORKFLOW, checked.call_args.args[3])
+        code, lines, report, _ = self.discover_with_lock(environ, [])
+        self.assertEqual((code, lines[0], report["outcome"]), (0, "count=1", "discovered"))
+
+    def test_lock_check_without_a_token_fails_closed(self) -> None:
+        code, lines, report, checked = self.discover_with_lock({}, [])
+        self.assertEqual((code, lines, report["outcome"]), (1, [], "failed"))
+        checked.assert_not_called()
 
     def test_settle_fails_the_run_unless_every_bounty_is_handled(self) -> None:
         for results, expected in (

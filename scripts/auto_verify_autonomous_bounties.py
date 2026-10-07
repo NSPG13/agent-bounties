@@ -5,7 +5,7 @@ The scheduled keeper runs in two stages, each in its own workflow job:
 
 - ``discover`` reads the public verification-job feed, keeps submitted jobs on
   the deployed LeadingZeroWorkVerifier and mines a passing nonce from each
-  job's committed values. It needs no secrets and no chain access.
+  job's committed values. It holds no keeper key and needs no chain access.
 - ``settle`` re-reads each bounty on-chain and relays ``verifyAndSettle``
   through the bounded relay, which first requires the module's own ``verify``
   to return pass. It holds the keeper key and the shared keeper lock.
@@ -26,6 +26,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+from datetime import datetime
 from typing import Any, Callable, Mapping, Sequence
 
 import relay_autonomous_action as relay
@@ -46,6 +47,13 @@ MAX_FEED_BYTES = 8 * 1024 * 1024
 BYTES32_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
 ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 OK_OUTCOMES = {"relayed", "already_applied", "skipped"}
+PROTOCOL_VERSION = "agent-bounties/autonomous-v1"
+KEEPER_LOCK_GROUP = "agent-bounties-shared-base-keeper"
+ACTIVE_RUN_STATUSES = ("in_progress", "queued", "pending", "waiting", "requested")
+MAX_RUN_PAGES = 5
+# GitHub cancels jobs queued for more than 24 hours; older "active" runs are
+# phantoms that can neither hold nor wait for the keeper lock.
+MAX_ACTIVE_RUN_AGE_SECONDS = 24 * 3600
 
 
 class AutoVerifyError(RuntimeError):
@@ -148,6 +156,10 @@ def candidate_reason(job: object, now: int) -> str | None:
     benchmark = document.get("benchmark") if isinstance(document, dict) else None
     if not isinstance(benchmark, dict):
         return "terms are missing a benchmark"
+    contract_terms = document.get("contract_terms") if isinstance(document, dict) else None
+    if not isinstance(contract_terms, dict) or contract_terms.get("protocol_version") != PROTOCOL_VERSION:
+        # The bounded relay accepts only autonomous-v1 clones; v2 must not take run slots.
+        return "not an autonomous-v1 bounty"
     if benchmark.get("engine") != ENGINE or benchmark.get("difficulty_bits") != DIFFICULTY_BITS:
         return "benchmark is not the 16-bit leading-zero-work engine"
     expires = job.get("verification_expires_at")
@@ -211,6 +223,77 @@ def discover(
             {"bounty_contract": job["bounty_contract"], "reason": "deferred to the next run"}
         )
     return envelopes, skipped
+
+
+def keeper_lock_workflows(root: pathlib.Path) -> set[str]:
+    """Workflow paths whose jobs can hold or queue in the shared keeper lock."""
+
+    workflows = root / ".github" / "workflows"
+    return {
+        f".github/workflows/{path.name}"
+        for path in sorted([*workflows.glob("*.yml"), *workflows.glob("*.yaml")])
+        if KEEPER_LOCK_GROUP in path.read_text(encoding="utf-8")
+    }
+
+
+def fetch_github_json(url: str, token: str, *, timeout: int = FEED_TIMEOUT_SECONDS) -> Any:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "agent-bounties-auto-verify/1",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read(MAX_FEED_BYTES).decode("utf-8"))
+
+
+def busy_keeper_runs(
+    repository: str,
+    token: str,
+    current_run_id: int,
+    workflows: set[str],
+    *,
+    now: float,
+    fetch: Callable[[str, str], Any] = fetch_github_json,
+) -> list[dict[str, object]]:
+    """Return other active runs of keeper-lock workflows.
+
+    GitHub cancels a pending job when another job queues in the same
+    concurrency group. Queuing the settle job only while no other keeper run is
+    active means it starts at once and cannot displace a pending user relay.
+    """
+
+    busy = []
+    for status in ACTIVE_RUN_STATUSES:
+        seen = 0
+        for page in range(1, MAX_RUN_PAGES + 1):
+            query = urllib.parse.urlencode({"status": status, "per_page": 100, "page": page})
+            value = fetch(f"https://api.github.com/repos/{repository}/actions/runs?{query}", token)
+            runs = value.get("workflow_runs") if isinstance(value, dict) else None
+            total = value.get("total_count") if isinstance(value, dict) else None
+            if not isinstance(runs, list) or not isinstance(total, int):
+                raise AutoVerifyError("GitHub workflow run listing is malformed")
+            for run in runs:
+                if not isinstance(run, dict):
+                    raise AutoVerifyError("GitHub workflow run listing is malformed")
+                if run.get("path") not in workflows or run.get("id") == current_run_id:
+                    continue
+                try:
+                    created = datetime.fromisoformat(str(run.get("created_at")).replace("Z", "+00:00"))
+                except ValueError as error:
+                    raise AutoVerifyError("GitHub workflow run listing is malformed") from error
+                if now - created.timestamp() > MAX_ACTIVE_RUN_AGE_SECONDS:
+                    continue
+                busy.append({"id": run.get("id"), "path": run.get("path"), "status": status})
+            seen += len(runs)
+            if seen >= total or not runs:
+                break
+        else:
+            raise AutoVerifyError("too many active workflow runs to inspect the keeper lock")
+    return busy
 
 
 def parse_envelopes(text: str) -> list[dict[str, object]]:
@@ -333,6 +416,11 @@ def build_parser() -> argparse.ArgumentParser:
     discover_parser.add_argument("--api-base", default=os.environ.get("API_BASE_URL", DEFAULT_API))
     discover_parser.add_argument("--github-output", type=pathlib.Path)
     discover_parser.add_argument(
+        "--require-idle-keeper-lock",
+        action="store_true",
+        help="hand off no work while another keeper-lock run is active (needs GH_TOKEN)",
+    )
+    discover_parser.add_argument(
         "--report", type=pathlib.Path, default=pathlib.Path("target/autonomous-auto-verify-discover.json")
     )
     settle_parser = sub.add_parser("settle", help="validate on-chain and relay passing proofs")
@@ -349,9 +437,23 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.stage == "discover":
+        busy: list[dict[str, object]] = []
         try:
             jobs = fetch_jobs(args.api_base)
             envelopes, skipped = discover(jobs, now=int(time.time()))
+            if envelopes and args.require_idle_keeper_lock:
+                token = os.environ.get("GH_TOKEN", "")
+                repository = os.environ.get("GITHUB_REPOSITORY", "")
+                run_id = os.environ.get("GITHUB_RUN_ID", "")
+                if not token or not repository or not run_id.isdigit():
+                    raise AutoVerifyError("GH_TOKEN, GITHUB_REPOSITORY and GITHUB_RUN_ID are required")
+                busy = busy_keeper_runs(
+                    repository,
+                    token,
+                    int(run_id),
+                    keeper_lock_workflows(pathlib.Path(".")),
+                    now=time.time(),
+                )
         except (AutoVerifyError, OSError, ValueError) as error:
             write_json(args.report, {"schema": SCHEMA, "stage": "discover", "outcome": "failed", "error": str(error)})
             print(f"autonomous_auto_verify=failed stage=discover error={error}", file=sys.stderr)
@@ -359,15 +461,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = {
             "schema": SCHEMA,
             "stage": "discover",
-            "outcome": "discovered",
+            "outcome": "deferred_keeper_lock_busy" if busy else "discovered",
             "feed_jobs": len(jobs),
             "envelopes": envelopes,
             "skipped": skipped,
+            "busy_keeper_runs": busy,
         }
+        if busy:
+            # Retry on the next schedule rather than queue behind another keeper run.
+            envelopes = []
         write_json(args.report, report)
         if args.github_output:
             write_github_output(args.github_output, envelopes)
-        print(f"autonomous_auto_verify=discovered jobs={len(jobs)} candidates={len(envelopes)}")
+        print(
+            f"autonomous_auto_verify={report['outcome']} jobs={len(jobs)} "
+            f"candidates={len(envelopes)} busy_keeper_runs={len(busy)}"
+        )
         return 0
 
     try:

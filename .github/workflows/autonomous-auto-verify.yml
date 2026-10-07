@@ -1,10 +1,11 @@
 name: Autonomous Auto Verify
 
-# Settles submitted leading-zero-work bounties whose mined proof passes the
-# committed module, so solvers need neither ETH nor a relay comment.
-# Discovery holds no secrets and takes no lock. The keeper job runs only when
-# discovery found work, so this schedule cannot displace a pending relay job
-# in the shared keeper concurrency group.
+# Settles submitted autonomous-v1 leading-zero-work bounties whose mined proof
+# passes the committed module, so solvers need neither ETH nor a relay comment.
+# Discovery holds no keeper key and takes no lock. It hands off work only while no
+# other keeper-lock run is active: GitHub cancels a pending job when another
+# queues in the same concurrency group, so the keeper job must start at once
+# rather than wait behind, and possibly displace, a user's pending relay.
 
 on:
   schedule:
@@ -18,6 +19,9 @@ jobs:
   discover:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
     outputs:
       count: ${{ steps.discover.outputs.count }}
       envelopes: ${{ steps.discover.outputs.envelopes }}
@@ -35,9 +39,11 @@ jobs:
         id: discover
         env:
           API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL || 'https://api.agentbounties.app' }}
+          GH_TOKEN: ${{ github.token }}
         run: >-
           python scripts/auto_verify_autonomous_bounties.py discover
           --github-output "$GITHUB_OUTPUT"
+          --require-idle-keeper-lock
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()

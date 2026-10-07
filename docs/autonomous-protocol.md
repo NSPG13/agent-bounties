@@ -450,17 +450,19 @@ events remain the lifecycle and payout evidence.
 ### Automatic Leading-Zero Settlement
 
 `.github/workflows/autonomous-auto-verify.yml` settles submitted
-leading-zero-work bounties without a relay comment. It runs every 10 minutes
-from `main` in two jobs:
+autonomous-v1 leading-zero-work bounties without a relay comment. It runs every
+10 minutes from `main` in two jobs:
 
-1. `discover` holds no secrets and takes no lock. It reads the verification
-   job feed and keeps jobs on the deployed 16-bit
-   `LeadingZeroWorkVerifier` with published, hash-matched evidence and at least
-   five minutes of verification time left. It then mines the nonce from each
+1. `discover` holds no keeper key, only a read-only token, and takes no lock. It
+   reads the verification job feed and keeps autonomous-v1 jobs on the deployed
+   16-bit `LeadingZeroWorkVerifier` with published, hash-matched evidence and at
+   least five minutes of verification time left. It then mines the nonce from each
    job's committed values. A 16-bit nonce takes about 65,000 hashes, and mining
    is capped at 2^20.
-2. `settle` runs only when `discover` found work, so the schedule never
-   displaces a pending relay comment in the shared keeper lock. It reads each
+2. `settle` runs only when `discover` found work and no other keeper-lock
+   workflow run is active. GitHub cancels a pending job when another one queues
+   in the same concurrency group, so `settle` must start at once rather than
+   wait behind, and possibly displace, a user's pending relay. It reads each
    bounty on-chain. It skips any bounty that is settled, has moved to another
    round, commits another module or is not an autonomous-v1 clone. The bounded
    relay then:
