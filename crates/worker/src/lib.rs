@@ -243,6 +243,17 @@ impl AutonomousIndexerConfig {
                     "set BASE_INDEXER_FACTORY_CONTRACT or {factory_contract_env} before running the autonomous Base indexer"
                 )
             })?;
+        if protocol == "autonomous-v2"
+            && descriptor.chain_id == 8_453
+            && !factory_contract
+                .trim()
+                .eq_ignore_ascii_case(service_runtime::CANONICAL_BASE_MAINNET_BOUNTY_V2_FACTORY)
+        {
+            return Err(anyhow!(
+                "Base mainnet autonomous-v2 indexing accepts only the recorded factory {}",
+                service_runtime::CANONICAL_BASE_MAINNET_BOUNTY_V2_FACTORY
+            ));
+        }
         let rpc_url = lookup("BASE_INDEXER_RPC_URL")
             .filter(|value| nonempty(value))
             .or_else(|| lookup(&descriptor.rpc_url_env).filter(|value| nonempty(value)))
@@ -1467,9 +1478,7 @@ fn factory_contract_env_for_network(
         ("autonomous-v1", 8_453) => Ok("BASE_MAINNET_BOUNTY_FACTORY"),
         ("autonomous-v1", 84_532) => Ok("BASE_SEPOLIA_BOUNTY_FACTORY"),
         ("autonomous-v2", 84_532) => Ok("BASE_SEPOLIA_BOUNTY_V2_FACTORY"),
-        ("autonomous-v2", 8_453) => Err(anyhow!(
-            "autonomous-v2 is not pinned on Base mainnet; index it only after an independently reviewed deployment"
-        )),
+        ("autonomous-v2", 8_453) => Ok("BASE_MAINNET_BOUNTY_V2_FACTORY"),
         ("autonomous-v1" | "autonomous-v2", chain_id) => {
             Err(anyhow!("unsupported Base chain id {chain_id}"))
         }
@@ -1942,7 +1951,7 @@ mod tests {
     }
 
     #[test]
-    fn autonomous_v2_indexer_uses_its_own_sepolia_factory_and_refuses_mainnet() {
+    fn autonomous_v2_indexer_uses_its_own_factory_and_only_the_recorded_mainnet_one() {
         let values = HashMap::from([
             ("BASE_INDEXER_NETWORK", "base-sepolia"),
             ("BASE_SEPOLIA_RPC_URL", "https://sepolia.example"),
@@ -1981,6 +1990,22 @@ mod tests {
             "autonomous-v2"
         )
         .is_err());
+        let recorded = HashMap::from([
+            ("BASE_MAINNET_RPC_URL", "https://base.example"),
+            (
+                "BASE_MAINNET_BOUNTY_V2_FACTORY",
+                "0xC33E2AE33BB9580837EA59DF18E57FA1039AE58A",
+            ),
+        ]);
+        let pinned = AutonomousIndexerConfig::from_lookup_for_protocol(
+            |key| recorded.get(key).map(|value| value.to_string()),
+            "autonomous-v2",
+        )
+        .unwrap();
+        assert!(pinned
+            .factory_contract
+            .eq_ignore_ascii_case(service_runtime::CANONICAL_BASE_MAINNET_BOUNTY_V2_FACTORY));
+        assert_eq!(pinned.network, "base-mainnet");
         assert!(
             AutonomousIndexerConfig::from_lookup_for_protocol(lookup, "autonomous-v9").is_err()
         );

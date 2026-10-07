@@ -33,6 +33,16 @@ pub const CANONICAL_BASE_MAINNET_BOUNTY_FACTORY: &str =
 pub const CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION: &str =
     "0x2fa36d2b2327642db3a6cc8cdd91544ad7484eb9";
 
+/// The autonomous-v2 deployment recorded in `deployments/autonomous-v2-base-mainnet.json` by the
+/// guarded mainnet workflow. Base mainnet v2 settings must equal it exactly.
+pub const CANONICAL_BASE_MAINNET_BOUNTY_V2_FACTORY: &str =
+    "0xc33e2ae33bb9580837ea59df18e57fa1039ae58a";
+pub const CANONICAL_BASE_MAINNET_BOUNTY_V2_IMPLEMENTATION: &str =
+    "0x8420c9bd1ff8a6b1abc4230b349538612c58f3a6";
+pub const CANONICAL_BASE_MAINNET_BOUNTY_V2_PLATFORM_FEE_BPS: u16 = 750;
+pub const CANONICAL_BASE_MAINNET_BOUNTY_V2_PLATFORM_FEE_RECIPIENT: &str =
+    "0x884834e884d6e93462655a2820140ad03e6747bc";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlannerAddressError {
     UnsupportedNetwork,
@@ -88,7 +98,7 @@ pub struct AutonomousV2Deployment {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AutonomousV2DeploymentError {
     UnsupportedNetwork,
-    /// Base mainnet v2 is refused until an independently reviewed deployment is pinned here.
+    /// Base mainnet v2 settings that differ from the pinned deployment are refused.
     MainnetNotPinned,
     /// Some but not all of the four v2 settings are set.
     Incomplete,
@@ -116,10 +126,8 @@ pub fn autonomous_v2_deployment(
             _ => Err(AutonomousV2DeploymentError::UnsupportedNetwork),
         };
     }
-    match chain_id {
-        84_532 => {}
-        8_453 => return Err(AutonomousV2DeploymentError::MainnetNotPinned),
-        _ => return Err(AutonomousV2DeploymentError::UnsupportedNetwork),
+    if !matches!(chain_id, 84_532 | 8_453) {
+        return Err(AutonomousV2DeploymentError::UnsupportedNetwork);
     }
     let [Some(factory), Some(implementation), Some(bps), Some(recipient)] = settings else {
         return Err(AutonomousV2DeploymentError::Incomplete);
@@ -136,14 +144,31 @@ pub fn autonomous_v2_deployment(
         chain_base::normalize_evm_address(address)
             .map_err(|_| AutonomousV2DeploymentError::Incomplete)
     };
-    Ok(Some(AutonomousV2Deployment {
+    let deployment = AutonomousV2Deployment {
         factory: normalize(&factory)?,
         implementation: normalize(&implementation)?,
         fee: AutonomousV2FactoryFee {
             platform_fee_bps: quote.platform_fee_bps,
             platform_fee_recipient: quote.platform_fee_recipient,
         },
-    }))
+    };
+    if chain_id == 8_453 && deployment != pinned_base_mainnet_v2_deployment() {
+        return Err(AutonomousV2DeploymentError::MainnetNotPinned);
+    }
+    Ok(Some(deployment))
+}
+
+/// The only autonomous-v2 deployment Base mainnet settings may name.
+pub fn pinned_base_mainnet_v2_deployment() -> AutonomousV2Deployment {
+    AutonomousV2Deployment {
+        factory: CANONICAL_BASE_MAINNET_BOUNTY_V2_FACTORY.to_string(),
+        implementation: CANONICAL_BASE_MAINNET_BOUNTY_V2_IMPLEMENTATION.to_string(),
+        fee: AutonomousV2FactoryFee {
+            platform_fee_bps: CANONICAL_BASE_MAINNET_BOUNTY_V2_PLATFORM_FEE_BPS,
+            platform_fee_recipient: CANONICAL_BASE_MAINNET_BOUNTY_V2_PLATFORM_FEE_RECIPIENT
+                .to_string(),
+        },
+    }
 }
 
 /// Reads `BASE_{SEPOLIA,MAINNET}_BOUNTY_V2_{FACTORY,IMPLEMENTATION,PLATFORM_FEE_BPS,PLATFORM_FEE_RECIPIENT}`.
@@ -993,9 +1018,11 @@ async fn hydrate(
 mod tests {
     use super::{
         autonomous_planner_addresses, autonomous_v2_deployment, bounty_status_from_network,
-        operator_token_is_authorized, AutonomousV2DeploymentError, BountyStatusLookupError,
-        PlannerAddressError, CANONICAL_BASE_MAINNET_BOUNTY_FACTORY,
-        CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION,
+        operator_token_is_authorized, pinned_base_mainnet_v2_deployment,
+        AutonomousV2DeploymentError, BountyStatusLookupError, PlannerAddressError,
+        CANONICAL_BASE_MAINNET_BOUNTY_FACTORY, CANONICAL_BASE_MAINNET_BOUNTY_IMPLEMENTATION,
+        CANONICAL_BASE_MAINNET_BOUNTY_V2_FACTORY, CANONICAL_BASE_MAINNET_BOUNTY_V2_IMPLEMENTATION,
+        CANONICAL_BASE_MAINNET_BOUNTY_V2_PLATFORM_FEE_RECIPIENT,
     };
     use app::{BountyNetwork, PostBountyRequest};
     use domain::{FundingMode, PrivacyLevel};
@@ -1103,6 +1130,61 @@ mod tests {
             autonomous_v2_deployment(1, None, None, None, None),
             Err(AutonomousV2DeploymentError::UnsupportedNetwork)
         );
+    }
+
+    #[test]
+    fn base_mainnet_v2_accepts_only_the_recorded_deployment() {
+        // Read at run time, so the record is not a compile-time input of verifier builds.
+        let record: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../deployments/autonomous-v2-base-mainnet.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let settings = &record["configuration"];
+        let setting = |name: &str| settings[name].as_str().map(str::to_uppercase);
+        let pinned = autonomous_v2_deployment(
+            8_453,
+            setting("BASE_MAINNET_BOUNTY_V2_FACTORY").map(|value| value.replacen("0X", "0x", 1)),
+            setting("BASE_MAINNET_BOUNTY_V2_IMPLEMENTATION")
+                .map(|value| value.replacen("0X", "0x", 1)),
+            settings["BASE_MAINNET_BOUNTY_V2_PLATFORM_FEE_BPS"]
+                .as_str()
+                .map(str::to_string),
+            settings["BASE_MAINNET_BOUNTY_V2_PLATFORM_FEE_RECIPIENT"]
+                .as_str()
+                .map(str::to_string),
+        );
+        assert_eq!(pinned, Ok(Some(pinned_base_mainnet_v2_deployment())));
+        assert_eq!(
+            record["factory"].as_str(),
+            Some(CANONICAL_BASE_MAINNET_BOUNTY_V2_FACTORY)
+        );
+        assert_eq!(
+            record["verification"]["implementation"].as_str(),
+            Some(CANONICAL_BASE_MAINNET_BOUNTY_V2_IMPLEMENTATION)
+        );
+        for (bps, recipient) in [
+            (
+                "749",
+                CANONICAL_BASE_MAINNET_BOUNTY_V2_PLATFORM_FEE_RECIPIENT,
+            ),
+            ("750", "0x1111111111111111111111111111111111111111"),
+        ] {
+            assert_eq!(
+                autonomous_v2_deployment(
+                    8_453,
+                    Some(CANONICAL_BASE_MAINNET_BOUNTY_V2_FACTORY.to_string()),
+                    Some(CANONICAL_BASE_MAINNET_BOUNTY_V2_IMPLEMENTATION.to_string()),
+                    Some(bps.to_string()),
+                    Some(recipient.to_string()),
+                ),
+                Err(AutonomousV2DeploymentError::MainnetNotPinned),
+                "{bps} {recipient}"
+            );
+        }
     }
 
     #[test]
