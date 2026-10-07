@@ -1,0 +1,65 @@
+{
+  "schema_version": "agent-bounties/autonomous-v2-mainnet-deployment-v1",
+  "network": "base-mainnet",
+  "chain_id": 8453,
+  "source_commit": "8464c4710e73c55191b4e0512a9e7b599c057fb4",
+  "workflow_run": "https://github.com/NSPG13/agent-bounties/actions/runs/37562374667",
+  "factory": "0xc33e2ae33bb9580837ea59df18e57fa1039ae58a",
+  "deployment_transaction": "0xd65c624183f9be07704365c77ff8c6c6b37c6a5c4bbcb14c459ceb1ef7e5de1e",
+  "deployment_block": 52275492,
+  "deployer": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+  "gas_used": 6876520,
+  "preflight": {
+    "schema_version": "agent-bounties/autonomous-v2-mainnet-deploy-plan-v1",
+    "chain_id": 8453,
+    "block": 52275490,
+    "factory_contract": "src/AgentBountyFactoryV2.sol:AgentBountyFactoryV2",
+    "init_code_hash": "0xafe14549f845a2196bad3ea75ce5ebfdc643ed24f38c741238a81ee5f40baf78",
+    "constructor": {
+      "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "platform_fee_bps": 750,
+      "platform_fee_recipient": "0x884834e884d6e93462655a2820140ad03e6747bc"
+    },
+    "keeper": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+    "keeper_nonce": 155,
+    "predicted_factory": "0xc33e2ae33bb9580837ea59df18e57fa1039ae58a",
+    "predicted_factory_has_code": false,
+    "estimated_gas": 6932263,
+    "gas_price_wei": 6000000,
+    "l1_fee_wei": 3153170163000,
+    "estimated_cost_wei": 44746748163000,
+    "required_keeper_wei": 134240244489000,
+    "keeper_eth_wei": 579892377855722,
+    "keeper_funded": true,
+    "already_recorded": false
+  },
+  "verification": {
+    "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    "platform_fee_bps": 750,
+    "platform_fee_recipient": "0x884834e884d6e93462655a2820140ad03e6747bc",
+    "factory_protocol_version": "0x99e5dd202deff00f67ecaf1cb2f19251a924aa0228025b7b50bb112049318ed0",
+    "implementation_protocol_version": "0x99e5dd202deff00f67ecaf1cb2f19251a924aa0228025b7b50bb112049318ed0",
+    "implementation": "0x8420c9bd1ff8a6b1abc4230b349538612c58f3a6",
+    "factory_runtime_code_hash": "0x3a706b2753ee4c6c05379cb17a3db21f5a7eb5aca6b207166611fed8baf1dc57",
+    "implementation_runtime_code_hash": "0x7420d074883da31643c5069b63dd9c1bd75e405ebd9a3d76bf513099c3d0314e"
+  },
+  "configuration": {
+    "BASE_MAINNET_BOUNTY_V2_FACTORY": "0xc33e2ae33bb9580837ea59df18e57fa1039ae58a",
+    "BASE_MAINNET_BOUNTY_V2_PLATFORM_FEE_BPS": "750",
+    "BASE_MAINNET_BOUNTY_V2_PLATFORM_FEE_RECIPIENT": "0x884834e884d6e93462655a2820140ad03e6747bc",
+    "BASE_INDEXER_PROTOCOL": "autonomous-v2",
+    "BASE_INDEXER_NETWORK": "base-mainnet",
+    "BASE_INDEXER_START_BLOCK": "52275492",
+    "BASE_MAINNET_BOUNTY_V2_IMPLEMENTATION": "0x8420c9bd1ff8a6b1abc4230b349538612c58f3a6"
+  },
+  "evidence_boundary": "The deployment and these on-chain reads prove the factory's immutable terms only. No bounty is created or funded, and only canonical events prove funding or settlement.",
+  "independent_checks": {
+    "receipt_status": "success",
+    "receipt_contract_address": "0xc33e2ae33bb9580837ea59df18e57fa1039ae58a",
+    "receipt_from": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+    "factory_platform_fee_bps": 750,
+    "factory_platform_fee_recipient": "0x884834e884d6e93462655a2820140ad03e6747bc",
+    "factory_settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    "implementation_runtime_code_hash_matches_build_of_source_commit": true
+  }
+}

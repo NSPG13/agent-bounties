@@ -517,7 +517,15 @@ contract registration never crosses this boundary.
 [ADR 0006](adr/0006-protocol-v2-platform-fee-and-non-custodial-fiat.md)) keeps
 the v1 bounty surface and adds a platform fee and a claim gate. It also hardens
 how funds and verdicts arrive (below), so contribution and claim authorizations
-use the v2 planners. v2 is not deployed yet.
+use the v2 planners.
+
+**Base mainnet deployment.** `AgentBountyFactoryV2` is
+`0xc33e2ae33bb9580837ea59df18e57fa1039ae58a` (implementation
+`0x8420c9bd1ff8a6b1abc4230b349538612c58f3a6`), deployed in block 52,275,492.
+It charges 750 bps to `0x884834E884d6e93462655A2820140aD03E6747bC`, in Base
+native USDC. `deployments/autonomous-v2-base-mainnet.json` records the
+transaction, the on-chain checks and the hosted settings. The deploy script
+refuses to deploy again while that record exists.
 
 **Authorization and verdict hardening**
 - Every v2 USDC authorization is an EIP-3009 `ReceiveWithAuthorization`, which
@@ -649,9 +657,12 @@ payment evidence.
 
 **Hosting.** The API and MCP server enable v2 on a network only when all four
 `BASE_SEPOLIA_BOUNTY_V2_{FACTORY,IMPLEMENTATION,PLATFORM_FEE_BPS,PLATFORM_FEE_RECIPIENT}`
-settings are present. A partial setting, fee terms over the cap, or any Base
-mainnet v2 setting is refused. Mainnet v2 is pinned in code only from the
-deployment record of the guarded mainnet workflow (#1577).
+settings are present, and on Base mainnet when all four
+`BASE_MAINNET_BOUNTY_V2_*` settings equal the recorded deployment exactly. A
+partial setting, fee terms over the cap, or any other Base mainnet v2 setting
+is refused, and the mainnet v2 indexer accepts only the recorded factory.
+Hosted mainnet v2 stays unconfigured until the gas-sponsorship follow-ups from
+#1613 land.
 - Contribution and claim plans (API, MCP and the agent-native claim flow)
   select the v2 planners from the indexed bounty's `protocol_version`. A v2
   bond nonce is derived from the next round in the indexed `BountyClaimed`

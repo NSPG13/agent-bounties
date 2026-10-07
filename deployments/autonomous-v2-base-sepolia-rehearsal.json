@@ -2,12 +2,12 @@
   "schema_version": "agent-bounties/autonomous-v2-sepolia-rehearsal-v1",
   "network": "base-sepolia",
   "chain_id": 84532,
-  "source_commit": "555d99f2b12f6de8d166b742093698736860be7e",
-  "workflow_run": "https://github.com/NSPG13/agent-bounties/actions/runs/37491127675",
-  "factory": "0x81a1712493e8a0ed2bdff77f2d4493a7ff930af1",
-  "implementation": "0x7fb24acfd445e8140d1ad81fa5a2646ed2246914",
-  "deployment_transaction": "0xd2c0e58f771ec39abacdac6600b2ab02f9ce4896a5613ba3b4fb8c9a6b1bee91",
-  "deployment_block": 47766887,
+  "source_commit": "8464c4710e73c55191b4e0512a9e7b599c057fb4",
+  "workflow_run": "https://github.com/NSPG13/agent-bounties/actions/runs/37562059809",
+  "factory": "0x44de6074440fc006c20087991364ce65c87e6d88",
+  "implementation": "0x9482786192e16ca4eb55f61787af664acd6b8e53",
+  "deployment_transaction": "0xed2bee2baa1593f4649ce8086b60b0ed298e852fe9621463bc0067a5429f9cb9",
+  "deployment_block": 47785903,
   "deployer": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
   "platform_fee_bps": 750,
   "platform_fee_recipient": "0x884834e884d6e93462655a2820140ad03e6747bc",
@@ -18,27 +18,28 @@
     "target": 127500
   },
   "participants": {
-    "poster": "0xa03dfef9ed05228f4f0e50d8c5e6e4f4db8aee57",
-    "solver": "0x999ca92af59b4253fdb4e022edcee634c05880b7",
+    "poster": "0xca109469cb0d55fc0e5dfacc29eb61d15f6c91dc",
+    "solver": "0xa85db93e4fcb9a731f2986d54ba2806933456da6",
     "verifiers": [
-      "0x1892887d3b3393f329691ed5c78a0d3ede48df99",
-      "0x8f90e93d3b4d19f3e0852a4fdb5784e039bf5ea9"
+      "0x4d7500bf1930b264efc23fad3e31597f132180f5",
+      "0xfc62792982b374e8ce18cd87fc32e1eee1bfe8b5"
     ],
     "relayer": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc"
   },
   "participant_funding_transactions": [
-    "0xa5ce47e981ec285c4bf10b1dea1c6b446bd35d4207f259133d85329e2d6da4b7",
-    "0x6f5e459ef8e1e3867f6d7c47989eaa4405300a64cee111486dedc75a339f424e"
+    "0x7650d4b5bf15d4a482b1db4e091bb0db181d63bbefbf6807762d873310716c08",
+    "0x3d2239fa98ceaa77810c50fcc0099ad2d21b8c471445d4d4ca3f8470113262f7"
   ],
-  "bounty": "0x883705ea2843b12d45012116fa687692609b95fb",
-  "bounty_id": "0xf691fd798928e34b46183145b2ac85c21cb961189c091ae61eaf251e3dae1fc0",
+  "bounty": "0xb71aadca2cf50750339552f5f73a8f1d06dde7a3",
+  "bounty_id": "0x63c202e9c53d347dab8624aeacefcae505141a3626ba4f46b5b020804c80b8a9",
   "steps": [
     {
       "step": "authorized_create",
-      "transaction_hash": "0xa6b8419ac4abf353829c419b1be98fc328731453977eda7c34fc1f003122823b",
-      "block": 47766890,
+      "transaction_hash": "0xc3f5be42e2df1ed336a3c55e7f0e4c4569e8607b4fa0981f9b05a306b15caf20",
+      "block": 47785907,
       "events": [
         "0x98de5035",
+        "0xddf252ad",
         "0xddf252ad",
         "FundingAdded",
         "0x8b181e59",
@@ -51,8 +52,8 @@
     },
     {
       "step": "authorized_claim",
-      "transaction_hash": "0x3cd67fbbcdd69df278c34f432fdb394930120c9d62694be6b0c63653ea14056b",
-      "block": 47766891,
+      "transaction_hash": "0x78537735d9cf99330a6eeecc50d58aad5b9b36439f6b0434af045787d171255f",
+      "block": 47785907,
       "events": [
         "BountyClaimed",
         "0x98de5035",
@@ -61,16 +62,16 @@
     },
     {
       "step": "submission_relay",
-      "transaction_hash": "0x4fa665ec9fa89142d4b20fb3fb7ba3e21d05ec9cf42c4351ac3a4c9287a564ee",
-      "block": 47766891,
+      "transaction_hash": "0xbc6ad6bf728d3199e49db33a54fa51806b2562c90271eebfd3d52b99782b4f5c",
+      "block": 47785908,
       "events": [
         "SubmissionAdded"
       ]
     },
     {
       "step": "attestation_settlement",
-      "transaction_hash": "0x82d403f0d517882e8494701f7a3e386c913bffca07404668670ebadc4910fd60",
-      "block": 47766892,
+      "transaction_hash": "0x83e62e2b26fa0ef64e0e65d7e1a19aed9726ed261ba0127e669798d09455ff45",
+      "block": 47785909,
       "events": [
         "0xddf252ad",
         "0xddf252ad",
@@ -85,13 +86,13 @@
   "missing_events": [],
   "status": "passed",
   "configuration": {
-    "BASE_SEPOLIA_BOUNTY_V2_FACTORY": "0x81a1712493e8a0ed2bdff77f2d4493a7ff930af1",
-    "BASE_SEPOLIA_BOUNTY_V2_IMPLEMENTATION": "0x7fb24acfd445e8140d1ad81fa5a2646ed2246914",
+    "BASE_SEPOLIA_BOUNTY_V2_FACTORY": "0x44de6074440fc006c20087991364ce65c87e6d88",
+    "BASE_SEPOLIA_BOUNTY_V2_IMPLEMENTATION": "0x9482786192e16ca4eb55f61787af664acd6b8e53",
     "BASE_SEPOLIA_BOUNTY_V2_PLATFORM_FEE_BPS": "750",
     "BASE_SEPOLIA_BOUNTY_V2_PLATFORM_FEE_RECIPIENT": "0x884834e884d6e93462655a2820140ad03e6747bc",
     "BASE_INDEXER_PROTOCOL": "autonomous-v2",
     "BASE_INDEXER_NETWORK": "base-sepolia",
-    "BASE_INDEXER_START_BLOCK": "47766887"
+    "BASE_INDEXER_START_BLOCK": "47785903"
   },
   "evidence_boundary": "Only these canonical events prove funding and settlement; the fee is the canonical USDC Transfer from the bounty to the fee recipient in the confirmed settlement receipt.",
   "independent_checks": {
@@ -100,9 +101,21 @@
     "factory_is_canonical_bounty": true,
     "bounty_protocol_version": "keccak256(agent-bounties/autonomous-v2)",
     "bounty_status": "Settled (4)",
-    "platform_fee_paid_event_amount": 7500
+    "platform_fee_paid_event_amount": 7500,
+    "implementation_has_hardened_functions": [
+      "cancelWithSignature(uint256,bytes)",
+      "withdrawRefundFor(address)",
+      "claimAuthorizationNonce(address,uint64)",
+      "cancelRequested()"
+    ]
   },
   "superseded_deployments": [
+    {
+      "factory": "0x81a1712493e8a0ed2bdff77f2d4493a7ff930af1",
+      "implementation": "0x7fb24acfd445e8140d1ad81fa5a2646ed2246914",
+      "workflow_run": "https://github.com/NSPG13/agent-bounties/actions/runs/37491127675",
+      "reason": "Pre-hardening contracts (before #1613): transfer authorizations, failing module verdicts that reject, and no gasless cancel or refund. Do not configure it."
+    },
     {
       "factory": "0x33413020250cfdffd42bfc472415a2198f36941b",
       "implementation": "0xe821db1abf28a46f789d88051ae52fcf48de13e5",
