@@ -54,6 +54,7 @@ MAX_RUN_PAGES = 5
 # GitHub cancels jobs queued for more than 24 hours; older "active" runs are
 # phantoms that can neither hold nor wait for the keeper lock.
 MAX_ACTIVE_RUN_AGE_SECONDS = 24 * 3600
+REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class AutoVerifyError(RuntimeError):
@@ -225,15 +226,21 @@ def discover(
     return envelopes, skipped
 
 
-def keeper_lock_workflows(root: pathlib.Path) -> set[str]:
-    """Workflow paths whose jobs can hold or queue in the shared keeper lock."""
+def keeper_lock_workflows(root: pathlib.Path = REPOSITORY_ROOT) -> set[str]:
+    """Workflow paths whose jobs can hold or queue in the shared keeper lock.
+
+    An empty set would make every active run look harmless, so it fails closed.
+    """
 
     workflows = root / ".github" / "workflows"
-    return {
+    found = {
         f".github/workflows/{path.name}"
         for path in sorted([*workflows.glob("*.yml"), *workflows.glob("*.yaml")])
         if KEEPER_LOCK_GROUP in path.read_text(encoding="utf-8")
     }
+    if not found:
+        raise AutoVerifyError(f"no keeper-lock workflow found under {workflows}")
+    return found
 
 
 def fetch_github_json(url: str, token: str, *, timeout: int = FEED_TIMEOUT_SECONDS) -> Any:
@@ -451,7 +458,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     repository,
                     token,
                     int(run_id),
-                    keeper_lock_workflows(pathlib.Path(".")),
+                    keeper_lock_workflows(),
                     now=time.time(),
                 )
         except (AutoVerifyError, OSError, ValueError) as error:
