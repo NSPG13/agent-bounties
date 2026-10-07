@@ -4456,6 +4456,41 @@ fn valid_regression_benchmark(benchmark: &Value) -> bool {
         .is_ok_and(|policy| policy.validate().is_ok())
 }
 
+/// Readiness of a deterministic-module bounty. `autonomous_v2` is true for v2 clones, which the
+/// routed-v3 router refuses because it answers only clones of the autonomous-v1 factory.
+fn deterministic_module_readiness(
+    verifier_module: Option<&str>,
+    solver_reward: u128,
+    terms: Option<&AutonomousBountyTermsRecord>,
+    autonomous_v2: bool,
+) -> (bool, &'static str) {
+    if verifier_module
+        .is_some_and(|module| module.eq_ignore_ascii_case(BASE_MAINNET_LEADING_ZERO_WORK_VERIFIER))
+    {
+        (
+            true,
+            "the deployed leading-zero deterministic verifier is supported",
+        )
+    } else if is_supported_routed_v3_parent_terms(verifier_module, solver_reward, terms) {
+        if autonomous_v2 {
+            (
+                false,
+                "the routed-v3 verifier accepts only autonomous-v1 bounties",
+            )
+        } else {
+            (
+                true,
+                "the routed-v3 verifier and profitable child dependency are supported",
+            )
+        }
+    } else {
+        (
+            false,
+            "deterministic verifier module is not in the live supported allowlist",
+        )
+    }
+}
+
 fn is_supported_routed_v3_parent_terms(
     verifier_module: Option<&str>,
     solver_reward: u128,
@@ -5011,7 +5046,11 @@ pub fn build_autonomous_verification_jobs(
         let timeout_bonus = item.timeout_bond_pool.parse::<u128>().map_err(|_| {
             ChainBaseError::InvalidLogData("feed timeout bond pool is invalid".to_string())
         })?;
-        let required_action = if verification_mode == "deterministic_module" {
+        let required_action = if verification_mode == "deterministic_module"
+            && item.protocol_version.as_deref() == Some(AUTONOMOUS_V2_PROTOCOL_VERSION)
+        {
+            "Evaluate the committed module proof format, then relay verifyAndSettle only with a passing proof. A pass settles; a failing proof reverts and changes nothing."
+        } else if verification_mode == "deterministic_module" {
             "Evaluate the committed module proof format, then relay verifyAndSettle. A valid pass settles and a valid fail pays the verifier and reopens the bounty."
         } else {
             "Evaluate only the immutable policy and exact evidence preimages, request the scoped EIP-712 attestation payload, sign one verdict, and relay a matching threshold quorum."
@@ -5684,26 +5723,12 @@ pub fn build_autonomous_bounty_feed(
                 false,
                 "quorum verifier service availability is not canonically attested",
             )
-        } else if verifier_module.as_deref().is_some_and(|module| {
-            module.eq_ignore_ascii_case(BASE_MAINNET_LEADING_ZERO_WORK_VERIFIER)
-        }) {
-            (
-                true,
-                "the deployed leading-zero deterministic verifier is supported",
-            )
-        } else if is_supported_routed_v3_parent_terms(
-            verifier_module.as_deref(),
-            u128::from(solver_reward),
-            terms_record.as_ref(),
-        ) {
-            (
-                true,
-                "the routed-v3 verifier and profitable child dependency are supported",
-            )
         } else {
-            (
-                false,
-                "deterministic verifier module is not in the live supported allowlist",
+            deterministic_module_readiness(
+                verifier_module.as_deref(),
+                u128::from(solver_reward),
+                terms_record.as_ref(),
+                platform_fee.is_some(),
             )
         };
         let item = AutonomousBountyFeedItem {
@@ -8191,6 +8216,42 @@ mod tests {
             2_000_000,
             routed_v3.terms.as_ref(),
         ));
+        assert_eq!(
+            deterministic_module_readiness(
+                routed_v3.verifier_module.as_deref(),
+                2_000_000,
+                routed_v3.terms.as_ref(),
+                false,
+            ),
+            (
+                true,
+                "the routed-v3 verifier and profitable child dependency are supported"
+            )
+        );
+        // The router reverts NonCanonicalCaller for v2 clones, so v2 must never list as ready.
+        assert_eq!(
+            deterministic_module_readiness(
+                routed_v3.verifier_module.as_deref(),
+                2_000_000,
+                routed_v3.terms.as_ref(),
+                true,
+            ),
+            (
+                false,
+                "the routed-v3 verifier accepts only autonomous-v1 bounties"
+            )
+        );
+        for autonomous_v2 in [false, true] {
+            assert!(
+                deterministic_module_readiness(
+                    Some(BASE_MAINNET_LEADING_ZERO_WORK_VERIFIER),
+                    1,
+                    None,
+                    autonomous_v2,
+                )
+                .0
+            );
+        }
         let routed_context = standing_meta_v2_parent_context(&routed_v3).unwrap();
         assert_eq!(
             routed_context.protocol_version,

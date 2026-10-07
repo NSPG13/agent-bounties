@@ -681,8 +681,24 @@ pub fn validate_autonomous_v2_creation_for_public_earning(
             "claim-gated bounties are not open public earning inventory".to_string(),
         ));
     }
+    validate_v2_deterministic_module(&create.base)?;
     validate_public_earning_policy(&create.base, terms, platform_fee)?;
     Ok(platform_fee)
+}
+
+/// The routed-v3 router and canonical-child verifiers answer only autonomous-v1 clones, so a v2
+/// bounty committing them could never settle. The leading-zero verifier checks no caller.
+fn validate_v2_deterministic_module(create: &AutonomousBountyCreate) -> Result<(), ChainBaseError> {
+    if create.verification_mode == AutonomousVerificationMode::DeterministicModule
+        && !create.verifier_module.as_deref().is_some_and(|module| {
+            module.eq_ignore_ascii_case(BASE_MAINNET_LEADING_ZERO_WORK_VERIFIER)
+        })
+    {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "autonomous-v2 public earning permits only the leading-zero deterministic verifier; v1-only modules cannot settle a v2 bounty".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2281,5 +2297,26 @@ mod tests {
             signature.truncate(signature.len() - 2);
         }
         assert!(plan_autonomous_v2_action(&short).is_err());
+    }
+
+    #[test]
+    fn v2_public_earning_refuses_modules_that_answer_only_v1_clones() {
+        let mut create = reconstructed_create("fee_deferred_then_forwarded").base;
+        create.verification_mode = AutonomousVerificationMode::DeterministicModule;
+        create.verifier_module = Some(BASE_MAINNET_LEADING_ZERO_WORK_VERIFIER.to_uppercase());
+        assert!(validate_v2_deterministic_module(&create).is_ok());
+        for v1_only in [
+            Some(BASE_MAINNET_STANDING_META_V3_ROUTER.to_string()),
+            Some(BASE_MAINNET_CANONICAL_CHILD_VERIFIER.to_string()),
+            None,
+        ] {
+            create.verifier_module = v1_only;
+            assert!(matches!(
+                validate_v2_deterministic_module(&create),
+                Err(ChainBaseError::InvalidVerificationConfiguration(_))
+            ));
+        }
+        create.verification_mode = AutonomousVerificationMode::SignedQuorum;
+        assert!(validate_v2_deterministic_module(&create).is_ok());
     }
 }

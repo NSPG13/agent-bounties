@@ -78,6 +78,7 @@ def compile_python(platform: str) -> None:
         "tools/opportunity_return.py", "scripts/test_opportunity_return.py",
         "scripts/test_mcp_tool_registry.py", "scripts/test_shared_evm.py", "scripts/test_shared_rpc.py",
         "scripts/relay_autonomous_action.py", "scripts/test_relay_autonomous_action.py",
+        "scripts/auto_verify_autonomous_bounties.py", "scripts/test_auto_verify_autonomous_bounties.py",
         "scripts/gas_sponsorship_budget.py", "scripts/test_gas_sponsorship_budget.py", "scripts/send-budgeted-cast.py",
         "scripts/relay_bounded_wallet_action.py", "scripts/test_relay_bounded_wallet_action.py",
         "scripts/bounded_agent_create.py", "scripts/plan_bounded_agent_budget.py",
@@ -151,7 +152,7 @@ scripts/test_shared_evm.py scripts/test_shared_rpc.py
 scripts/diagnose_hosted_api.py scripts/test_diagnose_hosted_api.py
 scripts/github_audience_audit.py scripts/test_github_audience_audit.py
 scripts/ruleset_drift_check.py scripts/test_ruleset_drift_check.py
-scripts/relay_autonomous_action.py scripts/test_relay_autonomous_action.py scripts/gas_sponsorship_budget.py scripts/test_gas_sponsorship_budget.py scripts/send-budgeted-cast.py
+scripts/relay_autonomous_action.py scripts/test_relay_autonomous_action.py scripts/auto_verify_autonomous_bounties.py scripts/test_auto_verify_autonomous_bounties.py scripts/gas_sponsorship_budget.py scripts/test_gas_sponsorship_budget.py scripts/send-budgeted-cast.py
 scripts/relay_bounded_wallet_action.py scripts/test_relay_bounded_wallet_action.py
 scripts/bounded_agent_create.py scripts/plan_bounded_agent_budget.py scripts/test_bounded_agent_budget.py
 scripts/local_delegate_wallet.py scripts/test_local_delegate_wallet.py scripts/self_heal.py scripts/test_self_heal.py
@@ -336,6 +337,7 @@ def main() -> int:
     )])
     py("-m", "pip", "install", "-r", "scripts/requirements-attest.txt")
     py("scripts/test_shared_evm.py", "-v")
+    py("scripts/test_auto_verify_autonomous_bounties.py", "-v")
     py("scripts/test_check_render_blueprint.py", "-v")
     py("scripts/check-render-blueprint.py")
     py("scripts/test_mcp_tool_registry.py", "-v")

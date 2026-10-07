@@ -1,0 +1,84 @@
+name: Autonomous Auto Verify
+
+# Settles submitted autonomous-v1 leading-zero-work bounties whose mined proof
+# passes the committed module, so solvers need neither ETH nor a relay comment.
+# Discovery holds no keeper key and takes no lock. It hands off work only while no
+# other keeper-lock run is active: GitHub cancels a pending job when another
+# queues in the same concurrency group, so the keeper job must start at once
+# rather than wait behind, and possibly displace, a user's pending relay.
+
+on:
+  schedule:
+    - cron: "4,14,24,34,44,54 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      count: ${{ steps.discover.outputs.count }}
+      envelopes: ${{ steps.discover.outputs.envelopes }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - name: Install the keccak dependency
+        run: python -m pip install -r scripts/requirements-attest.txt
+
+      - name: Find leading-zero-work jobs and mine proofs
+        id: discover
+        env:
+          API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL || 'https://api.agentbounties.app' }}
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python scripts/auto_verify_autonomous_bounties.py discover
+          --github-output "$GITHUB_OUTPUT"
+          --require-idle-keeper-lock
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: autonomous-auto-verify-discover-${{ github.run_id }}
+          path: target/autonomous-auto-verify-discover.json
+          if-no-files-found: warn
+
+  settle:
+    needs: discover
+    if: >-
+      github.ref == 'refs/heads/main'
+      && needs.discover.outputs.count != ''
+      && needs.discover.outputs.count != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: agent-bounties-shared-base-keeper
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+
+      - name: Validate on-chain and relay passing proofs
+        env:
+          BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+          GAS_SPONSOR_BUDGET_TOKEN: ${{ secrets.GAS_SPONSOR_BUDGET_TOKEN }}
+          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+          AUTO_VERIFY_ENVELOPES: ${{ needs.discover.outputs.envelopes }}
+        run: python scripts/auto_verify_autonomous_bounties.py settle --execute
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: autonomous-auto-verify-${{ github.run_id }}
+          path: target/autonomous-auto-verify.json
+          if-no-files-found: warn
