@@ -647,9 +647,8 @@ def validate_common(
 
 
 def action_call(
-    client: CastClient, event: RelayEvent, state: BountyState
+    client: CastClient, envelope: Mapping[str, object], state: BountyState
 ) -> tuple[str, list[str]]:
-    envelope = event.envelope
     action = str(envelope["action"])
     now = state.block_timestamp
     if action == "claim":
@@ -806,15 +805,15 @@ def is_waitable_predecessor(
 
 def read_actionable_state(
     client: CastClient,
-    event: RelayEvent,
+    envelope: Mapping[str, object],
     *,
     wait_seconds: int,
     poll_seconds: float,
     sleep_fn=time.sleep,
     clock=time.monotonic,
 ) -> tuple[BountyState, tuple[str, list[str]] | None, int]:
-    action = str(event.envelope["action"])
-    contract = normalize_address(str(event.envelope["bounty_contract"]))
+    action = str(envelope["action"])
+    contract = normalize_address(str(envelope["bounty_contract"]))
     started = clock()
     attempts = 0
     while True:
@@ -825,12 +824,12 @@ def read_actionable_state(
             action=action,
             require_funded=state.status != STATUS_SETTLED,
         )
-        if already_applied(action, event.envelope, state):
+        if already_applied(action, envelope, state):
             return state, None, attempts
         try:
-            call = action_call(client, event, state)
+            call = action_call(client, envelope, state)
         except RelayError as error:
-            if not is_waitable_predecessor(action, event.envelope, state):
+            if not is_waitable_predecessor(action, envelope, state):
                 raise
             elapsed = max(0.0, clock() - started)
             if elapsed >= wait_seconds:
@@ -976,7 +975,36 @@ def relay(
     sleep_fn=time.sleep,
     clock=time.monotonic,
 ) -> dict[str, object]:
-    envelope = event.envelope
+    return relay_envelope(
+        client,
+        event.envelope,
+        source={
+            "issue_number": event.issue_number,
+            "source_comment_id": event.comment_id,
+            "source_comment_author": event.comment_author,
+        },
+        execute=execute,
+        private_key=private_key,
+        state_wait_seconds=state_wait_seconds,
+        state_poll_seconds=state_poll_seconds,
+        sleep_fn=sleep_fn,
+        clock=clock,
+    )
+
+
+def relay_envelope(
+    client: CastClient,
+    envelope: Mapping[str, object],
+    *,
+    source: Mapping[str, object],
+    execute: bool,
+    private_key: str | None,
+    state_wait_seconds: int = DEFAULT_STATE_WAIT_SECONDS,
+    state_poll_seconds: float = DEFAULT_STATE_POLL_SECONDS,
+    sleep_fn=time.sleep,
+    clock=time.monotonic,
+) -> dict[str, object]:
+    """Validate, simulate and optionally send one validated envelope."""
     action = str(envelope["action"])
     contract = normalize_address(str(envelope["bounty_contract"]))
     normalized_key: str | None = None
@@ -985,7 +1013,7 @@ def relay(
         normalized_key, keeper, _ = preflight_keeper(client, private_key)
     state, call, state_attempts = read_actionable_state(
         client,
-        event,
+        envelope,
         wait_seconds=state_wait_seconds,
         poll_seconds=state_poll_seconds,
         sleep_fn=sleep_fn,
@@ -996,9 +1024,7 @@ def relay(
         "outcome": "validated",
         "action": action,
         "bounty_contract": contract,
-        "issue_number": event.issue_number,
-        "source_comment_id": event.comment_id,
-        "source_comment_author": event.comment_author,
+        **source,
         "execute_requested": execute,
         "lifecycle_block_tag": "latest",
         "state_attempts": state_attempts,

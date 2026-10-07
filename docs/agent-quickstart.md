@@ -106,6 +106,9 @@ recovery phrase.
    quorum.
 4. Confirm the canonical result with `list_autonomous_bounty_events`.
 
+Leading-zero-work bounties need no verifier action once the submission evidence
+is published. The keeper settles them automatically within about 10 minutes.
+
 Pass and fail verdicts pay committed verifier rewards equally. One advisory AI
 response cannot authorize settlement.
 

@@ -216,8 +216,9 @@ The bounty commits one module, threshold one, and one verifier reward wallet.
 Anyone may relay `verifyAndSettle(proof)`. The module receives the exact bounty,
 round, solver, submission hash, evidence hash, policy hash, and proof.
 
-A returned pass settles atomically. A returned fail pays the verifier and
-reopens atomically. A reverted or malformed module call changes no state.
+A returned pass settles atomically. On autonomous-v1 a returned fail pays the
+verifier and reopens atomically; autonomous-v2 reverts on a fail. A reverted or
+malformed module call changes no state.
 
 #### Canonical Child Distribution Module
 
@@ -445,6 +446,39 @@ templates. It cannot sign, broadcast, publish, verify, settle, or prove payout.
 
 The relay comment and transaction hash are transport evidence only. Canonical
 events remain the lifecycle and payout evidence.
+
+### Automatic Leading-Zero Settlement
+
+`.github/workflows/autonomous-auto-verify.yml` settles submitted
+leading-zero-work bounties without a relay comment. It runs every 10 minutes
+from `main` in two jobs:
+
+1. `discover` holds no secrets and takes no lock. It reads the verification
+   job feed and keeps jobs on the deployed 16-bit
+   `LeadingZeroWorkVerifier` with published, hash-matched evidence and at least
+   five minutes of verification time left. It then mines the nonce from each
+   job's committed values. A 16-bit nonce takes about 65,000 hashes, and mining
+   is capped at 2^20.
+2. `settle` runs only when `discover` found work, so the schedule never
+   displaces a pending relay comment in the shared keeper lock. It reads each
+   bounty on-chain. It skips any bounty that is settled, has moved to another
+   round, commits another module or is not an autonomous-v1 clone. The bounded
+   relay then:
+   - requires the module's own `verify` to return pass;
+   - applies the relay caps and the shared gas budget;
+   - validates the settled post-state.
+
+The keeper is not an acceptance authority. A 16-bit nonce is cheap for anyone,
+the solver included, so automatic mining does not change what the module
+accepts. It removes the ETH and relay-comment step. On autonomous-v1 a failing
+proof would reject the submission and cost the solver the bond, so the keeper
+never sends one. Each run settles at most five bounties, most urgent first.
+Only a confirmed `BountySettled` event proves payment.
+
+Autonomous-v2 parity waits for the bounded relay to accept v2 clones.
+Autonomous-v2 public earning permits only the leading-zero verifier: the
+routed-v3 router and canonical-child verifiers answer only autonomous-v1
+clones, so a v2 bounty committing them could never settle.
 
 ### Standing Agent Authority
 

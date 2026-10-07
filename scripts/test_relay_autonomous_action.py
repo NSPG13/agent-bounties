@@ -332,7 +332,7 @@ class RelayTests(unittest.TestCase):
 
     def test_claim_builds_only_bounded_authorization_call(self) -> None:
         client = FakeClient()
-        signature, args = relay.action_call(client, event(claim_envelope()), bounty_state())
+        signature, args = relay.action_call(client, claim_envelope(), bounty_state())
         self.assertTrue(signature.startswith("claimWithAuthorization"))
         self.assertEqual(args[0], SOLVER.lower())
         self.assertEqual(args[1], "0")
@@ -341,13 +341,13 @@ class RelayTests(unittest.TestCase):
     def test_claim_rejects_creator_and_long_authorization(self) -> None:
         with self.assertRaisesRegex(relay.RelayError, "independent"):
             relay.action_call(
-                FakeClient(), event(claim_envelope(solver=CREATOR)), bounty_state()
+                FakeClient(), claim_envelope(solver=CREATOR), bounty_state()
             )
         envelope = claim_envelope()
         assert isinstance(envelope["authorization"], dict)
         envelope["authorization"]["valid_before"] = NOW + 3_601
         with self.assertRaisesRegex(relay.RelayError, "one hour"):
-            relay.action_call(FakeClient(), event(envelope), bounty_state())
+            relay.action_call(FakeClient(), envelope, bounty_state())
 
     def test_submit_binds_solver_round_hashes_and_claim_deadline(self) -> None:
         state = bounty_state(
@@ -358,13 +358,13 @@ class RelayTests(unittest.TestCase):
             active_claim_bond=100_000,
         )
         signature, args = relay.action_call(
-            FakeClient(), event(submit_envelope()), state
+            FakeClient(), submit_envelope(), state
         )
         self.assertTrue(signature.startswith("submitWithSignature"))
         self.assertEqual(args[:2], [HASH_A, HASH_B])
         with self.assertRaisesRegex(relay.RelayError, "round"):
             relay.action_call(
-                FakeClient(), event(submit_envelope(round=2)), state
+                FakeClient(), submit_envelope(round=2), state
             )
 
     def test_settlement_relays_only_a_passing_allowlisted_module_proof(self) -> None:
@@ -378,12 +378,12 @@ class RelayTests(unittest.TestCase):
             evidence_hash=HASH_B,
         )
         signature, _ = relay.action_call(
-            FakeClient(), event(settle_envelope()), state
+            FakeClient(), settle_envelope(), state
         )
         self.assertEqual(signature, "verifyAndSettle(bytes)")
         with self.assertRaisesRegex(relay.RelayError, "refusing rejection"):
             relay.action_call(
-                FakeClient(verifier_passed=False), event(settle_envelope()), state
+                FakeClient(verifier_passed=False), settle_envelope(), state
             )
 
     def run_relay(
