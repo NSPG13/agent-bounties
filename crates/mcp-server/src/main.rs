@@ -8216,6 +8216,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // ENV_LOCK is held across awaits on purpose; this test's runtime has no other task to block.
+    #[allow(clippy::await_holding_lock)]
     async fn v2_quote_tool_prices_the_fee_only_on_a_configured_v2_factory() {
         let prefix = "BASE_SEPOLIA_BOUNTY_V2";
         let names = [

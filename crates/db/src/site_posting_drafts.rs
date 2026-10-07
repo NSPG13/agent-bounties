@@ -276,12 +276,11 @@ mod tests {
             draft_hash(&json!({"\u{e000}":1,"\u{10000}":2})).unwrap(),
             "9d4cdc71dda603c42f9b21d88d0c2ffc31a76cd1bd461d7359406cf169845f1e"
         );
-        for unsupported in [json!({"number":9_007_199_254_740_992u64})] {
-            assert!(matches!(
-                draft_hash(&unsupported),
-                Err(PostingDraftError::NonCanonicalJson)
-            ));
-        }
+        let unsupported = json!({"number":9_007_199_254_740_992u64});
+        assert!(matches!(
+            draft_hash(&unsupported),
+            Err(PostingDraftError::NonCanonicalJson)
+        ));
     }
 
     #[tokio::test]

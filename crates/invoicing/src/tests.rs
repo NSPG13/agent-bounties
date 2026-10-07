@@ -190,7 +190,8 @@ fn every_step_names_the_next_action() {
 #[test]
 fn payment_evidence_must_match_the_invoice_exactly() {
     let base = &through_funding()[..2];
-    let variants: Vec<Box<dyn Fn(&mut InvoicePaidEvidence)>> = vec![
+    type Mutation = Box<dyn Fn(&mut InvoicePaidEvidence)>;
+    let variants: Vec<Mutation> = vec![
         Box::new(|evidence| evidence.amount_paid_cents -= 1),
         Box::new(|evidence| evidence.amount_remaining_cents = 1),
         Box::new(|evidence| evidence.status = "open".to_string()),

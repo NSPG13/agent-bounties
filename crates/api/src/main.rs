@@ -17951,6 +17951,8 @@ mod tests {
     }
 
     /// Serializes tests that set process-wide autonomous-v2 and invoicing environment variables.
+    /// Callers hold the guard across awaits on purpose: each `#[tokio::test]` runs its own
+    /// single-threaded runtime, so no task on that runtime can wait on this lock.
     fn autonomous_v2_env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
@@ -17959,6 +17961,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn autonomous_v2_quote_requires_a_pinned_configured_factory() {
         let _env = autonomous_v2_env_lock();
         let prefix = "BASE_SEPOLIA_BOUNTY_V2";
@@ -24323,9 +24326,13 @@ mod tests {
         .unwrap()
     }
 
+    /// Requests the Stripe invoicing mock received, as `(path, body)` pairs; GET paths carry a
+    /// `GET ` prefix.
+    type RecordedRequests = Arc<Mutex<Vec<(String, String)>>>;
+
     /// A local Stripe stand-in for invoicing: it records every request, sums invoice items, and
     /// finalizes with that total.
-    fn spawn_stripe_invoicing_mock(suffix: String) -> (String, Arc<Mutex<Vec<(String, String)>>>) {
+    fn spawn_stripe_invoicing_mock(suffix: String) -> (String, RecordedRequests) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let requests = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
@@ -24449,7 +24456,7 @@ mod tests {
         AutonomousBountyEvent {
             id: Uuid::new_v4(),
             log_key: log_key.to_string(),
-            tx_hash: format!("0x{:064x}", block),
+            tx_hash: format!("0x{block:064x}"),
             block_number: block,
             log_index: 0,
             contract_address: contract.to_string(),
@@ -24466,6 +24473,7 @@ mod tests {
     /// registration, the 1099 summary, and a cancelled order refunded by a signed credit note.
     #[tokio::test]
     #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    #[allow(clippy::await_holding_lock)]
     async fn invoiced_seller_of_record_path_runs_end_to_end_postgres() {
         let _env = autonomous_v2_env_lock();
         let store = PostgresStore::connect(&env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap())
@@ -24609,7 +24617,7 @@ mod tests {
         // re-adding items.
         let resume_order = format!("ord_{}", Uuid::new_v4().simple());
         let resume_invoice = format!("in_{}", Uuid::new_v4().simple());
-        invoicing::create_invoice_order(
+        let _ = invoicing::create_invoice_order(
             State(state.clone()),
             operator.clone(),
             Json(serde_json::from_value(serde_json::json!({
@@ -25114,6 +25122,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn stripe_onramp_session_is_origin_bound_mode_matched_and_never_funding() {
         let _env = autonomous_v2_env_lock();
         let body = || {

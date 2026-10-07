@@ -150,7 +150,8 @@ mod tests {
 
     #[test]
     fn session_rejects_bad_wallets_amounts_and_identifiers() {
-        let cases: Vec<Box<dyn Fn(&mut StripeOnrampSessionRequest)>> = vec![
+        type Mutation = Box<dyn Fn(&mut StripeOnrampSessionRequest)>;
+        let cases: Vec<Mutation> = vec![
             Box::new(|request| request.wallet_address = "0x123".to_string()),
             Box::new(|request| request.wallet_address = format!("0x{}", "0".repeat(40))),
             Box::new(|request| request.destination_amount = "0".to_string()),

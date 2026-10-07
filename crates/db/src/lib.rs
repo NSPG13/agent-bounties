@@ -13372,6 +13372,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
     async fn platform_metrics_query_separates_history_from_identity_and_cohort_boundaries() {
+        #[allow(clippy::too_many_arguments)]
         async fn add_event(
             store: &PostgresStore,
             network: &str,
@@ -13412,6 +13413,7 @@ mod tests {
             }
         }
 
+        #[allow(clippy::too_many_arguments)]
         async fn add_competition_event(
             store: &PostgresStore,
             network: &str,
