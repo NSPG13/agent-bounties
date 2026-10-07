@@ -206,11 +206,16 @@ def run_pages(*pages: list[dict[str, object]], total: int | None = None):
 
 class KeeperLockTests(unittest.TestCase):
     def test_lock_workflows_are_read_from_the_repository(self) -> None:
-        root = pathlib.Path(__file__).resolve().parents[1]
-        workflows = auto.keeper_lock_workflows(root)
+        # The default root comes from the script's location, not the working directory.
+        workflows = auto.keeper_lock_workflows()
         self.assertIn(RELAY_WORKFLOW, workflows)
         self.assertIn(AUTO_WORKFLOW, workflows)
         self.assertNotIn(".github/workflows/ci.yml", workflows)
+
+    def test_missing_lock_workflows_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(auto.AutoVerifyError, "no keeper-lock workflow"):
+                auto.keeper_lock_workflows(pathlib.Path(directory))
 
     def test_other_active_keeper_runs_block_the_hand_off(self) -> None:
         fetch, _ = run_pages(
