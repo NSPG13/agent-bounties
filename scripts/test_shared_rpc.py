@@ -1864,6 +1864,113 @@ class RpcTest(unittest.TestCase):
         slept.assert_called_once_with(0.25)
         self.assertTrue(first.closed)
 
+    def test_http_200_jsonrpc_id_mismatch_retries_then_recovers(self) -> None:
+        """HTTP 200 responses with mismatched id are treated as retryable transport errors."""
+        mismatched = http_200_json({"jsonrpc": "2.0", "id": 999, "result": "0x2105"})
+        with patch("_shared.rpc.urlopen", side_effect=[mismatched]) as opened, patch(
+            "_shared.rpc.time.sleep"
+        ) as slept, self.assertRaises(RuntimeError) as raised:
+            rpc(SECRET_ENDPOINT, "eth_chainId", [], attempts=1, retry_delay=0)
+        self.assertEqual(opened.call_count, 1)
+        slept.assert_not_called()
+        self.assertTrue(mismatched.closed)
+        surface = exception_chain_text(raised.exception)
+        self.assertIn("RPC response was invalid", surface)
+        for fragment in SECRET_FRAGMENTS:
+            self.assertNotIn(fragment, surface)
+        self.assertTrue(
+            any(
+                isinstance(node, TransportError) and node.retryable
+                for node in walk_exception_chain(raised.exception)
+            )
+        )
+
+        first = http_200_json({"jsonrpc": "2.0", "id": 999, "result": "0x2105"})
+        second = http_200_json({"jsonrpc": "2.0", "id": 1, "result": "0x14a34"})
+        with patch("_shared.rpc.urlopen", side_effect=[first, second]) as opened, patch(
+            "_shared.rpc.time.sleep"
+        ) as slept:
+            result = rpc(SECRET_ENDPOINT, "eth_chainId", [], retry_delay=0.25)
+        self.assertEqual(result, "0x14a34")
+        self.assertEqual(opened.call_count, 2)
+        slept.assert_called_once_with(0.25)
+        self.assertTrue(first.closed)
+        self.assertTrue(second.closed)
+
+    def test_http_200_jsonrpc_version_mismatch_retries_then_recovers(self) -> None:
+        """HTTP 200 responses with non-2.0 jsonrpc are treated as retryable transport errors."""
+        for bad_version in ("1.0", "2", 2.0):
+            with self.subTest(bad_version=bad_version):
+                first = http_200_json(
+                    {"jsonrpc": bad_version, "id": 1, "result": "0x2105"}
+                )
+                second = http_200_json(
+                    {"jsonrpc": "2.0", "id": 1, "result": "0x14a34"}
+                )
+                with patch(
+                    "_shared.rpc.urlopen", side_effect=[first, second]
+                ) as opened, patch("_shared.rpc.time.sleep") as slept:
+                    result = rpc(SECRET_ENDPOINT, "eth_chainId", [], retry_delay=0.25)
+                self.assertEqual(result, "0x14a34")
+                self.assertEqual(opened.call_count, 2)
+                slept.assert_called_once_with(0.25)
+                self.assertTrue(first.closed)
+                self.assertTrue(second.closed)
+
+    def test_selection_skips_mismatched_response_id_endpoint(self) -> None:
+        """Base RPC selection skips an endpoint returning mismatched response id."""
+        seen: list[tuple[str, str]] = []
+
+        def open_response(request: object, **_kwargs: object) -> Response:
+            url = str(getattr(request, "full_url"))
+            method = request_method(request)
+            seen.append((url, method))
+            if "mismatched" in url:
+                return http_200_json({"jsonrpc": "2.0", "id": 999, "result": "0x2105"})
+            return http_200_json({"jsonrpc": "2.0", "id": 1, "result": "0x2105"})
+
+        with patch("_shared.rpc.urlopen", side_effect=open_response), patch(
+            "_shared.rpc.time.sleep"
+        ):
+            selected = select_working_base_rpc(
+                endpoints=("https://mismatched.local", "https://valid.local"),
+                max_retries=1,
+            )
+        self.assertEqual(selected, "https://valid.local")
+        self.assertIn(("https://mismatched.local", "eth_chainId"), seen)
+        self.assertIn(("https://valid.local", "eth_chainId"), seen)
+
+    def test_failover_retries_and_switches_endpoint_on_mismatched_response_id(
+        self,
+    ) -> None:
+        """Failover retries then switches endpoint when target read returns mismatched id."""
+        seen: list[tuple[str, str]] = []
+
+        def open_response(request: object, **_kwargs: object) -> Response:
+            url = str(getattr(request, "full_url"))
+            method = request_method(request)
+            seen.append((url, method))
+            if method == "eth_chainId":
+                return http_200_json({"jsonrpc": "2.0", "id": 1, "result": "0x2105"})
+            if "first" in url:
+                return http_200_json({"jsonrpc": "2.0", "id": 999, "result": "0xabc"})
+            return http_200_json({"jsonrpc": "2.0", "id": 42, "result": "0xabc"})
+
+        with patch("_shared.rpc.urlopen", side_effect=open_response), patch(
+            "_shared.rpc.time.sleep"
+        ):
+            result = rpc_failover(
+                "eth_blockNumber",
+                [],
+                request_id=42,
+                endpoints=("https://first.local", "https://second.local"),
+                max_retries=1,
+            )
+        self.assertEqual(result, "0xabc")
+        self.assertIn(("https://first.local", "eth_blockNumber"), seen)
+        self.assertIn(("https://second.local", "eth_blockNumber"), seen)
+
 
 if __name__ == "__main__":
     unittest.main()
+
