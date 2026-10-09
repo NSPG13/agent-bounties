@@ -665,5 +665,170 @@ class RelayTests(unittest.TestCase):
         self.assertIn("bounded lifecycle wait of 120 seconds", processing)
 
 
+def v2_state(**overrides: object) -> relay.BountyState:
+    values: dict[str, object] = {
+        "factory": relay.V2_FACTORY,
+        "factory_implementation": relay.V2_IMPLEMENTATION,
+        "codehash": relay.V2_CLONE_CODEHASH,
+        "protocol": relay.PROTOCOL_V2,
+        "platform_fee": 75_000,
+        "platform_fee_bps": relay.V2_PLATFORM_FEE_BPS,
+        "platform_fee_recipient": relay.V2_PLATFORM_FEE_RECIPIENT,
+        "target_amount": 1_075_000,
+        "funded_amount": 1_075_000,
+    }
+    values.update(overrides)
+    return bounty_state(**values)
+
+
+class V2Client(FakeClient):
+    """Answers the extra reads a v2 claim makes."""
+
+    def __init__(self, *, bound_nonce: str = "0x" + "55" * 32, **kwargs: object) -> None:
+        super().__init__(**kwargs)  # type: ignore[arg-type]
+        self.bound_nonce = bound_nonce
+
+    def call(self, contract: str, signature: str, *args: str, block: str | None = None) -> str:
+        if signature.startswith("claimAuthorizationNonce("):
+            self.nonce_args = (contract, args)
+            return self.bound_nonce
+        return super().call(contract, signature, *args, block=block)
+
+
+class StateReadClient:
+    """Serves the exact reads read_state makes, keyed by (contract, signature)."""
+
+    def __init__(self, factory: str) -> None:
+        bounty = CONTRACT.lower()
+        self.answers = {
+            (bounty, "factory()(address)"): factory,
+            (bounty, "platformFee()(uint256)"): "75000",
+            (bounty, "platformFeeBps()(uint16)"): "750",
+            (bounty, "platformFeeRecipient()(address)"): relay.V2_PLATFORM_FEE_RECIPIENT,
+            (bounty, "claimEligibilityRegistry()(address)"): relay.ZERO_ADDRESS,
+            (relay.V2_FACTORY, "isCanonicalBounty(address)(bool)"): "true",
+            (relay.V2_FACTORY, "implementation()(address)"): relay.V2_IMPLEMENTATION,
+            (relay.FACTORY, "isCanonicalBounty(address)(bool)"): "true",
+            (relay.FACTORY, "implementation()(address)"): relay.IMPLEMENTATION,
+        }
+        self.calls: list[tuple[str, str]] = []
+
+    def call(self, contract: str, signature: str, *args: str, block: str | None = None) -> str:
+        key = (contract.lower(), signature)
+        self.calls.append(key)
+        if key in self.answers:
+            return self.answers[key]
+        if signature.endswith("(address)") or signature.endswith("(address)(address)"):
+            return relay.ZERO_ADDRESS
+        if signature.endswith("(bytes32)"):
+            return "0x" + "00" * 32
+        return "0"
+
+    def chain_id(self) -> int:
+        return relay.CHAIN_ID
+
+    def block_timestamp(self, block: str) -> int:
+        return NOW
+
+    def codehash(self, contract: str, block: str | None = None) -> str:
+        return relay.V2_CLONE_CODEHASH
+
+
+class V2RelayTests(unittest.TestCase):
+    def test_v2_profile_matches_the_recorded_mainnet_deployment(self) -> None:
+        record = json.loads(
+            (Path(__file__).resolve().parents[1] / "deployments/autonomous-v2-base-mainnet.json").read_text()
+        )
+        self.assertEqual(relay.V2_FACTORY, record["factory"])
+        self.assertEqual(relay.V2_IMPLEMENTATION, record["verification"]["implementation"])
+        self.assertEqual(relay.V2_PLATFORM_FEE_BPS, record["verification"]["platform_fee_bps"])
+        self.assertEqual(
+            relay.V2_PLATFORM_FEE_RECIPIENT, record["verification"]["platform_fee_recipient"]
+        )
+        self.assertEqual(relay.USDC, record["verification"]["settlement_token"])
+        self.assertEqual(
+            {profile.protocol for profile in relay.PROFILES.values()},
+            {relay.PROTOCOL_V1, relay.PROTOCOL_V2},
+        )
+
+    def test_v2_bounty_passes_with_its_own_pins_and_fee(self) -> None:
+        relay.validate_common(v2_state())
+        relay.validate_common(v2_state(status=relay.STATUS_SUBMITTED), action="settle")
+
+    def test_v2_bounty_cannot_borrow_v1_pins_or_drop_its_fee(self) -> None:
+        cases = {
+            "codehash": v2_state(codehash=relay.CLONE_CODEHASH),
+            "factory_implementation": v2_state(factory_implementation=relay.IMPLEMENTATION),
+            "platform_fee_bps": v2_state(platform_fee_bps=500),
+            "platform_fee_recipient": v2_state(platform_fee_recipient=SOLVER),
+            "protocol": v2_state(protocol=relay.PROTOCOL_V1),
+        }
+        for field, state in cases.items():
+            with self.assertRaisesRegex(relay.RelayError, f"mismatch for {field}"):
+                relay.validate_common(state)
+        with self.assertRaisesRegex(relay.RelayError, "conservation"):
+            relay.validate_common(v2_state(platform_fee=0))
+        # A v1 bounty can never carry a fee.
+        with self.assertRaisesRegex(relay.RelayError, "conservation"):
+            relay.validate_common(bounty_state(platform_fee=75_000))
+
+    def test_unknown_factories_fail_closed(self) -> None:
+        with self.assertRaisesRegex(relay.RelayError, "mismatch for factory"):
+            relay.validate_common(v2_state(factory="0x" + "77" * 20))
+        with self.assertRaisesRegex(relay.RelayError, "not a recorded autonomous factory"):
+            relay.read_state(StateReadClient("0x" + "77" * 20), CONTRACT, block="latest")
+
+    def test_read_state_uses_the_bountys_own_factory(self) -> None:
+        client = StateReadClient(relay.V2_FACTORY)
+        state = relay.read_state(client, CONTRACT, block="latest")
+        self.assertEqual(state.protocol, relay.PROTOCOL_V2)
+        self.assertEqual(state.platform_fee, 75_000)
+        self.assertEqual(state.platform_fee_bps, 750)
+        self.assertIn((relay.V2_FACTORY, "isCanonicalBounty(address)(bool)"), client.calls)
+        self.assertNotIn((relay.FACTORY, "isCanonicalBounty(address)(bool)"), client.calls)
+        v1_client = StateReadClient(relay.FACTORY)
+        v1_state = relay.read_state(v1_client, CONTRACT, block="latest")
+        self.assertEqual((v1_state.protocol, v1_state.platform_fee), (relay.PROTOCOL_V1, 0))
+        self.assertNotIn((CONTRACT.lower(), "platformFee()(uint256)"), v1_client.calls)
+
+    def test_v2_claim_requires_the_round_bound_nonce_and_no_gate(self) -> None:
+        client = V2Client()
+        signature, args = relay.action_call(client, claim_envelope(), v2_state())
+        self.assertTrue(signature.startswith("claimWithAuthorization"))
+        self.assertEqual(client.nonce_args, (CONTRACT, (SOLVER.lower(), "1")))
+        with self.assertRaisesRegex(relay.RelayError, "round \\+ 1"):
+            relay.action_call(V2Client(bound_nonce="0x" + "99" * 32), claim_envelope(), v2_state())
+        with self.assertRaisesRegex(relay.RelayError, "claim-gated"):
+            relay.action_call(
+                V2Client(), claim_envelope(), v2_state(claim_eligibility_registry=SOLVER)
+            )
+
+    def test_v2_settlement_relays_only_a_passing_proof(self) -> None:
+        submitted = v2_state(
+            status=relay.STATUS_SUBMITTED,
+            round=1,
+            solver=SOLVER,
+            verification_expires_at=NOW + 10_000,
+            submission_hash=HASH_A,
+            evidence_hash=HASH_B,
+        )
+        settled = v2_state(
+            status=relay.STATUS_SETTLED, round=1, solver=SOLVER, funded_amount=0
+        )
+        client = FakeClient()
+        states = [submitted, settled]
+        original = relay.read_state
+        relay.read_state = lambda ignored, contract, block=None: states.pop(0)  # type: ignore[assignment]
+        try:
+            report = relay.relay(client, event(settle_envelope()), execute=True, private_key=PRIVATE_KEY)
+        finally:
+            relay.read_state = original
+        self.assertEqual(report["outcome"], "relayed")
+        self.assertEqual(report["before"]["protocol"], relay.PROTOCOL_V2)
+        self.assertTrue(client.sent)
+        with self.assertRaisesRegex(relay.RelayError, "did not return pass"):
+            relay.action_call(FakeClient(verifier_passed=False), settle_envelope(), submitted)
+
+
 if __name__ == "__main__":
     unittest.main()

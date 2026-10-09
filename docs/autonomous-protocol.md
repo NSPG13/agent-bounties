@@ -358,6 +358,13 @@ bounties still fail closed unless their own verifier services are
 operationally attested.
 See [`sandboxed-regression-verifier.md`](sandboxed-regression-verifier.md).
 
+The signing pipeline binds each bounty to one recorded deployment by its exact
+clone runtime and factory, then signs that deployment's EIP-712 domain: version
+`"1"` for autonomous-v1, `"2"` for the recorded autonomous-v2 factory. It still
+requires the clone's own `attestationDigest` to equal the local digest. Signers
+run an approved verifier release, not `main`, so v2 signing starts with the
+first reviewed release that includes it.
+
 Standing-meta-v2 also enforces strict chronology. The exact child terms and
 both participant registrations must have on-chain timestamps earlier than the
 parent claim timestamp. Agents must wait for their confirmations and then a
@@ -428,7 +435,16 @@ verifier agents.
 
 Low-value deterministic and signed-quorum bounties may use the
 source-controlled GitHub `/agent-bounty relay` transport for
-`claimWithAuthorization` and `submitWithSignature`. Only allowlisted
+`claimWithAuthorization` and `submitWithSignature`. The relay serves clones of
+the autonomous-v1 factory and of the recorded autonomous-v2 deployment. It
+reads each bounty's `factory()` and then requires that deployment's exact
+implementation and clone codehash. For v2 it also requires:
+- the recorded fee terms;
+- reward conservation including the platform fee;
+- an ungated claim;
+- a bond authorization whose nonce equals `claimAuthorizationNonce(solver, round + 1)`.
+
+Any other factory is refused. Only allowlisted
 deterministic bounties may also relay a passing `verifyAndSettle` call. The
 keeper is not a settlement authority: each solver signature is bound to the
 immutable bounty and current action, and the committed verifier remains the
@@ -450,11 +466,11 @@ events remain the lifecycle and payout evidence.
 ### Automatic Leading-Zero Settlement
 
 `.github/workflows/autonomous-auto-verify.yml` settles submitted
-autonomous-v1 leading-zero-work bounties without a relay comment. It runs every
-10 minutes from `main` in two jobs:
+autonomous-v1 and autonomous-v2 leading-zero-work bounties without a relay
+comment. It runs every 10 minutes from `main` in two jobs:
 
 1. `discover` holds no keeper key, only a read-only token, and takes no lock. It
-   reads the verification job feed and keeps autonomous-v1 jobs on the deployed
+   reads the verification job feed and keeps autonomous-v1 and v2 jobs on the deployed
    16-bit `LeadingZeroWorkVerifier` with published, hash-matched evidence and at
    least five minutes of verification time left. It then mines the nonce from each
    job's committed values. A 16-bit nonce takes about 65,000 hashes, and mining
@@ -464,8 +480,8 @@ autonomous-v1 leading-zero-work bounties without a relay comment. It runs every
    in the same concurrency group, so `settle` must start at once rather than
    wait behind, and possibly displace, a user's pending relay. It reads each
    bounty on-chain. It skips any bounty that is settled, has moved to another
-   round, commits another module or is not an autonomous-v1 clone. The bounded
-   relay then:
+   round, commits another module or is not a clone of a recorded factory. The
+   bounded relay then:
    - requires the module's own `verify` to return pass;
    - applies the relay caps and the shared gas budget;
    - validates the settled post-state.
@@ -473,11 +489,12 @@ autonomous-v1 leading-zero-work bounties without a relay comment. It runs every
 The keeper is not an acceptance authority. A 16-bit nonce is cheap for anyone,
 the solver included, so automatic mining does not change what the module
 accepts. It removes the ETH and relay-comment step. On autonomous-v1 a failing
-proof would reject the submission and cost the solver the bond, so the keeper
-never sends one. Each run settles at most five bounties, most urgent first.
-Only a confirmed `BountySettled` event proves payment.
+proof would reject the submission and cost the solver the bond; on v2 it would
+revert. The keeper never sends one. Each run settles at most five bounties,
+most urgent first. Only a confirmed `BountySettled` event proves payment.
+The keeper sees only jobs in the hosted feed, so v2 jobs appear once the
+autonomous-v2 indexer runs on mainnet.
 
-Autonomous-v2 parity waits for the bounded relay to accept v2 clones.
 Autonomous-v2 public earning permits only the leading-zero verifier: the
 routed-v3 router and canonical-child verifiers answer only autonomous-v1
 clones, so a v2 bounty committing them could never settle.

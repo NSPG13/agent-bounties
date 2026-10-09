@@ -1094,5 +1094,97 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
                 )
 
 
+class AutonomousV2DeploymentTests(unittest.TestCase):
+    def preflight(self, runtime: str, factory: str) -> str:
+        def fake_run(command: list[str], *, env=None) -> str:
+            if command[1] == "code":
+                return runtime
+            if command[-1] == "factory()(address)":
+                return factory
+            if command[-1] == "settlementToken()(address)":
+                return pipeline.CANONICAL_SETTLEMENT_TOKEN
+            self.fail(f"unexpected command: {command}")
+
+        with mock.patch.object(pipeline, "run", side_effect=fake_run):
+            return pipeline.canonical_bounty_rpc_preflight(
+                Path("cast"), "https://relay.invalid", "0x" + "1" * 40, {}
+            )
+
+    def test_each_recorded_deployment_selects_its_domain_version(self) -> None:
+        self.assertEqual(
+            self.preflight(pipeline.CANONICAL_BOUNTY_RUNTIME, pipeline.CANONICAL_BOUNTY_FACTORY), "1"
+        )
+        self.assertEqual(
+            self.preflight(pipeline.CANONICAL_V2_BOUNTY_RUNTIME, pipeline.CANONICAL_V2_BOUNTY_FACTORY),
+            "2",
+        )
+
+    def test_runtime_and_factory_must_belong_to_the_same_deployment(self) -> None:
+        for runtime, factory in (
+            (pipeline.CANONICAL_V2_BOUNTY_RUNTIME, pipeline.CANONICAL_BOUNTY_FACTORY),
+            (pipeline.CANONICAL_BOUNTY_RUNTIME, pipeline.CANONICAL_V2_BOUNTY_FACTORY),
+        ):
+            with self.assertRaisesRegex(pipeline.PipelineError, "not the canonical factory"):
+                self.preflight(runtime, factory)
+
+    def test_v2_pins_match_the_recorded_deployment(self) -> None:
+        record = json.loads(
+            (Path(__file__).resolve().parents[1] / "deployments/autonomous-v2-base-mainnet.json").read_text()
+        )
+        implementation = record["verification"]["implementation"]
+        self.assertEqual(pipeline.CANONICAL_V2_BOUNTY_FACTORY, record["factory"])
+        self.assertEqual(
+            pipeline.CANONICAL_V2_BOUNTY_RUNTIME,
+            "0x363d3d373d3d3d363d73" + implementation[2:] + "5af43d82803e903d91602b57fd5bf3",
+        )
+
+    def test_local_digest_hashes_the_selected_domain_version(self) -> None:
+        current = {
+            "bounty_contract": "0x" + "3" * 40,
+            "bounty_id": "0x" + "4" * 64,
+            "round": 1,
+            "submission_evidence": {"artifact_hash": "0x" + "5" * 64, "evidence_hash": "0x" + "6" * 64},
+            "terms": {"policy_hash": "0x" + "7" * 64},
+        }
+        hashed: list[str] = []
+
+        def fake_keccak(cast: Path, value: str, environment: dict[str, str]) -> str:
+            hashed.append(value)
+            return "0x" + "8" * 64
+
+        for version in ("1", "2"):
+            hashed.clear()
+            with mock.patch.object(pipeline, "cast_keccak", side_effect=fake_keccak), mock.patch.object(
+                pipeline, "run", return_value="0x" + "9" * 64
+            ):
+                pipeline.local_attestation_digest(
+                    Path("cast"), current, "0x" + "a" * 40, True, "0x" + "b" * 64, 2_000_000_000, {},
+                    domain_version=version,
+                )
+            self.assertEqual(hashed[2], version)
+            self.assertEqual(hashed[1], "Agent Bounties")
+        with self.assertRaisesRegex(pipeline.PipelineError, "domain version"):
+            pipeline.local_attestation_digest(
+                Path("cast"), current, "0x" + "a" * 40, True, "0x" + "b" * 64, 2_000_000_000, {},
+                domain_version="3",
+            )
+
+    def test_attestation_digest_signs_with_the_preflight_version(self) -> None:
+        good = "0x" + "1" * 64
+        current = {"bounty_contract": "0x" + "3" * 40}
+
+        def fake_run(command: list[str], *, env=None) -> str:
+            return "8453" if command[1] == "chain-id" else good
+
+        with mock.patch.object(pipeline, "run", side_effect=fake_run), mock.patch.object(
+            pipeline, "canonical_bounty_rpc_preflight", return_value="2"
+        ), mock.patch.object(pipeline, "local_attestation_digest", return_value=good) as local:
+            pipeline.attestation_digest(
+                Path("cast"), "https://rpc.invalid", current, "0x" + "4" * 40, True,
+                "0x" + "5" * 64, 2_000_000_000, {},
+            )
+        self.assertEqual(local.call_args.kwargs["domain_version"], "2")
+
+
 if __name__ == "__main__":
     unittest.main()
