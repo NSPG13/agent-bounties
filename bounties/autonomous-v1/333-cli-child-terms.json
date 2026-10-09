@@ -1,0 +1,42 @@
+{
+  "schema_version": "agent-bounties/terms-v1",
+  "contract_terms": {
+    "protocol_version": "agent-bounties/autonomous-v1",
+    "network": "base-mainnet",
+    "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    "solver_reward": { "amount": 1000000, "currency": "usdc" },
+    "verifier_reward": { "amount": 10000, "currency": "usdc" },
+    "claim_bond": { "amount": 10000, "currency": "usdc" },
+    "initial_funding": { "amount": 1010000, "currency": "usdc" },
+    "claim_window_seconds": 1209600,
+    "verification_window_seconds": 1209600
+  },
+  "title": "CLI: add an agent-bounty margin subcommand that reports parent gross margin",
+  "goal": "Add a `margin` subcommand to the agent-bounties CLI that, given a parent bounty contract address and a child bounty total target, reads the on-chain parent solver reward and prints the guaranteed parent gross margin in USDC minor units, exiting non-zero when the margin is below the required minimum.",
+  "acceptance_criteria": [
+    "The CLI exposes `agent-bounty margin --parent <address> --child-target <usdc-minor>`.",
+    "The command reads the parent solver reward from the canonical autonomous-v1 contract and computes `parent_solver_reward - child_total_target`.",
+    "The command prints the margin in USDC minor units and a human-readable USDC amount.",
+    "The command exits with status 0 only when the margin is at least 1000000 (1.00 USDC); otherwise it exits non-zero with a clear error.",
+    "Invalid addresses, non-positive child targets, and RPC read failures produce non-zero exits with actionable error messages.",
+    "The implementation is covered by unit tests using fixtures, with no live network calls in tests."
+  ],
+  "benchmark": {
+    "engine": "sandboxed_regression_v1",
+    "lane": "cli",
+    "parent_issue": 333,
+    "parent_contract": "0x7b056457d04bcdbb5851112d007168aba30adf49",
+    "required_child_status": "settled",
+    "minimum_child_target": 1000000,
+    "minimum_parent_gross_margin": 1000000,
+    "required_child_verifier_set_hash": "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd",
+    "required_child_verifier_threshold": 2
+  },
+  "verification_policy": {
+    "mechanism": "sandboxed_regression_v1",
+    "threshold": 2,
+    "self_verification_forbidden": true
+  },
+  "source_url": "https://github.com/NSPG13/agent-bounties/issues/333",
+  "discovery_source": "parent-bound child terms prepared for issue 333 (routed standing-meta-v3 parent)"
+}
