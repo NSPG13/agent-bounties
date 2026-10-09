@@ -207,6 +207,11 @@ class BoundedWalletRelayTests(unittest.TestCase):
             verifier_reward=10_000,
             target_amount=110_000,
             funded_amount=110_000,
+            # The v1 profile fields read_state fills in for autonomous-v1 clones.
+            protocol=common["PROTOCOL_V1"],
+            platform_fee=0,
+            platform_fee_bps=0,
+            platform_fee_recipient=relay.ZERO_ADDRESS,
         )
         relay.validate_common(
             state,

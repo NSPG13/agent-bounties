@@ -55,6 +55,17 @@ CANONICAL_BOUNTY_RUNTIME = (
     "0x363d3d373d3d3d363d732fa36d2b2327642db3a6cc8cdd91544ad7484eb9"
     "5af43d82803e903d91602b57fd5bf3"
 )
+# The recorded autonomous-v2 deployment (deployments/autonomous-v2-base-mainnet.json).
+CANONICAL_V2_BOUNTY_FACTORY = "0xc33e2ae33bb9580837ea59df18e57fa1039ae58a"
+CANONICAL_V2_BOUNTY_RUNTIME = (
+    "0x363d3d373d3d3d363d738420c9bd1ff8a6b1abc4230b349538612c58f3a6"
+    "5af43d82803e903d91602b57fd5bf3"
+)
+# Exact clone runtime -> (its factory, its EIP-712 domain version).
+CANONICAL_BOUNTY_DEPLOYMENTS = {
+    CANONICAL_BOUNTY_RUNTIME: (CANONICAL_BOUNTY_FACTORY, "1"),
+    CANONICAL_V2_BOUNTY_RUNTIME: (CANONICAL_V2_BOUNTY_FACTORY, "2"),
+}
 # Compatibility exports are derived from the shared registry, never separate approval lists.
 _PROFILE_REGISTRY = regression_profiles.registry()
 RECONCILED_REGRESSION_BENCHMARK_SOURCES = {
@@ -575,7 +586,11 @@ def local_attestation_digest(
     response_hash: str,
     deadline: int,
     environment: dict[str, str],
+    *,
+    domain_version: str = "1",
 ) -> str:
+    if domain_version not in {"1", "2"}:
+        raise PipelineError("EIP-712 domain version must be 1 or 2")
     bounty = normalize_address(current.get("bounty_contract"), "bounty contract")
     bounty_id = checked_hash(current.get("bounty_id"), "bounty id")
     try:
@@ -599,7 +614,7 @@ def local_attestation_digest(
         environment,
     )
     name_hash = cast_keccak(cast, "Agent Bounties", environment)
-    version_hash = cast_keccak(cast, "1", environment)
+    version_hash = cast_keccak(cast, domain_version, environment)
     domain_encoding = run(
         [
             str(cast),
@@ -667,7 +682,7 @@ def attestation_digest(
         raise PipelineError("RPC returned an invalid chain id") from error
     if chain_id != 8453:
         raise PipelineError("RPC is not Base mainnet")
-    canonical_bounty_rpc_preflight(cast, rpc_url, bounty, environment)
+    domain_version = canonical_bounty_rpc_preflight(cast, rpc_url, bounty, environment)
     local_digest = local_attestation_digest(
         cast,
         current,
@@ -676,6 +691,7 @@ def attestation_digest(
         response_hash,
         deadline,
         environment,
+        domain_version=domain_version,
     )
     remote_digest = run(
         [
@@ -702,13 +718,16 @@ def canonical_bounty_rpc_preflight(
     rpc_url: str,
     bounty: str,
     environment: dict[str, str],
-) -> None:
+) -> str:
+    """Bind the bounty to one recorded deployment and return its EIP-712 domain version."""
+
     code = run(
         [str(cast), "code", "--rpc-url", rpc_url, "--block", "safe", bounty],
         env=environment,
     ).strip().lower()
-    if code != CANONICAL_BOUNTY_RUNTIME:
+    if code not in CANONICAL_BOUNTY_DEPLOYMENTS:
         raise PipelineError("RPC bounty runtime is not the precommitted canonical clone")
+    expected_factory, domain_version = CANONICAL_BOUNTY_DEPLOYMENTS[code]
     factory = normalize_address(
         run(
             [
@@ -725,7 +744,7 @@ def canonical_bounty_rpc_preflight(
         ).strip(),
         "RPC bounty factory",
     )
-    if factory != CANONICAL_BOUNTY_FACTORY:
+    if factory != expected_factory:
         raise PipelineError("RPC bounty factory is not the canonical factory")
     settlement_token = normalize_address(
         run(
@@ -745,6 +764,7 @@ def canonical_bounty_rpc_preflight(
     )
     if settlement_token != CANONICAL_SETTLEMENT_TOKEN:
         raise PipelineError("RPC bounty settlement token is not canonical Base USDC")
+    return domain_version
 
 
 def relay_rpc_preflight(

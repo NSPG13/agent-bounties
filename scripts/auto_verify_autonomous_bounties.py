@@ -47,7 +47,8 @@ MAX_FEED_BYTES = 8 * 1024 * 1024
 BYTES32_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
 ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 OK_OUTCOMES = {"relayed", "already_applied", "skipped"}
-PROTOCOL_VERSION = "agent-bounties/autonomous-v1"
+# Terms commit one of these; the bounded relay pins each to its recorded factory.
+PROTOCOL_VERSIONS = frozenset({"agent-bounties/autonomous-v1", "agent-bounties/autonomous-v2"})
 KEEPER_LOCK_GROUP = "agent-bounties-shared-base-keeper"
 ACTIVE_RUN_STATUSES = ("in_progress", "queued", "pending", "waiting", "requested")
 MAX_RUN_PAGES = 5
@@ -158,9 +159,9 @@ def candidate_reason(job: object, now: int) -> str | None:
     if not isinstance(benchmark, dict):
         return "terms are missing a benchmark"
     contract_terms = document.get("contract_terms") if isinstance(document, dict) else None
-    if not isinstance(contract_terms, dict) or contract_terms.get("protocol_version") != PROTOCOL_VERSION:
-        # The bounded relay accepts only autonomous-v1 clones; v2 must not take run slots.
-        return "not an autonomous-v1 bounty"
+    if not isinstance(contract_terms, dict) or contract_terms.get("protocol_version") not in PROTOCOL_VERSIONS:
+        # Only protocols the bounded relay can settle may take run slots.
+        return "not an autonomous-v1 or autonomous-v2 bounty"
     if benchmark.get("engine") != ENGINE or benchmark.get("difficulty_bits") != DIFFICULTY_BITS:
         return "benchmark is not the 16-bit leading-zero-work engine"
     expires = job.get("verification_expires_at")
@@ -343,13 +344,8 @@ def settle_one(
     private_key: str | None,
 ) -> dict[str, object]:
     contract = str(envelope["bounty_contract"])
+    # read_state refuses any factory outside the recorded v1 and v2 deployments.
     state = relay.read_state(client, contract, block="latest")
-    if state.factory != relay.FACTORY:
-        return {
-            "outcome": "skipped",
-            "bounty_contract": contract,
-            "reason": "bounty is not from the autonomous-v1 factory",
-        }
     if state.verifier_module != MODULE:
         return {
             "outcome": "skipped",

@@ -1,6 +1,6 @@
 name: Autonomous Auto Verify
 
-# Settles submitted autonomous-v1 leading-zero-work bounties whose mined proof
+# Settles submitted autonomous-v1 and v2 leading-zero-work bounties whose mined proof
 # passes the committed module, so solvers need neither ETH nor a relay comment.
 # Discovery holds no keeper key and takes no lock. It hands off work only while no
 # other keeper-lock run is active: GitHub cancels a pending job when another

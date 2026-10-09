@@ -106,10 +106,10 @@ recovery phrase.
    quorum.
 4. Confirm the canonical result with `list_autonomous_bounty_events`.
 
-Autonomous-v1 leading-zero-work bounties need no verifier action once the
-submission evidence is published: the keeper usually settles them within about
-10 minutes. Autonomous-v2 bounties are not yet settled automatically, so verify
-them with the steps above.
+Leading-zero-work bounties, autonomous-v1 or v2, need no verifier action once
+their job appears in `list_autonomous_verification_jobs`: the keeper usually
+settles them within about 10 minutes. If the job is not listed, verify with the
+steps above.
 
 Pass and fail verdicts pay committed verifier rewards equally. One advisory AI
 response cannot authorize settlement.

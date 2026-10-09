@@ -33,7 +33,7 @@ def job(**overrides: object) -> dict[str, object]:
             "policy_hash": POLICY_HASH,
             "document": {
                 "benchmark": {"engine": auto.ENGINE, "difficulty_bits": 16},
-                "contract_terms": {"protocol_version": auto.PROTOCOL_VERSION},
+                "contract_terms": {"protocol_version": "agent-bounties/autonomous-v1"},
             },
         },
         "submission_evidence": {
@@ -63,6 +63,19 @@ class MiningTests(unittest.TestCase):
             keccak_bytes(prefix + nonce.to_bytes(32, "big")).hex(),
             "0000f9d986fa38592a9ab5866d20e52507df12b2908d2b1851f87aa32dd26a2f",
         )
+
+    def test_pinned_clone_codehashes_are_the_eip1167_runtimes_of_their_implementations(self) -> None:
+        # The relay tests run before pycryptodome is installed, so the derivation lives here.
+        from _shared.evm import keccak256
+
+        for implementation, codehash in (
+            (relay.IMPLEMENTATION, relay.CLONE_CODEHASH),
+            (relay.V2_IMPLEMENTATION, relay.V2_CLONE_CODEHASH),
+        ):
+            runtime = bytes.fromhex(
+                "363d3d373d3d3d363d73" + implementation[2:] + "5af43d82803e903d91602b57fd5bf3"
+            )
+            self.assertEqual(keccak256(runtime), codehash)
 
     def test_work_prefix_is_the_abi_encoding_of_the_committed_values(self) -> None:
         prefix = auto.work_prefix(job())
@@ -108,16 +121,16 @@ class DiscoverTests(unittest.TestCase):
                     "policy_hash": POLICY_HASH,
                     "document": {
                         "benchmark": {"engine": auto.ENGINE, "difficulty_bits": 24},
-                        "contract_terms": {"protocol_version": auto.PROTOCOL_VERSION},
+                        "contract_terms": {"protocol_version": "agent-bounties/autonomous-v1"},
                     },
                 }
             ),
-            "not an autonomous-v1 bounty": job(
+            "not an autonomous-v1 or autonomous-v2 bounty": job(
                 terms={
                     "policy_hash": POLICY_HASH,
                     "document": {
                         "benchmark": {"engine": auto.ENGINE, "difficulty_bits": 16},
-                        "contract_terms": {"protocol_version": "agent-bounties/autonomous-v2"},
+                        "contract_terms": {"protocol_version": "agent-bounties/autonomous-v3"},
                     },
                 }
             ),
@@ -153,7 +166,7 @@ class DiscoverTests(unittest.TestCase):
             [(f"0x{index:040x}", "deferred to the next run") for index in (2, 1)],
         )
 
-    def test_v2_jobs_never_take_run_slots_from_v1_jobs(self) -> None:
+    def test_v1_and_v2_jobs_are_both_candidates(self) -> None:
         v2_terms = {
             "policy_hash": POLICY_HASH,
             "document": {
@@ -161,13 +174,14 @@ class DiscoverTests(unittest.TestCase):
                 "contract_terms": {"protocol_version": "agent-bounties/autonomous-v2"},
             },
         }
+        v2_contract = "0x" + "06" * 20
         jobs = [
-            job(bounty_contract=f"0x{index:040x}", verification_expires_at=NOW + 1_000, terms=v2_terms)
-            for index in range(1, 6)
+            job(bounty_contract=v2_contract, verification_expires_at=NOW + 1_000, terms=v2_terms),
+            job(verification_expires_at=NOW + 3_000),
         ]
-        jobs.append(job(verification_expires_at=NOW + 3_000))
-        envelopes, _ = auto.discover(jobs, now=NOW, max_jobs=5, hash_fn=zero_hash)
-        self.assertEqual([item["bounty_contract"] for item in envelopes], [CONTRACT])
+        envelopes, skipped = auto.discover(jobs, now=NOW, hash_fn=zero_hash)
+        self.assertEqual([item["bounty_contract"] for item in envelopes], [v2_contract, CONTRACT])
+        self.assertEqual(skipped, [])
 
     def test_duplicate_contracts_are_settled_once(self) -> None:
         envelopes, skipped = auto.discover([job(), job(round=4)], now=NOW, hash_fn=zero_hash)
@@ -340,15 +354,30 @@ class SettleTests(unittest.TestCase):
         self.assertEqual(kwargs["state_wait_seconds"], 0)
         self.assertTrue(kwargs["execute"])
 
-    def test_other_factories_and_modules_are_skipped(self) -> None:
-        for state, reason in (
-            (self.submitted(factory="0x" + "55" * 20), "autonomous-v1 factory"),
-            (self.submitted(verifier_module=relay.STANDING_META_V2_VERIFIER_MODULE), "leading-zero-work"),
-        ):
-            result, relay_envelope = self.settle_one(state)
-            self.assertEqual(result["outcome"], "skipped")
-            self.assertIn(reason, result["reason"])
-            relay_envelope.assert_not_called()
+    def test_other_modules_are_skipped_and_unknown_factories_fail(self) -> None:
+        result, relay_envelope = self.settle_one(
+            self.submitted(verifier_module=relay.STANDING_META_V2_VERIFIER_MODULE)
+        )
+        self.assertEqual(result["outcome"], "skipped")
+        self.assertIn("leading-zero-work", result["reason"])
+        relay_envelope.assert_not_called()
+        refused = relay.RelayError("bounty factory is not a recorded autonomous factory: 0x55")
+        with mock.patch.object(relay, "read_state", side_effect=refused), mock.patch.object(
+            relay, "relay_envelope"
+        ) as relay_envelope:
+            results = auto.settle(object(), [self.envelope], execute=True, private_key=None)
+        self.assertEqual(results[0]["outcome"], "failed")
+        relay_envelope.assert_not_called()
+
+    def test_v2_submission_is_relayed_like_v1(self) -> None:
+        from test_relay_autonomous_action import v2_state
+
+        state = v2_state(
+            status=relay.STATUS_SUBMITTED, round=1, solver=SOLVER, verification_expires_at=NOW + 3_600
+        )
+        result, relay_envelope = self.settle_one(state)
+        self.assertEqual(result, {"outcome": "relayed"})
+        relay_envelope.assert_called_once()
 
     def test_changed_lifecycle_is_skipped_or_already_applied(self) -> None:
         result, relay_envelope = self.settle_one(self.submitted(status=relay.STATUS_SETTLED))

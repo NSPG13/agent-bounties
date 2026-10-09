@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Relay one bounded autonomous-v1 solver action from a GitHub issue comment.
+"""Relay one bounded autonomous solver action from a GitHub issue comment.
 
 The keeper is intentionally not a general transaction signer. It accepts only
-three exact calls against low-value canonical Base-mainnet bounties. Claim and
+three exact calls against low-value canonical Base-mainnet bounties from the
+autonomous-v1 factory or the recorded autonomous-v2 deployment. Claim and
 submission relays support deterministic and signed-quorum verification;
 settlement remains limited to allowlisted deterministic verifier modules.
 """
@@ -40,6 +41,15 @@ ALLOWED_VERIFIER_MODULES = frozenset(
     {LEADING_ZERO_WORK_VERIFIER_MODULE, STANDING_META_V2_VERIFIER_MODULE}
 )
 CLONE_CODEHASH = "0x6e7d6297e170d10e6484c9b72314bb0e2173cd967aa8e05231ee369dbde0c0a1"
+# The recorded autonomous-v2 deployment (deployments/autonomous-v2-base-mainnet.json).
+V2_FACTORY = "0xc33e2ae33bb9580837ea59df18e57fa1039ae58a"
+V2_IMPLEMENTATION = "0x8420c9bd1ff8a6b1abc4230b349538612c58f3a6"
+# keccak256 of the EIP-1167 runtime that delegates to V2_IMPLEMENTATION.
+V2_CLONE_CODEHASH = "0x42d8c489f645de40b80ba7f9abe5e36d98882e6949d1649b3ac37ad5c779cc8d"
+V2_PLATFORM_FEE_BPS = 750
+V2_PLATFORM_FEE_RECIPIENT = "0x884834e884d6e93462655a2820140ad03e6747bc"
+PROTOCOL_V1 = "autonomous-v1"
+PROTOCOL_V2 = "autonomous-v2"
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 MAX_COMMENT_BYTES = 8_192
 MAX_TARGET_MINOR = 5_000_000
@@ -291,6 +301,38 @@ def validate_envelope(value: dict[str, object]) -> dict[str, object]:
 
 
 @dataclass(frozen=True)
+class ProtocolProfile:
+    """One exact factory deployment whose clones the bounded relay may serve."""
+
+    protocol: str
+    factory: str
+    implementation: str
+    codehash: str
+    platform_fee_bps: int
+    platform_fee_recipient: str
+
+
+PROFILES = {
+    FACTORY: ProtocolProfile(PROTOCOL_V1, FACTORY, IMPLEMENTATION, CLONE_CODEHASH, 0, ZERO_ADDRESS),
+    V2_FACTORY: ProtocolProfile(
+        PROTOCOL_V2,
+        V2_FACTORY,
+        V2_IMPLEMENTATION,
+        V2_CLONE_CODEHASH,
+        V2_PLATFORM_FEE_BPS,
+        V2_PLATFORM_FEE_RECIPIENT,
+    ),
+}
+
+
+def profile_for(factory: str) -> ProtocolProfile:
+    profile = PROFILES.get(factory)
+    if profile is None:
+        raise RelayError(f"bounty factory is not a recorded autonomous factory: {factory}")
+    return profile
+
+
+@dataclass(frozen=True)
 class BountyState:
     chain_id: int
     block_timestamp: int
@@ -317,6 +359,12 @@ class BountyState:
     policy_hash: str
     submission_hash: str
     evidence_hash: str
+    # autonomous-v2 only; autonomous-v1 bounties have no fee and no claim gate.
+    protocol: str = PROTOCOL_V1
+    platform_fee: int = 0
+    platform_fee_bps: int = 0
+    platform_fee_recipient: str = ZERO_ADDRESS
+    claim_eligibility_registry: str = ZERO_ADDRESS
 
 
 class CastClient:
@@ -538,17 +586,29 @@ def keeper_health(client: CastClient, private_key: str | None) -> dict[str, obje
 
 def read_state(client: CastClient, contract: str, block: str | None = None) -> BountyState:
     call = lambda signature, *args: client.call(contract, signature, *args, block=block)
+    factory = normalize_address(call("factory()(address)"))
+    profile = profile_for(factory)
+    v2_fields: dict[str, object] = {}
+    if profile.protocol == PROTOCOL_V2:
+        v2_fields = {
+            "platform_fee": parse_uint(call("platformFee()(uint256)")),
+            "platform_fee_bps": parse_uint(call("platformFeeBps()(uint16)")),
+            "platform_fee_recipient": normalize_address(call("platformFeeRecipient()(address)")),
+            "claim_eligibility_registry": normalize_address(
+                call("claimEligibilityRegistry()(address)")
+            ),
+        }
     return BountyState(
         chain_id=client.chain_id(),
         block_timestamp=client.block_timestamp("latest" if block is None else block),
         codehash=client.codehash(contract, block),
         canonical=bool_value(
-            client.call(FACTORY, "isCanonicalBounty(address)(bool)", contract, block=block)
+            client.call(profile.factory, "isCanonicalBounty(address)(bool)", contract, block=block)
         ),
         factory_implementation=normalize_address(
-            client.call(FACTORY, "implementation()(address)", block=block)
+            client.call(profile.factory, "implementation()(address)", block=block)
         ),
-        factory=normalize_address(call("factory()(address)")),
+        factory=factory,
         settlement_token=normalize_address(call("settlementToken()(address)")),
         bounty_id=call("bountyId()(bytes32)").strip().lower(),
         creator=normalize_address(call("creator()(address)")),
@@ -568,6 +628,8 @@ def read_state(client: CastClient, contract: str, block: str | None = None) -> B
         policy_hash=call("policyHash()(bytes32)").strip().lower(),
         submission_hash=call("submissionHash()(bytes32)").strip().lower(),
         evidence_hash=call("evidenceHash()(bytes32)").strip().lower(),
+        protocol=profile.protocol,
+        **v2_fields,
     )
 
 
@@ -580,13 +642,21 @@ def validate_common(
     threshold: int | None = None,
     expected_verifier_module: str | None = None,
 ) -> None:
+    profile = PROFILES.get(state.factory)
+    if profile is None:
+        raise RelayError(
+            "fail-closed canonical-state mismatch for factory: expected one of "
+            f"{sorted(PROFILES)}, got {state.factory}"
+        )
     expected = {
         "chain_id": CHAIN_ID,
-        "codehash": CLONE_CODEHASH,
+        "protocol": profile.protocol,
+        "codehash": profile.codehash,
         "canonical": True,
-        "factory_implementation": IMPLEMENTATION,
-        "factory": FACTORY,
+        "factory_implementation": profile.implementation,
         "settlement_token": USDC,
+        "platform_fee_bps": profile.platform_fee_bps,
+        "platform_fee_recipient": profile.platform_fee_recipient,
     }
     if verification_mode is not None:
         expected["verification_mode"] = verification_mode
@@ -640,7 +710,7 @@ def validate_common(
         raise RelayError("bounty exceeds the public relay 5 USDC target cap")
     if state.verifier_reward <= 0 or state.verifier_reward > MAX_BOND_MINOR:
         raise RelayError("claim bond exceeds the public relay 0.5 USDC cap")
-    if state.solver_reward + state.verifier_reward != state.target_amount:
+    if state.solver_reward + state.verifier_reward + state.platform_fee != state.target_amount:
         raise RelayError("bounty reward conservation is invalid")
     if require_funded and state.funded_amount != state.target_amount:
         raise RelayError("bounty is not fully funded")
@@ -659,6 +729,21 @@ def action_call(
             raise RelayError("bounty is not currently claimable")
         authorization = envelope["authorization"]
         assert isinstance(authorization, dict)
+        if state.protocol == PROTOCOL_V2:
+            if state.claim_eligibility_registry != ZERO_ADDRESS:
+                raise RelayError("claim-gated bounties are not public inventory for the relay")
+            # A v2 bond is a ReceiveWithAuthorization bound to the round it opens.
+            bound_nonce = client.call(
+                str(envelope["bounty_contract"]),
+                "claimAuthorizationNonce(address,uint64)(bytes32)",
+                solver,
+                str(state.round + 1),
+                block="latest",
+            ).strip().lower()
+            if authorization["nonce"] != bound_nonce:
+                raise RelayError(
+                    "claim authorization nonce must equal claimAuthorizationNonce(solver, round + 1)"
+                )
         valid_before = int(authorization["valid_before"])
         if valid_before <= now + 30:
             raise RelayError("claim authorization expires too soon")
