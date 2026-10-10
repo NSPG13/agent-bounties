@@ -906,24 +906,51 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if args.public_metrics_only and not args.public_metrics_output:
+        raise ValueError("--public-metrics-only requires --public-metrics-output")
+    policy = public_metrics_policy(args.public_metrics_policy) if args.public_metrics_output else {}
+    policy_logins = policy.get("maintainer_github_logins", [])
+    if not isinstance(policy_logins, list):
+        raise ValueError("maintainer_github_logins must be a JSON array")
     if args.fixture:
         snapshot = json.loads(args.fixture.read_text(encoding="utf-8"))
     else:
-        snapshot = collect_snapshot(
-            args.repository,
-            include_enrichment=not args.public_metrics_only,
-            activity_since=PLATFORM_LAUNCH_AT if args.public_metrics_only else None,
-            include_repository_traffic=args.public_metrics_only,
-        )
+        try:
+            snapshot = collect_snapshot(
+                args.repository,
+                include_enrichment=not args.public_metrics_only,
+                activity_since=PLATFORM_LAUNCH_AT if args.public_metrics_only else None,
+                include_repository_traffic=args.public_metrics_only,
+            )
+        except (subprocess.SubprocessError, OSError, UnicodeError, json.JSONDecodeError):
+            if not args.public_metrics_only or args.sync:
+                raise
+            # Optional site statistics may be unavailable. Never publish partial
+            # counts as complete or expose GitHub responses/identifiers in JSON.
+            unavailable = {
+                "schema_version": "agent-bounties/github-participation-v1",
+                "source": "github_public_activity",
+                "generated_at": utc_now(),
+                "namespace": "github",
+                "periods": {},
+                "coverage": {
+                    "status": "unavailable",
+                    "reason": "github_collection_failed",
+                    "raw_identifiers_included": False,
+                },
+            }
+            args.public_metrics_output.parent.mkdir(parents=True, exist_ok=True)
+            args.public_metrics_output.write_text(
+                json.dumps(unavailable, indent=2) + "\n", encoding="utf-8"
+            )
+            print("GitHub participation is unavailable; no counts were published.", file=sys.stderr)
+            print(f"public_metrics_output={args.public_metrics_output}")
+            return 0
     snapshot.setdefault("repository", args.repository)
     if args.snapshot_output:
         args.snapshot_output.parent.mkdir(parents=True, exist_ok=True)
         args.snapshot_output.write_text(json.dumps(snapshot, indent=2) + "\n", encoding="utf-8")
     if args.public_metrics_output:
-        policy = public_metrics_policy(args.public_metrics_policy)
-        policy_logins = policy.get("maintainer_github_logins", [])
-        if not isinstance(policy_logins, list):
-            raise ValueError("maintainer_github_logins must be a JSON array")
         excluded_logins = {
             str(value).strip().lower()
             for value in [*policy_logins, *args.exclude_login]
@@ -944,8 +971,6 @@ def main() -> int:
         )
         print(f"public_metrics_output={args.public_metrics_output}")
     if args.public_metrics_only:
-        if not args.public_metrics_output:
-            raise ValueError("--public-metrics-only requires --public-metrics-output")
         return 0
     audit = build_audit(snapshot, args.owner_login, include_owner=args.include_owner)
     args.output.parent.mkdir(parents=True, exist_ok=True)
