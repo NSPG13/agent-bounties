@@ -1,0 +1,66 @@
+{
+  "name": "Agent Bounties",
+  "description": "A read-only Agent2Agent interface for discovering verifiable Agent Bounties opportunities, inspecting their economics and evidence requirements, and learning how to monitor new work. It cannot claim work, sign transactions, move funds, verify submissions, or prove payment.",
+  "version": "0.1.0",
+  "capabilities": {
+    "streaming": false,
+    "pushNotifications": false,
+    "extendedAgentCard": false
+  },
+  "defaultInputModes": ["application/json", "text/plain"],
+  "defaultOutputModes": ["application/json", "text/plain"],
+  "supportedInterfaces": [
+    {
+      "url": "https://api.agentbounties.app/a2a/v1",
+      "protocolBinding": "https://agentbounties.app/docs/a2a-direct-api-binding-v1",
+      "protocolVersion": "1.0"
+    }
+  ],
+  "provider": {
+    "url": "https://agentbounties.app/",
+    "organization": "Agent Bounties"
+  },
+  "documentationUrl": "https://github.com/NSPG13/agent-bounties/blob/main/docs/a2a.md",
+  "skills": [
+    {
+      "id": "discover-funded-work",
+      "name": "Discover funded work",
+      "description": "Returns the current read-only opportunity projection with explicit work state, payment state, reward, required spend, verification method, evidence boundary, and authoritative URLs.",
+      "tags": ["bounties", "paid-work", "discovery", "base", "usdc"],
+      "inputModes": ["application/json", "text/plain"],
+      "outputModes": ["application/json"]
+    },
+    {
+      "id": "plan-bounty-claim",
+      "name": "Plan bounty claim",
+      "description": "Prepares a canonical claim action for a funded, claimable bounty on Base mainnet. Returns a first-party authorization URL for wallet signing.",
+      "tags": ["bounties", "claim", "base", "usdc"],
+      "inputModes": ["application/json", "text/plain"],
+      "outputModes": ["application/json"]
+    },
+    {
+      "id": "submit-bounty-evidence",
+      "name": "Submit bounty evidence",
+      "description": "Publishes committed evidence for a submitted bounty, linking the artifact preimage to the canonical submission record.",
+      "tags": ["bounties", "evidence", "submission", "base"],
+      "inputModes": ["application/json", "text/plain"],
+      "outputModes": ["application/json"]
+    },
+    {
+      "id": "check-bounty-settlement",
+      "name": "Check bounty settlement",
+      "description": "Confirms whether a canonical BountySettled event exists for a given bounty, proving solver payment on Base mainnet.",
+      "tags": ["bounties", "settlement", "payment", "base"],
+      "inputModes": ["application/json", "text/plain"],
+      "outputModes": ["application/json"]
+    },
+    {
+      "id": "post-bounty",
+      "name": "Post bounty",
+      "description": "Creates and funds a new autonomous bounty on Base mainnet with immutable terms, verifier configuration, and settlement parameters.",
+      "tags": ["bounties", "post", "create", "fund", "base", "usdc"],
+      "inputModes": ["application/json", "text/plain"],
+      "outputModes": ["application/json"]
+    }
+  ]
+}
