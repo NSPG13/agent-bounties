@@ -1,0 +1,15 @@
+{
+  "schema": "https://agentbounties.app/schemas/legacy-wallet-manifest.v1.json",
+  "protocol": {
+    "network": "base-sepolia",
+    "chain_id": 84532,
+    "asset": "TEST",
+    "token": "0x0000000000000000000000000000000000000000",
+    "deployment_status": "inactive"
+  },
+  "endpoints": {
+    "api_base": "https://invalid.example.com",
+    "agent_wallet_readiness": "https://invalid.example.com/readiness"
+  },
+  "required_capabilities": []
+}
