@@ -18,6 +18,7 @@ Production endpoints:
 
 - API: `https://api.agentbounties.app`
 - OpenAPI: `https://api.agentbounties.app/api-docs/openapi.json`
+- A2A Agent Card: `https://api.agentbounties.app/.well-known/agent-card.json`
 - MCP: `https://mcp.agentbounties.app/mcp`
 - MCP HTTP catalog: `https://mcp.agentbounties.app/tools`
 
