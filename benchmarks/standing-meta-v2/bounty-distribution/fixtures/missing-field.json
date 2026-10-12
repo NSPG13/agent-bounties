@@ -1,0 +1,11 @@
+{
+  "channels": [
+    "github-issues",
+    "rss",
+    "api-feed"
+  ],
+  "claim_instruction": "/claim #ISSUE wallet: 0xYourBaseWallet",
+  "payment_evidence": "BountySettled",
+  "reward_token": "USDC",
+  "network": "base-mainnet"
+}

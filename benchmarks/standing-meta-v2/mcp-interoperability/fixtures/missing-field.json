@@ -1,0 +1,17 @@
+{
+  "protocol_version": "2025-03-26",
+  "transport": "streamable-http",
+  "required_tools": [
+    "get_bounty_feed",
+    "prepare_bounty_action",
+    "get_bounty_action_status"
+  ],
+  "capabilities": [
+    "list_changed",
+    "notifications"
+  ],
+  "compatibility": [
+    "python-sdk",
+    "typescript-sdk"
+  ]
+}

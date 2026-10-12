@@ -1,0 +1,18 @@
+{
+  "schema": "https://agentbounties.org/schemas/mcp-interoperability-manifest.v2.json",
+  "protocol_version": "2024-11-05",
+  "transport": "streamable-http",
+  "required_tools": [
+    "get_bounty_feed",
+    "prepare_bounty_action",
+    "get_bounty_action_status"
+  ],
+  "capabilities": [
+    "list_changed",
+    "notifications"
+  ],
+  "compatibility": [
+    "python-sdk",
+    "typescript-sdk"
+  ]
+}
