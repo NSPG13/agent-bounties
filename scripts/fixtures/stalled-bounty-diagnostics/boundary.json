@@ -1,0 +1,12 @@
+{
+  "bounty_id": "bounty-102",
+  "canonical_events": [
+    {"name": "BountyClaimed", "at": "2026-08-10T13:00:00Z"}
+  ],
+  "terms": {
+    "claim_window_seconds": 604800,
+    "verification_window_seconds": 259200
+  },
+  "verifier_available": true,
+  "index_updated_at": "2026-08-17T11:00:00Z"
+}
