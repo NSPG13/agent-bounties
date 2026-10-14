@@ -78,7 +78,7 @@ jobs:
             --required-actor 0xa898d50b92e103abe626596b6b47d2ebfd506149 \
             --minimum-usdc 900000 \
             --output target/beta3-sepolia-rehearsal-recovery.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: open-competition-v2-beta3-sepolia-rehearsal-recovery-${{ github.sha }}-${{ github.run_attempt }}
           path: |

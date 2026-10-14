@@ -44,7 +44,7 @@ jobs:
 
       - name: Retain production rail dry-run evidence
         if: always()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: distribution-rail-mcp-dry-run-${{ github.run_id }}-${{ github.run_attempt }}
           path: target/distribution/production-rail-mcp-dry-run.txt

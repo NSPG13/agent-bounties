@@ -159,7 +159,7 @@ jobs:
           --rpc-url "$BASE_MAINNET_RPC_URL"
           --output target/standing-meta-v4-base-mainnet-plan.json
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: standing-meta-v4-plan-${{ github.sha }}
           path: |
@@ -236,7 +236,7 @@ jobs:
             --deployment "target/standing-meta-v4-$NETWORK-deployment.json" \
             --output "target/standing-meta-v4-$NETWORK-rpc-verification.json"
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
           name: standing-meta-v4-${{ github.event.inputs.network }}-${{ github.sha }}
@@ -321,7 +321,7 @@ jobs:
             --rpc-url "$RPC" \
             --broadcast --slow -v
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
           name: standing-meta-v4-subscription-funding-${{ github.sha }}

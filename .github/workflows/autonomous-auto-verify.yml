@@ -45,7 +45,7 @@ jobs:
           --github-output "$GITHUB_OUTPUT"
           --require-idle-keeper-lock
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
           name: autonomous-auto-verify-discover-${{ github.run_id }}
@@ -76,7 +76,7 @@ jobs:
           AUTO_VERIFY_ENVELOPES: ${{ needs.discover.outputs.envelopes }}
         run: python scripts/auto_verify_autonomous_bounties.py settle --execute
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
           name: autonomous-auto-verify-${{ github.run_id }}

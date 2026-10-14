@@ -99,7 +99,7 @@ jobs:
           ' "$output/evidence-resolution.json"
 
       - name: Upload immutable internal shadow evidence
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: qicswu-production-shadow-${{ steps.window.outputs.day }}-${{ github.run_id }}
           path: target/qicswu-shadow/${{ steps.window.outputs.day }}

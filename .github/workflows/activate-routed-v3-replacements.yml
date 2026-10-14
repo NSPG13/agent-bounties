@@ -154,7 +154,7 @@ jobs:
               "All five replacement bounties reconciled from canonical Base evidence and now expose the repaired routed-V3 child path. Only future BountySettled events prove solver payments."
           fi
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
           name: routed-v3-replacement-activation-${{ github.run_id }}

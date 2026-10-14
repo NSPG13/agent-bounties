@@ -97,7 +97,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: gh pr comment "$PR_NUMBER" --body-file target/standing-meta-v3-plan.md
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: standing-meta-v3-plan-${{ github.sha }}
           path: |
@@ -192,7 +192,7 @@ jobs:
           EOF
           gh issue comment 527 --repo "$GITHUB_REPOSITORY" --body-file /tmp/v3-deploy-failure.md
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
           name: standing-meta-v3-mainnet-${{ github.sha }}

@@ -63,7 +63,7 @@ jobs:
           [ "$balance" -ge 200000 ]
       - name: Rehearse the gasless v2 loop against real test USDC
         run: python tools/rehearse_autonomous_v2_sepolia.py --rpc-url "$FORK_RPC" --keeper-key-env FORK_SIGNER_KEY --output target/autonomous-v2-sepolia-fork-rehearsal.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
           name: autonomous-v2-sepolia-fork-rehearsal
@@ -103,7 +103,7 @@ jobs:
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
           fi
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
           name: autonomous-v2-sepolia-rehearsal
