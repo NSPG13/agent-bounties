@@ -201,6 +201,9 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         workflow = (
             MODULE.ROOT / ".github/workflows/open-competition-v2-beta3-release.yml"
         ).read_text(encoding="utf-8")
+        self.assert_authenticated_rehearsal(workflow)
+
+    def assert_authenticated_rehearsal(self, workflow):
         sepolia = workflow.split("  live-sepolia-rehearsal:", 1)[1].split(
             "  deploy-mainnet:", 1
         )[0]
@@ -213,12 +216,57 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         self.assertIn(auth_probe, sepolia)
         self.assertIn('test "$prover_auth_status" = "400"', sepolia)
         self.assertLess(sepolia.index(auth_probe), sepolia.index(payment_rehearsal))
-        upload = sepolia.split(
-            "- uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
-            1,
-        )[1]
-        self.assertIn("if: always()", upload)
-        self.assertIn("target/sepolia-prover-auth.json", upload)
+        # Select the action, not a particular release pin, and stop at the next
+        # step so unrelated evidence cannot satisfy this upload's assertions.
+        uploads = [
+            step for step in re.split(r"(?m)^      - ", sepolia)[1:]
+            if step.startswith("uses: actions/upload-artifact@")
+        ]
+        self.assertEqual(len(uploads), 1)
+        upload = uploads[0]
+        self.assertRegex(
+            upload.splitlines()[0],
+            r"^uses: actions/upload-artifact@[0-9a-f]{40}(?:[ \t]+#.*)?$",
+        )
+        self.assertRegex(upload, r"(?m)^        if: always\(\)[ \t]*$")
+        self.assertRegex(upload, r"(?m)^            target/sepolia-prover-auth\.json[ \t]*$")
+
+    def test_rehearsal_evidence_selector_accepts_changed_full_commit_pins(self):
+        workflow = (
+            MODULE.ROOT / ".github/workflows/open-competition-v2-beta3-release.yml"
+        ).read_text(encoding="utf-8")
+        for pin in (
+            "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+            "cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+        ):
+            with self.subTest(pin=pin):
+                changed = re.sub(r"actions/upload-artifact@[0-9a-f]{40}",
+                                 "actions/upload-artifact@" + pin, workflow)
+                self.assert_authenticated_rehearsal(changed)
+
+    def test_rehearsal_evidence_selector_rejects_missing_safeguards(self):
+        workflow = (
+            MODULE.ROOT / ".github/workflows/open-competition-v2-beta3-release.yml"
+        ).read_text(encoding="utf-8")
+        before, rest = workflow.split("  live-sepolia-rehearsal:", 1)
+        sepolia, after = rest.split("  deploy-mainnet:", 1)
+        pin = re.search(r"actions/upload-artifact@([0-9a-f]{40})", sepolia)[1]
+        mutations = {
+            "floating_pin": sepolia.replace(pin, "v7"),
+            "missing_upload": sepolia.replace("uses: actions/upload-artifact@", "uses: example/other@"),
+            "duplicate_upload": sepolia + f"      - uses: actions/upload-artifact@{pin}\n",
+            "missing_always": sepolia.replace("        if: always()", "        if: success()"),
+            "missing_evidence": sepolia.replace("            target/sepolia-prover-auth.json\n", ""),
+            "evidence_in_other_step": sepolia.replace("            target/sepolia-prover-auth.json\n", "")
+                + "      - run: |\n          echo target/sepolia-prover-auth.json\n",
+            "missing_auth": sepolia.replace("Authorization: Bearer ${OPEN_COMPETITION_V2_PROVER_API_KEY}", "Authorization: omitted"),
+            "payment_before_auth": "      - run: python scripts/run_open_competition_v2_x402_rehearsal.py\n" + sepolia,
+        }
+        for name, changed in mutations.items():
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                self.assert_authenticated_rehearsal(
+                    before + "  live-sepolia-rehearsal:" + changed + "  deploy-mainnet:" + after
+                )
 
     def test_mainnet_deploys_the_exact_recoverable_reserve_factory(self):
         workflow = (
