@@ -184,7 +184,7 @@ jobs:
         run: |
           mkdir -p target
           python -c 'import os,pathlib; pathlib.Path("target/verifier-release.json").write_text(os.environ["REGRESSION_VERIFIER_RELEASE_JSON"])'
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: target/release/worker
           key: reviewed-verifier-${{ runner.os }}-${{ runner.arch }}-${{ fromJSON(vars.REGRESSION_VERIFIER_RELEASE_JSON).worker_binary_digest }}
