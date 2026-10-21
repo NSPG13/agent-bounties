@@ -304,6 +304,18 @@ def _rpc_call(
             f"RPC {method} failed: "
             f"{json.dumps({'code': code, 'message': _project_rpc_error_message(message)}, sort_keys=True)}"
         )
+    if "jsonrpc" in body and body.get("jsonrpc") != "2.0":
+        raise TransportError(
+            f"RPC response was invalid for {method} at {_redact_endpoint(endpoint)}",
+            retryable=True,
+        )
+    if "id" in body and not _jsonrpc_id_binds_to_request(
+        body.get("id"), request_id, None
+    ):
+        raise TransportError(
+            f"RPC response was invalid for {method} at {_redact_endpoint(endpoint)}",
+            retryable=True,
+        )
     return body.get("result")
 
 
