@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import io
+import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,6 +27,64 @@ class GitHubAudienceAuditTests(unittest.TestCase):
         fixture = SCRIPT_DIR / "fixtures" / "github_audience_audit.json"
         self.snapshot = json.loads(fixture.read_text(encoding="utf-8"))
         self.audit = MODULE.build_audit(self.snapshot, "NSPG13")
+
+    def test_optional_metrics_failed_review_read_withholds_all_counts_and_private_details(self) -> None:
+        def partial_api(repository, suffix, **kwargs):
+            if suffix.startswith("pulls/1326/reviews"):
+                raise MODULE.subprocess.CalledProcessError(
+                    1, ["gh"], stderr="private@example.test secret-token contributor-login"
+                )
+            if suffix.startswith("pulls?state"):
+                return [{"number": 1326, "updated_at": "2026-09-23T00:00:00Z"}]
+            return [{"id": 77, "body": "private-content", "user": {"login": "contributor-login"}}]
+
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "nested" / "metrics.json"
+            argv = ["audit", "--public-metrics-only", "--public-metrics-output", str(destination)]
+            stderr, stdout = io.StringIO(), io.StringIO()
+            with patch.object(MODULE.sys, "argv", argv), patch.object(MODULE, "gh_api", partial_api), redirect_stderr(stderr), redirect_stdout(stdout):
+                self.assertEqual(MODULE.main(), 0)
+            raw = destination.read_text()
+            value = json.loads(raw)
+            self.assertEqual(value["coverage"]["status"], "unavailable")
+            self.assertFalse(value["coverage"]["raw_identifiers_included"])
+            self.assertEqual(value["periods"], {})
+            self.assertNotIn("weekly", value)
+            self.assertNotIn("first_month", value)
+            for secret in ["private@example.test", "secret-token", "contributor-login", "private-content", "1326"]:
+                self.assertNotIn(secret, raw + stderr.getvalue() + stdout.getvalue())
+
+    def test_collection_failure_still_stops_normal_audit_and_sync(self) -> None:
+        for mode in [[], ["--sync"], ["--public-metrics-only", "--sync"]]:
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                destination = Path(directory) / "metrics.json"
+                argv = ["audit", "--public-metrics-output", str(destination), *mode]
+                with patch.object(MODULE.sys, "argv", argv), patch.object(MODULE, "collect_snapshot", side_effect=MODULE.subprocess.CalledProcessError(1, ["gh"])):
+                    with self.assertRaises(MODULE.subprocess.CalledProcessError):
+                        MODULE.main()
+                self.assertFalse(destination.exists())
+
+    def test_invalid_local_policy_is_not_hidden_by_collection_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "metrics.json"
+            policy = Path(directory) / "policy.json"
+            policy.write_text('{"maintainer_github_logins":"not-an-array"}')
+            argv = ["audit", "--public-metrics-only", "--public-metrics-output", str(destination), "--public-metrics-policy", str(policy)]
+            with patch.object(MODULE.sys, "argv", argv), patch.object(MODULE, "collect_snapshot") as collect:
+                with self.assertRaisesRegex(ValueError, "must be a JSON array"):
+                    MODULE.main()
+            collect.assert_not_called()
+            self.assertFalse(destination.exists())
+
+    def test_successful_optional_metrics_keep_the_existing_aggregate(self) -> None:
+        snapshot = {**self.snapshot, "fetched_at": "2026-09-23T12:00:00Z"}
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "metrics.json"
+            argv = ["audit", "--public-metrics-only", "--public-metrics-output", str(destination)]
+            with patch.object(MODULE.sys, "argv", argv), patch.object(MODULE, "collect_snapshot", return_value=deepcopy(snapshot)), redirect_stdout(io.StringIO()):
+                self.assertEqual(MODULE.main(), 0)
+            expected = MODULE.build_public_participation_metrics(snapshot, "NSPG13")
+            self.assertEqual(json.loads(destination.read_text()), expected)
 
     def test_github_api_output_is_decoded_as_utf8_on_every_platform(self) -> None:
         response = '[[{"id":1,"body":"autonomous café"}]]'
