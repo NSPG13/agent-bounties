@@ -1,0 +1,10 @@
+{
+  "schema_version": "inventory-state-breakdown-v1",
+  "ready_to_earn": 0,
+  "in_progress": 0,
+  "submitted": 0,
+  "paid": 0,
+  "verification_unavailable": 5,
+  "generated_at": "2026-08-12T00:00:00Z",
+  "source": "degraded_rpc"
+}
