@@ -1036,3 +1036,18 @@ for (const suffix of ["", ".html"]) test(`page tools recognize exact hosted rout
   assert.equal(status.paid, false);
   assert.equal(env.navigations.length, 0);
 });
+
+
+test("assistant staging preserves the entered solver reward and rejects a deducted verifier cost", async () => {
+  const env = environment(), client = flow.createClient(env.window);
+  client.start({role:"post"}); client.save({...client.load(),brief:{solver_reward_usdc:"100.00"}});
+  env.register();
+  const stage = env.tools.get("agent_bounties_stage_funded_bounty");
+  const draft = {title:"Exact reward",goal:"Deliver a spreadsheet",acceptance_criteria:["Source links"],solver_reward_usdc:"90",verifier_reward_usdc:"10",task_window_days:7,review_mode:"creator"};
+  await assert.rejects(stage.execute(draft), /entered reward/);
+  assert.equal(client.load().brief.solver_reward_usdc, "100.00");
+  assert.equal(env.navigations.length, 0);
+  await stage.execute({...draft,solver_reward_usdc:"100.000000"});
+  assert.equal(client.load().draft.solver_reward_usdc, "100.000000");
+  assert.equal(client.load().brief.budget_usdc, undefined);
+});

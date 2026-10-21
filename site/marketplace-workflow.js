@@ -437,5 +437,14 @@
       },
     };
   }
-  return { ADDRESS, UUID, BOUNDARY, GUIDANCE, POSTING_OPTIONS, postingOptions, NETWORK, SESSION_KEY, apiBase, units, isV2, ready, participationKind, phase, opportunityDeadline, sortOpportunities, inventoryCounts, canonicalCoverage, fundedInventory, opportunityFeedUrl, loadFundedInventory, detailUrl, text, publicJson, summarize, createClient, createPostingJournal };
+  function assertSolverReward(brief, draft) {
+    if (!brief?.solver_reward_usdc) return;
+    const micro = value => {
+      const match = /^(\d+)(?:\.(\d{1,6}))?$/.exec(String(value ?? "").trim());
+      return match ? BigInt(match[1]) * 1000000n + BigInt((match[2] || "").padEnd(6, "0")) : null;
+    };
+    const expected = micro(brief.solver_reward_usdc), proposed = micro(draft.solver_reward_usdc);
+    if (expected === null || expected <= 0n || proposed !== expected) throw new Error("The proposed solver reward differs from your entered reward. Keep that reward intact and add verification separately, or edit the reward in your brief first.");
+  }
+  return { assertSolverReward, ADDRESS, UUID, BOUNDARY, GUIDANCE, POSTING_OPTIONS, postingOptions, NETWORK, SESSION_KEY, apiBase, units, isV2, ready, participationKind, phase, opportunityDeadline, sortOpportunities, inventoryCounts, canonicalCoverage, fundedInventory, opportunityFeedUrl, loadFundedInventory, detailUrl, text, publicJson, summarize, createClient, createPostingJournal };
 });

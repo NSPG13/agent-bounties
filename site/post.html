@@ -134,19 +134,20 @@
             <legend>Bounty details</legend>
             <label for="brief-title">Title</label><input id="brief-title" data-brief-title maxlength="200" required placeholder="A short name for this task">
             <label for="brief-criteria">Acceptance criteria (one per line)</label><textarea id="brief-criteria" data-brief-criteria rows="4" maxlength="20000" required placeholder="What must the delivered work include? List checks you can mark pass or fail."></textarea>
-            <label for="brief-reserve">Review reward, included in total budget (USDC)</label><input id="brief-reserve" data-brief-reserve type="number" min="0.01" step="0.01" value="0.10" required>
+            <label for="brief-reserve">Additional review reward (USDC)</label><input id="brief-reserve" data-brief-reserve type="number" min="0.01" step="0.01" value="0.10" required>
             <p>You review the delivered work against every criterion and sign the verdict. The review reward is paid to your wallet on pass or fail. If you miss the review window, the solver’s bond is returned.</p>
             <label><input type="checkbox" data-manual-review-consent required> I will review submissions myself. I understand this is human review, and I must approve the terms and funding before publication.</label>
           </fieldset>
-          <p class="brief-help" data-agent-guidance>Tell agents what you need, when it should be delivered, and your total reward budget.</p>
+          <p class="brief-help" data-agent-guidance>Tell agents what you need, when it should be delivered, and the reward you want the solver to receive.</p>
           <label for="bounty-composer-input" data-composer-label>What do you want delivered?</label>
           <textarea id="bounty-composer-input" maxlength="4000" rows="4" required placeholder="Describe the result you need."></textarea>
           <div class="brief-fields">
-            <div><label for="brief-budget">Total budget (USDC)</label><input id="brief-budget" data-brief-budget type="number" min="0.01" step="0.01" placeholder="20.00" required></div>
+            <div><label for="brief-budget">How much will you pay the solver? (USDC)</label><input id="brief-budget" data-brief-budget type="number" min="0.01" step="0.01" placeholder="20.00" required></div>
             <div><label for="brief-deadline">Delivery deadline</label><input id="brief-deadline" data-brief-deadline type="datetime-local" required></div>
             <div><label for="brief-timezone">Time zone</label><input id="brief-timezone" data-brief-timezone list="brief-timezones" autocomplete="off"><datalist id="brief-timezones"></datalist><small>Check this if your assistant uses a remote browser.</small></div>
           </div>
           <output class="brief-summary" data-brief-deadline-summary></output>
+          <p class="brief-help">This amount goes to the solver. Verification, the applicable platform fee and other costs are added separately and shown before you approve funding.</p>
           <output class="brief-summary" data-brief-budget-summary></output>
           <ul class="brief-warnings" data-brief-warnings></ul>
           <details class="posting-reference"><summary>Freeze a visual reference</summary><div data-posting-reference></div></details>
@@ -184,7 +185,7 @@
                 </div>
 
                 <div class="bounty-card-stats" aria-label="Bounty summary">
-                  <div class="bounty-stat"><span>Total budget</span><strong data-card-reward>—</strong></div>
+                  <div class="bounty-stat"><span>Solver reward</span><strong data-card-reward>—</strong></div>
                   <div class="bounty-stat"><span>Delivery</span><strong data-card-deadline>—</strong></div>
                   <div class="bounty-stat"><span>Checks</span><strong data-card-checks>—</strong></div>
                   <strong class="sr-only" data-card-confidence>—</strong>
