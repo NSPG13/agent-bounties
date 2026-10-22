@@ -32,6 +32,7 @@ RUNS = [
 # Only a LIVE-CANONICAL receipt upgrades payment. A local `settled: true` does not.
 CANONICAL_RECEIPT = {
     "provenance": "canonical_live",
+    "event": "BountySettled",
     "tx_hash": "0x" + "a" * 64,
     "log_key": "base:8453:log:17",
     "block_number": 39_221_004,
@@ -256,6 +257,29 @@ def main() -> int:
             print(f"  ERROR {name}: {type(exc).__name__}: {exc}")
     print(f"\n{len(tests) - len(failed)}/{len(tests)} passed")
     return 1 if failed else 0
+
+
+def test_non_canonical_settlement_event_stays_unverified() -> None:
+    """An event name that is not `BountySettled` is not payment evidence.
+
+    Added after cross-checking against the TypeScript proposal on #686: a live
+    provenance plus a well-formed hash is not enough if the event it points at
+    is something the solver made up.
+    """
+    ev = good_evidence()
+    ev["settlement"] = copy.deepcopy(CANONICAL_RECEIPT)
+    ev["settlement"]["event"] = "PaymentSentByBob"
+    out = build_checklist(ev)
+    assert out["payment"]["status"] == "unverified"
+    assert "BountySettled" in out["payment"]["reason"]
+
+
+def test_missing_settlement_event_stays_unverified() -> None:
+    ev = good_evidence()
+    ev["settlement"] = copy.deepcopy(CANONICAL_RECEIPT)
+    del ev["settlement"]["event"]
+    out = build_checklist(ev)
+    assert out["payment"]["status"] == "unverified"
 
 
 if __name__ == "__main__":
