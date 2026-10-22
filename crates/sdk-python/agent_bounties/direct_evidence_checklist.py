@@ -41,6 +41,10 @@ __all__ = [
 
 CHECKLIST_VERSION = "1.0.0"
 
+# The only settlement event that counts. A receipt naming anything else is not
+# payment evidence, even if it carries a live provenance and a well-formed hash.
+CANONICAL_SETTLEMENT_EVENT = "BountySettled"
+
 REQUIRED_FIELDS: Tuple[str, ...] = (
     "repository",
     "source_commit",
@@ -205,6 +209,7 @@ def _validate_payment(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
         )
 
     provenance = _clean(receipt.get("provenance"))
+    event = _clean(receipt.get("event"))
     tx_hash = _clean(receipt.get("tx_hash"))
     log_key = _clean(receipt.get("log_key"))
     block = receipt.get("block_number")
@@ -221,12 +226,24 @@ def _validate_payment(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
         return {"status": "unverified", "reason": "tx_hash is not 0x + 64 hex"}, []
     if not log_key:
         return {"status": "unverified", "reason": "log_key is missing"}, []
+    if event != CANONICAL_SETTLEMENT_EVENT:
+        return (
+            {
+                "status": "unverified",
+                "reason": (
+                    f"event {event!r} is not the canonical "
+                    f"{CANONICAL_SETTLEMENT_EVENT!r} event"
+                ),
+            },
+            [],
+        )
     if not isinstance(block, int) or isinstance(block, bool) or block <= 0:
         return {"status": "unverified", "reason": "block_number must be positive"}, []
 
     return (
         {
             "status": "settled",
+            "event": event,
             "tx_hash": tx_hash,
             "log_key": log_key,
             "block_number": block,
