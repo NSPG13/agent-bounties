@@ -1,0 +1,1 @@
+{"schema":"api-discovery/v1","tool_inventory_endpoint":"https://api.agentbounties.app/v1/mcp/tools","tools":["list_autonomous_bounties","list_opportunities","prepare_agent_to_earn","prepare_bounty_post","get_bounty_detail"]}
