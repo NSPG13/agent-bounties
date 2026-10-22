@@ -24342,14 +24342,19 @@ mod tests {
     /// Requests the Stripe invoicing mock received, as `(path, body)` pairs; GET paths carry a
     /// `GET ` prefix.
     type RecordedRequests = Arc<Mutex<Vec<(String, String)>>>;
+    type InvoiceReadFixtures = Arc<Mutex<BTreeMap<String, serde_json::Value>>>;
 
     /// A local Stripe stand-in for invoicing: it records every request, sums invoice items, and
     /// finalizes with that total.
-    fn spawn_stripe_invoicing_mock(suffix: String) -> (String, RecordedRequests) {
+    fn spawn_stripe_invoicing_mock(
+        suffix: String,
+    ) -> (String, RecordedRequests, InvoiceReadFixtures) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let requests = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
         let recorded = requests.clone();
+        let read_fixtures = Arc::new(Mutex::new(BTreeMap::<String, serde_json::Value>::new()));
+        let reads = read_fixtures.clone();
         thread::spawn(move || {
             let mut item_total = 0u64;
             let mut finalized = false;
@@ -24402,7 +24407,9 @@ mod tests {
                     .and_then(|rest| rest.split('/').next())
                     .filter(|id| id.starts_with("in_") && *id != invoice)
                     .map(ToString::to_string);
+                let read_fixture = reads.lock().unwrap().get(&path).cloned();
                 let response = match path.as_str() {
+                    _ if method == "GET" && read_fixture.is_some() => read_fixture.unwrap(),
                     path if method == "GET" && path == retrieve => serde_json::json!({
                         "id": invoice, "object": "invoice",
                         "status": if finalized { "open" } else { "draft" }, "livemode": false,
@@ -24447,7 +24454,7 @@ mod tests {
                 );
             }
         });
-        (format!("http://{address}"), requests)
+        (format!("http://{address}"), requests, read_fixtures)
     }
 
     fn invoice_webhook(event_type: &str, object: serde_json::Value, id: &str) -> Vec<u8> {
@@ -24483,7 +24490,7 @@ mod tests {
     /// Drives the invoiced seller-of-record path end to end against Postgres: quote, bank-transfer
     /// invoice through a Stripe stand-in, signed invoice.paid (including a replay), treasury
     /// funding plan, reconciliation from indexed canonical events, contractor attestation and
-    /// registration, the 1099 summary, and a cancelled order refunded by a signed credit note.
+    /// registration, the 1099 summary, and customer repayment confirmed separately from its credit note.
     #[tokio::test]
     #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
     #[allow(clippy::await_holding_lock)]
@@ -24522,7 +24529,7 @@ mod tests {
         }
         let suffix = Uuid::new_v4().simple().to_string();
         let invoice_id = format!("in_{suffix}");
-        let (stripe_url, stripe_requests) = spawn_stripe_invoicing_mock(suffix);
+        let (stripe_url, stripe_requests, stripe_reads) = spawn_stripe_invoicing_mock(suffix);
         let mut app = Arc::try_unwrap(test_state_with_stripe_live(
             BountyNetwork::default(),
             stripe_url,
@@ -24720,10 +24727,32 @@ mod tests {
         assert!(deliver(paid_body.clone(), "wrong-secret").await.is_err());
         let paid = deliver(paid_body.clone(), webhook_secret).await.unwrap().0;
         assert!(paid.applied);
-        let replay = deliver(paid_body, webhook_secret).await.unwrap().0;
+        let replay = deliver(paid_body.clone(), webhook_secret).await.unwrap().0;
         assert!(
             replay.duplicate && !replay.applied,
             "a Stripe retry never applies twice"
+        );
+
+        let mut conflicting: serde_json::Value = serde_json::from_slice(&paid_body).unwrap();
+        conflicting["data"]["object"]["amount_paid"] = serde_json::json!(11749);
+        assert_eq!(
+            deliver(serde_json::to_vec(&conflicting).unwrap(), webhook_secret)
+                .await
+                .unwrap_err()
+                .0,
+            StatusCode::CONFLICT,
+            "same event ID cannot acquire different financial facts"
+        );
+        conflicting["data"]["object"]["amount_paid"] = serde_json::json!(11750);
+        conflicting["data"]["object"]["id"] = serde_json::json!(resume_invoice);
+        conflicting["data"]["object"]["metadata"]["order_id"] = serde_json::json!(resume_order);
+        assert_eq!(
+            deliver(serde_json::to_vec(&conflicting).unwrap(), webhook_secret)
+                .await
+                .unwrap_err()
+                .0,
+            StatusCode::CONFLICT,
+            "one Stripe event cannot pay two orders"
         );
 
         let plan = invoicing::plan_invoice_funding(
@@ -24976,7 +25005,7 @@ mod tests {
             "settlements to an earlier wallet still count"
         );
 
-        // A second order is cancelled after payment and refunded by a signed credit note.
+        // A second order is cancelled after payment. Its credit note does not prove repayment.
         let refund_order = format!("ord_{}", Uuid::new_v4().simple());
         let refund_invoice = format!("in_{}", Uuid::new_v4().simple());
         let _ = invoicing::create_invoice_order(
@@ -25112,12 +25141,37 @@ mod tests {
             )
             .await
             .unwrap();
+        let before_external = stripe_requests.lock().unwrap().len();
+        assert_eq!(
+            invoicing::refund_invoice_order(
+                State(state.clone()),
+                operator.clone(),
+                Path(refund_order.clone()),
+                Json(
+                    serde_json::from_value(
+                        serde_json::json!({"refund":"out_of_band","memo":"external"})
+                    )
+                    .unwrap()
+                ),
+            )
+            .await
+            .unwrap_err()
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            stripe_requests.lock().unwrap().len(),
+            before_external,
+            "external repayment annotations are rejected before any Stripe execution"
+        );
         let credit = refund().await.unwrap().0;
         assert_eq!(credit.request.body["refund_amount"], 11_750);
-        let refunded = deliver(
+        let credit_note_id = format!("cn_{}", Uuid::new_v4().simple());
+        let refund_id = format!("re_{}", Uuid::new_v4().simple());
+        let pending = deliver(
             invoice_webhook("credit_note.created", serde_json::json!({
-                "id": format!("cn_{}", Uuid::new_v4().simple()), "object": "credit_note", "invoice": refund_invoice, "status": "issued",
-                "total": 11_750, "livemode": false,
+                "id": credit_note_id, "object": "credit_note", "invoice": refund_invoice, "status": "issued",
+                "total": 11_750, "currency": "usd", "livemode": false,
                 "metadata": {"order_id": refund_order, "purpose": "invoiced_outcome"}
             }), &format!("evt_{}", Uuid::new_v4().simple())),
             webhook_secret,
@@ -25126,9 +25180,189 @@ mod tests {
         .unwrap()
         .0;
         assert_eq!(
-            refunded.state.unwrap().status,
+            pending.state.unwrap().status,
+            ::invoicing::OrderStatus::RefundPending
+        );
+        assert_eq!(
+            refund().await.unwrap_err().0,
+            StatusCode::CONFLICT,
+            "do not issue another credit note while repayment is pending"
+        );
+        let note_path = format!("/v1/credit_notes/{credit_note_id}");
+        let refund_path = format!("/v1/refunds/{refund_id}");
+        let note = serde_json::json!({
+            "id":credit_note_id,"object":"credit_note","invoice":refund_invoice,"status":"issued",
+            "currency":"usd","total":11750,"livemode":false,"pre_payment_amount":0,"post_payment_amount":11750,
+            "out_of_band_amount":null,"customer_balance_transaction":null,
+            "metadata":{"purpose":"invoiced_outcome","order_id":refund_order},
+            "refunds":[{"refund":refund_id,"amount_refunded":11750}]
+        });
+        let refund_snapshot = |status: &str| {
+            serde_json::json!({
+                "id":refund_id,"object":"refund","amount":11750,"currency":"usd","status":status,
+                "destination_details":{"type":"us_bank_transfer","us_bank_transfer":{}}
+            })
+        };
+        stripe_reads
+            .lock()
+            .unwrap()
+            .insert(note_path.clone(), note.clone());
+        stripe_reads
+            .lock()
+            .unwrap()
+            .insert(refund_path.clone(), refund_snapshot("pending"));
+        let mut restarted = Arc::try_unwrap(test_state_with_stripe_live(
+            BountyNetwork::default(),
+            state.stripe_api_base_url.clone(),
+        ))
+        .ok()
+        .unwrap();
+        restarted.store = Some(store.clone());
+        restarted.operator_api_token = Some("operator-secret".into());
+        let restarted = Arc::new(restarted);
+        let reconcile = |runtime: SharedState| {
+            invoicing::reconcile_invoice_order(
+                State(runtime),
+                operator.clone(),
+                Path(refund_order.clone()),
+            )
+        };
+        let (first, concurrent) =
+            tokio::join!(reconcile(state.clone()), reconcile(restarted.clone()));
+        let (first, concurrent) = (first.unwrap().0, concurrent.unwrap().0);
+        assert_eq!(first.state.status, ::invoicing::OrderStatus::RefundPending);
+        assert_eq!(
+            first.applied.len() + concurrent.applied.len(),
+            1,
+            "concurrent independent runtimes append the snapshot once"
+        );
+        assert_eq!(first.state.refund_outstanding_cents(), 11750);
+
+        let mut wrong_note = note.clone();
+        wrong_note["invoice"] = serde_json::json!("in_other");
+        stripe_reads
+            .lock()
+            .unwrap()
+            .insert(note_path.clone(), wrong_note);
+        assert_eq!(
+            reconcile(restarted.clone()).await.unwrap_err().0,
+            StatusCode::BAD_GATEWAY
+        );
+        stripe_reads.lock().unwrap().insert(note_path, note);
+        stripe_reads
+            .lock()
+            .unwrap()
+            .insert(refund_path.clone(), refund_snapshot("succeeded"));
+        let success = reconcile(restarted.clone()).await.unwrap().0;
+        assert_eq!(success.state.status, ::invoicing::OrderStatus::Refunded);
+        assert_eq!(success.state.refund_outstanding_cents(), 0);
+        assert!(
+            reconcile(state.clone()).await.unwrap().0.applied.is_empty(),
+            "a replay cannot refund twice"
+        );
+
+        // Repeated status values are new evidence after a bank return, not duplicates
+        // of the first pending/succeeded snapshots. The same refund can recover.
+        for (status, expected) in [
+            ("requires_action", ::invoicing::OrderStatus::RefundPending),
+            ("pending", ::invoicing::OrderStatus::RefundPending),
+            ("succeeded", ::invoicing::OrderStatus::Refunded),
+        ] {
+            stripe_reads
+                .lock()
+                .unwrap()
+                .insert(refund_path.clone(), refund_snapshot(status));
+            let recovered = reconcile(state.clone()).await.unwrap().0;
+            assert_eq!(recovered.state.status, expected);
+            assert_eq!(
+                recovered.applied.len(),
+                1,
+                "each genuine status transition is durable"
+            );
+            assert_eq!(
+                recovered.state.refund_outstanding_cents(),
+                if status == "succeeded" { 0 } else { 11750 }
+            );
+        }
+        stripe_reads
+            .lock()
+            .unwrap()
+            .insert(refund_path, refund_snapshot("failed"));
+        let returned = reconcile(restarted).await.unwrap().0;
+        assert_eq!(
+            returned.state.status,
+            ::invoicing::OrderStatus::RefundFailed
+        );
+        assert_eq!(returned.state.refund_outstanding_cents(), 11750);
+        assert_eq!(
+            stripe_requests
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(path, _)| path == "/v1/credit_notes")
+                .count(),
+            1,
+            "all reconciliation and recovery checks were read-only"
+        );
+        // Cancellation before funding must be reconcilable without a bounty contract.
+        let mut pre_funding_paid: serde_json::Value = serde_json::from_slice(&paid_body).unwrap();
+        pre_funding_paid["id"] = serde_json::json!(format!("evt_{}", Uuid::new_v4().simple()));
+        pre_funding_paid["data"]["object"]["id"] = serde_json::json!(resume_invoice);
+        pre_funding_paid["data"]["object"]["metadata"]["order_id"] =
+            serde_json::json!(resume_order);
+        assert!(
+            deliver(
+                serde_json::to_vec(&pre_funding_paid).unwrap(),
+                webhook_secret
+            )
+            .await
+            .unwrap()
+            .0
+            .applied
+        );
+        let cancelled = invoicing::cancel_invoice_order(
+            State(state.clone()),
+            operator.clone(),
+            Path(resume_order.clone()),
+            Json(serde_json::from_value(serde_json::json!({"reason":"before funding"})).unwrap()),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert!(cancelled.state.bounty_contract.is_none());
+        let early_note_id = format!("cn_{}", Uuid::new_v4().simple());
+        assert!(deliver(invoice_webhook("credit_note.created", serde_json::json!({
+            "id":early_note_id,"object":"credit_note","invoice":resume_invoice,"status":"issued",
+            "total":11750,"currency":"usd","livemode":false,
+            "metadata":{"purpose":"invoiced_outcome","order_id":resume_order}
+        }), &format!("evt_{}", Uuid::new_v4().simple())), webhook_secret).await.unwrap().0.applied);
+        let early_refund_id = format!("re_{}", Uuid::new_v4().simple());
+        stripe_reads.lock().unwrap().insert(format!("/v1/credit_notes/{early_note_id}"), serde_json::json!({
+            "id":early_note_id,"object":"credit_note","invoice":resume_invoice,"status":"issued",
+            "currency":"usd","total":11750,"livemode":false,"pre_payment_amount":0,"post_payment_amount":11750,
+            "out_of_band_amount":null,"customer_balance_transaction":null,
+            "metadata":{"purpose":"invoiced_outcome","order_id":resume_order},
+            "refunds":[{"refund":early_refund_id,"amount_refunded":11750}]
+        }));
+        let mut early_refund = refund_snapshot("succeeded");
+        early_refund["id"] = serde_json::json!(early_refund_id);
+        stripe_reads
+            .lock()
+            .unwrap()
+            .insert(format!("/v1/refunds/{early_refund_id}"), early_refund);
+        let early_result = invoicing::reconcile_invoice_order(
+            State(state.clone()),
+            operator.clone(),
+            Path(resume_order.clone()),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(
+            early_result.state.status,
             ::invoicing::OrderStatus::Refunded
         );
+        assert!(!early_result.state.funded);
         for name in ["INVOICING_ENABLED", "STRIPE_INVOICE_WEBHOOK_SECRET"] {
             env::remove_var(name);
         }

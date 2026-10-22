@@ -1,9 +1,9 @@
 //! Stripe Invoicing for the seller-of-record business path (ADR 0006).
 //!
 //! AgentBounties (the US entity) invoices a business buyer for a verified outcome. Invoices accept
-//! only US bank transfers (`customer_balance`). Those payments cannot be charged back, so a paid
-//! invoice is final when the signature-verified `invoice.paid` webhook arrives. Card and ACH debit
-//! stay disabled until dispute reconciliation exists.
+//! only US bank transfers (`customer_balance`). A verified `invoice.paid` records invoice payment;
+//! it does not prove available company cash or exclude bank reversals. Production funding still
+//! needs cash/conversion evidence and reversal handling. Card and ACH debit remain disabled.
 //!
 //! Planners return `StripeRequestIntent`s with deterministic idempotency keys per order. Parsers
 //! accept native Stripe webhook events (`{id, type, livemode, data: {object}}`) and only for objects
@@ -11,6 +11,12 @@
 
 use super::{StripeIntegrationError, StripeRequestIntent, STRIPE_API_VERSION};
 use serde::{Deserialize, Serialize};
+
+mod refunds;
+pub use refunds::{
+    parse_credit_note_refund_bindings, parse_invoice_refund_snapshot, plan_retrieve_credit_note,
+    plan_retrieve_invoice_refund, InvoiceRefundBinding, InvoiceRefundSnapshot,
+};
 
 pub const CUSTOMERS_ENDPOINT: &str = "/v1/customers";
 pub const INVOICES_ENDPOINT: &str = "/v1/invoices";
@@ -293,9 +299,12 @@ pub fn plan_credit_note_refund(
 #[derive(Debug, Clone, Deserialize)]
 pub struct StripeNativeEvent {
     pub id: String,
+    pub object: String,
     #[serde(rename = "type")]
     pub event_type: String,
     pub livemode: bool,
+    pub account: Option<String>,
+    pub context: Option<serde_json::Value>,
     pub data: StripeNativeEventData,
 }
 
@@ -333,6 +342,7 @@ pub enum InvoiceWebhookEvidence {
         order_id: String,
         status: String,
         total_cents: u64,
+        currency: String,
         livemode: bool,
     },
 }
@@ -389,6 +399,12 @@ pub fn parse_invoice_webhook(
     payload: &[u8],
 ) -> Result<Option<InvoiceWebhookEvidence>, StripeIntegrationError> {
     let event: StripeNativeEvent = serde_json::from_slice(payload).map_err(|_| invalid("event"))?;
+    if event.object != "event" || event.account.is_some() || event.context.is_some() {
+        return Err(invalid("event_scope"));
+    }
+    if stripe_id(&event.id, "evt_", "id")? != event.id {
+        return Err(invalid("id"));
+    }
     let object = &event.data.object;
     let tagged = object
         .get("metadata")
@@ -436,6 +452,7 @@ pub fn parse_invoice_webhook(
             order_id: order,
             status: string_field(object, "status")?,
             total_cents: cents_field(object, "total")?,
+            currency: string_field(object, "currency")?,
             livemode: event.livemode,
         },
         _ => return Ok(None),
@@ -622,6 +639,7 @@ mod tests {
                 "invoice": "in_456",
                 "status": "issued",
                 "total": 11_750,
+                "currency": "usd",
                 "livemode": false,
                 "metadata": {"order_id": "ord_01", "purpose": "invoiced_outcome"},
             }),
@@ -676,5 +694,24 @@ mod tests {
             "tagged lifecycle events are acknowledged, not retried"
         );
         assert!(parse_invoice_webhook(b"not json").is_err());
+    }
+
+    #[test]
+    fn invoicing_events_reject_connected_account_and_organization_scope() {
+        let original: serde_json::Value =
+            serde_json::from_slice(&event("invoice.paid", paid_invoice())).unwrap();
+        for (key, value) in [
+            ("account", serde_json::json!("acct_other")),
+            ("context", serde_json::json!("org_other")),
+            ("object", serde_json::json!("invoice")),
+            ("id", serde_json::json!("evt_bad/path")),
+        ] {
+            let mut candidate = original.clone();
+            candidate[key] = value;
+            assert!(
+                parse_invoice_webhook(&serde_json::to_vec(&candidate).unwrap()).is_err(),
+                "{key}"
+            );
+        }
     }
 }

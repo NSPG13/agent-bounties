@@ -296,12 +296,23 @@ pub enum OrderEvent {
         amount_usdc: u64,
         log_key: String,
     },
-    /// Signature-verified Stripe `credit_note.created` refunding the buyer.
+    /// Signature-verified accounting adjustment. Issuance alone never proves repayment.
     CreditNoteIssued {
         credit_note_id: String,
         invoice_id: String,
         refund_cents: u64,
         stripe_event_id: String,
+        livemode: bool,
+    },
+    /// A fresh authenticated Stripe read of every refund allocated to this credit note.
+    /// The adapter verifies the credit note's invoice, order, currency and full allocation first.
+    BuyerRefundReconciled {
+        credit_note_id: String,
+        invoice_id: String,
+        refunds: Vec<BuyerRefund>,
+        /// Log length read before fetching Stripe. A concurrent append invalidates this read.
+        observed_sequence: usize,
+        evidence_id: String,
         livemode: bool,
     },
 }
@@ -320,6 +331,7 @@ impl OrderEvent {
             OrderEvent::FundingObserved { log_key, .. }
             | OrderEvent::SettlementObserved { log_key, .. }
             | OrderEvent::RefundObserved { log_key, .. } => Some(log_key),
+            OrderEvent::BuyerRefundReconciled { evidence_id, .. } => Some(evidence_id),
             _ => None,
         }
     }
@@ -335,6 +347,8 @@ pub enum OrderStatus {
     Funded,
     Settled,
     CancelRequested,
+    RefundPending,
+    RefundFailed,
     Refunded,
     Voided,
 }
@@ -345,6 +359,24 @@ pub struct ContractorSettlement {
     pub reportable_usdc: u64,
     pub settled_at: u64,
     pub log_key: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BuyerRefundStatus {
+    Pending,
+    RequiresAction,
+    Succeeded,
+    Failed,
+    Canceled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuyerRefund {
+    pub refund_id: String,
+    pub amount_cents: u64,
+    pub currency: String,
+    pub status: BuyerRefundStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -362,11 +394,31 @@ pub struct OrderState {
     pub refunded_to_treasury: bool,
     pub settlement: Option<ContractorSettlement>,
     pub credit_note_id: Option<String>,
+    /// Legacy credit-note events replay with no proven customer repayment.
+    #[serde(default)]
+    pub buyer_refunds: Vec<BuyerRefund>,
     /// What the operator or the system must do next.
     pub next_action: String,
 }
 
 impl OrderState {
+    /// Customer repayment still outstanding, including an issued but unconfirmed credit note.
+    pub fn refund_outstanding_cents(&self) -> u64 {
+        if !matches!(
+            self.status,
+            OrderStatus::CancelRequested | OrderStatus::RefundPending | OrderStatus::RefundFailed
+        ) {
+            return 0;
+        }
+        self.paid_cents
+            - self
+                .buyer_refunds
+                .iter()
+                .filter(|refund| refund.status == BuyerRefundStatus::Succeeded)
+                .map(|refund| refund.amount_cents)
+                .sum::<u64>()
+    }
+
     /// The amount owed to the buyer: positive only after cancellation, once no escrow remains at
     /// risk, and before a credit note has been issued. Once treasury funding is planned, the
     /// creation may already be signed or mined but not yet reconciled, so the absence of
@@ -399,6 +451,16 @@ impl OrderState {
                 "complete_planned_treasury_funding_then_cancel_bounty_and_withdraw_treasury_refund"
             }
             OrderStatus::Settled => "record_contractor_payment",
+            OrderStatus::RefundPending
+                if self
+                    .buyer_refunds
+                    .iter()
+                    .any(|refund| refund.status == BuyerRefundStatus::RequiresAction) =>
+            {
+                "complete_buyer_refund_action_then_reconcile"
+            }
+            OrderStatus::RefundPending => "reconcile_buyer_refund",
+            OrderStatus::RefundFailed => "recover_failed_buyer_refund",
             OrderStatus::Refunded | OrderStatus::Voided => "none",
         }
         .to_string();
@@ -469,10 +531,21 @@ pub fn project_order(
         refunded_to_treasury: false,
         settlement: None,
         credit_note_id: None,
+        buyer_refunds: Vec::new(),
         next_action: String::new(),
     };
     let mut applied_evidence = HashSet::new();
-    for event in rest {
+    for (offset, event) in rest.iter().enumerate() {
+        if let OrderEvent::BuyerRefundReconciled {
+            observed_sequence, ..
+        } = event
+        {
+            if *observed_sequence != offset + 1 {
+                return reject(
+                    "order changed during refund reconciliation; retrieve fresh Stripe evidence",
+                );
+            }
+        }
         if let Some(id) = event.evidence_id() {
             if id.trim().is_empty() || !applied_evidence.insert(id.to_string()) {
                 return reject("evidence id is empty or already applied");
@@ -679,7 +752,96 @@ fn apply_order_event(
                 return reject("credit note does not refund this order's full paid invoice");
             }
             state.credit_note_id = Some(credit_note_id.clone());
-            state.status = Status::Refunded;
+            state.status = Status::RefundPending;
+            Ok(())
+        }
+        OrderEvent::BuyerRefundReconciled {
+            credit_note_id,
+            invoice_id,
+            refunds,
+            livemode,
+            ..
+        } => {
+            if !matches!(
+                state.status,
+                Status::RefundPending | Status::RefundFailed | Status::Refunded
+            ) || state.credit_note_id.as_deref() != Some(credit_note_id.as_str())
+                || state.invoice_id.as_deref() != Some(invoice_id.as_str())
+                || *livemode != policy.livemode
+                || refunds.is_empty()
+                || refunds.len() > 100
+            {
+                return reject(
+                    "buyer refund evidence is not bound to this order's issued credit note",
+                );
+            }
+            let mut ids = HashSet::new();
+            let mut total = 0u64;
+            for refund in refunds {
+                if !(refund.refund_id.starts_with("re_") || refund.refund_id.starts_with("pyr_"))
+                    || refund.refund_id.ends_with('_')
+                    || refund.refund_id.len() > 255
+                    || !refund
+                        .refund_id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+                    || !ids.insert(&refund.refund_id)
+                    || refund.amount_cents == 0
+                    || refund.currency != "usd"
+                {
+                    return reject("buyer refund identity, amount or currency is invalid");
+                }
+                total = checked_add(total, refund.amount_cents)?;
+                if let Some(old) = state
+                    .buyer_refunds
+                    .iter()
+                    .find(|old| old.refund_id == refund.refund_id)
+                {
+                    let status_allowed = match old.status {
+                        // Bank refunds can return to requires_action after success, then
+                        // cycle through pending and success again. A fresh read is bound
+                        // to the pre-read log sequence above; status alone is not a clock.
+                        BuyerRefundStatus::Pending
+                        | BuyerRefundStatus::RequiresAction
+                        | BuyerRefundStatus::Succeeded => true,
+                        BuyerRefundStatus::Failed | BuyerRefundStatus::Canceled => {
+                            old.status == refund.status
+                        }
+                    };
+                    if old.amount_cents != refund.amount_cents
+                        || old.currency != refund.currency
+                        || !status_allowed
+                    {
+                        return reject("buyer refund binding changed or its status regressed");
+                    }
+                }
+            }
+            if total != state.paid_cents
+                || (!state.buyer_refunds.is_empty()
+                    && (state.buyer_refunds.len() != refunds.len()
+                        || state
+                            .buyer_refunds
+                            .iter()
+                            .any(|old| !ids.contains(&old.refund_id))))
+            {
+                return reject("buyer refund evidence must cover the same full paid amount without replacing refund identities");
+            }
+            state.status = if refunds
+                .iter()
+                .all(|refund| refund.status == BuyerRefundStatus::Succeeded)
+            {
+                Status::Refunded
+            } else if refunds.iter().any(|refund| {
+                matches!(
+                    refund.status,
+                    BuyerRefundStatus::Failed | BuyerRefundStatus::Canceled
+                )
+            }) {
+                Status::RefundFailed
+            } else {
+                Status::RefundPending
+            };
+            state.buyer_refunds = refunds.clone();
             Ok(())
         }
     }
