@@ -1386,13 +1386,19 @@ pub enum DirectBountyEvidenceChecklistError {
     InvalidRepository,
     #[error("subdirectory cannot be empty")]
     EmptySubdirectory,
+    #[error("subdirectory must be a relative path without '..' or root prefixes")]
+    InvalidSubdirectory,
     #[error("pull request URL must be an https://github.com/.../pull/<n> URL")]
     InvalidPullRequestUrl,
+    #[error("pull request URL repository must match submission repository")]
+    CrossRepositoryPullRequestUrl,
     #[error("check run URLs list cannot be empty")]
     EmptyCheckRunUrls,
-    #[error("check run URL must be an absolute https:// URL")]
+    #[error("check run URL must be a credential-free absolute https:// URL")]
     InvalidCheckRunUrl,
-    #[error("artifact URL must be an absolute https:// URL")]
+    #[error("check run URL repository must match submission repository")]
+    CrossRepositoryCheckRunUrl,
+    #[error("artifact URL must be a credential-free, immutable absolute https:// URL")]
     InvalidArtifactUrl,
     #[error("artifact digest algorithm must be sha256 or sha512")]
     InvalidArtifactDigestAlgorithm,
@@ -1464,29 +1470,42 @@ impl DirectBountyEvidenceChecklist {
         if !is_40_hex(&self.submission_evidence.commit) {
             return Err(DirectBountyEvidenceChecklistError::InvalidCommitSha);
         }
-        if !is_github_repository_url(&self.submission_evidence.repository) {
+        let Some((repo_owner, repo_name)) =
+            parse_github_repository_url(&self.submission_evidence.repository)
+        else {
             return Err(DirectBountyEvidenceChecklistError::InvalidRepository);
-        }
+        };
         if self.submission_evidence.subdirectory.trim().is_empty() {
             return Err(DirectBountyEvidenceChecklistError::EmptySubdirectory);
         }
-        if !is_github_pull_request_url(&self.submission_evidence.pull_request_url) {
+        if !is_safe_relative_subdirectory(&self.submission_evidence.subdirectory) {
+            return Err(DirectBountyEvidenceChecklistError::InvalidSubdirectory);
+        }
+        let Some((pr_owner, pr_repo)) =
+            parse_github_pull_request_url(&self.submission_evidence.pull_request_url)
+        else {
             return Err(DirectBountyEvidenceChecklistError::InvalidPullRequestUrl);
+        };
+        if !pr_owner.eq_ignore_ascii_case(repo_owner) || !pr_repo.eq_ignore_ascii_case(repo_name) {
+            return Err(DirectBountyEvidenceChecklistError::CrossRepositoryPullRequestUrl);
         }
         if self.verification_evidence.check_run_urls.is_empty() {
             return Err(DirectBountyEvidenceChecklistError::EmptyCheckRunUrls);
         }
         for url in &self.verification_evidence.check_run_urls {
-            if !url.starts_with("https://") {
+            if !is_safe_https_url(url) || is_mutable_evidence_url(url) {
                 return Err(DirectBountyEvidenceChecklistError::InvalidCheckRunUrl);
             }
+            if let Some((run_owner, run_repo)) = parse_github_repo_from_url(url) {
+                if !run_owner.eq_ignore_ascii_case(repo_owner)
+                    || !run_repo.eq_ignore_ascii_case(repo_name)
+                {
+                    return Err(DirectBountyEvidenceChecklistError::CrossRepositoryCheckRunUrl);
+                }
+            }
         }
-        if !self
-            .verification_evidence
-            .artifact
-            .url
-            .starts_with("https://")
-        {
+        let artifact_url = &self.verification_evidence.artifact.url;
+        if !is_safe_https_url(artifact_url) || is_mutable_evidence_url(artifact_url) {
             return Err(DirectBountyEvidenceChecklistError::InvalidArtifactUrl);
         }
         let digest = &self.verification_evidence.artifact.digest;
@@ -1545,30 +1564,188 @@ fn is_0x_64_hex(value: &str) -> bool {
         && value[2..].chars().all(|c| c.is_ascii_hexdigit())
 }
 
-fn is_github_repository_url(value: &str) -> bool {
-    let prefix = "https://github.com/";
-    if !value.starts_with(prefix) {
+fn is_safe_relative_subdirectory(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || trimmed != value
+        || trimmed.starts_with('/')
+        || trimmed.starts_with('\')
+        || trimmed.contains('\')
+    {
         return false;
     }
-    let rest = &value[prefix.len()..];
-    let parts: Vec<&str> = rest.split('/').collect();
-    parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty()
+    trimmed
+        .split('/')
+        .all(|segment| !segment.is_empty() && segment != "..")
 }
 
-fn is_github_pull_request_url(value: &str) -> bool {
-    let prefix = "https://github.com/";
-    if !value.starts_with(prefix) {
+fn is_valid_github_slug(value: &str) -> bool {
+    !value.is_empty()
+        && value != "."
+        && value != ".."
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+}
+
+fn is_safe_https_url(value: &str) -> bool {
+    let Some(rest) = value.strip_prefix("https://") else {
+        return false;
+    };
+    if rest.is_empty()
+        || rest.bytes().any(|b| b.is_ascii_whitespace() || b.is_ascii_control())
+        || rest.contains('#')
+    {
         return false;
     }
-    let rest = &value[prefix.len()..];
+    let authority_end = rest.find(['/', '?']).unwrap_or(rest.len());
+    let authority = &rest[..authority_end];
+    if authority.is_empty() || authority.contains('@') {
+        return false;
+    }
+    let host = match authority.split_once(':') {
+        Some((h, port)) => {
+            if port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()) {
+                return false;
+            }
+            h
+        }
+        None => authority,
+    };
+    if host.is_empty()
+        || host.starts_with('.')
+        || host.ends_with('.')
+        || host.contains("..")
+        || !host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.')
+    {
+        return false;
+    }
+    let after_authority = &rest[authority_end..];
+    if let Some((_, query)) = after_authority.split_once('?') {
+        if has_sensitive_query_param(query) {
+            return false;
+        }
+    }
+    true
+}
+
+fn has_sensitive_query_param(query: &str) -> bool {
+    const SENSITIVE_KEYS: &[&str] = &[
+        "token",
+        "access_token",
+        "auth",
+        "key",
+        "api_key",
+        "apikey",
+        "secret",
+        "password",
+        "passwd",
+        "sig",
+        "signature",
+        "credential",
+        "credentials",
+        "x-amz-signature",
+        "x-amz-credential",
+        "x-amz-security-token",
+        "x-goog-signature",
+        "x-goog-credential",
+    ];
+    for pair in query.split(['&', ';']) {
+        let key = pair.split('=').next().unwrap_or("").trim().to_ascii_lowercase();
+        if SENSITIVE_KEYS.contains(&key.as_str()) {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_mutable_evidence_url(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    const MUTABLE_MARKERS: &[&str] = &[
+        "/latest",
+        "/refs/heads/",
+        "/refs/tags/",
+        "/branch/",
+        "/branches/",
+        "/blob/",
+        "/raw/",
+        "/tree/",
+        "/main/",
+        "/master/",
+        "/develop/",
+        "/head/",
+        "@main",
+        "@master",
+        "@develop",
+        "@head",
+        "@latest",
+    ];
+    if lower.ends_with("/main")
+        || lower.ends_with("/master")
+        || lower.ends_with("/develop")
+        || lower.ends_with("/head")
+        || MUTABLE_MARKERS.iter().any(|marker| lower.contains(marker))
+    {
+        return true;
+    }
+    if let Some((_, query)) = lower.split_once('?') {
+        for pair in query.split(['&', ';']) {
+            let key = pair.split('=').next().unwrap_or("").trim();
+            if matches!(key, "ref" | "branch" | "tag") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn parse_github_repository_url(value: &str) -> Option<(&str, &str)> {
+    if !is_safe_https_url(value) || value.contains('?') {
+        return None;
+    }
+    let rest = value.strip_prefix("https://github.com/")?;
     let parts: Vec<&str> = rest.split('/').collect();
-    parts.len() == 4
-        && !parts[0].is_empty()
-        && !parts[1].is_empty()
+    if parts.len() == 2 && is_valid_github_slug(parts[0]) && is_valid_github_slug(parts[1]) {
+        Some((parts[0], parts[1]))
+    } else {
+        None
+    }
+}
+
+fn parse_github_pull_request_url(value: &str) -> Option<(&str, &str)> {
+    if !is_safe_https_url(value) || value.contains('?') {
+        return None;
+    }
+    let rest = value.strip_prefix("https://github.com/")?;
+    let parts: Vec<&str> = rest.split('/').collect();
+    if parts.len() == 4
+        && is_valid_github_slug(parts[0])
+        && is_valid_github_slug(parts[1])
         && parts[2] == "pull"
         && !parts[3].is_empty()
         && parts[3] != "0"
         && parts[3].bytes().all(|byte| byte.is_ascii_digit())
+    {
+        Some((parts[0], parts[1]))
+    } else {
+        None
+    }
+}
+
+fn parse_github_repo_from_url(value: &str) -> Option<(&str, &str)> {
+    let rest = value.strip_prefix("https://github.com/")?;
+    let path = rest.split('?').next().unwrap_or(rest);
+    let mut parts = path.split('/');
+    let owner = parts.next()?;
+    let repo = parts.next()?;
+    let section = parts.next()?;
+    if is_valid_github_slug(owner) && is_valid_github_slug(repo) && !section.is_empty() {
+        Some((owner, repo))
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -1966,6 +2143,51 @@ mod tests {
     }
 
     #[test]
+    fn direct_evidence_checklist_rejects_unsafe_subdirectory_paths() {
+        let mut empty_subdir = valid_checklist();
+        empty_subdir.submission_evidence.subdirectory = "   ".to_string();
+        assert_eq!(
+            empty_subdir.validate(),
+            Err(DirectBountyEvidenceChecklistError::EmptySubdirectory)
+        );
+
+        for invalid_path in [
+            "/crates/domain",
+            "crates/../secrets",
+            "..",
+            "crates//domain",
+            "crates\\domain",
+        ] {
+            let mut bad_subdir = valid_checklist();
+            bad_subdir.submission_evidence.subdirectory = invalid_path.to_string();
+            assert_eq!(
+                bad_subdir.validate(),
+                Err(DirectBountyEvidenceChecklistError::InvalidSubdirectory),
+                "expected invalid subdirectory for {invalid_path}"
+            );
+        }
+    }
+
+    #[test]
+    fn direct_evidence_checklist_rejects_cross_repository_pr_and_check_run_urls() {
+        let mut cross_pr = valid_checklist();
+        cross_pr.submission_evidence.pull_request_url =
+            "https://github.com/other-org/agent-bounties/pull/745".to_string();
+        assert_eq!(
+            cross_pr.validate(),
+            Err(DirectBountyEvidenceChecklistError::CrossRepositoryPullRequestUrl)
+        );
+
+        let mut cross_check = valid_checklist();
+        cross_check.verification_evidence.check_run_urls =
+            vec!["https://github.com/other-org/agent-bounties/actions/runs/1".to_string()];
+        assert_eq!(
+            cross_check.validate(),
+            Err(DirectBountyEvidenceChecklistError::CrossRepositoryCheckRunUrl)
+        );
+    }
+
+    #[test]
     fn direct_evidence_checklist_rejects_empty_or_insecure_verification_urls() {
         let mut empty_runs = valid_checklist();
         empty_runs.verification_evidence.check_run_urls = vec![];
@@ -1988,6 +2210,46 @@ mod tests {
             insecure_artifact.validate(),
             Err(DirectBountyEvidenceChecklistError::InvalidArtifactUrl)
         );
+    }
+
+    #[test]
+    fn direct_evidence_checklist_rejects_hostless_credential_and_mutable_urls() {
+        for bad_artifact_url in [
+            "https://",
+            "https:///path/only",
+            "https://user:secret@mcp.agentbounties.app/public/artifacts/1",
+            "https://mcp.agentbounties.app/public/artifacts/1?token=ghp_secret",
+            "https://mcp.agentbounties.app/public/artifacts/1?api_key=secret",
+            "https://mcp.agentbounties.app/public/artifacts/1#fragment",
+            "https://mcp.agentbounties.app/public/artifacts/latest",
+            "https://github.com/NSPG13/agent-bounties/raw/main/artifact.tar.gz",
+            "https://github.com/NSPG13/agent-bounties/blob/develop/artifact.tar.gz",
+            "https://mcp.agentbounties.app/public/artifacts/1?ref=main",
+            "https://mcp.agentbounties.app/public/artifacts/1?branch=develop",
+        ] {
+            let mut checklist = valid_checklist();
+            checklist.verification_evidence.artifact.url = bad_artifact_url.to_string();
+            assert_eq!(
+                checklist.validate(),
+                Err(DirectBountyEvidenceChecklistError::InvalidArtifactUrl),
+                "expected InvalidArtifactUrl for {bad_artifact_url}"
+            );
+        }
+
+        for bad_check_url in [
+            "https://",
+            "https://user:pass@github.com/NSPG13/agent-bounties/actions/runs/1",
+            "https://github.com/NSPG13/agent-bounties/actions/runs/1?token=secret",
+            "https://github.com/NSPG13/agent-bounties/actions/runs/latest",
+        ] {
+            let mut checklist = valid_checklist();
+            checklist.verification_evidence.check_run_urls = vec![bad_check_url.to_string()];
+            assert_eq!(
+                checklist.validate(),
+                Err(DirectBountyEvidenceChecklistError::InvalidCheckRunUrl),
+                "expected InvalidCheckRunUrl for {bad_check_url}"
+            );
+        }
     }
 
     #[test]
