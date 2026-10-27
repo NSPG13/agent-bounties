@@ -82,10 +82,30 @@ def compute_idempotency_key(
     inventory_snapshot: Mapping[str, Any],
     candidate_manifest: Mapping[str, Any],
     target_ready_count: int,
-    selected_candidate_ids: Sequence[str],
+    selected_candidates: Sequence[Mapping[str, Any]] | None = None,
+    selected_candidate_ids: Sequence[str] | None = None,
     total_funding: int,
     blockers: Sequence[str],
 ) -> str:
+    candidates_commitment: list[dict[str, Any]] = []
+    if selected_candidates:
+        for c in selected_candidates:
+            candidates_commitment.append(
+                {
+                    "candidate_id": str(c.get("candidate_id") or c.get("slug") or ""),
+                    "issue": c.get("issue"),
+                    "benchmark_subdirectory": str(c.get("benchmark_subdirectory") or ""),
+                    "benchmark_digest": str(c.get("benchmark_digest") or ""),
+                    "threshold": c.get("threshold", 2),
+                    "verifiers": sorted(str(v).lower() for v in c.get("verifiers", [])),
+                    "solver_reward": c.get("solver_reward", 0),
+                    "verifier_reward": c.get("verifier_reward", 0),
+                    "initial_funding": c.get("initial_funding", 0),
+                }
+            )
+    elif selected_candidate_ids:
+        candidates_commitment = [{"candidate_id": cid} for cid in selected_candidate_ids]
+
     commitment = {
         "schema": PLAN_SCHEMA,
         "inventory_observed_at": str(inventory_snapshot.get("observed_at", "")),
@@ -95,7 +115,7 @@ def compute_idempotency_key(
         "wallet": str(candidate_manifest.get("wallet", "")).lower(),
         "policy_version": candidate_manifest.get("policy_version"),
         "policy_hash": str(candidate_manifest.get("policy_hash", "")).lower(),
-        "selected_candidate_ids": list(selected_candidate_ids),
+        "selected_candidates": candidates_commitment,
         "total_funding": total_funding,
         "blockers": list(blockers),
     }
@@ -151,28 +171,36 @@ def evaluate_candidate(candidate: Mapping[str, Any]) -> tuple[dict[str, Any], li
     if (
         isinstance(threshold, bool)
         or not isinstance(threshold, int)
-        or threshold < 2
+        or threshold < 1
         or not isinstance(verifiers, list)
-        or len({str(v).lower() for v in verifiers if ADDRESS_RE.match(str(v).lower())}) < threshold
+        or len(verifiers) < threshold
     ):
-        blockers.append(f"unverifiable_quorum:{cid}")
-
-    if verifier_reward > 0 and isinstance(threshold, int) and threshold > 0:
-        if verifier_reward % threshold != 0:
-            blockers.append(f"indivisible_verifier_reward:{cid}")
+        blockers.append(f"insufficient_verifiers:{cid}")
+    else:
+        normalized_verifiers = []
+        for v in verifiers:
+            try:
+                normalized_verifiers.append(_normalize_address(v, f"verifier in {cid}"))
+            except ReplenishmentPlanError:
+                blockers.append(f"invalid_verifier_address:{cid}")
+                break
+        if len(set(normalized_verifiers)) != len(normalized_verifiers):
+            blockers.append(f"duplicate_verifier_addresses:{cid}")
 
     normalized = {
         "candidate_id": cid,
         "issue": issue,
-        "title": str(candidate.get("title", "")).strip(),
+        "title": str(candidate.get("title", "")),
         "benchmark_subdirectory": benchmark_subdir,
         "benchmark_digest": benchmark_digest,
         "solver_reward": solver_reward,
         "verifier_reward": verifier_reward,
         "claim_bond": claim_bond,
         "initial_funding": initial_funding,
+        "estimated_solver_cost": estimated_solver_cost,
         "solver_margin": solver_margin,
         "threshold": threshold,
+        "verifiers": candidate.get("verifiers", []),
     }
     return normalized, blockers
 
@@ -204,7 +232,7 @@ def generate_replenishment_plan(
     eval_now = (
         parse_utc_timestamp(now, "now")
         if now is not None
-        else observed_at
+        else datetime.now(timezone.utc)
     )
     snapshot_age_seconds = int((eval_now - observed_at).total_seconds())
     if snapshot_age_seconds < 0 or snapshot_age_seconds > max_snapshot_age_seconds:
@@ -220,8 +248,37 @@ def generate_replenishment_plan(
     ready_count = _require_non_negative_int(inventory_snapshot.get("ready_count", 0), "ready_count")
     deficit = max(0, target_ready_count - ready_count)
 
-    # 2. Wallet balance and bounded-wallet policy authority
-    wallet = _normalize_address(candidate_manifest.get("wallet", "0x" + "00" * 20), "wallet")
+    # 2. Wallet identity, policy authority and balance checks
+    raw_wallet = candidate_manifest.get("wallet")
+    if not raw_wallet or not isinstance(raw_wallet, str):
+        blockers.append("missing_wallet_identity")
+        wallet = "0x" + "00" * 20
+    else:
+        try:
+            wallet = _normalize_address(raw_wallet, "wallet")
+            if wallet == "0x" + "00" * 20:
+                blockers.append("missing_wallet_identity")
+        except ReplenishmentPlanError:
+            blockers.append("missing_wallet_identity")
+            wallet = "0x" + "00" * 20
+
+    policy_version = candidate_manifest.get("policy_version")
+    if (
+        policy_version is None
+        or isinstance(policy_version, bool)
+        or not isinstance(policy_version, int)
+        or policy_version <= 0
+    ):
+        blockers.append("missing_policy_version")
+
+    policy_hash = candidate_manifest.get("policy_hash")
+    if (
+        not policy_hash
+        or not isinstance(policy_hash, str)
+        or not HEX32_RE.match(policy_hash.strip().lower())
+    ):
+        blockers.append("missing_policy_hash")
+
     settlement_token = _normalize_address(
         candidate_manifest.get("settlement_token", NATIVE_BASE_USDC),
         "settlement_token",
@@ -231,7 +288,10 @@ def generate_replenishment_plan(
     if int(candidate_manifest.get("chain_id", BASE_CHAIN_ID)) != BASE_CHAIN_ID:
         blockers.append("wrong_chain_id")
 
-    wallet_state = candidate_manifest.get("wallet_state") or {}
+    wallet_state = candidate_manifest.get("wallet_state")
+    if not isinstance(wallet_state, Mapping):
+        wallet_state = {}
+
     wallet_balance = _require_non_negative_int(
         wallet_state.get("wallet_balance", candidate_manifest.get("wallet_balance", 0)),
         "wallet_balance",
@@ -244,6 +304,9 @@ def generate_replenishment_plan(
         wallet_state.get("max_per_period", candidate_manifest.get("max_per_period", 0)),
         "max_per_period",
     )
+    if max_per_period <= 0:
+        blockers.append("zero_period_cap")
+
     lifetime_spent = _require_non_negative_int(
         wallet_state.get("lifetime_spent", candidate_manifest.get("lifetime_spent", 0)),
         "lifetime_spent",
@@ -255,6 +318,9 @@ def generate_replenishment_plan(
         ),
         "max_lifetime_spend",
     )
+    if max_lifetime_spend <= 0:
+        blockers.append("zero_lifetime_cap")
+
     max_per_action = _require_non_negative_int(
         wallet_state.get("max_per_action", candidate_manifest.get("max_per_action", max_per_period)),
         "max_per_action",
@@ -278,47 +344,37 @@ def generate_replenishment_plan(
     seen_ids: set[str] = set()
     seen_issues: set[int] = set()
     seen_benchmarks: set[str] = set()
-    active_issues = {
-        int(i) for i in inventory_snapshot.get("active_issues", []) if isinstance(i, int)
-    }
-
     valid_candidates: list[dict[str, Any]] = []
+
     for raw in raw_candidates:
         if not isinstance(raw, Mapping):
             blockers.append("malformed_candidate_entry")
             continue
-        norm, cand_blockers = evaluate_candidate(raw)
-        cid = norm["candidate_id"]
-        issue = norm["issue"]
-        b_digest = norm["benchmark_digest"]
+        normalized, c_blockers = evaluate_candidate(raw)
+        blockers.extend(c_blockers)
 
-        if cid in seen_ids or (isinstance(issue, int) and issue in seen_issues) or (b_digest and b_digest in seen_benchmarks):
-            blockers.append(f"duplicate_candidate:{cid or issue}")
-            continue
-        if isinstance(issue, int) and issue in active_issues:
-            blockers.append(f"duplicate_active_issue:{issue}")
-            continue
+        cid = normalized["candidate_id"]
+        issue = normalized["issue"]
+        bench_key = (
+            f"{normalized['benchmark_subdirectory']}@{normalized['benchmark_digest']}"
+        )
+
+        if cid in seen_ids:
+            blockers.append(f"duplicate_candidate:{cid}")
+        if issue in seen_issues:
+            blockers.append(f"duplicate_issue:{issue}")
+        if bench_key in seen_benchmarks:
+            blockers.append(f"duplicate_benchmark:{bench_key}")
 
         seen_ids.add(cid)
         if isinstance(issue, int):
             seen_issues.add(issue)
-        if b_digest:
-            seen_benchmarks.add(b_digest)
+        seen_benchmarks.add(bench_key)
 
-        if cand_blockers:
-            blockers.extend(cand_blockers)
-            continue
+        if not c_blockers:
+            valid_candidates.append(normalized)
 
-        if max_bounty_target > 0 and norm["initial_funding"] > max_bounty_target:
-            blockers.append(f"exceeds_max_bounty_target:{cid}")
-            continue
-        if max_per_action > 0 and norm["initial_funding"] > max_per_action:
-            blockers.append(f"exceeds_max_per_action:{cid}")
-            continue
-
-        valid_candidates.append(norm)
-
-    # Sort deterministically by issue number ascending, then candidate_id
+    # Sort deterministically by issue, then candidate_id
     valid_candidates.sort(key=lambda item: (int(item["issue"]), str(item["candidate_id"])))
 
     # 4. Select exact deficit tasks if no structural blockers
@@ -368,7 +424,7 @@ def generate_replenishment_plan(
         inventory_snapshot=inventory_snapshot,
         candidate_manifest=candidate_manifest,
         target_ready_count=target_ready_count,
-        selected_candidate_ids=[c["candidate_id"] for c in plan_candidates],
+        selected_candidates=plan_candidates,
         total_funding=effective_total_funding,
         blockers=deduped_blockers,
     )
@@ -424,6 +480,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--candidates", required=True, type=Path, help="Path to candidate manifest JSON")
     parser.add_argument("--target-ready", type=int, default=DEFAULT_TARGET_READY_COUNT)
     parser.add_argument("--max-age-seconds", type=int, default=DEFAULT_MAX_SNAPSHOT_AGE_SECONDS)
+    parser.add_argument("--now", default=None, help="Optional evaluation timestamp (defaults to current clock)")
     args = parser.parse_args(argv)
 
     inventory = json.loads(args.inventory.read_text(encoding="utf-8"))
@@ -433,6 +490,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         candidates,
         target_ready_count=args.target_ready,
         max_snapshot_age_seconds=args.max_age_seconds,
+        now=args.now,
     )
     print(json.dumps(plan, indent=2, sort_keys=True))
     return 0 if plan["status"] in ("ready_to_plan", "no_replenishment_needed") else 1

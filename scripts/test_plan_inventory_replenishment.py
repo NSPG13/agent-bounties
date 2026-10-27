@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timezone
 import unittest
 
 from scripts.plan_inventory_replenishment import (
     CANDIDATE_MANIFEST_SCHEMA,
+    DEFAULT_MAX_SNAPSHOT_AGE_SECONDS,
     INVENTORY_SCHEMA,
     NATIVE_BASE_USDC,
     PLAN_SCHEMA,
@@ -182,6 +184,111 @@ class PlanInventoryReplenishmentTests(unittest.TestCase):
         self.assertTrue(any(b.startswith("duplicate_candidate:") for b in plan["blockers"]))
         self.assertTrue(any(b.startswith("non_positive_solver_margin:") for b in plan["blockers"]))
         self.assertEqual(plan["candidates"], [])
+
+    def test_stale_snapshot_rejected_against_current_clock(self) -> None:
+        """Verify that omitting `now` ages a historical snapshot against the real current clock."""
+        inventory = _base_inventory(ready_count=0)
+        inventory["observed_at"] = "2020-01-01T00:00:00Z"
+        manifest = _base_candidate_manifest(count=5)
+        plan = generate_replenishment_plan(inventory, manifest, target_ready_count=5)
+        self.assertEqual(plan["status"], "blocked")
+        self.assertIn("stale_inventory_snapshot", plan["blockers"])
+        self.assertGreater(plan["inventory"]["snapshot_age_seconds"], DEFAULT_MAX_SNAPSHOT_AGE_SECONDS)
+        self.assertEqual(plan["candidates"], [])
+
+    def test_changing_benchmark_or_verifiers_changes_idempotency_key(self) -> None:
+        """Verify that altering benchmark digest, subdirectory, or verifiers set alters idempotency key."""
+        inventory = _base_inventory(ready_count=0)
+        base_manifest = _base_candidate_manifest(count=5)
+        plan_base = generate_replenishment_plan(
+            inventory, base_manifest, now="2026-10-22T20:05:00Z", target_ready_count=5
+        )
+        self.assertEqual(plan_base["status"], "ready_to_plan")
+
+        # 1. Alter benchmark_digest
+        manifest_alt_digest = deepcopy(base_manifest)
+        manifest_alt_digest["candidates"][0]["benchmark_digest"] = "sha256:" + ("f" * 64)
+        plan_alt_digest = generate_replenishment_plan(
+            inventory, manifest_alt_digest, now="2026-10-22T20:05:00Z", target_ready_count=5
+        )
+        self.assertNotEqual(
+            plan_base["idempotency_key"],
+            plan_alt_digest["idempotency_key"],
+            "Changing benchmark_digest must produce a distinct idempotency key",
+        )
+
+        # 2. Alter benchmark_subdirectory
+        manifest_alt_subdir = deepcopy(base_manifest)
+        manifest_alt_subdir["candidates"][0]["benchmark_subdirectory"] = "benchmarks/direct-inventory-v1/task-alt"
+        plan_alt_subdir = generate_replenishment_plan(
+            inventory, manifest_alt_subdir, now="2026-10-22T20:05:00Z", target_ready_count=5
+        )
+        self.assertNotEqual(
+            plan_base["idempotency_key"],
+            plan_alt_subdir["idempotency_key"],
+            "Changing benchmark_subdirectory must produce a distinct idempotency key",
+        )
+
+        # 3. Alter verifiers set
+        manifest_alt_verifiers = deepcopy(base_manifest)
+        manifest_alt_verifiers["candidates"][0]["verifiers"] = [
+            "0x0000000000000000000000000000000000000001",
+            "0x0000000000000000000000000000000000000002",
+        ]
+        plan_alt_verifiers = generate_replenishment_plan(
+            inventory, manifest_alt_verifiers, now="2026-10-22T20:05:00Z", target_ready_count=5
+        )
+        self.assertNotEqual(
+            plan_base["idempotency_key"],
+            plan_alt_verifiers["idempotency_key"],
+            "Changing verifiers set must produce a distinct idempotency key",
+        )
+
+    def test_missing_identity_policy_fields_and_zero_caps_are_rejected(self) -> None:
+        """Verify that missing identity, missing policy fields, and zero caps are rejected."""
+        inventory = _base_inventory(ready_count=0)
+
+        # Missing wallet identity
+        manifest_no_wallet = _base_candidate_manifest(count=5)
+        del manifest_no_wallet["wallet"]
+        plan = generate_replenishment_plan(inventory, manifest_no_wallet, now="2026-10-22T20:05:00Z")
+        self.assertEqual(plan["status"], "blocked")
+        self.assertIn("missing_wallet_identity", plan["blockers"])
+
+        # Zero-address wallet
+        manifest_zero_wallet = _base_candidate_manifest(count=5)
+        manifest_zero_wallet["wallet"] = "0x" + "00" * 20
+        plan = generate_replenishment_plan(inventory, manifest_zero_wallet, now="2026-10-22T20:05:00Z")
+        self.assertEqual(plan["status"], "blocked")
+        self.assertIn("missing_wallet_identity", plan["blockers"])
+
+        # Missing policy_version
+        manifest_no_pv = _base_candidate_manifest(count=5)
+        del manifest_no_pv["policy_version"]
+        plan = generate_replenishment_plan(inventory, manifest_no_pv, now="2026-10-22T20:05:00Z")
+        self.assertEqual(plan["status"], "blocked")
+        self.assertIn("missing_policy_version", plan["blockers"])
+
+        # Missing policy_hash
+        manifest_no_ph = _base_candidate_manifest(count=5)
+        del manifest_no_ph["policy_hash"]
+        plan = generate_replenishment_plan(inventory, manifest_no_ph, now="2026-10-22T20:05:00Z")
+        self.assertEqual(plan["status"], "blocked")
+        self.assertIn("missing_policy_hash", plan["blockers"])
+
+        # Zero max_per_period cap
+        manifest_zero_period = _base_candidate_manifest(count=5)
+        manifest_zero_period["wallet_state"]["max_per_period"] = 0
+        plan = generate_replenishment_plan(inventory, manifest_zero_period, now="2026-10-22T20:05:00Z")
+        self.assertEqual(plan["status"], "blocked")
+        self.assertIn("zero_period_cap", plan["blockers"])
+
+        # Zero max_lifetime_spend cap
+        manifest_zero_lifetime = _base_candidate_manifest(count=5)
+        manifest_zero_lifetime["wallet_state"]["max_lifetime_spend"] = 0
+        plan = generate_replenishment_plan(inventory, manifest_zero_lifetime, now="2026-10-22T20:05:00Z")
+        self.assertEqual(plan["status"], "blocked")
+        self.assertIn("zero_lifetime_cap", plan["blockers"])
 
 
 if __name__ == "__main__":
