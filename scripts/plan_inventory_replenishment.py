@@ -228,7 +228,17 @@ def generate_replenishment_plan(
         raise ReplenishmentPlanError("target_ready_count must be a positive integer")
 
     # 1. Freshness & source integrity check
-    observed_at = parse_utc_timestamp(inventory_snapshot.get("observed_at"), "observed_at")
+    raw_observed = inventory_snapshot.get("observed_at")
+    if not raw_observed:
+        blockers.append("missing_observed_at")
+        observed_at = datetime.now(timezone.utc)
+    else:
+        try:
+            observed_at = parse_utc_timestamp(raw_observed, "observed_at")
+        except ReplenishmentPlanError:
+            blockers.append("invalid_observed_at")
+            observed_at = datetime.now(timezone.utc)
+
     eval_now = (
         parse_utc_timestamp(now, "now")
         if now is not None
@@ -241,9 +251,12 @@ def generate_replenishment_plan(
     if bool(inventory_snapshot.get("source_degraded", False)):
         blockers.append("degraded_inventory_source")
 
-    safe_block = _require_non_negative_int(inventory_snapshot.get("safe_block", 0), "safe_block")
-    if safe_block <= 0:
+    raw_safe_block = inventory_snapshot.get("safe_block")
+    if raw_safe_block is None or isinstance(raw_safe_block, bool) or not isinstance(raw_safe_block, int) or raw_safe_block <= 0:
         blockers.append("missing_safe_block")
+        safe_block = 0
+    else:
+        safe_block = raw_safe_block
 
     ready_count = _require_non_negative_int(inventory_snapshot.get("ready_count", 0), "ready_count")
     deficit = max(0, target_ready_count - ready_count)
@@ -262,6 +275,23 @@ def generate_replenishment_plan(
             blockers.append("missing_wallet_identity")
             wallet = "0x" + "00" * 20
 
+    raw_chain = candidate_manifest.get("chain_id")
+    if raw_chain is None or isinstance(raw_chain, bool) or not isinstance(raw_chain, int) or raw_chain != BASE_CHAIN_ID:
+        blockers.append("missing_or_wrong_chain_id")
+
+    raw_token = candidate_manifest.get("settlement_token")
+    if not raw_token or not isinstance(raw_token, str):
+        blockers.append("missing_settlement_token")
+        settlement_token = NATIVE_BASE_USDC
+    else:
+        try:
+            settlement_token = _normalize_address(raw_token, "settlement_token")
+            if settlement_token != NATIVE_BASE_USDC:
+                blockers.append("wrong_settlement_token")
+        except ReplenishmentPlanError:
+            blockers.append("wrong_settlement_token")
+            settlement_token = NATIVE_BASE_USDC
+
     policy_version = candidate_manifest.get("policy_version")
     if (
         policy_version is None
@@ -278,15 +308,6 @@ def generate_replenishment_plan(
         or not HEX32_RE.match(policy_hash.strip().lower())
     ):
         blockers.append("missing_policy_hash")
-
-    settlement_token = _normalize_address(
-        candidate_manifest.get("settlement_token", NATIVE_BASE_USDC),
-        "settlement_token",
-    )
-    if settlement_token != NATIVE_BASE_USDC:
-        blockers.append("wrong_settlement_token")
-    if int(candidate_manifest.get("chain_id", BASE_CHAIN_ID)) != BASE_CHAIN_ID:
-        blockers.append("wrong_chain_id")
 
     wallet_state = candidate_manifest.get("wallet_state")
     if not isinstance(wallet_state, Mapping):
@@ -325,10 +346,16 @@ def generate_replenishment_plan(
         wallet_state.get("max_per_action", candidate_manifest.get("max_per_action", max_per_period)),
         "max_per_action",
     )
+    if max_per_action <= 0:
+        blockers.append("zero_action_cap")
+
     max_bounty_target = _require_non_negative_int(
         wallet_state.get("max_bounty_target", candidate_manifest.get("max_bounty_target", max_per_action)),
         "max_bounty_target",
     )
+    if max_bounty_target <= 0:
+        blockers.append("zero_bounty_target_cap")
+
     revoked = bool(wallet_state.get("revoked", candidate_manifest.get("revoked", False)))
     if revoked:
         blockers.append("wallet_policy_revoked")
@@ -365,6 +392,12 @@ def generate_replenishment_plan(
             blockers.append(f"duplicate_issue:{issue}")
         if bench_key in seen_benchmarks:
             blockers.append(f"duplicate_benchmark:{bench_key}")
+
+        # Check candidate funding against action and target caps
+        if max_per_action > 0 and normalized["initial_funding"] > max_per_action:
+            blockers.append(f"task_exceeds_action_cap:{cid}")
+        if max_bounty_target > 0 and normalized["initial_funding"] > max_bounty_target:
+            blockers.append(f"task_exceeds_bounty_target_cap:{cid}")
 
         seen_ids.add(cid)
         if isinstance(issue, int):
@@ -411,14 +444,17 @@ def generate_replenishment_plan(
         status = "blocked"
         plan_candidates: list[dict[str, Any]] = []
         effective_total_funding = total_funding
+        next_authorized_action = "RESOLVE_BLOCKERS"
     elif deficit == 0:
         status = "no_replenishment_needed"
         plan_candidates = []
         effective_total_funding = 0
+        next_authorized_action = "NONE"
     else:
         status = "ready_to_plan"
         plan_candidates = selected_candidates
         effective_total_funding = total_funding
+        next_authorized_action = "DISPATCH_CANDIDATE_TASKS_NON_FINANCIAL"
 
     idempotency_key = compute_idempotency_key(
         inventory_snapshot=inventory_snapshot,
@@ -437,6 +473,12 @@ def generate_replenishment_plan(
         "broadcasted": False,
         "labels_applied": [],
         "payment_claimed": False,
+        "next_authorized_action": next_authorized_action,
+        "verifier_readiness": {
+            "status": "READY" if status == "ready_to_plan" else "NOT_READY",
+            "candidate_count": len(plan_candidates),
+            "threshold": plan_candidates[0]["threshold"] if plan_candidates else 0,
+        },
         "inventory": {
             "ready_count": ready_count,
             "target_ready_count": target_ready_count,

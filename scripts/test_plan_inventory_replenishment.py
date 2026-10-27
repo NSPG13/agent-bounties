@@ -87,6 +87,7 @@ class PlanInventoryReplenishmentTests(unittest.TestCase):
         )
         self.assertEqual(plan["schema"], PLAN_SCHEMA)
         self.assertEqual(plan["status"], "no_replenishment_needed")
+        self.assertEqual(plan["next_authorized_action"], "NONE")
         self.assertEqual(plan["inventory"]["deficit"], 0)
         self.assertEqual(plan["economics"]["candidate_count"], 0)
         self.assertEqual(plan["economics"]["total_funding"], 0)
@@ -108,6 +109,8 @@ class PlanInventoryReplenishmentTests(unittest.TestCase):
         )
 
         self.assertEqual(plan_a["status"], "ready_to_plan")
+        self.assertEqual(plan_a["next_authorized_action"], "DISPATCH_CANDIDATE_TASKS_NON_FINANCIAL")
+        self.assertEqual(plan_a["verifier_readiness"]["status"], "READY")
         self.assertEqual(plan_a["inventory"]["deficit"], 5)
         self.assertEqual(plan_a["economics"]["candidate_count"], 5)
         self.assertEqual(plan_a["economics"]["per_task_funding"], 1_100_000)
@@ -130,6 +133,7 @@ class PlanInventoryReplenishmentTests(unittest.TestCase):
             inventory, manifest, now="2026-10-22T20:02:00Z", target_ready_count=5
         )
         self.assertEqual(plan["status"], "blocked")
+        self.assertEqual(plan["next_authorized_action"], "RESOLVE_BLOCKERS")
         self.assertIn("insufficient_wallet_balance", plan["blockers"])
         self.assertFalse(plan["sufficiency"]["wallet_sufficient"])
         self.assertEqual(plan["candidates"], [])
@@ -276,6 +280,27 @@ class PlanInventoryReplenishmentTests(unittest.TestCase):
         self.assertEqual(plan["status"], "blocked")
         self.assertIn("missing_policy_hash", plan["blockers"])
 
+        # Missing chain_id
+        manifest_no_chain = _base_candidate_manifest(count=5)
+        del manifest_no_chain["chain_id"]
+        plan = generate_replenishment_plan(inventory, manifest_no_chain, now="2026-10-22T20:05:00Z")
+        self.assertEqual(plan["status"], "blocked")
+        self.assertIn("missing_or_wrong_chain_id", plan["blockers"])
+
+        # Missing settlement_token
+        manifest_no_token = _base_candidate_manifest(count=5)
+        del manifest_no_token["settlement_token"]
+        plan = generate_replenishment_plan(inventory, manifest_no_token, now="2026-10-22T20:05:00Z")
+        self.assertEqual(plan["status"], "blocked")
+        self.assertIn("missing_settlement_token", plan["blockers"])
+
+        # Missing safe_block in inventory
+        inv_no_safe_block = _base_inventory(ready_count=0)
+        del inv_no_safe_block["safe_block"]
+        plan = generate_replenishment_plan(inv_no_safe_block, _base_candidate_manifest(count=5), now="2026-10-22T20:05:00Z")
+        self.assertEqual(plan["status"], "blocked")
+        self.assertIn("missing_safe_block", plan["blockers"])
+
         # Zero max_per_period cap
         manifest_zero_period = _base_candidate_manifest(count=5)
         manifest_zero_period["wallet_state"]["max_per_period"] = 0
@@ -289,6 +314,20 @@ class PlanInventoryReplenishmentTests(unittest.TestCase):
         plan = generate_replenishment_plan(inventory, manifest_zero_lifetime, now="2026-10-22T20:05:00Z")
         self.assertEqual(plan["status"], "blocked")
         self.assertIn("zero_lifetime_cap", plan["blockers"])
+
+        # Zero max_per_action cap
+        manifest_zero_action = _base_candidate_manifest(count=5)
+        manifest_zero_action["wallet_state"]["max_per_action"] = 0
+        plan = generate_replenishment_plan(inventory, manifest_zero_action, now="2026-10-22T20:05:00Z")
+        self.assertEqual(plan["status"], "blocked")
+        self.assertIn("zero_action_cap", plan["blockers"])
+
+        # Task exceeding per-action cap
+        manifest_exceed_action = _base_candidate_manifest(count=5)
+        manifest_exceed_action["wallet_state"]["max_per_action"] = 1_000_000  # task initial_funding is 1.1 USDC
+        plan = generate_replenishment_plan(inventory, manifest_exceed_action, now="2026-10-22T20:05:00Z")
+        self.assertEqual(plan["status"], "blocked")
+        self.assertTrue(any(b.startswith("task_exceeds_action_cap:") for b in plan["blockers"]))
 
 
 if __name__ == "__main__":
