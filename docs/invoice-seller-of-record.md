@@ -30,7 +30,9 @@ for:
 | Funding planned | Operator plans `AgentBountyFactoryV2.createBounty` from the treasury for exactly the quoted target | `plan_v2_creation` |
 | Funded | Canonical `FundingAdded` from the planned contract: the treasury contributes exactly the target | `OrderEvent::FundingObserved` |
 | Settled | Canonical `BountySettled` | `OrderEvent::SettlementObserved` |
-| Cancelled → refunded | Canonical treasury `RefundWithdrawn` (when funded), then a signature-verified `credit_note.created` for the full paid amount | `OrderEvent::RefundObserved`, `OrderEvent::CreditNoteIssued` |
+| Cancelled → refund pending | Canonical treasury `RefundWithdrawn` (when funding was planned), then a signature-verified `credit_note.created` for the full paid amount | `OrderEvent::RefundObserved`, `OrderEvent::CreditNoteIssued` |
+| Refund pending → refunded | Authenticated Stripe reads bind the full credit-note allocation to this invoice and order, and every linked refund reports `succeeded` to a US bank-transfer destination | `OrderEvent::BuyerRefundReconciled` |
+| Refunded → repayment required again | A fresh read shows a bank return: `requires_action`, `pending`, `failed` or `canceled` | `OrderEvent::BuyerRefundReconciled` |
 
 `invoicing::project_order` replays the append-only log.
 
@@ -51,6 +53,14 @@ for:
   still pay a contractor.
 - An invoice marked paid outside Stripe (`paid_out_of_band`) is never payment.
 - Each state names its `next_action`.
+- An issued credit note records an accounting adjustment, not returned money.
+  `refund_due_cents` is the amount eligible for a credit note; the separate
+  `refund_outstanding_cents` remains positive until successful bank repayment.
+- Refund reads are bound to the order log sequence observed before the Stripe
+  requests. A concurrent append invalidates an older observation; retry by
+  reading Stripe again. Unchanged snapshots do not grow the log. Genuine bank
+  return/retry cycles can record the same status again without being mistaken
+  for a duplicate from an earlier cycle.
 
 ## Money
 
@@ -69,8 +79,11 @@ for:
   history or its 1099 totals.
 - **Payment methods.** Invoices accept only US bank transfers
   (`payment_settings.payment_method_types = [customer_balance]`). These
-  payments cannot be charged back, so `invoice.paid` is final. Card and ACH
-  debit stay disabled until dispute reconciliation exists.
+  payments can be reversed when sent over US ACH rails. `invoice.paid`
+  establishes invoice payment, not bank cash availability or irreversible
+  settlement. This operator path still needs reversal handling and explicit
+  settled-cash/conversion evidence before production funding. Card and ACH
+  debit remain disabled. See [Stripe bank-transfer disputes](https://docs.stripe.com/payments/bank-transfers#disputes).
 
 ## Contractors
 
@@ -123,8 +136,14 @@ validated before they are placed in a URL path:
   footer, and metadata `{order_id, purpose: invoiced_outcome, terms_sha256}`
 - `POST /v1/invoiceitems`, one per quote line
 - `POST /v1/invoices/{id}/finalize`, `/send` and `/void`
-- `POST /v1/credit_notes`: the full amount, refunded once, either through
-  Stripe (`refund_amount`) or recorded outside it (`out_of_band_amount`)
+- `POST /v1/credit_notes`: request the full Stripe refund (`refund_amount`).
+  The low-level planner also supports accounting for an external repayment,
+  but the hosted refund endpoint rejects `out_of_band` until verified external
+  repayment evidence is implemented.
+- Stripe's [retrieve a credit note](https://docs.stripe.com/api/credit_notes/retrieve)
+  and [retrieve a refund](https://docs.stripe.com/api/refunds/retrieve) GET requests
+  read the complete refund allocation and current repayment status.
+  Reconciliation never issues another refund.
 
 An interrupted run is resumed by reading the stored invoice back before
 anything is added to it.
@@ -133,7 +152,8 @@ anything is added to it.
 signature verification. It ignores objects not tagged
 `purpose: invoiced_outcome`, and tagged lifecycle events it does not apply
 (such as `invoice.finalized`), so Stripe does not retry them. It rejects
-malformed events and mode mismatches.
+malformed events, connected-account/organization event scopes and mode
+mismatches. The native credit-note currency must match the USD order.
 
 ## Never evidence
 
@@ -161,9 +181,9 @@ is stored only when that replay accepts it.
 | `POST /v1/invoicing/orders/{id}/invoice` | Create the customer, draft and items, finalize, record the invoice, then send. Each Stripe id is stored before the next step. A retry reads a stored invoice back instead of re-adding items, and an already recorded invoice is only resent. The finalized total must equal the quote |
 | `POST /v1/invoicing/orders/{id}/void` | Void an unpaid invoice. `invoice.voided` records it |
 | `POST /v1/invoicing/orders/{id}/funding-plan` | Publish the v2 terms and return the treasury's unsigned creation plan. The terms commit the quote economics, the treasury as creator, the contractor gate and the verifier quorum |
-| `POST /v1/invoicing/orders/{id}/reconcile` | Apply indexed canonical treasury `FundingAdded`, `BountySettled` and treasury `RefundWithdrawn` for the planned bounty |
+| `POST /v1/invoicing/orders/{id}/reconcile` | Apply indexed canonical treasury events when funding was planned; when a credit note exists, also read its linked Stripe refunds. Works for cancellation before funding too |
 | `POST /v1/invoicing/orders/{id}/cancel` | Cancel a paid order after applying the latest indexed events. When funded and not yet refunded, it returns the treasury's `cancel()` and `withdrawRefund()` calls. Repeating it returns the current calls |
-| `POST /v1/invoicing/orders/{id}/refund` | Apply the latest indexed events, then issue the credit note once no escrow is at risk. `credit_note.created` marks the order refunded |
+| `POST /v1/invoicing/orders/{id}/refund` | Apply the latest indexed events, then issue the credit note once no escrow is at risk. `credit_note.created` leaves `refund_pending`; reconciliation must confirm repayment |
 | `PUT /v1/invoicing/contractors/{id}` | Record a contractor: wallet, agreement acceptance, and a tax-form reference only. A wallet change keeps the old wallet in `previous_wallets`, and a wallet never moves to another contractor |
 | `POST /v1/invoicing/contractors/{id}/attestation-plan` | Return the attester's EIP-712 payload for an eligible contractor |
 | `POST /v1/invoicing/contractors/{id}/registration-plan` | Plan the relayed `register` call for an attestation that the configured attester signed |
@@ -171,12 +191,42 @@ is stored only when that replay accepts it.
 | `POST /v1/stripe/invoice-webhooks` | Signature-verified Stripe events, using a separate endpoint secret |
 
 **Webhook handling.** Each Stripe event applies at most once; a retry is
-reported as a duplicate. A transition the projection rejects is acknowledged
+reported as a duplicate only when its financial facts match. Reusing an
+evidence ID with different facts or a different order returns a conflict.
+A transition the projection rejects is acknowledged
 with its reason, so Stripe does not retry evidence that can never apply. The
 exception is an `invoice.paid` that arrives before its order records the
 invoice: it gets a retryable 409, so Stripe redelivers it.
 
+**Refund operation and compatibility.** Stripe can return a bank refund from
+`succeeded` to `requires_action`, then process corrected bank details through
+`pending` and `succeeded` again. `failed` and `canceled` leave the amount owed
+visible as `refund_failed`; the operator must arrange a separately verified
+recovery. Never issue another repayment just because a read failed. See
+[Stripe's bank refund lifecycle](https://docs.stripe.com/payments/customer-balance/refunding).
+
+Only Stripe refunds fully allocated to the matching credit note are supported.
+Customer credit balances, cash-balance refund destinations and external payment
+annotations do not prove a return to the customer's bank. Unknown successful
+refund destinations fail closed. International wire refunds require a separate
+external payment path and are not completed by this implementation.
+
+Old `CreditNoteIssued` events still replay, now as `refund_pending` until linked
+refunds are verified. No stored events are rewritten. New
+`BuyerRefundReconciled` events include the observed log sequence and require this
+reader: once they are written, rolling back to an older binary would make those
+order logs unreadable. Disable intake/invoicing if necessary and deploy a
+compatible correction; retain the event reader when reverting other behavior.
+
 **Known limits.**
+- Refund status is refreshed by the operator's reconciliation endpoint. There
+  is no automatic refund-event worker yet; late bank returns need continued
+  reconciliation, including for previously successful refunds.
+- A failed or canceled refund identity cannot be replaced silently. Recovery
+  through a new payment provider/refund is not implemented here.
+- Live funding still requires the cash-availability, conversion, reversal and
+  account-country work described above. These refund changes do not enable
+  invoicing or approve any live money movement.
 - `ParticipantEligibilityRegistry` cannot revoke an attestation. A
   contractor's earlier wallet stays eligible until its attestation expires, so
   keep validity short (the plan accepts at most 365 days).
@@ -199,7 +249,9 @@ are set:
   `INVOICING_VERIFICATION_MODE` (`signed_quorum` or `ai_judge_quorum`).
 - **Stripe:** `STRIPE_SECRET_KEY` and `STRIPE_INVOICE_WEBHOOK_SECRET`. A live
   key is refused unless `INVOICING_LIVEMODE=true`, and a test key is refused
-  when it is set.
+  when it is set. The restricted key must permit the existing invoice writes
+  plus credit-note and refund reads for reconciliation. Keep it scoped to the
+  actual seller account and configured mode.
 
 **Optional settings:**
 - `INVOICING_PROCESSING_FEE_BPS` and `INVOICING_PROCESSING_FEE_FIXED_CENTS`
@@ -216,4 +268,7 @@ quote, bank-transfer invoice (including a resent and a resumed issue), signed
 plan, reconciliation from indexed events, contractor attestation and
 registration, a contractor wallet change, the 1099 summary, and a cancelled
 order whose planned funding is completed, cancelled and withdrawn before the
-buyer is refunded by a signed credit note.
+credit note leaves customer repayment pending. It then exercises independent
+runtime retries, concurrent reconciliation, invalid allocations, successful
+repayment, bank returns, a subsequent retry cycle, and terminal failure. All
+refund reconciliation requests are reads.
