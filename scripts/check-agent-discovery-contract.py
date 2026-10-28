@@ -154,17 +154,6 @@ def validate_agent_discovery_contract(root: Path) -> None:
     quickstart = (root / "docs" / "agent-quickstart.md").read_text(encoding="utf-8")
     status = (root / "docs" / "a2a-status.md").read_text(encoding="utf-8")
 
-    retired_artifacts = (
-        root / "fixtures" / "a2a-agent-card.json",
-        root / "docs" / "a2a-direct-api-binding-v1.md",
-        root / "scripts" / "check-a2a-agent-card.py",
-    )
-    for path in retired_artifacts:
-        if path.exists():
-            raise SystemExit(
-                f"retired unsupported A2A artifact remains: {path.relative_to(root)}"
-            )
-
     if "a2aproject/A2A/blob/main/docs/specification.md" not in status:
         raise SystemExit("A2A status must link the current primary specification")
 
@@ -186,8 +175,19 @@ def validate_agent_discovery_contract(root: Path) -> None:
     )
     if api_advertises_a2a or other_a2a_advertising:
         validate_a2a_implementation(root, api, status)
-    elif "does not currently implement the Agent2Agent (A2A) protocol" not in status:
-        raise SystemExit("A2A status must state that the protocol is not implemented")
+    else:
+        if "does not currently implement the Agent2Agent (A2A) protocol" not in status:
+            raise SystemExit("A2A status must state that the protocol is not implemented")
+        retired_artifacts = (
+            root / "fixtures" / "a2a-agent-card.json",
+            root / "docs" / "a2a-direct-api-binding-v1.md",
+            root / "scripts" / "check-a2a-agent-card.py",
+        )
+        for path in retired_artifacts:
+            if path.exists():
+                raise SystemExit(
+                    f"retired unsupported A2A artifact remains: {path.relative_to(root)}"
+                )
 
     required = {
         "API generic discovery route": "/.well-known/agent-bounties.json",
