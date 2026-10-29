@@ -50,7 +50,8 @@
   }
   function envelope(journey) {
     const original = journey.brief || {};
-    const budget = String(original.budget_usdc ?? "").trim(), decimal = /^(\d+)(?:\.(\d{0,6}))?$/.exec(budget);
+    const amountField = original.solver_reward_usdc !== undefined ? "solver_reward_usdc" : "budget_usdc";
+    const budget = String(original[amountField] ?? "").trim(), decimal = /^(\d+)(?:\.(\d{0,6}))?$/.exec(budget);
     const fraction = decimal?.[2]?.replace(/0+$/, "") || "";
     const deadline = original.deadline_at || journey.draft?.delivery_deadline || null;
     const manual = original.preparation_mode === "manual" ? {
@@ -60,7 +61,7 @@
       review_consent: original.review_consent === true,
     } : {};
     const brief = journey.brief ? { ...manual, goal: String(original.goal || journey.draft?.goal || journey.goal || "").trim(),
-      budget_usdc: decimal ? `${BigInt(decimal[1])}${fraction ? `.${fraction}` : ""}` : budget,
+      [amountField]: decimal ? `${BigInt(decimal[1])}${fraction ? `.${fraction}` : ""}` : budget,
       deadline_at: deadline && Number.isFinite(Date.parse(deadline)) ? new Date(deadline).toISOString() : deadline } : null;
     return { schema: "agent-bounties/posting-draft-v1", id: journey.id, role: "post", goal: journey.goal || "", preferences: journey.preferences || "",
       brief, draft: journey.draft || null, draft_stale: journey.draft_stale === true, reference_attachment: journey.reference_attachment || null };
@@ -192,7 +193,7 @@
       if (previous?.owner !== owner || previous.operation_id !== client.load()?.id || !previous.reviewed_terms) return [];
       const old = previous.reviewed_terms, current = envelope(client.load());
       const changes = [], short = value => value == null ? "not set" : String(value).slice(0, 180);
-      for (const [section, fields] of [["brief", { budget_usdc: "Brief budget (USDC)", deadline_at: "Brief deadline", timezone: "Time zone" }],
+      for (const [section, fields] of [["brief", { budget_usdc: "Legacy total reward budget (USDC)", solver_reward_usdc: "Solver reward (USDC)", deadline_at: "Brief deadline", timezone: "Time zone" }],
         ["draft", { title: "Title", goal: "Goal", solver_reward_usdc: "Worker reward (USDC)", verifier_reward_usdc: "Review reserve (USDC)", review_mode: "Reviewer", delivery_deadline: "Delivery deadline", task_window_days: "Work window (days)" }]]) {
         for (const [key, label] of Object.entries(fields)) if (stable(old[section]?.[key]) !== stable(current[section]?.[key]))
           changes.push(`${label}: ${short(old[section]?.[key])} → ${short(current[section]?.[key])}`);

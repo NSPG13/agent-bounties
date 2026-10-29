@@ -69,7 +69,7 @@ async function fixtures(context, origin, options = {}) {
     }
     if (url.pathname === "/v1/base/gas-sponsorship") return route.fulfill({ json: { schema: "agent-bounties/gas-sponsorship-v1", network: "base-mainnet", creation: { available: mock.sponsorAvailable !== false } } });
     if (url.pathname === "/v1/base/autonomous-bounties/events") return route.fulfill({ json: mock.events });
-    if (url.pathname === "/v1/opportunities") return route.fulfill({ json: { schema_version: "agent-bounties/opportunity-projection-v1", items: mock.inventory } });
+    if (url.pathname === "/v1/opportunities") return route.fulfill({ json: { schema_version: "agent-bounties/opportunity-projection-v1", degraded: false, source_statuses: [{source_type: "canonical_base", available: true}], items: mock.inventory } });
     if (url.origin === "https://mainnet.base.org") {
       const call = request.postDataJSON(); mock.rpcRequests.push(call);
       if (mock.rpcFailure) return route.fulfill({ status: 503, json: { error: { message: "Synthetic outage" } } });
@@ -350,6 +350,54 @@ async function recoveryRegressions(browser, origin) {
     } finally { await next.close(); }
     console.log("PASS incomplete brief resumes across devices without inventing a draft or approving terms");
   } finally { await partialContext.close(); }
+}
+async function rewardInputRegression(browser, origin) {
+  for (const width of [390, 1280]) {
+    const context = await browser.newContext({ viewport: { width, height: 900 } });
+    await fixtures(context, origin);
+    try {
+      const page = await context.newPage();
+      const errors = []; page.on("pageerror", error => errors.push(error.message));
+      await page.goto(origin + "/post.html?mode=manual"); await awaitPosting(page);
+      await page.locator("[data-brief-title]").fill("Reward input regression");
+      await page.locator("#bounty-composer-input").fill("Deliver a comparison spreadsheet");
+      await page.locator("[data-brief-criteria]").fill("Include source links");
+      await page.locator("[data-brief-budget]").fill("100.00");
+      await page.locator("[data-brief-reserve]").fill("10.00");
+      await page.locator("[data-brief-deadline]").fill(new Date(Date.now()+7*86400000).toISOString().slice(0,16));
+      await page.locator("[data-manual-review-consent]").check();
+      await page.locator("[data-composer-submit]").click();
+      await page.waitForFunction(() => window.AgentBountiesWorkflow.createClient(window).load()?.draft?.solver_reward_usdc === "100.00");
+      const saved = await page.evaluate(() => window.AgentBountiesWorkflow.createClient(window).load());
+      assert.equal(saved.brief.solver_reward_usdc, "100.00");
+      assert.equal(saved.brief.budget_usdc, undefined);
+      assert.equal(saved.draft.verifier_reward_usdc, "10.00");
+      assert.match(await page.locator("[data-card-reward]").innerText(), /^100(?:\.00)? USDC$/);
+      const costs = await page.locator("[data-posting-cost]").innerText();
+      assert.match(costs, /Solver reward: 100(?:\.00)? USDC/);
+      assert.match(costs, /verification: 10(?:\.00)? USDC/);
+      assert.match(costs, /Total funding: 110(?:\.00)? USDC/); // Existing v1 has no platform fee.
+      const changedReward = await page.evaluate(async () => {
+        const client = window.AgentBountiesWorkflow.createClient(window), before = client.load();
+        try {
+          await window.AgentBountiesComposer.stage({ ...before.draft, solver_reward_usdc: "90.00", posting_operation_id: crypto.randomUUID() });
+          return { rejected: false };
+        } catch (error) {
+          return { rejected: true, message: error.message, unchanged: JSON.stringify(client.load()) === JSON.stringify(before) };
+        }
+      });
+      assert.equal(changedReward.rejected, true);
+      assert.match(changedReward.message, /entered reward/);
+      assert.equal(changedReward.unchanged, true, "A new operation ID must not silently replace the entered reward");
+      await page.evaluate(() => window.AgentBountiesPostingSession.create(window).flush({requireServer:true}));
+      await page.reload(); await awaitPosting(page);
+      await page.waitForFunction(() => document.querySelector("[data-brief-budget]").value === "100");
+      assert.equal(await page.locator("[data-brief-reserve]").inputValue(), "10.00");
+      assert.deepEqual(await page.evaluate(() => window.__walletWrites), []);
+      assert.deepEqual(errors, []);
+      console.log("PASS exact 100 solver reward plus 10 verification through manual review and reload at width " + width);
+    } finally { await context.close(); }
+  }
 }
 async function hitTarget(page, selector, minimumHeight = 43) {
   const result = await page.locator(selector).evaluate((el, minimumHeight) => {
@@ -638,7 +686,8 @@ async function main() {
     { width: 480, height: 360, zoomReflow: true }
   ];
   try {
-    if (process.env.POSTING_LAYOUT_RESTORE_ONLY) { await recoveryRegressions(browser, origin); return; }
+    if (process.env.POSTING_LAYOUT_RESTORE_ONLY) { await rewardInputRegression(browser, origin);
+    await recoveryRegressions(browser, origin); return; }
     if (process.env.POSTING_LAYOUT_GUIDE_ONLY) { await walletBrandRegressions(browser, origin); await signedMoonpayDestinationRegressions(browser, origin); await guidedTopupRegressions(browser, origin);
     await topupPhoneConnectionRegression(browser, origin); return; }
     for (const size of sizes) {
@@ -778,6 +827,7 @@ async function main() {
       console.log("PASS signed-out posting action opens login with the exact draft preserved and no wallet request");
       await context.close();
     }
+    await rewardInputRegression(browser, origin);
     await recoveryRegressions(browser, origin);
     await guidedTopupRegressions(browser, origin);
     await topupPhoneConnectionRegression(browser, origin);

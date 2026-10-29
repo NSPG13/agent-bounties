@@ -694,6 +694,8 @@
       ? window.AgentBountyAI.parseDraft(value)
       : value;
     if (!prepared || typeof prepared !== "object") throw new Error("The prepared bounty draft is invalid.");
+    const savedJourney = window.AgentBountiesWorkflow.createClient(window).load();
+    if (!restoring) window.AgentBountiesWorkflow.assertSolverReward(savedJourney?.brief, prepared);
     prepared.reference_attachment ||= window.AgentBountiesWorkflow.createClient(window).load()?.reference_attachment || null;
 
     prepared = window.AgentBountiesCreatorReview[restoring ? "display" : "prepare"](prepared);
@@ -758,7 +760,7 @@
     const client = window.AgentBountiesWorkflow.createClient(window);
     const journey = client.load() || client.start({ role: "post" });
     const operationId = prepared.posting_operation_id || new URLSearchParams(window.location.search).get("operation_id");
-    if (!restoring) client.save({ ...journey, ...(operationId && window.AgentBountiesWorkflow.UUID.test(operationId) ? { id: operationId } : {}), role: "post", goal: prepared.goal, draft: prepared, draft_stale: false, reference_attachment: prepared.reference_attachment || null, brief: { ...journey.brief, goal: prepared.goal, budget_usdc: String(total), deadline_at: prepared.delivery_deadline || journey.brief?.deadline_at || null } });
+    if (!restoring) client.save({ ...journey, ...(operationId && window.AgentBountiesWorkflow.UUID.test(operationId) ? { id: operationId } : {}), role: "post", goal: prepared.goal, draft: prepared, draft_stale: false, reference_attachment: prepared.reference_attachment || null, brief: { ...journey.brief, goal: prepared.goal, budget_usdc: undefined, solver_reward_usdc: prepared.solver_reward_usdc, deadline_at: prepared.delivery_deadline || journey.brief?.deadline_at || null } });
     await renderPreview();
     state.approved = await postingSession.approved();
     syncPrimaryAction();
@@ -1062,7 +1064,7 @@
     const rewards = currentRewardSplit();
     ui.title.textContent = state.draft.title;
     ui.goal.textContent = state.draft.goal;
-    ui.reward.textContent = `${formatUsdc(state.fundingUsdc)} USDC (${formatUsdc(Number(rewards.solver) / 1_000_000)} solver + ${formatUsdc(Number(rewards.verifier) / 1_000_000)} ${state.draft.benchmark?.engine === "creator_review_v1" ? "creator-review reserve" : "verifier reward"})`;
+    ui.reward.textContent = `${formatUsdc(Number(rewards.solver) / 1_000_000)} USDC`;
     if (state.metaParent) ui.reward.textContent += ` · Qualifying child for: ${state.metaParent.title}`;
     ui.deadline.textContent = state.scope === "mission"
       ? `${state.taskWindowDays} days for this task · ${state.horizon.label} mission`
@@ -2015,7 +2017,8 @@
 
   function updatePostingCost(fees = null, request = null) {
     if (state.fundingUsdc == null) return;
-    const cost = `Bounty budget — rewards: ${formatUsdc(state.fundingUsdc)} USDC + platform fee: 0.00 USDC.`;
+    const rewards = currentRewardSplit();
+    const cost = `Solver reward: ${formatUsdc(Number(rewards.solver) / 1_000_000)} USDC + verification: ${formatUsdc(Number(rewards.verifier) / 1_000_000)} USDC + platform fee: 0.00 USDC. Total funding: ${formatUsdc(state.fundingUsdc)} USDC.`;
     const debit = request ? ` This request transfers ${window.AgentBountiesFundingReadiness.formatUnits(request.transferUsdcUnits)} USDC.` : "";
     const gas = state.gasSponsored ? " Network fee paid by Agentizable: 0 ETH charged to you." : fees?.estimatedTotalWei != null
       ? ` Estimated network fee for this request: ${window.AgentBountiesFundingReadiness.formatUnits(fees.estimatedTotalWei, 18, 18)} ETH. Your wallet confirms the final network fee; this is not a guaranteed maximum.`

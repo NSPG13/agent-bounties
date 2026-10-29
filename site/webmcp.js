@@ -518,6 +518,7 @@
       const draft = normalizeDraft({ ...input, meta_child: parent });
       if (Boolean(draft.benchmark) !== Boolean(draft.evidence_schema)) throw new Error("Supply benchmark and evidence_schema together.");
       const journey = client.load() || client.start({ role: "post" });
+      flow.assertSolverReward(journey.brief, draft);
       if (isPost) {
         const result = await stageOnPostPage(draft);
         pendingStaging = Promise.resolve();
@@ -526,7 +527,7 @@
         // change the approval hash when the same draft is restored on reload.
         return result;
       }
-      client.save({ ...journey, draft, draft_stale: false, goal: draft.goal, brief: { ...journey.brief, goal: draft.goal, budget_usdc: String(Number(draft.solver_reward_usdc) + Number(draft.verifier_reward_usdc)), deadline_at: draft.delivery_deadline || journey.brief?.deadline_at || null }, meta_child: draft.meta_child, role: "post" });
+      client.save({ ...journey, draft, draft_stale: false, goal: draft.goal, brief: { ...journey.brief, goal: draft.goal, budget_usdc: undefined, solver_reward_usdc: draft.solver_reward_usdc, deadline_at: draft.delivery_deadline || journey.brief?.deadline_at || null }, meta_child: draft.meta_child, role: "post" });
       if (!persistPendingDraft(draft)) throw new Error("This browser cannot preserve the draft across navigation. Open /post.html and call this tool again.");
       const target = new URL("/post.html?from=webmcp", window.location.origin).href;
       window.setTimeout(() => window.location.assign(target), 0);

@@ -60,7 +60,7 @@
     const result = document.createElement("p"); result.setAttribute("aria-live", "polite");
     const note = document.createElement("p"); note.textContent = "This is hours × your chosen rate, plus the review reserve. It is a planning estimate, not a prediction of bids. Consider specialist access, tools and external expenses.";
     const comparable = document.createElement("a"); comparable.href = "/metrics.html"; comparable.textContent = "Compare dated, confirmed payouts";
-    const update = () => { const estimate = helper.estimateBudget(...inputs.map(({ field }) => field.value)); result.textContent = estimate ? `${estimate.total} USDC total: ${estimate.solver} for the work + ${estimate.reserve} review reserve. Update your brief if you want this budget.` : "Enter positive hours, rate and review reserve within the supported range."; };
+    const update = () => { const estimate = helper.estimateBudget(...inputs.map(({ field }) => field.value)); result.textContent = estimate ? `${estimate.total} USDC before platform fees and other costs: ${estimate.solver} for the work + ${estimate.reserve} review reserve. Enter the work amount as your solver reward; the review reserve is additional. Platform fees and other costs are shown before funding.` : "Enter positive hours, rate and review reserve within the supported range."; };
     for (const { field } of inputs) field.addEventListener("input", update);
     estimator.append(title, ...inputs.map(({ row }) => row), result, note, comparable); budgetSummary.after(estimator); update();
   }
@@ -77,8 +77,8 @@
     if (budgetSummary) {
       const staged = journey?.draft;
       budgetSummary.textContent = staged
-        ? `Proposal split: ${staged.solver_reward_usdc} USDC for the worker + ${staged.verifier_reward_usdc} USDC ${staged.review_mode === "creator" ? "creator-review reserve" : "verifier reward"}.${journey.draft_stale ? " Your brief changed; prepare an updated proposal before approving." : " These are the amounts on the review card."}`
-        : "Enter the combined worker and review budget. The exact split will appear on the review card.";
+        ? `Solver reward: ${staged.solver_reward_usdc} USDC + ${staged.verifier_reward_usdc} USDC ${staged.review_mode === "creator" ? "creator-review reserve" : "verifier reward"}.${journey.draft_stale ? " Your brief changed; prepare an updated proposal before approving." : " These are the amounts on the review card."}`
+        : `The solver receives your entered reward.${mode.value === "manual" ? ` Review adds ${reserve.value || "—"} USDC.` : " Verification is additional."} The review card shows the platform fee, other costs and total before funding.`;
     }
     if (warningList) {
       warningList.replaceChildren();
@@ -97,7 +97,7 @@
     const brief = journey.brief || {};
     const savedDeadline = brief.deadline_at || journey.draft?.delivery_deadline || "";
     if (document.activeElement !== goal) goal.value = brief.goal || journey.draft?.goal || journey.goal || "";
-    if (document.activeElement !== budget) budget.value = brief.budget_usdc || (journey.draft ? String(Number(journey.draft.solver_reward_usdc) + Number(journey.draft.verifier_reward_usdc)) : "");
+    if (document.activeElement !== budget) budget.value = helper.restoredSolverReward(brief, journey.draft);
     if (document.activeElement !== timezone) timezone.value = brief.timezone || savedDeadline.match(/([+-]\d\d:\d\d)$/)?.[1] || detectedTimezone;
     if (document.activeElement !== deadline) {
       try {
@@ -115,7 +115,7 @@
     if (document.activeElement !== consent) consent.checked = brief.review_consent === true;
     if (brief.preparation_mode && !protectedHandoff) mode.value = brief.preparation_mode;
     setMode();
-    status.textContent = journey.draft ? "Draft saved on this device. Review the proposal below." : "Brief saved on this device. Complete the details to prepare your proposal.";
+    status.textContent = brief.budget_usdc && !helper.restoredSolverReward(brief, journey.draft) ? "Your saved brief used a total budget. Enter the solver reward and review the additional verification cost before continuing." : journey.draft ? "Draft saved on this device. Review the proposal below." : "Brief saved on this device. Complete the details to prepare your proposal.";
     restoring = false;
     render();
   }
@@ -123,7 +123,7 @@
     if (restoring) return;
     const current = client.load() || client.start({ role: "post" });
     const result = render();
-    const brief = { preparation_mode: mode.value, title: title.value, criteria: criteria.value, review_reward_usdc: reserve.value, review_consent: consent.checked, goal: goal.value.trim(), budget_usdc: budget.value, deadline_at: result.iso, deadline_local: deadline.value, timezone: timezone.value.trim() };
+    const brief = { preparation_mode: mode.value, title: title.value, criteria: criteria.value, review_reward_usdc: reserve.value, review_consent: consent.checked, goal: goal.value.trim(), solver_reward_usdc: budget.value, deadline_at: result.iso, deadline_local: deadline.value, timezone: timezone.value.trim() };
     // Compare decisions, not display formatting, so restoring an old brief
     // does not invalidate approval simply because display fields were added.
     const before = current.brief || {};
@@ -132,7 +132,7 @@
       || Number(brief.review_reward_usdc) !== Number(before.review_reward_usdc ?? current.draft?.verifier_reward_usdc ?? "0.10")
       || brief.review_consent !== (before.review_consent === true));
     const changed = manualChanged || brief.goal !== (before.goal || current.draft?.goal || current.goal || "")
-      || Number(brief.budget_usdc) !== Number(before.budget_usdc || (current.draft ? Number(current.draft.solver_reward_usdc) + Number(current.draft.verifier_reward_usdc) : ""))
+      || Number(brief.solver_reward_usdc) !== Number(helper.restoredSolverReward(before, current.draft))
       || (Date.parse(brief.deadline_at) || null) !== (Date.parse(before.deadline_at || current.draft?.delivery_deadline) || null);
     if (changed && current.draft) window.AgentBountiesComposer?.invalidate();
     client.save({ ...current, role: "post", goal: brief.goal, brief, draft_stale: current.draft_stale || Boolean(changed && current.draft), updated_at: new Date().toISOString() });

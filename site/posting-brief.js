@@ -57,10 +57,27 @@
     return Number.isSafeInteger(result) && result > 0 ? result : null;
   }
   function proposedSplit(value) {
-    const total = cents(value);
-    if (total === null || total < 2) return null;
-    const reserve = Math.max(1, Math.round(total / 10));
-    return { solver: ((total - reserve) / 100).toFixed(2), reserve: (reserve / 100).toFixed(2), total: (total / 100).toFixed(2) };
+    const solver = cents(value);
+    if (solver === null) return null;
+    const reserve = Math.max(1, Math.round(solver / 10));
+    if (!Number.isSafeInteger(solver + reserve)) return null;
+    return { solver: (solver / 100).toFixed(2), reserve: (reserve / 100).toFixed(2), total: ((solver + reserve) / 100).toFixed(2) };
+  }
+  function restoredSolverReward(brief = {}, draft = null) {
+    if (brief.solver_reward_usdc !== undefined) return String(brief.solver_reward_usdc);
+    if (!brief.budget_usdc) return String(draft?.solver_reward_usdc ?? "");
+    // Older briefs stored an all-inclusive reward budget. Never relabel that
+    // amount as the solver reward or change an already prepared commitment.
+    const units = value => {
+      const match = /^(\d+)(?:\.(\d{1,6}))?$/.exec(String(value ?? ""));
+      return match ? BigInt(match[1]) * 1000000n + BigInt((match[2] || "").padEnd(6, "0")) : null;
+    };
+    // A staged draft owns the allocation; the brief may retain a hidden form default.
+    // Missing or invalid staged values must not fall back to a guessed split.
+    const total = units(brief.budget_usdc), reserve = units(draft ? draft.verifier_reward_usdc : brief.review_reward_usdc);
+    if (total === null || reserve === null || reserve <= 0n || total <= reserve) return "";
+    const solver = total - reserve;
+    return `${solver / 1000000n}.${String(solver % 1000000n).padStart(6, "0")}`.replace(/0+$/, "").replace(/\.$/, "");
   }
   function estimateBudget(hours, hourlyRate, reviewReserve) {
     // Hundredths of an hour times cents/hour; round the work budget up to a cent.
@@ -88,7 +105,7 @@
     const total = cents(budget);
     const solver = draft ? cents(draft.solver_reward_usdc) : null;
     if (total !== null && total <= 500 && (/\b(video|animation|animate|3d|simulation)\b/i.test(goal) || draft?.acceptance_criteria?.length >= 5)) {
-      output.push(`This ${((solver ?? Math.round(total * .9)) / 100).toFixed(2)} USDC solver reward accompanies substantial creative work or several checks. Consider a smaller first deliverable or a higher budget; this is scope guidance, not a market price estimate.`);
+      output.push(`This ${((solver ?? total) / 100).toFixed(2)} USDC solver reward accompanies substantial creative work or several checks. Consider a smaller first deliverable or a higher reward; this is scope guidance, not a market price estimate.`);
     }
     return output;
   }
@@ -98,12 +115,12 @@
     if (!title || title.length > 200) throw new Error("Enter a title of up to 200 characters.");
     if (!goal || goal.length > 4000) throw new Error("Describe the work in up to 4,000 characters.");
     if (!criteria.length || criteria.length > 20 || criteria.some(s => s.length > 1000)) throw new Error("Add 1–20 acceptance criteria, one per line, with up to 1,000 characters each.");
-    const total = cents(brief.budget_usdc), reserve = cents(brief.review_reward_usdc);
-    if (total === null || total > 900000000000 || reserve === null || total - reserve < 200) throw new Error("The total must cover at least 2 USDC for the worker plus a review reward of at least 0.01 USDC.");
+    const solver = cents(brief.solver_reward_usdc), reserve = cents(brief.review_reward_usdc);
+    if (solver === null || solver < 200 || reserve === null || !Number.isSafeInteger(solver + reserve) || solver + reserve > 900000000000) throw new Error("Enter at least 2 USDC for the worker and an additional review reward of at least 0.01 USDC, within the supported total.");
     const remaining = Date.parse(brief.deadline_at) - now;
     if (!Number.isFinite(remaining) || remaining <= 0 || remaining > 30 * 86400000) throw new Error("Choose a future delivery deadline within 30 days. Use a smaller milestone for longer work.");
     if (brief.review_consent !== true) throw new Error("Confirm that you will review submissions yourself.");
-    return { title, goal, acceptance_criteria: criteria, solver_reward_usdc: ((total - reserve) / 100).toFixed(2), verifier_reward_usdc: (reserve / 100).toFixed(2), task_window_days: Math.max(1, Math.ceil(remaining / 86400000)), delivery_deadline: brief.deadline_at, review_mode: "creator", discovery_source: "Platform form (no AI)" };
+    return { title, goal, acceptance_criteria: criteria, solver_reward_usdc: (solver / 100).toFixed(2), verifier_reward_usdc: (reserve / 100).toFixed(2), task_window_days: Math.max(1, Math.ceil(remaining / 86400000)), delivery_deadline: brief.deadline_at, review_mode: "creator", discovery_source: "Platform form (no AI)" };
   }
-  return Object.freeze({ manualDraft, resolveDeadline, wallTime, proposedSplit, estimateBudget, countdown, warnings, cents });
+  return Object.freeze({ manualDraft, restoredSolverReward, resolveDeadline, wallTime, proposedSplit, estimateBudget, countdown, warnings, cents });
 });

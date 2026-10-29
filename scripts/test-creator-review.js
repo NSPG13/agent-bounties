@@ -155,7 +155,7 @@ test("saved brief edits reach the shared journey and invalidate an older funding
   client.save({ ...client.load(), draft: { goal: goal.value, solver_reward_usdc: "18", verifier_reward_usdc: "2" }, brief: { ...client.load().brief, deadline_at: cutoff } });
   assert.notEqual(deadline.value, "", "AI staging updates the deadline even while another field has focus");
   budget.value = "25"; budget.handlers.input();
-  assert.equal(client.load().brief.budget_usdc, "25"); assert.equal(client.load().draft_stale, true); assert.equal(invalidations, 1);
+  assert.equal(client.load().brief.solver_reward_usdc, "25"); assert.equal(client.load().draft_stale, true); assert.equal(invalidations, 1);
   assert.ok(client.load().brief.deadline_at, "editing the budget must not erase the deadline");
   const timezone = elements.get("[data-brief-timezone]");
   document.activeElement = timezone; timezone.value = "America/Mexico_City"; timezone.handlers.input();
@@ -171,6 +171,27 @@ test("saved brief edits reach the shared journey and invalidate an older funding
   document.activeElement = timezone; timezone.value = "CST"; timezone.handlers.input();
   assert.equal(client.load().brief.deadline_at, null, "ambiguous zones cannot stage a guessed deadline");
   assert.match(deadline.validationMessage, /ambiguous/);
+
+  // A saved AI draft can retain the hidden manual form's default reserve.
+  // Restoring it and editing an unrelated field must preserve the staged split.
+  document.activeElement = null;
+  const legacyDraft = { goal: "Restore the saved proposal", solver_reward_usdc: "18.00", verifier_reward_usdc: "2.00", delivery_deadline: cutoff };
+  client.save({ ...client.load(), draft_stale: false, draft: legacyDraft, brief: {
+    preparation_mode: "ai", goal: legacyDraft.goal, budget_usdc: "20.00", review_reward_usdc: "0.10", deadline_at: cutoff, timezone: "UTC"
+  } });
+  vm.runInNewContext(fs.readFileSync(require.resolve("../site/posting-workspace.js"), "utf8"), { window: win, document, Intl, Date, URL, URLSearchParams, Blob });
+  assert.equal(budget.value, "18", "reload restores the solver's staged allocation, not 19.90");
+  const invalidationsBeforeRestoreEdit = invalidations;
+  const hiddenTitle = elements.get("[data-brief-title]");
+  document.activeElement = hiddenTitle; hiddenTitle.value = "Unused manual title"; hiddenTitle.handlers.input();
+  assert.equal(client.load().brief.solver_reward_usdc, "18", "unrelated input persists the same solver amount");
+  assert.equal(client.load().draft_stale, false);
+  assert.equal(invalidations, invalidationsBeforeRestoreEdit);
+  assert.deepEqual(client.load().draft, legacyDraft, "restoration never rewrites the staged terms");
+  document.activeElement = budget; budget.value = "19"; budget.handlers.input();
+  assert.equal(client.load().draft_stale, true, "a real reward edit still requires a fresh proposal");
+  assert.equal(invalidations, invalidationsBeforeRestoreEdit + 1);
+  assert.deepEqual(client.load().draft, legacyDraft);
 });
 
 test("contract-wallet verdict preserves a wider signature through review and relay",async()=>{

@@ -47,8 +47,12 @@ const server = http.createServer((req, res) => {
       await page.waitForFunction(() => document.querySelector("[data-brief-status]").textContent.startsWith("Proposal prepared"));
       const draft = await page.evaluate(() => window.AgentBountiesWorkflow.createClient(window).load().draft);
       assert.equal(draft.title, "Research competitors");
-      assert.equal(draft.solver_reward_usdc, "19.90");
+      assert.equal(draft.solver_reward_usdc, "20.01");
       assert.equal(draft.verifier_reward_usdc, "0.11");
+      const costs = await page.locator("[data-posting-cost]").innerText();
+      assert.match(costs, /Solver reward: 20\.01 USDC/);
+      assert.match(costs, /verification: 0\.11 USDC/);
+      assert.match(costs, /Total funding: 20\.12 USDC/); // Existing v1 has no platform fee.
       assert.equal(draft.benchmark.engine, "creator_review_v1");
       assert.deepEqual(draft.acceptance_criteria, ["Include 20 competitors", "Link each pricing source"]);
       assert.equal(await page.locator("[data-open-funding]").isDisabled(), true, "preparing does not approve or fund");

@@ -500,3 +500,18 @@ test("native form inputs survive account synchronization and changes revoke appr
   edit(two.win, value => { value.brief.criteria = "Thirty sources"; });
   assert.equal(await two.session.approved(), false);
 });
+
+
+test("solver-only brief survives account sync and changed reward invalidates approval", async () => {
+  const one = await ready();
+  edit(one.win, value => { delete value.brief.budget_usdc; value.brief.solver_reward_usdc="100.00"; value.draft.solver_reward_usdc="100.00"; value.draft.verifier_reward_usdc="10.00"; });
+  await one.session.approve();
+  const two = await second(one.server);
+  assert.equal(current(two.win).brief.solver_reward_usdc, "100");
+  assert.equal(current(two.win).brief.budget_usdc, undefined);
+  assert.equal(current(two.win).draft.solver_reward_usdc, "100.00");
+  assert.equal(current(two.win).draft.verifier_reward_usdc, "10.00");
+  assert.equal(await two.session.approved(), true);
+  edit(two.win, value => { value.brief.solver_reward_usdc="101"; });
+  assert.equal(await two.session.approved(), false);
+});
