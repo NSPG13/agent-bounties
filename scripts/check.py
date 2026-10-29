@@ -272,6 +272,7 @@ def main() -> int:
         py(f"scripts/{name}.py", "--self-test")
     py("scripts/test_github_pr_claim_guard.py", "-v")
     py("scripts/test_opportunity_return.py", "-v")
+    py("-m", "pip", "install", "-r", "scripts/requirements-site.txt")
     for name in ("sync_hosted_bounty_inventory", "reconcile_github_bounty_labels", "diagnose_hosted_api", "github_audience_audit", "prepare_site_metrics", "refresh_site_metrics", "ruleset_drift_check", "code_size_report", "mcp_tool_registry", "shared_rpc", "relay_autonomous_action", "gas_sponsorship_budget", "relay_bounded_wallet_action", "bounded_agent_budget"):
         py(f"scripts/test_{name}.py", "-v")
     for name in ("standing_meta_v3_deploy", "activate_standing_meta_v3_replacements"):
@@ -304,7 +305,6 @@ def main() -> int:
         [cargo, "run", "-p", "cli", "--", "discovery", "--public-base-url", "https://agentbounties.local", "--mcp-base-url", "https://agentbounties.local/mcp"],
         [cargo, "run", "-p", "cli", "--", "discovery-report", "--input-fixture", "crates/cli/fixtures/discovery_answers.json", "--json-out", "target/tmp/discovery-report.json", "--markdown-out", "target/tmp/discovery-report.md"],
     ])
-    py("-m", "pip", "install", "-r", "scripts/requirements-site.txt")
     py("scripts/check-site.py")
     py("scripts/test_check_public_site_canary.py", "-v")
     py("examples/x402-async-phases/verify.py")
