@@ -206,3 +206,65 @@ test('mixed-case contract spelling selects the same normalized exact identity', 
   assert.equal((await client.inspect(entry.opportunity_id.replaceAll('ab', 'aB'))).opportunity_id,entry.opportunity_id);
   assert.equal(calls[0].url.searchParams.get('opportunity_id'),entry.opportunity_id);
 });
+
+const autonomousV2 = () => ({...structuredClone(item), platform_fee: {protocol_version:'agent-bounties/autonomous-v2'}});
+function currentProjection() {
+  const p = projection(); p.items.push(autonomousV2());
+  p.items[1].source_id = '0x' + '33'.repeat(20);
+  p.items[1].opportunity_id = `canonical:base-mainnet:${p.items[1].source_id}`;
+  p.source_statuses[0].item_count = 2;
+  p.source_statuses[0].protocol_statuses.splice(1, 0, status('autonomous-v2','complete',1));
+  return p;
+}
+test('four-family inventory retains both autonomous versions without hiding unavailable competition coverage', () => {
+  const p = currentProjection(), result = flow.fundedInventory(p);
+  assert.equal(result.items.length, 2);
+  assert.equal(result.coverage.state, 'partial');
+  assert.deepEqual(result.coverage.missing, ['open-competition-v2-beta3']);
+  assert.equal(flow.isV2(p.items[1]), false, 'autonomous v2 is not competition v2');
+});
+test('autonomous v2 exact identity uses its authoritative status without a marketplace scan', async () => {
+  const entry = autonomousV2(), p = exactProjection(entry);
+  p.items[0].terms_hash = null; // Avoid the separate terms read in this coverage test.
+  p.source_statuses[0].protocol_statuses = [status('autonomous-v2','complete',1)];
+  const {client,calls} = exactClient(p);
+  assert.equal((await client.inspect(entry.opportunity_id)).opportunity_id, entry.opportunity_id);
+  assert.equal(calls.length, 1);
+});
+test('autonomous version metadata cannot borrow another protocol status or count', () => {
+  for (const mutate of [
+    p => p.source_statuses[0].protocol_statuses.splice(1,1),
+    p => p.source_statuses[0].protocol_statuses[1].item_count = 0,
+    p => p.source_statuses[0].protocol_statuses[1] = status('autonomous-v2','unavailable',null),
+    p => p.source_statuses[0].protocol_statuses[1].protocol = 'autonomous-v1',
+    p => p.source_statuses[0].protocol_statuses[1].protocol = 'autonomous-v3',
+    p => p.items[1].platform_fee.protocol_version = 'agent-bounties/autonomous-v3',
+    p => p.items[1].platform_fee.protocol_version = 'agent-bounties/open-competition-v2-beta3',
+    p => delete p.items[1].platform_fee,
+    p => p.items[1].opportunity_id = p.items[1].opportunity_id.replace('canonical:', 'open-competition-v2:'),
+  ]) { const p = currentProjection(); mutate(p); assert.throws(() => flow.fundedInventory(p)); }
+  const p = exactProjection(autonomousV2());
+  assert.throws(() => flow.canonicalCoverage(p,item.opportunity_id), /records/);
+});
+test('unresolved autonomous identity is unavailable and never produces an action', async () => {
+  const p = exactProjection(item,'ready_to_earn');
+  p.items=[];p.coverage='unavailable';p.degraded=true;
+  Object.assign(p.source_statuses[0],{available:false,coverage:'unavailable',item_count:0,protocol_statuses:[status('autonomous','unavailable',null)]});
+  const {client,calls}=exactClient(p);
+  await assert.rejects(client.prepareAction({action:'solve',opportunity_id:item.opportunity_id}), /unavailable/);
+  assert.equal(calls.length,1);
+  p.source_statuses[0].protocol_statuses[0] = status('autonomous','complete',0);
+  assert.throws(() => flow.canonicalCoverage(p,item.opportunity_id), /malformed/);
+});
+
+test('present malformed fee metadata cannot fall back to roomy legacy v1 coverage', () => {
+  for (const malformed of [{},{protocol_version:null},'malformed',42,[],{protocol_version:''}]) {
+    const p=currentProjection();p.source_statuses[0].protocol_statuses[0].item_count=61;
+    p.items[1].platform_fee=malformed;
+    assert.throws(()=>flow.fundedInventory(p),/records/);
+  }
+  for (const legacyFee of [undefined,null,{protocol_version:'agent-bounties/autonomous-v1'}]) {
+    const p=projection();p.items[0].platform_fee=legacyFee;
+    assert.equal(flow.fundedInventory(p).items.length,1);
+  }
+});

@@ -126,15 +126,38 @@
       if (payload.degraded !== false || source.available !== true) throw new Error("Canonical inventory evidence is unavailable.");
       return { state: "complete", limited: payload.items?.length >= 300, missing: [], message: payload.items?.length >= 300 ? "Showing a limited page of checked listings; the full count is unknown." : "" };
     }
-    const protocols = ["autonomous-v1", "open-competition-v1", "open-competition-v2-beta3"];
-    const forId = id => String(id || "").startsWith("canonical:") ? protocols[0]
-      : String(id || "").startsWith("open-competition:") ? protocols[1]
-      : String(id || "").startsWith("open-competition-v2:") ? protocols[2] : null;
+    const legacyProtocols = ["autonomous-v1", "open-competition-v1", "open-competition-v2-beta3"];
+    const forId = id => String(id || "").startsWith("canonical:") ? "autonomous"
+      : String(id || "").startsWith("open-competition:") ? "open-competition-v1"
+      : String(id || "").startsWith("open-competition-v2:") ? "open-competition-v2-beta3" : null;
+    // Both autonomous versions share canonical: identities. The authoritative
+    // projection publishes their version with platform-fee metadata; legacy
+    // records without that metadata are v1, never v2 or competition records.
+    const forItem = item => {
+      const family = forId(item?.opportunity_id);
+      const fee = item?.platform_fee;
+      if (fee != null && (typeof fee !== "object" || Array.isArray(fee) || typeof fee.protocol_version !== "string")) return null;
+      const version = fee?.protocol_version;
+      if (family === "autonomous") return version == null || version === "agent-bounties/autonomous-v1" ? "autonomous-v1"
+        : version === "agent-bounties/autonomous-v2" ? "autonomous-v2" : null;
+      return version == null || version === `agent-bounties/${family}` ? family : null;
+    };
     const scoped = payload.coverage_scope === "canonical_identity";
     if (scoped ? (!expectedIdentity || payload.requested_opportunity_id !== expectedIdentity)
       : payload.coverage_scope !== "inventory_page") throw new Error("Inventory coverage has the wrong scope.");
-    const expected = scoped ? [forId(expectedIdentity)] : protocols;
     const statuses = source.protocol_statuses;
+    const family = forId(expectedIdentity);
+    const scopedProtocol = family === "autonomous" ? statuses?.[0]?.protocol : family;
+    const expected = scoped ? [scopedProtocol] : [...legacyProtocols,
+      ...(statuses?.some?.(status => status?.protocol === "autonomous-v2") ? ["autonomous-v2"] : [])];
+    if (scoped && family === "autonomous" && !["autonomous-v1", "autonomous-v2", "autonomous"].includes(scopedProtocol)) {
+      throw new Error("Protocol coverage is incomplete or malformed.");
+    }
+    // The API uses the family label only for an unresolved identity. It can
+    // describe unavailable evidence, but cannot authorize an action or record.
+    if (scopedProtocol === "autonomous" && (statuses?.[0]?.coverage !== "unavailable" || payload.items?.length !== 0)) {
+      throw new Error("Protocol coverage is incomplete or malformed.");
+    }
     if (!Array.isArray(statuses) || statuses.length !== expected.length
       || expected.some(protocol => !protocol || statuses.filter(status => status.protocol === protocol).length !== 1)
       || statuses.some(status => !["complete", "partial", "unavailable"].includes(status.coverage)
@@ -148,14 +171,14 @@
       || (state !== "complete" && payload.degraded !== true)
       || typeof payload.degraded !== "boolean" || !Array.isArray(payload.items)
       || payload.items.some(item => {
-        const status = statuses.find(status => status.protocol === forId(item.opportunity_id));
+        const status = statuses.find(status => status.protocol === forItem(item));
         return !status || status.coverage === "unavailable" || (scoped && item.opportunity_id !== expectedIdentity);
       })
-      || statuses.some(status => payload.items.filter(item => forId(item.opportunity_id) === status.protocol).length > (status.item_count ?? 0))) {
+      || statuses.some(status => payload.items.filter(item => forItem(item) === status.protocol).length > (status.item_count ?? 0))) {
       throw new Error("Protocol coverage does not match the returned records.");
     }
     const missing = statuses.filter(status => status.coverage !== "complete").map(status => status.protocol);
-    const labels = { "autonomous-v1": "bounties", "open-competition-v1": "open competitions", "open-competition-v2-beta3": "Beta3 competitions" };
+    const labels = { "autonomous": "bounties", "autonomous-v1": "v1 bounties", "autonomous-v2": "v2 bounties", "open-competition-v1": "open competitions", "open-competition-v2-beta3": "Beta3 competitions" };
     const limited = payload.has_more === true || (payload.has_more === undefined && payload.items.length >= 300);
     if (payload.has_more !== undefined && typeof payload.has_more !== "boolean") throw new Error("Page coverage is malformed.");
     return { state, limited, missing, message: state === "complete" ? (limited ? "Showing a limited page of checked listings; the full count is unknown." : "") : state === "unavailable"

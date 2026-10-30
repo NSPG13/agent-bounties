@@ -1422,8 +1422,8 @@ def check_install_distribution(repo_root: Path, site_dir: Path) -> None:
 def check_shared_script_versions(site_dir: Path) -> None:
     # These keys must be newer than every key used before the Agentizable cutover.
     # A per-page increment can collide with a key already cached by another page.
-    floors = {"marketplace.js": 10, "wallet-link.js": 14, "marketplace-workflow.js": 15,
-              "submissions.js": 5, "review-deadline.js": 4, "webmcp.js": 17, "analytics-config.js": 15}
+    floors = {"marketplace.js": 10, "wallet-link.js": 14, "marketplace-workflow.js": 16,
+              "submissions.js": 5, "review-deadline.js": 4, "webmcp.js": 17, "analytics-config.js": 16}
     versions = {name: set() for name in floors}
     for page in [*site_dir.rglob("*.html"), site_dir / "analytics-config.js"]:
         text = page.read_text(encoding="utf-8")

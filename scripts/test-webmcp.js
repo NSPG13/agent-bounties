@@ -32,7 +32,7 @@ function environment(path = "/", entries = [item()]) {
       requests.push({ url, ...options });
       const query = new URL(url).searchParams, identity = query.get("opportunity_id");
       const selected = identity ? entries.filter(entry => entry.opportunity_id === identity) : entries;
-      const protocol = id => id.startsWith("canonical:") ? "autonomous-v1" : id.startsWith("open-competition-v2:") ? "open-competition-v2-beta3" : "open-competition-v1";
+      const protocol = id => id.startsWith("canonical:") ? (entries.find(entry => entry.opportunity_id === id)?.platform_fee?.protocol_version === "agent-bounties/autonomous-v2" ? "autonomous-v2" : "autonomous-v1") : id.startsWith("open-competition-v2:") ? "open-competition-v2-beta3" : "open-competition-v1";
       const protocols = identity ? [protocol(identity)] : ["autonomous-v1", "open-competition-v1", "open-competition-v2-beta3"];
       const payload = url.includes("/opportunities?") ? { schema_version: "agent-bounties/opportunity-projection-v1", generated_at: "2026-09-05T23:00:00Z", network: "base-mainnet", applied_view: query.get("view"), degraded: false,
         coverage: "complete", coverage_scope: identity ? "canonical_identity" : "inventory_page", requested_opportunity_id: identity, has_more: false,
@@ -1053,4 +1053,17 @@ for (const suffix of ["", ".html"]) test(`page tools recognize exact hosted rout
   assert.equal(status.review_page_open, true);
   assert.equal(status.paid, false);
   assert.equal(env.navigations.length, 0);
+});
+
+test("autonomous v2 prepares a normal claim review and preserves the bond and confirmation", async () => {
+  const entry = item({platform_fee:{protocol_version:"agent-bounties/autonomous-v2"},bond:amount(100000)});
+  const env = environment("/participate.html",[entry]); env.register();
+  const result = await env.tools.get("agent_bounties_prepare_action").execute({action:"solve",opportunity_id:entry.opportunity_id});
+  assert.notEqual(result.status,"competition_workflow");
+  const request = env.requests.find(r=>r.method === "POST");
+  assert.ok(request.url.endsWith("/v1/chatgpt/action-intents"));
+  assert.equal(JSON.parse(request.body).details.claim_bond_base_units,"100000");
+  assert.equal(JSON.parse(request.body).bounty_contract,contract);
+  assert.equal(result.user_confirmation_required,true);
+  assert.equal(env.navigations.length,0);
 });
