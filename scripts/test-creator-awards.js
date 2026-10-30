@@ -80,13 +80,13 @@ test('one shared load serves summary and metrics; date changes use the selected 
   const h = harness('summary'); let reads = 0;
   h.win.fetch = async (_, options) => { reads++; assert.equal(options.credentials, 'omit'); return { ok: true, json: async () => copy() }; };
   awards.start(h.win, h.doc); await tick();
-  assert.match(h.host.innerHTML, /1 paid award · 15.068098 USDC/);
+  assert.match(h.host.innerHTML, /1 paid award · \$15\.07/);
   h.host.dataset.directAwards = 'metrics';
   awards.setWindow(h.doc, window(paidAt - 1000, paidAt + 1000));
-  assert.match(h.host.innerHTML, /1 paid award · 15.068098 USDC/);
+  assert.match(h.host.innerHTML, /1 paid award · \$15\.07/);
   assert.match(h.host.innerHTML, /selected period/);
   awards.setWindow(h.doc, window(paidAt - 1000, paidAt));
-  assert.match(h.host.innerHTML, /0 paid awards · 0 USDC/);
+  assert.match(h.host.innerHTML, /0 paid awards · \$0\.00/);
   awards.setWindow(h.doc, null);
   assert.match(h.host.innerHTML, /dates are unavailable/);
   assert.equal(reads, 1);
@@ -124,4 +124,11 @@ test('the submissions route opens the paid public award and rejects an unknown a
   assert.equal(refresh.disabled, false);
   win.location.search = '?award=unknown'; await submissions.start(win, doc);
   assert.match(status.textContent, /not available/); assert.doesNotMatch(page.innerHTML, /Winning/);
+});
+
+test('USD summaries round for display while exact award evidence remains intact', () => {
+  assert.equal(awards.usd('15068098'), '$15.07');
+  assert.equal(awards.usd('0'), '$0.00');
+  assert.equal(awards.usd('9007199254740993'), '$9,007,199,254.74');
+  assert.equal(awards.amount('15068098'), '15.068098 USDC');
 });
