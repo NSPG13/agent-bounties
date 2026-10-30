@@ -204,7 +204,23 @@
     requireValue(reason.trim() === reason && length <= 2000 && (passed || length >= 20) && !/[\u0000-\u0009\u000b-\u001f\u007f]/u.test(reason));
     return { round: pending.round, submission_hash: pending.submission_hash, evidence_hash: pending.evidence_hash, passed, reason };
   }
-  const api = { target, apiOrigin, session, quote, order, acceptanceKey, checkoutURL, money, review, verdict, artifactURL };
+  // Preparation publishes intended public terms, but grants no acceptance or payment consent.
+  function cardQuoteRequest(input) {
+    fields(input, ['document', 'solver_reward_micro_usdc', 'currency', 'maximum_charge_minor']);
+    integer(input.solver_reward_micro_usdc); integer(input.maximum_charge_minor);
+    requireValue(['mxn', 'usd'].includes(input.currency));
+    const d = input.document;
+    fieldsAllowing(d, ['title', 'goal', 'acceptance_criteria', 'benchmark', 'evidence_schema'], ['source_url', 'image']);
+    text(d.title, 200); text(d.goal, 4000);
+    requireValue(Array.isArray(d.acceptance_criteria) && d.acceptance_criteria.length > 0 && d.acceptance_criteria.length <= 20);
+    d.acceptance_criteria.forEach(c => text(c, 1000));
+    fields(d.benchmark, ['engine', 'delivery_deadline']);
+    requireValue(d.benchmark.engine === 'customer_review_v1'); integer(d.benchmark.delivery_deadline);
+    requireValue(d.evidence_schema && typeof d.evidence_schema === 'object' && !Array.isArray(d.evidence_schema));
+    requireValue(new TextEncoder().encode(JSON.stringify(input)).length <= 60000);
+    return JSON.parse(JSON.stringify({ document: d, solver_reward_micro_usdc: input.solver_reward_micro_usdc }));
+  }
+  const api = { target, apiOrigin, session, quote, order, acceptanceKey, checkoutURL, money, review, verdict, artifactURL, cardQuoteRequest };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.ManagedService = Object.freeze(api);
 })(typeof window === 'object' ? window : globalThis);

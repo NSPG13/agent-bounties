@@ -21,6 +21,7 @@ let browser, base;
 async function setup(options = {}) {
   const context = await browser.newContext({ serviceWorkers: 'block' });
   const page = await context.newPage(), calls = [], requests = [], errors = [], accepts = [];
+  await page.addInitScript(() => { document.modelContext = { registerTool(tool) { window.testCardQuoteTool = tool; } }; });
   const q = structuredClone(fixture.quote), now = Math.floor(Date.now() / 1000);
   Object.assign(q.input, { issued_at: now - 10, expires_at: now + 7200 }); q.input.price_basis.valid_until = now + 7200; q.input.terms.delivery_deadline = now + 86400; q.input.bounty.funding_deadline = now + 86400;
   const state = { account, quote: sign(q), status: 'awaiting_payment', verdicts: [], ...options };
@@ -41,6 +42,12 @@ async function setup(options = {}) {
     if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: { 'Access-Control-Allow-Origin': base, 'Access-Control-Allow-Credentials': 'true', 'Access-Control-Allow-Headers': 'content-type', 'Access-Control-Allow-Methods': 'GET, POST' } });
     if (url.pathname === '/v1/site-auth/session') return reply({ authenticated: !!state.account, user: state.account ? { id: state.account } : null, providers: { google: true, github: true, amazon: false, evil: true }, needs_wallet: true });
     if (url.pathname === '/v1/site-auth/logout') { state.account = null; return route.fulfill({ status: 204, headers: { 'Access-Control-Allow-Origin': base, 'Access-Control-Allow-Credentials': 'true' } }); }
+    if (url.pathname === '/v1/managed-service/bounty-quotes') {
+      if (state.prepareWait) await state.prepareWait;
+      if (state.prepareDrop) return route.abort('failed');
+      if (state.switchAfterPrepare) state.account = other;
+      return reply(state.quote, state.prepareCode || 200);
+    }
     if (url.pathname.endsWith('/accept')) {
       accepts.push(call.body);
       if (state.acceptWait) await state.acceptWait;
@@ -80,6 +87,79 @@ async function setup(options = {}) {
   async function close() { assert.deepEqual(errors, []); await context.close(); }
   return { context, page, calls, requests, accepts, state, go, close };
 }
+
+const quoteDraft = () => ({ document: { title: 'Check the public website', goal: 'Return a timestamped public report.',
+  acceptance_criteria: ['Give the public URL and HTTP status.'], benchmark: { engine: 'customer_review_v1', delivery_deadline: Math.floor(Date.now() / 1000) + 86400 * 7 },
+  evidence_schema: { type: 'object' } }, solver_reward_micro_usdc: 100000000, currency: 'mxn', maximum_charge_minor: 217375 });
+const prepare = (page, input = quoteDraft()) => page.evaluate(async value => {
+  try { return await window.testCardQuoteTool.execute(value); } catch (error) { return { error: error.message }; }
+}, input);
+test('WebMCP prepares an account-bound quote visibly without accepting or opening Checkout', async () => {
+  const f = await setup(); await f.page.goto(base + '/account.html');
+  const tool = await f.page.evaluate(() => ({ name: window.testCardQuoteTool.name, annotations: window.testCardQuoteTool.annotations, description: window.testCardQuoteTool.description }));
+  assert.equal(tool.name, 'agent_bounties_prepare_card_quote'); assert.equal(tool.annotations.readOnlyHint, false); assert.match(tool.description, /Publish.*public bounty terms/);
+  const result = await prepare(f.page); assert.equal(result.status, 'quote_ready_for_personal_review');
+  assert.equal(result.total_minor, 217375); assert.equal(result.accepted, false); assert.equal(result.checkout_created, false);
+  await visible(f.page, 'Review the deliverable'); assert.equal(await f.page.locator('#managed-consent').isChecked(), false);
+  assert.equal(await f.page.locator('#managed-accept').isDisabled(), true);
+  assert.deepEqual(f.calls.filter(c => c.method === 'POST').map(c => c.path), ['/v1/managed-service/bounty-quotes']);
+  assert.match((await prepare(f.page)).error, /current quote/); assert.equal(f.calls.filter(c => c.method === 'POST').length, 1); await f.close();
+});
+test('a fractional USDC reward can display exactly MXN10 with all itemized costs', async () => {
+  const f = await setup(), q = f.state.quote.quote;
+  q.input.solver_reward_micro_usdc = 178000; q.input.verifier_reserve_micro_usdc = 100000;
+  q.platform_fee_micro_usdc = 13350; q.bounty_target_micro_usdc = 291350;
+  const amounts = [[178000,344],[100000,193],[13350,26]];
+  q.lines = q.lines.slice(0,3).map((line,i) => ({ ...line, amount_micro_usdc: amounts[i][0], amount_minor: amounts[i][1] }));
+  q.input.additional_costs = [ { code: 'currency_conversion', label: 'Currency conversion buffer (1.00%)', amount_minor: 6 },
+    { code: 'review_deposit', label: 'Review deposit (refundable, 10% of solver reward)', amount_minor: 35 },
+    { code: 'payment_processing', label: 'Card processing', amount_minor: 396 } ];
+  q.lines.push(...q.input.additional_costs.map(line => ({ ...line, amount_micro_usdc: null }))); q.total_minor = 1000; f.state.quote = sign(q);
+  await f.page.goto(base + '/account.html');
+  const result = await prepare(f.page,{ ...quoteDraft(), solver_reward_micro_usdc: 178000, maximum_charge_minor: 1000 });
+  assert.equal(result.total_minor,1000); assert.equal(await f.page.locator('#managed-total').innerText(),'MXN 10.00');
+  assert.equal(await f.page.locator('#managed-consent').isChecked(),false); assert.equal(f.accepts.length,0); await f.close();
+});
+test('concurrent preparation and a late response after navigation cannot publish twice or expose a quote', async () => {
+  let finish; const wait = new Promise(resolve => { finish=resolve; });
+  const f = await setup({ prepareWait: wait }); await f.page.goto(base + '/account.html');
+  const first=prepare(f.page); await f.page.waitForRequest(r => r.url().endsWith('/bounty-quotes'));
+  assert.match((await prepare(f.page)).error,/current quote/);
+  await f.page.evaluate(() => window.dispatchEvent(new Event('pagehide'))); finish(); await first;
+  assert.equal(f.calls.filter(c => c.method === 'POST').length,1);
+  assert.equal(await f.page.locator('#managed-private').isVisible(),false); assert.equal(f.accepts.length,0); await f.close();
+});
+
+test('preparation rejects invalid input and a signed-out account before publishing terms', async () => {
+  for (const bad of [ { ...quoteDraft(), maximum_charge_minor: -1 }, { ...quoteDraft(), document: { ...quoteDraft().document, private_key: 'never-transmit' } } ]) {
+    const f = await setup(); await f.page.goto(base + '/account.html'); assert.ok((await prepare(f.page, bad)).error); assert.equal(f.calls.length, 0); await f.close();
+  }
+  const f = await setup({ account: null }); await f.page.goto(base + '/account.html'); assert.ok((await prepare(f.page)).error);
+  assert.equal(f.calls.filter(c => c.method === 'POST').length, 0); await f.close();
+});
+test('wrong owner, digest, amount, currency or reward never exposes acceptance after preparation', async () => {
+  for (const change of [f => { f.state.switchAfterPrepare = true; }, f => { f.state.quote.quote_digest = '0'.repeat(64); },
+    f => {}]) {
+    const f = await setup(); change(f); const i = quoteDraft();
+    if (!f.state.switchAfterPrepare && f.state.quote.quote_digest !== '0'.repeat(64)) i.maximum_charge_minor = 1000;
+    await f.page.goto(base + '/account.html'); assert.ok((await prepare(f.page, i)).error);
+    assert.equal(await f.page.locator('#managed-private').isVisible(), false); assert.equal(f.accepts.length, 0); await f.close();
+  }
+  for (const input of [{ ...quoteDraft(), currency: 'usd' }, { ...quoteDraft(), solver_reward_micro_usdc: 1 }]) {
+    const f = await setup(); await f.page.goto(base + '/account.html'); assert.ok((await prepare(f.page,input)).error); assert.equal(f.accepts.length,0); await f.close();
+  }
+});
+test('malformed and ambiguous incoming operation links cannot become fresh preparation pages', async () => {
+  for (const query of ['?managed_quote=invalid','?managed_quote='+quoteId+'&managed_order='+orderId,'?unrelated=1','#managed_quote='+quoteId]) {
+    const f=await setup(); await f.page.goto(base+'/account.html'+query); assert.match((await prepare(f.page)).error,/current quote/);
+    assert.equal(f.calls.filter(c => c.method === 'POST').length,0); await f.close();
+  }
+});
+test('uncertain quote creation cannot be retried automatically and never creates an order', async () => {
+  const f = await setup({ prepareDrop: true }); await f.page.goto(base + '/account.html');
+  assert.ok((await prepare(f.page)).error); assert.match((await prepare(f.page)).error,/replacement/);
+  assert.equal(f.calls.filter(c => c.method === 'POST').length,1); assert.equal(f.accepts.length,0); await f.close();
+});
 
 test('recovered refund is separate from historical funding and never offers a new verdict', async () => {
   const amount = fixture.quote.lines.filter(l => ['solver_reward', 'verification'].includes(l.code)).reduce((n, l) => n + l.amount_minor, 0);

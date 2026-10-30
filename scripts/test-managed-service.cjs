@@ -151,3 +151,17 @@ test('a review deposit line must be exactly 10% of the solver reward at the quot
   const bad = withDeposit(deposit - 1);
   await assert.rejects(core.quote(bad, sign(bad), account));
 });
+
+
+test('card preparation input admits fractional rewards while bounding public data and budget', () => {
+  const i = { document: { title: 'Check the site', goal: 'Publish a report.', acceptance_criteria: ['Show its URL.'],
+    benchmark: { engine: 'customer_review_v1', delivery_deadline: 1900000000 }, evidence_schema: { type: 'object' } },
+    solver_reward_micro_usdc: 178000, currency: 'mxn', maximum_charge_minor: 1000 };
+  const body = core.cardQuoteRequest(i); assert.deepEqual(Object.keys(body), ['document','solver_reward_micro_usdc']);
+  assert.notEqual(body.document,i.document); assert.equal(body.solver_reward_micro_usdc,178000);
+  for (const change of [v => { v.currency='eur'; },v => { v.maximum_charge_minor=0; },v => { v.solver_reward_micro_usdc=1.2; },
+    v => { v.document.private_key='secret'; },v => { v.document.benchmark.engine='other'; },v => { v.document.evidence_schema=null; },
+    v => { v.document.goal='x'.repeat(4001); },v => { v.document.image={ text:'x'.repeat(60001) }; }]) {
+    const value=structuredClone(i); change(value); assert.throws(() => core.cardQuoteRequest(value));
+  }
+});

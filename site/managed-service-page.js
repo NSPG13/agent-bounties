@@ -1,6 +1,7 @@
 (function () {
   'use strict';
   const core = window.ManagedService, el = id => document.getElementById('managed-' + id);
+  const preparationPage = location.search === '' && location.hash === ''; // Before any URL normalization.
   let target, origin, epoch = 0, controller, poll, expiry, polls = 0, account = null, record = null, digest = null, order = null, busy = false, pending = null;
   const status = message => { el('status').textContent = message; };
   function clear() {
@@ -314,6 +315,60 @@
       busy = false; drawOrder(value);
     } catch (error) { failure(error, token, true); }
   }
+  // A page-local preparation surface: no shared analytics, cookies, wallet access or
+  // automatic acceptance. The server owns account admission, price and funding rules.
+  let preparationAttempted = false;
+  async function prepareCardQuote(input) {
+    const body = core.cardQuoteRequest(input), currency = input.currency, maximum = input.maximum_charge_minor;
+    if (!preparationPage || target || busy || preparationAttempted) throw new Error('Keep the current quote or order; do not create a replacement.');
+    const token = clear(); busy = true; controls(); status('Preparing an itemized card quote…');
+    try {
+      const session = await request('/v1/site-auth/session', token); account = core.session(session);
+      if (!account) throw Object.assign(new Error('Sign in first'), { status: 401 });
+      preparationAttempted = true;
+      const reply = await request('/v1/managed-service/bounty-quotes', token, body);
+      await sameAccount(token, account);
+      const q = await core.quote(reply.quote, reply.quote_digest, account); current(token);
+      const now = Math.floor(Date.now() / 1000);
+      if (q.input.currency !== currency || q.total_minor > maximum
+          || q.input.solver_reward_micro_usdc !== body.solver_reward_micro_usdc
+          || q.input.issued_at > now || q.input.expires_at <= now) throw new Error('Quote does not match the requested budget.');
+      target = core.target('?managed_quote=' + q.input.quote_id);
+      history.replaceState(null, '', target.path);
+      record = q; digest = reply.quote_digest; busy = false; drawQuote(q); quoteState();
+      return { status: 'quote_ready_for_personal_review', quote_id: q.input.quote_id, quote_digest: digest,
+        currency: q.input.currency, total_minor: q.total_minor, review_path: target.path,
+        public_terms_published: true, accepted: false, checkout_created: false, payment_made: false };
+    } catch (error) {
+      failure(error, token, true);
+      if (token === epoch && !document.hidden && preparationAttempted)
+        status('The quote result could not be confirmed. Public terms may have been saved, but no order or payment was started. Do not repeat preparation automatically.');
+      throw new Error('Card quote preparation unavailable; check the page status.');
+    }
+  }
+  const preparationLifecycle = new AbortController();
+  function registerPreparation() {
+    if (window.top !== window.self) return;
+    try { core.apiOrigin(location); } catch (_) { return; }
+    const contexts = [...new Set([document.modelContext, window.navigator?.modelContext])]
+      .filter(context => typeof context?.registerTool === 'function');
+    const tool = { name: 'agent_bounties_prepare_card_quote', title: 'Prepare an itemized card bounty quote',
+      description: 'Publish the intended public bounty terms and prepare an account-owned card quote using the current signed-in session. Supply only the intended public task, never private files or credentials. The server checks account admission and price limits. This displays the exact full price for personal review; it never accepts terms, creates Checkout, pays, signs, or funds. Use a blank account.html page. A failed or lost result must not be automatically retried.',
+      annotations: { readOnlyHint: false, untrustedContentHint: true },
+      inputSchema: { type: 'object', additionalProperties: false,
+        required: ['document', 'solver_reward_micro_usdc', 'currency', 'maximum_charge_minor'],
+        properties: { document: { type: 'object', description: 'Public title, goal, acceptance_criteria, benchmark {engine: customer_review_v1, delivery_deadline: Unix seconds}, evidence_schema; optional source_url and image.' },
+          solver_reward_micro_usdc: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
+          currency: { type: 'string', enum: ['mxn', 'usd'] },
+          maximum_charge_minor: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER } } },
+      execute: prepareCardQuote };
+    for (const context of contexts) {
+      try { Promise.resolve(context.registerTool(tool, { signal: preparationLifecycle.signal })).catch(() => {}); }
+      catch (_) { /* Ordinary quote review works without WebMCP support. */ }
+    }
+  }
+  window.addEventListener('pagehide', () => preparationLifecycle.abort());
+  registerPreparation();
   el('refund-consent').addEventListener('change', controls); el('refund').addEventListener('click', refund);
   for (const id of ['verdict-pass', 'verdict-reject', 'review-consent']) el(id).addEventListener('change', controls);
   el('review-reason').addEventListener('input', controls); el('review-submit').addEventListener('click', submitReview);
@@ -330,7 +385,7 @@
   document.addEventListener('visibilitychange', () => { if (document.hidden) { clear(); status('Refresh to securely load your order.'); } else load(); });
   try {
     if (window.top !== window.self) throw new Error('Embedded payment page');
-    target = core.target(location.search); origin = core.apiOrigin(location); history.replaceState(null, '', target.path); load();
+    origin = core.apiOrigin(location); target = core.target(location.search); history.replaceState(null, '', target.path); load();
   }
   catch (_) { clear(); history.replaceState(null, '', '/account.html'); el('refresh').disabled = true; status('Open the quote or order link provided by Agentizable to view its details.'); }
 })();
