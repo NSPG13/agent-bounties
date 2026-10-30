@@ -1,0 +1,92 @@
+{
+  "schema_version": "agentizable/discovery-query-cases-v1",
+  "purpose": "Fixed inputs matching the four search queries and four AI questions in the October 29, 2026 baseline; this file contains no measured search or AI-answer results.",
+  "required_receipt_fields": [
+    "case_id",
+    "observed_at",
+    "engine",
+    "mode",
+    "model",
+    "locale",
+    "input",
+    "status",
+    "returned_links",
+    "destination",
+    "brand_accuracy",
+    "limitations"
+  ],
+  "locale_policy": "Record a verified provider locale when exposed; otherwise record unknown/uncontrolled. Do not infer search locale from the user time zone.",
+  "model_policy": "Record the model only if the provider exposes it; otherwise record unspecified. A provider name or Search mode does not establish the underlying model.",
+  "search_cases": [
+    {
+      "id": "brand",
+      "input": "\"Agentizable\"",
+      "intent": "Find the canonical brand website",
+      "expected_destination": "https://agentizable.ai/"
+    },
+    {
+      "id": "brand-integration",
+      "input": "\"Agentizable\" MCP",
+      "intent": "Find current connection instructions",
+      "expected_destination": "https://agentizable.ai/install/"
+    },
+    {
+      "id": "solver-intent",
+      "input": "\"how to earn money with my AI agent\"",
+      "intent": "Find a useful guide with accurate availability and payment boundaries",
+      "expected_destination": "https://agentizable.ai/how-to-earn-money-with-my-ai-agent"
+    },
+    {
+      "id": "poster-intent",
+      "input": "\"post a bounty with ChatGPT\"",
+      "intent": "Find a reviewable outcome-based posting workflow",
+      "expected_destination": "https://agentizable.ai/post-a-bounty-with-chatgpt-claude-gemini"
+    }
+  ],
+  "answer_engine_cases": [
+    {
+      "id": "geo-brand",
+      "input": "What is Agentizable and how is it different from an AI assistant subscription?",
+      "acceptance": "Correct identity and product distinction, supported by current official sources; no invented subscription or earnings claims",
+      "expected_sources": [
+        "https://agentizable.ai/",
+        "https://agentizable.ai/about"
+      ]
+    },
+    {
+      "id": "geo-safe-start",
+      "input": "Can I inspect Agentizable work without a wallet or spending money?",
+      "acceptance": "Distinguish free read-only inspection from wallet connection, paid actions and commitments",
+      "expected_sources": [
+        "https://agentizable.ai/collaborate/",
+        "https://agentizable.ai/agent/index.md"
+      ]
+    },
+    {
+      "id": "geo-mcp",
+      "input": "How do I connect an AI agent to Agentizable over MCP?",
+      "acceptance": "Working canonical connection instructions and catalog discovery; no assumed tools outside the returned catalog",
+      "expected_sources": [
+        "https://agentizable.ai/install/",
+        "https://mcp.agentizable.ai/mcp"
+      ]
+    },
+    {
+      "id": "geo-payment-evidence",
+      "input": "What proves that an Agentizable bounty solver has been paid?",
+      "acceptance": "Applicable confirmed canonical settlement event, distinguished from plans, signatures, transaction hashes and submissions",
+      "expected_sources": [
+        "https://agentizable.ai/earn-money-using-ai",
+        "https://agentizable.ai/metrics"
+      ]
+    }
+  ],
+  "answer_engine_default_status": "not_run",
+  "limits": [
+    "Preserve the exact input, including search quotation marks, and case ID across comparable runs. A changed input requires a new case or explicitly versioned baseline.",
+    "Do not infer a specific engine's answers from a web search.",
+    "Capture results without claiming exhaustive rankings or causal lift.",
+    "Search/provider locale and retrieval coverage can change results; an uncontrolled locale remains an explicit limitation.",
+    "The initial web-search provider and model were unspecified, and locale was unknown/uncontrolled. Do not attribute those results to Google, Bing, or a named answer model."
+  ]
+}

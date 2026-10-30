@@ -22,9 +22,9 @@ python scripts/check-mcp-protocol-eras.py \
 | Legacy `initialize` handshake | Negotiates a supported legacy version and preserves legacy result shapes |
 | Modern `initialize` or `ping` | `404` with JSON-RPC `-32601`; those methods are not in the modern core |
 | Modern `GET /mcp` or `DELETE /mcp` | `405`; modern Streamable HTTP uses one `POST` per request |
-| Ordinary core discovery (client name is not `openai-mcp` and no exact ChatGPT `Origin`) | Twenty-eight-tool core catalog: the nine app tools, cached-client compatibility tool `list_autonomous_bounties`, the two Open Competition V2 tools, and sixteen broad verification tools |
-| Modern discovery with exact `params._meta["io.modelcontextprotocol/clientInfo"].name="openai-mcp"` | Nine-tool app catalog; the only bounty-discovery entry point is **get_bounty_feed** |
-| Discovery from an exact ChatGPT browser `Origin` | Nine-tool app catalog as a browser-client fallback |
+| Ordinary core discovery (client name is not `openai-mcp` and no exact ChatGPT `Origin`) | Core catalog for that deployed revision; inspect `tools/list` for its app, compatibility, verification, and specialist operations |
+| Modern discovery with exact `params._meta["io.modelcontextprotocol/clientInfo"].name="openai-mcp"` | App catalog for that deployed revision; use **get_bounty_feed** for bounty discovery |
+| Discovery from an exact ChatGPT browser `Origin` | App catalog as a browser-client fallback |
 | `tools/call` for `list_autonomous_bounties` from a cached ChatGPT registration | Accepted and dispatched even though the alias is absent from new ChatGPT discovery |
 
 Modern and legacy MCP implementations are not directly interoperable. The
@@ -198,12 +198,12 @@ MCP_ALLOWED_ORIGINS=https://client.example,https://another.example
 
 Do not use wildcard origins. This check is the endpoint's DNS-rebinding
 boundary, not an authentication substitute. A modern client whose standard MCP
-client-info name is exactly `openai-mcp` receives the nine-tool app catalog;
+client-info name is exactly `openai-mcp` receives the app catalog;
 exact ChatGPT browser origins provide the same metadata-only fallback. These
 self-declared signals never authenticate a caller or grant wallet, payment,
 publishing, analytics-exclusion, or operator authority. Release must stop
 before registration changes if a real ChatGPT metadata scan sees the
-twenty-eight-tool core catalog.
+core catalog instead of its app catalog.
 
 ## Verification
 
@@ -216,9 +216,26 @@ python scripts/check-mcp-protocol-eras.py --endpoint http://127.0.0.1:8080/mcp -
 
 The runtime check calls modern `server/discover`, both modern catalog profiles,
 a resource, and a tool, plus legacy `initialize` and both legacy catalog
-profiles through the real HTTP endpoint. It requires nine tools for the exact
-`openai-mcp` client-info name, twenty-eight tools for an ordinary core client, and a
-successful cached-client dispatch attempt for `list_autonomous_bounties`.
+profiles through the real HTTP endpoint. It checks the catalog expected by that
+source revision for the exact `openai-mcp` client-info name and for an ordinary
+core client, plus cached-client dispatch for `list_autonomous_bounties`. Do not
+use a tool count from another release as the hosted acceptance criterion.
+
+For a dated, read-only discovery receipt against the actual hosted release:
+
+```bash
+python scripts/agent-discovery-benchmark.py --output /tmp/agent-discovery.json
+```
+
+This checks orientation, REST inventory, modern and legacy MCP discovery, and
+advertised read-only feed/posting-options tools. It records the source commit,
+health-header revisions, exact requests, coverage, and empty-inventory results.
+It never prepares a bounty, signs, funds, or publishes. Its requests are marked
+as self-tests in the receipt and user agent; this does not guarantee server-side
+analytics exclusion. When available, the script reads the scoped
+`AGENT_BOUNTIES_ANALYTICS_EXCLUSION_TOKEN` environment variable and records the
+server's `X-Agent-Bounties-Analytics-Excluded` acknowledgement without saving
+the credential. Do not count the run as independent user adoption.
 
 The deployed production smoke performs modern discovery and legacy initialize
 against the published endpoint. A health response alone is not sufficient

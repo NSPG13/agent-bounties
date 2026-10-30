@@ -64,6 +64,14 @@ async function main() {
       const ctx = await context({ viewport: { width, height: 800 } }), page = await ctx.newPage();
       let reference;
       for (const file of pages) {
+        if (file === "404.html") {
+          await page.goto(`${origin}/${file}`);
+          assert.equal(await page.locator("h1").innerText(), "This page isn't here.");
+          assert.equal(await page.locator('meta[name="robots"]').getAttribute("content"), "noindex, follow");
+          assert.equal(await page.locator("script, form, iframe").count(), 0, "missing-page fallback has no active journey");
+          for (const n of [1, 2, 3]) await assertFits(page, `nav a:nth-child(${n})`);
+          continue;
+        }
         if (file === "posting-draft-canary.html") {
           const sessionUrl = "https://api.agentizable.ai/v1/site-auth/session";
           await page.route(sessionUrl, route => route.fulfill({
@@ -88,7 +96,7 @@ async function main() {
           // journey handlers or analytics may see quote, order or account state.
           await page.goto(`${origin}/${file}`);
           assert.equal(await page.locator("[data-site-header], .ab-footer").count(), 0, "private order page remains isolated");
-          assert.deepEqual(await page.locator("script").evaluateAll(els => els.map(el => el.getAttribute("src"))), ["managed-service-core.js?v=20261028", "managed-service-page.js?v=20261028"]);
+          assert.deepEqual(await page.locator("script").evaluateAll(els => els.map(el => el.getAttribute("src"))), ["managed-service-core.js?v=20261030", "managed-service-page.js?v=20261030"]);
           assert.equal(await page.locator('meta[name="robots"]').getAttribute("content"), "noindex, nofollow");
           continue;
         }
@@ -134,7 +142,7 @@ async function main() {
       page.on("pageerror", e => errors.push(e.message));
       mode = "ready";
       await page.goto(`${origin}/metrics.html`);
-      await page.waitForFunction(() => document.querySelector("[data-payout-volume]").textContent === "12 USDC");
+      await page.waitForFunction(() => document.querySelector("[data-payout-volume]").textContent === "$12.00");
       assert.equal(await page.locator("[data-settled-rounds]").innerText(), "2");
       assert.equal(await page.locator("[data-overview-ready]").innerText(), "3");
       assert.equal(await page.locator(".metrics-detail[open]").count(), 0);
@@ -146,7 +154,7 @@ async function main() {
       }
       await assertFits(page, '[data-period="7d"]');
       await page.locator('[data-period="7d"]').click();
-      await page.waitForFunction(() => document.querySelector("[data-payout-volume]").textContent === "7 USDC");
+      await page.waitForFunction(() => document.querySelector("[data-payout-volume]").textContent === "$7.00");
       assert.equal(await page.locator("[data-overview-ready]").innerText(), "3");
       await page.goto(`${origin}/metrics.html#payout-audit`);
       assert.equal(await page.locator("#payment-records").getAttribute("open"), "");
@@ -163,11 +171,11 @@ async function main() {
       assert.equal(await page.locator("[data-platform-revenue]").innerText(), "—");
       mode = "partial";
       await page.locator('[data-period="lifetime"]').click();
-      await page.waitForFunction(() => document.querySelector("[data-payout-volume]").textContent === "12 USDC");
+      await page.waitForFunction(() => document.querySelector("[data-payout-volume]").textContent === "$12.00");
       assert.equal(await page.locator("[data-overview-ready]").innerText(), "—");
       mode = "zero";
       await page.locator('[data-period="7d"]').click();
-      await page.waitForFunction(() => document.querySelector("[data-payout-volume]").textContent === "0 USDC");
+      await page.waitForFunction(() => document.querySelector("[data-payout-volume]").textContent === "$0.00");
       assert.equal(await page.locator("[data-overview-ready]").innerText(), "0");
       assert.deepEqual(errors, []);
       console.log(`Metrics overview, periods, proof deep link, scrolling and unavailable/partial/zero passed ${width}x${height}`);

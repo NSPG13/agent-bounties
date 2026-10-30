@@ -13,26 +13,26 @@ from urllib.parse import urldefrag, urlparse
 
 
 CANONICAL_PAGES = {
-    "blog/check-agent-work-before-committing-funds.html": "https://agentizable.ai/blog/check-agent-work-before-committing-funds.html",
-    "account.html": "https://agentizable.ai/account.html",
-    "check-work.html": "https://agentizable.ai/check-work.html",
-    "app-testing.html": "https://agentizable.ai/app-testing.html",
-    "api-integration.html": "https://agentizable.ai/api-integration.html",
-    "bug-fix.html": "https://agentizable.ai/bug-fix.html",
+    "blog/check-agent-work-before-committing-funds.html": "https://agentizable.ai/blog/check-agent-work-before-committing-funds",
+    "account.html": "https://agentizable.ai/account",
+    "check-work.html": "https://agentizable.ai/check-work",
+    "app-testing.html": "https://agentizable.ai/app-testing",
+    "api-integration.html": "https://agentizable.ai/api-integration",
+    "bug-fix.html": "https://agentizable.ai/bug-fix",
     "index.html": "https://agentizable.ai/",
-    "earn.html": "https://agentizable.ai/earn.html",
-    "leaderboard.html": "https://agentizable.ai/leaderboard.html",
-    "competition.html": "https://agentizable.ai/competition.html",
-    "participate.html": "https://agentizable.ai/participate.html",
-    "creator-open.html": "https://agentizable.ai/creator-open.html",
-    "setup.html": "https://agentizable.ai/setup.html",
-    "funded.html": "https://agentizable.ai/funded.html",
-    "submissions.html": "https://agentizable.ai/submissions.html",
-    "recover-bounty.html": "https://agentizable.ai/recover-bounty.html",
-    "about.html": "https://agentizable.ai/about.html",
+    "earn.html": "https://agentizable.ai/earn",
+    "leaderboard.html": "https://agentizable.ai/leaderboard",
+    "competition.html": "https://agentizable.ai/competition",
+    "participate.html": "https://agentizable.ai/participate",
+    "creator-open.html": "https://agentizable.ai/creator-open",
+    "setup.html": "https://agentizable.ai/setup",
+    "funded.html": "https://agentizable.ai/funded",
+    "submissions.html": "https://agentizable.ai/submissions",
+    "recover-bounty.html": "https://agentizable.ai/recover-bounty",
+    "about.html": "https://agentizable.ai/about",
     "blog/index.html": "https://agentizable.ai/blog/",
-    "blog/agentic-economy-needs-a-market-for-work.html": "https://agentizable.ai/blog/agentic-economy-needs-a-market-for-work.html",
-    "how-to-earn-money-with-my-ai-agent.html": "https://agentizable.ai/how-to-earn-money-with-my-ai-agent.html",
+    "blog/agentic-economy-needs-a-market-for-work.html": "https://agentizable.ai/blog/agentic-economy-needs-a-market-for-work",
+    "how-to-earn-money-with-my-ai-agent.html": "https://agentizable.ai/how-to-earn-money-with-my-ai-agent",
     "install/index.html": "https://agentizable.ai/install/",
     "collaborate/index.html": "https://agentizable.ai/collaborate/",
     "install/bankr/index.html": "https://agentizable.ai/install/bankr/",
@@ -48,17 +48,17 @@ CANONICAL_PAGES = {
     "install/mcpmarket/index.html": "https://agentizable.ai/install/mcpmarket/",
     "install/openclaw/index.html": "https://agentizable.ai/install/openclaw/",
     "install/vscode/index.html": "https://agentizable.ai/install/vscode/",
-    "authorize.html": "https://agentizable.ai/authorize.html",
-    "cancel.html": "https://agentizable.ai/cancel.html",
-    "earn-money-using-ai.html": "https://agentizable.ai/earn-money-using-ai.html",
-    "post-a-bounty-with-chatgpt-claude-gemini.html": "https://agentizable.ai/post-a-bounty-with-chatgpt-claude-gemini.html",
-    "metrics.html": "https://agentizable.ai/metrics.html",
-    "onramp.html": "https://agentizable.ai/onramp.html",
-    "post.html": "https://agentizable.ai/post.html",
-    "posting-draft-canary.html": "https://agentizable.ai/posting-draft-canary.html",
-    "privacy.html": "https://agentizable.ai/privacy.html",
-    "success.html": "https://agentizable.ai/success.html",
-    "terms.html": "https://agentizable.ai/terms.html",
+    "authorize.html": "https://agentizable.ai/authorize",
+    "cancel.html": "https://agentizable.ai/cancel",
+    "earn-money-using-ai.html": "https://agentizable.ai/earn-money-using-ai",
+    "post-a-bounty-with-chatgpt-claude-gemini.html": "https://agentizable.ai/post-a-bounty-with-chatgpt-claude-gemini",
+    "metrics.html": "https://agentizable.ai/metrics",
+    "onramp.html": "https://agentizable.ai/onramp",
+    "post.html": "https://agentizable.ai/post",
+    "posting-draft-canary.html": "https://agentizable.ai/posting-draft-canary",
+    "privacy.html": "https://agentizable.ai/privacy",
+    "success.html": "https://agentizable.ai/success",
+    "terms.html": "https://agentizable.ai/terms",
 }
 INDEXABLE_PAGES = {
     "blog/check-agent-work-before-committing-funds.html",
@@ -425,6 +425,42 @@ def check_internal_link(site_dir: Path, source: Path, link: str, ids: set[str]) 
         target_parser.feed(target_path.read_text(encoding="utf-8"))
         if fragment not in target_parser.ids:
             fail(f"{source}: missing target anchor {link}")
+
+
+def check_missing_page(site_dir: Path) -> None:
+    # A top-level 404.html disables Cloudflare Pages' implicit SPA fallback.
+    # It can render at any missing URL depth, so every link is fully qualified.
+    text = (site_dir / "404.html").read_text(encoding="utf-8")
+    parser = PageParser()
+    parser.feed(text)
+    if parser.h1_count != 1:
+        fail("404.html must contain exactly one h1")
+    require_phrases("404.html", text, [
+        '<meta name="robots" content="noindex, follow">',
+        "<title>Page not found | Agentizable.ai</title>",
+        'href="https://agentizable.ai/"',
+        'href="https://agentizable.ai/earn"',
+        'href="https://agentizable.ai/install/"',
+    ])
+    if re.search(r'<(?:script|form|iframe)\b|rel=["\']canonical["\']|http-equiv=["\']refresh["\']', text, re.I):
+        fail("404.html must not run a journey, redirect, or canonicalize missing URLs to a real page")
+    for link in parser.links:
+        if not link.startswith("https://agentizable.ai/"):
+            fail(f"404.html link must work from any missing path: {link}")
+
+
+def check_ended_builder_sprint(site_dir: Path) -> None:
+    challenge = json_file(site_dir / "collaborate/challenge.json")
+    sprint = next((item for item in challenge.get("sprints", [])
+                   if item.get("id") == "first-builder-sprint-2026-10"), None)
+    if not sprint or sprint.get("status") != "ended":
+        fail("the October 5–12 builder sprint must remain explicitly ended")
+    if sprint.get("starts_at") != "2026-10-05T00:00:00Z" or sprint.get("ends_at") != "2026-10-12T23:59:59Z" or sprint.get("submission_deadline") != sprint.get("ends_at"):
+        fail("the ended builder sprint must preserve its historical window")
+    for relative in ("collaborate/index.html", "collaborate/guide.md"):
+        require_phrases(relative, (site_dir / relative).read_text(encoding="utf-8"), [
+            "This sprint has ended.", "General contributions are still welcome",
+        ])
 
 
 def check_protocol(protocol: dict, deployment: dict) -> None:
@@ -1472,8 +1508,10 @@ def main() -> int:
         fail("static site custom domain must be agentizable.ai")
 
     html_files = {path.relative_to(site_dir).as_posix() for path in site_dir.rglob("*.html")}
-    if html_files != set(CANONICAL_PAGES):
+    if html_files != set(CANONICAL_PAGES) | {"404.html"}:
         fail(f"site HTML inventory does not match canonical page policy; found {sorted(html_files)}")
+    check_missing_page(site_dir)
+    check_ended_builder_sprint(site_dir)
     ui_code = {path.relative_to(site_dir).as_posix() for pattern in ("*.js", "*.css") for path in site_dir.rglob(pattern)}
     generated_wallet = {"vendor/coinbase-embedded-wallet.bundle.js", "vendor/coinbase-embedded-wallet.bundle.css"}
     present_wallet = ui_code & generated_wallet
@@ -1502,6 +1540,14 @@ def main() -> int:
         analytics_version = 7
         parser = PageParser()
         parser.feed(text)
+        # Match the clean URL that Cloudflare Pages serves after redirecting
+        # .html aliases; do not declare a redirecting alias as canonical.
+        route = relative.removesuffix("index.html") if relative.endswith("index.html") else relative.removesuffix(".html")
+        if canonical != "https://agentizable.ai/" + route:
+            fail(f"{relative}: canonical must match the Cloudflare Pages clean URL")
+        og_url = re.search(r'<meta\s+property="og:url"\s+content="([^"]+)"', text)
+        if og_url and og_url.group(1) != canonical:
+            fail(f"{relative}: og:url must match its canonical URL")
         if parser.h1_count != 1:
             fail(f"{relative} must contain exactly one h1")
         require_phrases(
@@ -1563,9 +1609,10 @@ def main() -> int:
 
     sitemap = ET.parse(site_dir / "sitemap.xml").getroot()
     namespace = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
-    urls = {item.text.strip() for item in sitemap.findall("sm:url/sm:loc", namespace) if item.text}
+    listed_urls = [item.text.strip() for item in sitemap.findall("sm:url/sm:loc", namespace) if item.text]
+    urls = set(listed_urls)
     expected_urls = {CANONICAL_PAGES[relative] for relative in INDEXABLE_PAGES}
-    if urls != expected_urls:
+    if urls != expected_urls or len(listed_urls) != len(urls):
         fail(f"sitemap must list every indexable canonical website page exactly once; found {sorted(urls)}")
     for retired in (
         "https://agentizable.ai/objective.html",

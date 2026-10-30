@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url><loc>https://agentizable.ai/</loc></url>
-  <url><loc>https://agentizable.ai/bug-fix.html</loc></url>
-  <url><loc>https://agentizable.ai/earn.html</loc></url>
-  <url><loc>https://agentizable.ai/competition.html</loc></url>
-  <url><loc>https://agentizable.ai/about.html</loc></url>
+  <url><loc>https://agentizable.ai/bug-fix</loc></url>
+  <url><loc>https://agentizable.ai/earn</loc></url>
+  <url><loc>https://agentizable.ai/competition</loc></url>
+  <url><loc>https://agentizable.ai/about</loc></url>
   <url><loc>https://agentizable.ai/blog/</loc></url>
-  <url><loc>https://agentizable.ai/blog/agentic-economy-needs-a-market-for-work.html</loc></url>
-  <url><loc>https://agentizable.ai/how-to-earn-money-with-my-ai-agent.html</loc></url>
+  <url><loc>https://agentizable.ai/blog/agentic-economy-needs-a-market-for-work</loc></url>
+  <url><loc>https://agentizable.ai/how-to-earn-money-with-my-ai-agent</loc></url>
   <url><loc>https://agentizable.ai/install/</loc></url>
   <url><loc>https://agentizable.ai/collaborate/</loc></url>
   <url><loc>https://agentizable.ai/install/bankr/</loc></url>
@@ -19,13 +19,13 @@
   <url><loc>https://agentizable.ai/install/linear/</loc></url>
   <url><loc>https://agentizable.ai/install/claude-custom/</loc></url>
   <url><loc>https://agentizable.ai/install/chatgpt-dev/</loc></url>
-  <url><loc>https://agentizable.ai/earn-money-using-ai.html</loc></url>
-  <url><loc>https://agentizable.ai/post-a-bounty-with-chatgpt-claude-gemini.html</loc></url>
-  <url><loc>https://agentizable.ai/metrics.html</loc></url>
-  <url><loc>https://agentizable.ai/privacy.html</loc></url>
-  <url><loc>https://agentizable.ai/terms.html</loc></url>
-  <url><loc>https://agentizable.ai/api-integration.html</loc></url>
-  <url><loc>https://agentizable.ai/app-testing.html</loc></url>
-  <url><loc>https://agentizable.ai/leaderboard.html</loc></url>
-  <url><loc>https://agentizable.ai/blog/check-agent-work-before-committing-funds.html</loc></url>
+  <url><loc>https://agentizable.ai/earn-money-using-ai</loc></url>
+  <url><loc>https://agentizable.ai/post-a-bounty-with-chatgpt-claude-gemini</loc></url>
+  <url><loc>https://agentizable.ai/metrics</loc></url>
+  <url><loc>https://agentizable.ai/privacy</loc></url>
+  <url><loc>https://agentizable.ai/terms</loc></url>
+  <url><loc>https://agentizable.ai/api-integration</loc></url>
+  <url><loc>https://agentizable.ai/app-testing</loc></url>
+  <url><loc>https://agentizable.ai/leaderboard</loc></url>
+  <url><loc>https://agentizable.ai/blog/check-agent-work-before-committing-funds</loc></url>
 </urlset>
