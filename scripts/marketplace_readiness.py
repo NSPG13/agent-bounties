@@ -79,10 +79,12 @@ def inspect(payload, now=None):
         return invalid('checked_at_invalid')
     try:
         readers = payload['readers']
-        if not isinstance(readers, list) or len(readers) != len(PROTOCOLS):
+        if not isinstance(readers, list) or len(readers) not in (len(PROTOCOLS), len(PROTOCOLS) + 1):
             return invalid('readers_invalid')
         if (not all(isinstance(r, dict) and isinstance(r.get('protocol'), str) for r in readers)
-                or {r['protocol'] for r in readers} != PROTOCOLS
+                or len({r['protocol'] for r in readers}) != len(readers)
+                or {r['protocol'] for r in readers} not in (
+                    PROTOCOLS, PROTOCOLS | {'agent-bounties/autonomous-v2'})
                 or type(payload.get('ready')) is not bool):
             return invalid('readers_invalid')
         safe, latest = payload['safe_block'], payload['latest_block']

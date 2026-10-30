@@ -42,6 +42,34 @@ class MarketplaceReadinessTests(unittest.TestCase):
                 data = copy.deepcopy(self.payload); data['readers'][position].update(patch)
                 self.assertNotEqual(inspect(data, self.now)['state'], 'healthy')
 
+    def test_configured_v2_is_checked_with_every_existing_reader(self):
+        data = copy.deepcopy(self.payload)
+        data['readers'].append(dict(data['readers'][0], protocol='agent-bounties/autonomous-v2'))
+        result = inspect(data, self.now)
+        self.assertEqual(result['state'], 'healthy')
+        self.assertEqual(len(result['readers']), 4)
+        self.assertFalse(result['restartable'])
+        for change in [{'ready': False, 'blocker': 'reader_failed'},
+                       {'heartbeat_age_seconds': 91}, {'cursor_block': 1011},
+                       {'lag_blocks': 21}, {'heartbeat_age_seconds': True},
+                       {'cursor_block': None}]:
+            invalid = copy.deepcopy(data)
+            invalid['readers'][-1].update(change)
+            result = inspect(invalid, self.now)
+            self.assertNotEqual(result['state'], 'healthy')
+            self.assertFalse(result['restartable'])
+
+    def test_v2_cannot_replace_required_reader_or_admit_duplicates_or_unknowns(self):
+        v2 = dict(self.payload['readers'][0], protocol='agent-bounties/autonomous-v2')
+        for readers in [self.payload['readers'][1:] + [v2],
+                        self.payload['readers'] + [self.payload['readers'][0]],
+                        self.payload['readers'] + [v2, v2],
+                        self.payload['readers'] + [dict(v2, protocol='unknown')],
+                        self.payload['readers'] + [None]]:
+            result = inspect(dict(self.payload, readers=readers), self.now)
+            self.assertEqual(result['state'], 'unavailable')
+            self.assertFalse(result['restartable'])
+
     def test_missing_duplicate_future_or_stale_data_fail_closed(self):
         for patch in [{'readers': self.payload['readers'][:2]},
                       {'readers': [self.payload['readers'][0]] * 3}, {'safe_block': None},
