@@ -33,9 +33,15 @@ immutable first touch and records the later rail separately as an assist.
 The response also returns `x-agent-bounties-attribution-rail` and
 `x-agent-bounties-first-touch-rail`, plus
 `x-agent-bounties-measurement-eligible`. The same evidence is included in MCP
-result metadata under `agentizable.ai/acquisition`. MCP `initialize` and `tools/list`
-are safe probes: they write analytics observations only and do not prepare a
-draft, start wallet review, sign, fund, or invoke any mutation tool.
+result metadata under `agentbounties.app/acquisition`. This is a stable wire key,
+not a URL to visit; the Agentizable website/domain change does not rename it.
+MCP `initialize` and `tools/list` are safe probes: they write analytics observations
+only and do not prepare a draft, start wallet review, sign, fund, or invoke any
+mutation tool.
+
+The offline probe controls run with
+`python3 -m unittest scripts.test_distribution_rail_mcp -v`. They inspect fixture
+responses only; they do not contact production or create acquisition records.
 
 Safe probes send `x-agent-bounties-canary: dry-run-v1`; a mainnet lifecycle
 canary sends `x-agent-bounties-canary: mainnet-v1`. Unknown values are rejected.

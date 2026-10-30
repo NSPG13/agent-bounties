@@ -39,6 +39,8 @@ RAIL_HEADER = "x-agent-bounties-attribution-rail"
 FIRST_TOUCH_HEADER = "x-agent-bounties-first-touch-rail"
 CANARY_HEADER = "x-agent-bounties-canary"
 MEASUREMENT_ELIGIBLE_HEADER = "x-agent-bounties-measurement-eligible"
+# Stable wire identity; a website/domain rename does not change this namespace.
+ACQUISITION_META = "agentbounties.app/acquisition"
 TOKEN = re.compile(r"^aba1_[0-9a-f]{64}\.[0-9a-f]{64}$")
 
 
@@ -122,7 +124,7 @@ def check_rail(endpoint: str, rail: str, canary_kind: str) -> None:
     attribution = (
         body.get("result", {})
         .get("_meta", {})
-        .get("agentizable.ai/acquisition", {})
+        .get(ACQUISITION_META, {})
     )
     if (
         attribution.get("acquisition_id") != acquisition
