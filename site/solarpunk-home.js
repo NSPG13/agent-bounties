@@ -789,7 +789,7 @@ ${competitionChildBrief(item)}`;
 
     function applyMetricState(snapshot) {
       const formatter = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
-      doc.querySelector("[data-market-volume]").textContent = formatter.format(snapshot.payout);
+      doc.querySelector("[data-market-volume]").textContent = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(snapshot.payout);
       doc.querySelector("[data-live-bounties]").textContent = snapshot.live === null ? "—" : formatter.format(snapshot.live);
       doc.querySelector("[data-completed-bounties]").textContent = formatter.format(snapshot.completed);
       const counts = snapshot.availability;
