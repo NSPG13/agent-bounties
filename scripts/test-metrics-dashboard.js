@@ -497,3 +497,24 @@ test("daily GitHub snapshots keep their observation time and never make stale he
   assert.match(js, /Reviewed daily snapshot/);
   assert.doesNotMatch(js, /Hourly aggregate of external issues/);
 });
+
+
+test("USD summaries preserve token audit formatting and negative refund cash flow", () => {
+  assert.equal(metrics.formatUsd(1.25), "$1.25");
+  assert.equal(metrics.formatUsd(-1.25), "-$1.25");
+  assert.equal(metrics.formatUsd(NaN), "—");
+  assert.equal(metrics.formatUsdc(0.183679, { maximumFractionDigits: 6 }), "0.183679 USDC");
+});
+
+test("card coverage fails closed, matches the window, and never changes payout GMV", () => {
+  const window = { started_at: "2026-10-01T00:00:00+00:00", ended_at: "2026-10-30T00:00:00+00:00" };
+  const card = { schema_version: "agent-bounties/card-payment-metrics-v1", status: "ready", currency: "USD", ...window,
+    paid_orders: 1, refund_operations: 1, gross_received_usd: "0.529100", refunded_usd: "0.018518", net_received_usd: "0.510582", platform_fees_collected_usd: "0.014285" };
+  const p = platform({window, card_payments: card});
+  assert.equal(metrics.cardPaymentsSummary(p), card);
+  assert.equal(metrics.cardPaymentsSummary(platform()), null);
+  for (const bad of [{status:"partial"}, {currency:"MXN"}, {gross_received_usd:"oops"}, {paid_orders:1.5}, {net_received_usd:"9.000000"}, {ended_at:"2026-11-01"}]) {
+    assert.equal(metrics.cardPaymentsSummary({...p,card_payments:{...card,...bad}}),null);
+  }
+  assert.deepEqual(metrics.mergeMetrics(p, github(), "7d", NOW).daily, metrics.mergeMetrics(platform(), github(), "7d", NOW).daily);
+});

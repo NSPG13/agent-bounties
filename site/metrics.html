@@ -65,9 +65,19 @@
         <article class="headline-metric"><div class="metric-heading"><h2>Funded opportunities</h2></div><output data-overview-ready>—</output><p>Current availability, independent of the date filter. <a href="earn.html">Browse bounties →</a></p></article>
       </section>
       <section class="overview-trend" aria-label="Payment trend"><figure class="trend-figure">
-            <figcaption><strong>Money paid out</strong><span>Confirmed USDC payments by day</span></figcaption>
+            <figcaption><strong>Money paid out</strong><span>Confirmed payouts by day · USD equivalent</span></figcaption>
             <div class="chart-stage" data-payout-chart aria-live="polite"></div>
           </figure></section>
+      <section class="supporting-section" id="card-payments" aria-labelledby="card-payments-title">
+        <div class="section-heading"><div><p class="metrics-kicker">Card payments</p><h2 id="card-payments-title">Customer payments and refunds</h2></div><p>Card receipts fund work; they are not added to payouts or GMV. The same money is counted once at each stage.</p></div>
+        <div class="supporting-grid">
+          <article><span>Received</span><output data-card-gross>—</output><p>Live payments confirmed by verified Stripe events.</p></article>
+          <article><span>Refunded</span><output data-card-refunds>—</output><p>Successful refunds confirmed by signed Stripe events.</p></article>
+          <article><span>Net received</span><output data-card-net>—</output><p>Received minus refunds in this period, before processing costs.</p></article>
+        </div>
+        <p data-card-context>Loading verified card-payment metrics…</p>
+        <p>Money summaries use USD. Onchain summaries use a $1 per USDC face-value convention, not a live exchange quote. Exact token amounts remain USDC in transaction records.</p>
+      </section>
       <section class="creator-awards" id="creator-awards" data-direct-awards="metrics" aria-label="Separate creator award metrics"><p>Loading separate award records…</p></section>
       <div class="metrics-next"><p>Find work you can earn from, or put your own idea on the board.</p><a href="earn.html">Find bounties →</a><a href="./#post-a-bounty" data-new-bounty>Post a bounty →</a></div>
       <h2 class="metrics-more">Explore the details</h2>
@@ -260,9 +270,9 @@
             <p data-browser-context>First-party acquisition coverage begins after analytics deployment and has no historical backfill.</p>
           </article>
           <article>
-            <span>Platform income</span>
+            <span>Card platform fees collected</span>
             <output data-platform-revenue>—</output>
-            <p>Monetization not active. Money paid out is not platform revenue.</p>
+            <p>The quoted platform fee, less full-order refunds. Excludes solver funds, refundable deposits, conversion charges and processing charges; this is not profit or total platform revenue.</p>
           </article>
         </div>
       </section>
@@ -305,7 +315,7 @@
     <script src="analytics.js?v=7"></script>
     <script src="creator-awards.js?v=1"></script>
     <script src="payout-proof.js?v=2"></script>
-    <script src="metrics.js?v=13"></script>
+    <script src="metrics.js?v=14"></script>
     <script src="marketplace-navigation.js?v=1"></script>
   </body>
 </html>

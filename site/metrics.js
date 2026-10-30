@@ -50,6 +50,32 @@
     }).format(amount)} USDC`;
   }
 
+  // Presentation only: token accounting and proof reconciliation remain in USDC.
+  // The page discloses the $1/USDC face-value convention, not a market FX quote.
+  function formatUsd(value, options = {}) {
+    const amount = Number(value);
+    if (!Number.isFinite(amount)) return "—";
+    return new Intl.NumberFormat("en-US", {
+      style: "currency", currency: "USD",
+      notation: options.compact && Math.abs(amount) >= 1000 ? "compact" : "standard",
+      minimumFractionDigits: 2, maximumFractionDigits: options.maximumFractionDigits ?? 2,
+    }).format(amount);
+  }
+
+  function cardPaymentsSummary(platform) {
+    const card = platform?.card_payments;
+    const fields = ["gross_received_usd", "refunded_usd", "net_received_usd", "platform_fees_collected_usd"];
+    if (!card || card.schema_version !== "agent-bounties/card-payment-metrics-v1"
+      || card.status !== "ready" || card.currency !== "USD"
+      || card.started_at !== platform.window?.started_at || card.ended_at !== platform.window?.ended_at
+      || !Number.isSafeInteger(card.paid_orders) || card.paid_orders < 0
+      || !Number.isSafeInteger(card.refund_operations) || card.refund_operations < 0
+      || fields.some(key => typeof card[key] !== "string" || !/^-?\d+\.\d{6}$/.test(card[key]) || !Number.isFinite(Number(card[key])))
+      || Number(card.gross_received_usd) < 0 || Number(card.refunded_usd) < 0
+      || BigInt(card.gross_received_usd.replace(".", "")) - BigInt(card.refunded_usd.replace(".", "")) !== BigInt(card.net_received_usd.replace(".", ""))) return null;
+    return card;
+  }
+
   function formatPercent(value) {
     const percent = Math.max(0, Math.min(1, finiteNumber(value))) * 100;
     return `${percent.toLocaleString("en-US", { maximumFractionDigits: 1 })}%`;
@@ -529,11 +555,11 @@
     }).join("");
     const markerIndexes = [...new Set([0, Math.floor((selected.length - 1) / 2), selected.length - 1])];
     const labels = markerIndexes.map((index) => `<text class="chart-axis-label" text-anchor="${index === 0 ? "start" : index === selected.length - 1 ? "end" : "middle"}" x="${x(index)}" y="${height - 6}">${escapeXml(selected[index].day.slice(5))}</text>`).join("");
-    const dots = selected.map((point, index) => `<circle class="chart-dot ${kind === "payout" ? "payout" : ""}" cx="${x(index)}" cy="${y(values[index])}" r="3" tabindex="0"><title>${escapeXml(point.day)}: ${escapeXml(kind === "payout" ? formatUsdc(values[index]) : `${formatInteger(values[index])} active identities`)}</title></circle>`).join("");
+    const dots = selected.map((point, index) => `<circle class="chart-dot ${kind === "payout" ? "payout" : ""}" cx="${x(index)}" cy="${y(values[index])}" r="3" tabindex="0"><title>${escapeXml(point.day)}: ${escapeXml(kind === "payout" ? formatUsd(values[index]) : `${formatInteger(values[index])} active identities`)}</title></circle>`).join("");
     const gradient = kind === "payout"
       ? '<linearGradient id="payout-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#79a8ff" stop-opacity=".24"/><stop offset="1" stop-color="#79a8ff" stop-opacity="0"/></linearGradient>'
       : '<linearGradient id="identity-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#b9ef37" stop-opacity=".22"/><stop offset="1" stop-color="#b9ef37" stop-opacity="0"/></linearGradient>';
-    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${kind === "payout" ? "Daily confirmed payout in USDC" : "Daily external active identities"}"><defs>${gradient}</defs>${ticks}<path class="chart-area ${kind === "payout" ? "payout" : ""}" d="${area}"/><path class="chart-line ${kind === "payout" ? "payout" : ""}" d="${line}"/>${dots}${labels}</svg>`;
+    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${kind === "payout" ? "Daily confirmed payout in USD equivalents" : "Daily external active identities"}"><defs>${gradient}</defs>${ticks}<path class="chart-area ${kind === "payout" ? "payout" : ""}" d="${area}"/><path class="chart-line ${kind === "payout" ? "payout" : ""}" d="${line}"/>${dots}${labels}</svg>`;
   }
 
   function start(win, doc) {
@@ -565,7 +591,7 @@
     };
 
     function amount(response) {
-      return formatUsdc(response?.usdc);
+      return response?.usdc == null ? "—" : formatUsd(response.usdc);
     }
 
     function shortHash(value) {
@@ -896,9 +922,9 @@
       const inventoryReady = inventory?.status === "ready";
       setText("[data-overview-ready]", inventoryReady ? formatInteger(inventory.active_funded_opportunities) : "—");
       setText("[data-inventory-ready]", inventoryReady ? formatInteger(inventory.active_funded_opportunities) : "—");
-      setText("[data-inventory-funded]", inventoryReady ? formatUsdc(inventory.available_funding_usdc) : "—");
-      setText("[data-inventory-solvers]", inventoryReady ? formatUsdc(inventory.available_solver_rewards_usdc) : "—");
-      setText("[data-inventory-verifiers]", inventoryReady ? formatUsdc(inventory.available_verifier_rewards_usdc) : "—");
+      setText("[data-inventory-funded]", inventoryReady ? formatUsd(inventory.available_funding_usdc) : "—");
+      setText("[data-inventory-solvers]", inventoryReady ? formatUsd(inventory.available_solver_rewards_usdc) : "—");
+      setText("[data-inventory-verifiers]", inventoryReady ? formatUsd(inventory.available_verifier_rewards_usdc) : "—");
       setText("[data-inventory-status]", inventoryReady ? `All required canonical inventory sources checked at ${new Date(inventory.generated_at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}.` : "Inventory is partial or unavailable; historical values remain visible and the unified total is not replaced with a lower value or zero.");
       setText("[data-gmv-28d]", demandGrowth ? amount(demandGrowth.gmv_usdc_28d) : "—");
       setText(
@@ -961,7 +987,14 @@
       setText("[data-browser-context]", state.acquisition
         ? `${formatInteger(state.acquisition.overview?.sessions)} browser sessions in the matching lookback. Device/browser IDs are not people.`
         : "Acquisition source unavailable. Browser IDs are never estimated or counted as active identities.");
-      setText("[data-platform-revenue]", platform ? amount(platform.platform_revenue) : "—");
+      const card = cardPaymentsSummary(platform);
+      setText("[data-card-gross]", card ? formatUsd(card.gross_received_usd) : "—");
+      setText("[data-card-refunds]", card ? formatUsd(card.refunded_usd) : "—");
+      setText("[data-card-net]", card ? formatUsd(card.net_received_usd) : "—");
+      setText("[data-platform-revenue]", card ? formatUsd(card.platform_fees_collected_usd) : "—");
+      setText("[data-card-context]", card
+        ? `${formatInteger(card.paid_orders)} paid orders · ${formatInteger(card.refund_operations)} confirmed refunds in the selected period. Includes live launch tests. Amounts use each accepted quote’s price basis; these are USD equivalents, not executed FX or bank settlement.`
+        : "Verified card-payment metrics are unavailable. Missing evidence is not reported as zero.");
       renderSourceLedger(merged, acquisitionStatus, repositoryStatus, audit, interfaceUsage, discoverability);
 
       const notices = [];
@@ -1083,6 +1116,8 @@
     dashboardStatus,
     discoverabilitySummary,
     formatUsdc,
+    formatUsd,
+    cardPaymentsSummary,
     mergeDaily,
     mergeMetrics,
     normalizedPublicMetricsPolicy,
