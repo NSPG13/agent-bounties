@@ -18,9 +18,10 @@ def sync(check=False):
     changed = []
     for path in sorted((ROOT / "site").rglob("*.html")):
         relative = path.relative_to(ROOT / "site")
-        # check-site.py separately checks isolated private pages, which must not
-        # load shared account/journey handlers or analytics dependencies.
-        if relative.as_posix() in {"posting-draft-canary.html", "account.html"}:
+        # check-site.py checks isolated private pages and the missing-page
+        # fallback. The latter can render at any URL depth, where shared
+        # relative assets/links would resolve against the missing path.
+        if relative.as_posix() in {"posting-draft-canary.html", "account.html", "404.html"}:
             continue
         prefix = "../" * (len(relative.parts) - 1)
         markup = template.replace("{{root}}", prefix or "./").replace("{{prefix}}", prefix)

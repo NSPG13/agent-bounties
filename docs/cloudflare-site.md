@@ -1,5 +1,26 @@
 # Cloudflare website operations
 
+## Search routes and missing pages
+
+Cloudflare Pages redirects file-shaped HTML URLs such as `/about.html` to
+`/about` and directory indexes such as `/install/index.html` to `/install/`.
+Canonical tags, social URL metadata, structured page URLs and the sitemap use
+those final routes. The original HTML files and working legacy links remain
+available through the provider's redirects; no API or MCP aliases change.
+
+The top-level `site/404.html` is required. Without it, Pages treats this static
+website as a single-page application and returns the homepage for missing
+paths. The independent fallback uses fully qualified recovery links because
+it can render at any URL depth. It has no analytics, account or wallet scripts,
+declares `noindex, follow`, and is omitted from the sitemap. The site gate checks
+these source requirements; after deployment, verify an unknown top-level and
+nested path return HTTP 404 and that canonical/sitemap targets return HTTP 200
+without a redirect. A local file check does not establish live HTTP behavior.
+
+Provider behavior: [Serving Pages](https://developers.cloudflare.com/pages/configuration/serving-pages/).
+
+## Build and publication
+
 Pages builds `main` with `bash scripts/build-static-site.sh` and publishes `site`.
 The build verifies wallet assets and origin, prepares licensed fonts and schemas,
 validates the reviewed local participation aggregate, and runs site tests. It

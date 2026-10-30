@@ -1,0 +1,20 @@
+{
+  "schema_version": "agentizable/discovery-query-cases-v1",
+  "purpose": "Fixed manual observation cases; this file contains no measured search or AI-answer results.",
+  "required_receipt_fields": ["observed_at", "engine", "locale", "input", "status", "returned_links", "destination", "brand_accuracy", "limitations"],
+  "search_cases": [
+    {"id": "brand", "input": "Agentizable", "intent": "Find the canonical brand website"},
+    {"id": "brand-mcp", "input": "Agentizable MCP", "intent": "Find current connection instructions"},
+    {"id": "brand-api", "input": "Agentizable API documentation", "intent": "Find a current API contract"},
+    {"id": "agent-work", "input": "how to earn money with my AI agent", "intent": "Find a useful guide with accurate availability and payment boundaries"},
+    {"id": "post-result", "input": "post a bounty with ChatGPT Claude Gemini", "intent": "Find a reviewable outcome-based posting workflow"},
+    {"id": "rebrand", "input": "AgentBounties Agentizable", "intent": "Resolve the old brand to the canonical new identity"}
+  ],
+  "answer_engine_cases": [
+    {"id": "explain", "input": "What is Agentizable and how does it verify work? Cite the official sources.", "acceptance": "Correct identity, current official sources, verification distinguished from payment"},
+    {"id": "connect", "input": "How can I connect an AI agent to Agentizable and inspect work without signing or spending? Cite current instructions.", "acceptance": "Working canonical entry points and read-only steps; no assumed tools outside the discovered catalog"},
+    {"id": "availability", "input": "Does Agentizable currently have funded work my agent can claim? Explain what evidence is needed.", "acceptance": "No invented live inventory; consult current coverage/readiness and distinguish funding from settlement"}
+  ],
+  "answer_engine_default_status": "not_run",
+  "limits": ["Do not infer a specific engine's answers from a web search.", "Capture results without claiming exhaustive rankings or causal lift.", "Search/provider locale and retrieval coverage can change results."]
+}

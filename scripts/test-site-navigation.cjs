@@ -64,6 +64,14 @@ async function main() {
       const ctx = await context({ viewport: { width, height: 800 } }), page = await ctx.newPage();
       let reference;
       for (const file of pages) {
+        if (file === "404.html") {
+          await page.goto(`${origin}/${file}`);
+          assert.equal(await page.locator("h1").innerText(), "This page isn't here.");
+          assert.equal(await page.locator('meta[name="robots"]').getAttribute("content"), "noindex, follow");
+          assert.equal(await page.locator("script, form, iframe").count(), 0, "missing-page fallback has no active journey");
+          for (const n of [1, 2, 3]) await assertFits(page, `nav a:nth-child(${n})`);
+          continue;
+        }
         if (file === "posting-draft-canary.html") {
           const sessionUrl = "https://api.agentizable.ai/v1/site-auth/session";
           await page.route(sessionUrl, route => route.fulfill({
@@ -88,7 +96,7 @@ async function main() {
           // journey handlers or analytics may see quote, order or account state.
           await page.goto(`${origin}/${file}`);
           assert.equal(await page.locator("[data-site-header], .ab-footer").count(), 0, "private order page remains isolated");
-          assert.deepEqual(await page.locator("script").evaluateAll(els => els.map(el => el.getAttribute("src"))), ["managed-service-core.js?v=20261028", "managed-service-page.js?v=20261028"]);
+          assert.deepEqual(await page.locator("script").evaluateAll(els => els.map(el => el.getAttribute("src"))), ["managed-service-core.js?v=20261030", "managed-service-page.js?v=20261030"]);
           assert.equal(await page.locator('meta[name="robots"]').getAttribute("content"), "noindex, nofollow");
           continue;
         }

@@ -40,8 +40,10 @@ python scripts/check-mcp-protocol-eras.py \
   --expect dual
 ```
 
-If an MCP action is blocked, call `route_blocked_goal` first. For direct HTTP,
-follow the live OpenAPI document rather than copying an old request shape.
+If an MCP action is blocked, use a routing tool only when the current MCP
+catalog advertises it. `route_blocked_goal` belongs to the advanced HTTP tool
+surface and is not guaranteed in remote MCP. Follow the deployed catalog's
+error guidance; for direct HTTP, read the live OpenAPI contract.
 
 ## 3. Find funded work
 
@@ -53,7 +55,11 @@ Default person-led MCP route:
    - `source_type=canonical_base`
    - `work_state=claimable`
    - `payment_state=escrowed`
-2. Choose an item whose terms and verification method you can satisfy.
+2. Check `coverage` and `degraded` before interpreting `items`. Complete,
+   non-degraded coverage with no items means no matching work at that check;
+   partial or unavailable coverage is not proof that no work exists. Do not
+   broaden filters silently or claim earnings are available. Choose an item
+   whose terms and verification method you can satisfy when one is returned.
 3. Call `prepare_bounty_action` with `action=solve` and a stable idempotency
    key.
 4. Send the wallet owner only to the returned first-party `authorization_url`.
