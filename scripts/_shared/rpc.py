@@ -154,6 +154,23 @@ def _jsonrpc_id_binds_to_request(
     return False
 
 
+def _jsonrpc_result_binds_to_request(parsed: dict, request_id: object) -> bool:
+    """True unless a success object carries a foreign version or response id.
+
+    A result is only an answer to this request when its id matches the
+    request id exactly; id=null is reserved for errors. Bare {"result": ...}
+    bodies without jsonrpc/id stay accepted for compatibility.
+    """
+    if "jsonrpc" in parsed and parsed["jsonrpc"] != "2.0":
+        return False
+    if "id" not in parsed:
+        return True
+    response_id = parsed["id"]
+    if response_id is None:
+        return False
+    return _jsonrpc_id_binds_to_request(response_id, request_id, None)
+
+
 def _jsonrpc_error_fields(
     parsed: object, request_id: object
 ) -> tuple[int, str] | None:
@@ -303,6 +320,14 @@ def _rpc_call(
         raise RpcError(
             f"RPC {method} failed: "
             f"{json.dumps({'code': code, 'message': _project_rpc_error_message(message)}, sort_keys=True)}"
+        )
+    if not _jsonrpc_result_binds_to_request(body, request_id):
+        # A result for another request (stale cache, shared connection, bad
+        # proxy) must not be accepted as this call's answer or chain proof.
+        raise TransportError(
+            f"RPC response id did not match the request for {method} at "
+            f"{_redact_endpoint(endpoint)}",
+            retryable=True,
         )
     return body.get("result")
 
