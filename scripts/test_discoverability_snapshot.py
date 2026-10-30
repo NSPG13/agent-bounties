@@ -11,7 +11,8 @@ from contextlib import redirect_stdout
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
+from types import ModuleType
+from unittest.mock import MagicMock, patch
 
 
 MODULE_PATH = Path(__file__).with_name("discoverability_snapshot.py")
@@ -99,6 +100,78 @@ class DiscoverabilitySnapshotTests(unittest.TestCase):
         self.assertEqual((end - headline_start).days + 1, 28)
         self.assertEqual((end - recovery_start).days + 1, 35)
         self.assertEqual((self.now.date() - end).days, 3)
+
+    def google_clients(self):
+        # Keep credential-path tests offline and independent of local packages.
+        names = ["google", "google.auth", "google.auth.transport",
+                 "google.auth.transport.requests", "google.oauth2",
+                 "google.oauth2.credentials", "google.oauth2.service_account"]
+        modules = {name: ModuleType(name) for name in names}
+        for name in names:
+            if "." in name:
+                parent, child = name.rsplit(".", 1)
+                setattr(modules[parent], child, modules[name])
+        token_credentials = MagicMock()
+        key_credentials = MagicMock()
+        session_factory = MagicMock()
+        modules["google.oauth2.credentials"].Credentials = token_credentials
+        modules["google.oauth2.service_account"].Credentials = key_credentials
+        modules["google.auth.transport.requests"].AuthorizedSession = session_factory
+        session_factory.return_value.post.return_value.json.return_value = {"rows": []}
+        session_factory.return_value.post.return_value.status_code = 200
+        return modules, token_credentials, key_credentials, session_factory
+
+    def test_search_console_ephemeral_token_precedes_json_without_changing_payload(self):
+        modules, token, key, session = self.google_clients()
+        with patch.dict(sys.modules, modules):
+            snapshot = MODULE.collect_search_console(
+                access_token="ephemeral-token", service_account_json="not-valid-json",
+                property_url=MODULE.DEFAULT_PROPERTY, observed_at=self.now)
+        token.assert_called_once_with(token="ephemeral-token")
+        key.from_service_account_info.assert_not_called()
+        session.assert_called_once_with(token.return_value)
+        self.assertEqual(snapshot.payload["totals"], {
+            "impressions": 0, "clicks": 0, "average_position": 0.0})
+        self.assertEqual(len(session.return_value.post.call_args_list), 2)
+        for call in session.return_value.post.call_args_list:
+            self.assertEqual(call.args, (
+                "https://searchconsole.googleapis.com/webmasters/v3/sites/"
+                "https%3A%2F%2Fagentizable.ai%2F/searchAnalytics/query",))
+            self.assertEqual(call.kwargs["timeout"], 60)
+            self.assertIs(call.kwargs["allow_redirects"], False)
+        self.assertEqual(snapshot.as_request()["data_through"], "2026-08-21T23:59:59Z")
+
+    def test_search_console_legacy_json_keeps_readonly_scope(self):
+        modules, token, key, session = self.google_clients()
+        with patch.dict(sys.modules, modules):
+            MODULE.collect_search_console(
+                service_account_json='{"fixture": true}',
+                property_url=MODULE.DEFAULT_PROPERTY, observed_at=self.now)
+        token.assert_not_called()
+        key.from_service_account_info.assert_called_once_with(
+            {"fixture": True}, scopes=[MODULE.GSC_SCOPE])
+        session.assert_called_once_with(key.from_service_account_info.return_value)
+
+    def test_search_console_token_failure_never_falls_back_to_json(self):
+        modules, token, key, session = self.google_clients()
+        session.return_value.post.return_value.raise_for_status.side_effect = RuntimeError("token rejected")
+        with patch.dict(sys.modules, modules), self.assertRaises(RuntimeError):
+            MODULE.collect_search_console(
+                access_token="rejected-token", service_account_json='{"fixture": true}',
+                property_url=MODULE.DEFAULT_PROPERTY, observed_at=self.now)
+        token.assert_called_once_with(token="rejected-token")
+        key.from_service_account_info.assert_not_called()
+        self.assertEqual(session.return_value.post.call_count, 1)
+
+    def test_search_console_redirect_is_rejected_without_following_or_key_fallback(self):
+        modules, token, key, session = self.google_clients()
+        session.return_value.post.return_value.status_code = 302
+        with patch.dict(sys.modules, modules), self.assertRaises(RuntimeError):
+            MODULE.collect_search_console(access_token="ephemeral-token",
+                property_url=MODULE.DEFAULT_PROPERTY, observed_at=self.now)
+        self.assertIs(session.return_value.post.call_args.kwargs["allow_redirects"], False)
+        key.from_service_account_info.assert_not_called()
+        session.return_value.post.return_value.json.assert_not_called()
 
     def test_failure_labels_never_include_exception_text_or_secrets(self):
         secret = "secret-service-account-private-key"
@@ -265,6 +338,21 @@ class DiscoverabilitySnapshotTests(unittest.TestCase):
         for collector in collectors:
             collector.assert_not_called()
 
+    def test_ephemeral_search_token_satisfies_provider_configuration_without_logging(self):
+        env = {name: "secret-value-do-not-log" for name in [
+            "DISCOVERABILITY_INGEST_TOKEN", "GSC_ACCESS_TOKEN", "REPOSITORY_TRAFFIC_TOKEN"]}
+        for args in [["--dry-run"], []]:
+            code, output, upload, collectors = self.run_main(args, env)
+            with self.subTest(args=args):
+                self.assertEqual(code, 0)
+                self.assertIn("missing=none", output)
+                self.assertNotIn("secret-value-do-not-log", output)
+                self.assertNotIn("private-provider-row", output)
+                self.assertEqual(collectors[0].call_args.kwargs["access_token"], "secret-value-do-not-log")
+                self.assertEqual(collectors[0].call_args.kwargs["service_account_json"], "")
+                if args:
+                    upload.assert_not_called()
+
     def test_dry_run_validates_serialization_and_preserves_healthy_providers(self):
         invalid = replace(self.valid_snapshot("first_party"), window_ended_at=self.now + timedelta(days=1))
         env = {name: "secret-value-do-not-log" for name in ["DISCOVERABILITY_INGEST_TOKEN", "GSC_SERVICE_ACCOUNT_JSON", "REPOSITORY_TRAFFIC_TOKEN"]}
@@ -318,6 +406,32 @@ class DiscoverabilitySnapshotTests(unittest.TestCase):
                 result = subprocess.run(["bash", "-c", stub + script], text=True, capture_output=True,
                                         env={**os.environ, "DISCOVERABILITY_DRY_RUN": mode}, check=True)
                 self.assertEqual(result.stdout.splitlines(), ["scripts/discoverability_snapshot.py", *expected])
+
+    def test_workflow_keyless_auth_is_bounded_and_immediately_precedes_collection(self):
+        workflow = (MODULE_PATH.parent.parent / ".github/workflows/discoverability-snapshot.yml").read_text()
+        self.assertIn("if: github.ref == 'refs/heads/main'", workflow)
+        self.assertRegex(workflow, r"permissions:\s+contents: read\s+id-token: write")
+        self.assertIn("google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093", workflow)
+        auth = workflow.split("- name: Authenticate Search Console with keyless identity\n", 1)[1]
+        auth_step, collector = auth.split("- name: Snapshot overlapping provider windows\n", 1)
+        for expected in [
+            "vars.GCP_WORKLOAD_IDENTITY_PROVIDER != '' || vars.GCP_SEARCH_CONSOLE_SERVICE_ACCOUNT != ''",
+            "workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}",
+            "service_account: ${{ vars.GCP_SEARCH_CONSOLE_SERVICE_ACCOUNT }}",
+            "token_format: access_token", "access_token_lifetime: 600s",
+            "access_token_scopes: https://www.googleapis.com/auth/webmasters.readonly",
+            "create_credentials_file: false", "export_environment_variables: false",
+        ]:
+            self.assertIn(expected, auth_step)
+        self.assertNotIn("- name:", auth_step)
+        self.assertNotIn("- uses:", auth_step)
+        self.assertNotIn("continue-on-error:", workflow)
+        self.assertNotIn("always()", collector)
+        self.assertIn("GSC_ACCESS_TOKEN: ${{ steps.google_auth.outputs.access_token }}", collector)
+        before_collector = workflow.split("- name: Snapshot overlapping provider windows\n", 1)[0]
+        self.assertNotIn("secrets.", before_collector)
+        for name in ["REPOSITORY_TRAFFIC_TOKEN", "GSC_SERVICE_ACCOUNT_JSON", "DISCOVERABILITY_INGEST_TOKEN"]:
+            self.assertIn(f"{name}: ${{{{ secrets.{name} }}}}", collector)
 
 
 if __name__ == "__main__":

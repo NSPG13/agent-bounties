@@ -116,14 +116,77 @@ disable the all-provider freshness requirement to make the headline appear.
 
 ## Credential boundary (separate R3 action)
 
-Code deployment does not provision access. A maintainer must separately create
-and grant three narrowly scoped secrets:
+Code deployment does not provision access. A maintainer must separately grant
+the narrowly scoped provider and ingestion access:
 
 - `REPOSITORY_TRAFFIC_TOKEN`: GitHub repository-traffic read access;
-- `GSC_SERVICE_ACCOUNT_JSON`: a Search Console restricted-user service account
-  for the `https://agentizable.ai/` property; and
+- Search Console: the service account below has Restricted access to the exact
+  `https://agentizable.ai/` URL-prefix property, using keyless federation; and
 - `DISCOVERABILITY_INGEST_TOKEN`: one matching ingestion-only value in Render
   and GitHub Actions.
+
+### Keyless Search Console configuration
+
+The workflow uses GitHub OIDC and Google Workload Identity Federation to mint
+an OAuth access token immediately before collection. It requests only
+`https://www.googleapis.com/auth/webmasters.readonly` for 600 seconds. The token
+is passed to the collector as `GSC_ACCESS_TOKEN`; it is not a repository secret,
+credentials file, exported ambient Google credential, or log artifact. The
+workflow runs only on `refs/heads/main`, retains `contents: read`, and adds
+`id-token: write` only to the snapshot job. Its Monday schedule and manual
+`dry_run=true` default are unchanged.
+
+Set these nonsecret repository variables after the separate access approval:
+
+| Variable | Value |
+| --- | --- |
+| `GCP_WORKLOAD_IDENTITY_PROVIDER` | `projects/782448447339/locations/global/workloadIdentityPools/agentizable-discovery/providers/github-discovery` |
+| `GCP_SEARCH_CONSOLE_SERVICE_ACCOUNT` | `agentizable-search-console@agent-bounties-local-auth.iam.gserviceaccount.com` |
+
+The provider issuer is `https://token.actions.githubusercontent.com`. Use the
+provider's default audience check; the pinned Google auth action derives its
+audience from the configured provider. Map `google.subject=assertion.sub`, plus
+`attribute.repository_id`, `attribute.repository_owner_id`, `attribute.ref`, and
+`attribute.workflow_ref` to their corresponding assertion claims. Require this
+exact provider condition (the numeric IDs were verified against GitHub):
+
+```text
+assertion.repository_id == '1293030696' &&
+assertion.repository_owner_id == '189029667' &&
+assertion.ref == 'refs/heads/main' &&
+assertion.workflow_ref == 'NSPG13/agent-bounties/.github/workflows/discoverability-snapshot.yml@refs/heads/main'
+```
+
+Grant only `roles/iam.workloadIdentityUser` on the named service account to:
+
+```text
+principalSet://iam.googleapis.com/projects/782448447339/locations/global/workloadIdentityPools/agentizable-discovery/attribute.repository_id/1293030696
+```
+
+This grants no project role, service-account-key creation, domain-wide
+delegation, Search Console ownership, or permission to change the property.
+The ordinary workflow claim is `workflow_ref`; `job_workflow_ref` describes
+reusable workflows and must not replace it here. Numeric repository and owner
+IDs prevent name-reuse impersonation; reviewed changes to this workflow on
+main remain part of the trusted boundary.
+
+If either federation variable is set, the authentication step must succeed;
+partial configuration or a rejected identity stops the job before collection.
+Do not add `continue-on-error` or fall back to a JSON key after WIF failure.
+The collector prefers a supplied access token and cannot refresh it or fall
+back after rejection. It rejects Search Console redirects. If collection
+outlasts the token, a new authorized run must mint a new token.
+
+The preexisting `GSC_SERVICE_ACCOUNT_JSON` path remains compatible only when no
+access token is supplied and the workflow has no federation configuration.
+Do not create a key or weaken an organization policy to use that fallback.
+With neither credential, safe diagnostics name both alternatives and leave
+Search Console unavailable; they never substitute zero traffic for a failed
+request.
+
+Official references: [Google GitHub auth action](https://github.com/google-github-actions/auth),
+[Google deployment-pipeline federation](https://docs.cloud.google.com/iam/docs/workload-identity-federation-with-deployment-pipelines#github-actions),
+and [GitHub OIDC claims](https://docs.github.com/en/actions/reference/security/oidc).
 
 Never put credential values, Search Console query rows, GitHub path/referrer
 rows, or raw provider payloads in issues, workflow logs, public artifacts, or
@@ -132,6 +195,14 @@ the public Metrics page.
 Changing credential grants or property access is separate from a read-only
 diagnostic or collector repair. Claim pipeline restoration only after an
 authorized ingestion result and fresh public provider observations verify it.
+First dispatch the exact reviewed main revision with `dry_run=true`, and verify
+all three collected providers with no upload. Then an authorized
+`dry_run=false` run can verify ingestion and all four fresh public summary
+providers. A fresh stored Search Console window may show zero for a recently
+migrated property; compare its D-3 dates before interpreting growth. To contain
+a federation incident, disable this workflow or provider and revoke the
+service-account-only binding; do not rotate unrelated credentials or enable
+the legacy key path automatically.
 
 ## Weekly operating rule and day-30 readout
 
