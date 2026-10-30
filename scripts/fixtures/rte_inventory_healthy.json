@@ -1,0 +1,134 @@
+{
+  "schema_version": "agent-bounties/opportunity-feed-v1",
+  "items": [
+    {
+      "id": "canonical:base-mainnet:0x1111111111111111111111111111111111111111",
+      "title": "Healthy funded bounty",
+      "_bountyboard": {
+        "work_state": "claimable",
+        "payment_state": "escrowed",
+        "payment_committed": true,
+        "verification_method": "deterministic_module",
+        "verification_ready": true,
+        "terms_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "reward": { "amount": "2000000", "currency": "USDC", "decimals": 6, "unit": "base_units" },
+        "cash_economics": {
+          "solver_reward": { "amount": "2000000", "currency": "USDC", "decimals": 6, "unit": "base_units" },
+          "refundable_claim_bond": { "amount": "10000", "currency": "USDC", "decimals": 6, "unit": "base_units" },
+          "required_external_spend": { "amount": "0", "currency": "USDC", "decimals": 6, "unit": "base_units" },
+          "gross_cash_margin": { "amount": "2000000", "currency": "USDC", "decimals": 6, "unit": "base_units", "gross_cash_margin_positive": true },
+          "scope_disclaimer": "Gross cash margin is solver reward minus required external spend."
+        },
+        "source_type": "canonical_base",
+        "evidence_boundary": "Only BountySettled proves payment.",
+        "next_action": {
+          "action": "prepare_agent_to_earn",
+          "instructions": "Run the wallet-neutral readiness check before requesting a claim.",
+          "method": "POST",
+          "url": "https://api.agentbounties.app/v1/base/agent-wallet/readiness"
+        }
+      },
+      "tags": ["canonical_base", "claimable", "escrowed"],
+      "date_published": "2026-07-30T00:00:00Z"
+    },
+    {
+      "id": "canonical:base-mainnet:0x2222222222222222222222222222222222222222",
+      "title": "Verification not ready bounty",
+      "_bountyboard": {
+        "work_state": "claimable",
+        "payment_state": "escrowed",
+        "payment_committed": true,
+        "verification_method": "deterministic_module",
+        "verification_ready": false,
+        "terms_hash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reward": { "amount": "2000000", "currency": "USDC", "decimals": 6, "unit": "base_units" },
+        "cash_economics": {
+          "solver_reward": { "amount": "2000000", "currency": "USDC", "decimals": 6, "unit": "base_units" },
+          "refundable_claim_bond": { "amount": "10000", "currency": "USDC", "decimals": 6, "unit": "base_units" },
+          "required_external_spend": { "amount": "0", "currency": "USDC", "decimals": 6, "unit": "base_units" },
+          "gross_cash_margin": { "amount": "2000000", "currency": "USDC", "decimals": 6, "unit": "base_units", "gross_cash_margin_positive": true }
+        },
+        "source_type": "canonical_base",
+        "evidence_boundary": "Only BountySettled proves payment.",
+        "next_action": null
+      },
+      "tags": ["canonical_base", "claimable", "escrowed", "verification_pending"],
+      "date_published": "2026-07-30T00:00:00Z"
+    },
+    {
+      "id": "canonical:base-mainnet:0x3333333333333333333333333333333333333333",
+      "title": "Recovery reserved bounty",
+      "_bountyboard": {
+        "work_state": "recovery_reserved",
+        "payment_state": "escrowed",
+        "payment_committed": true,
+        "verification_method": "deterministic_module",
+        "verification_ready": true,
+        "terms_hash": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "reward": { "amount": "2000000", "currency": "USDC", "decimals": 6, "unit": "base_units" },
+        "cash_economics": {
+          "solver_reward": { "amount": "2000000", "currency": "USDC", "decimals": 6, "unit": "base_units" },
+          "refundable_claim_bond": { "amount": "10000", "currency": "USDC", "decimals": 6, "unit": "base_units" },
+          "required_external_spend": { "amount": "0", "currency": "USDC", "decimals": 6, "unit": "base_units" },
+          "gross_cash_margin": { "amount": "2000000", "currency": "USDC", "decimals": 6, "unit": "base_units", "gross_cash_margin_positive": true }
+        },
+        "recovery_reserved_at": "2026-07-29T12:00:00Z",
+        "source_type": "canonical_base",
+        "evidence_boundary": "Only BountySettled proves payment.",
+        "next_action": null
+      },
+      "tags": ["canonical_base", "recovery_reserved", "escrowed"],
+      "date_published": "2026-07-30T00:00:00Z"
+    },
+    {
+      "id": "canonical:base-mainnet:0x4444444444444444444444444444444444444444",
+      "title": "Invalid terms bounty",
+      "_bountyboard": {
+        "work_state": "claimable",
+        "payment_state": "escrowed",
+        "payment_committed": true,
+        "verification_method": "deterministic_module",
+        "verification_ready": false,
+        "terms_valid": false,
+        "terms_hash": "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "reward": { "amount": "2000000", "currency": "USDC", "decimals": 6, "unit": "base_units" },
+        "cash_economics": {
+          "solver_reward": { "amount": "2000000", "currency": "USDC", "decimals": 6, "unit": "base_units" },
+          "refundable_claim_bond": { "amount": "10000", "currency": "USDC", "decimals": 6, "unit": "base_units" },
+          "required_external_spend": { "amount": "0", "currency": "USDC", "decimals": 6, "unit": "base_units" },
+          "gross_cash_margin": { "amount": "2000000", "currency": "USDC", "decimals": 6, "unit": "base_units", "gross_cash_margin_positive": true }
+        },
+        "validation_errors": ["terms_hash_commitment_mismatch"],
+        "source_type": "canonical_base",
+        "evidence_boundary": "Only BountySettled proves payment.",
+        "next_action": null
+      },
+      "tags": ["canonical_base", "claimable", "invalid_terms"],
+      "date_published": "2026-07-30T00:00:00Z"
+    },
+    {
+      "id": "canonical:base-mainnet:0x5555555555555555555555555555555555555555",
+      "title": "Terminal status bounty",
+      "_bountyboard": {
+        "work_state": "settled",
+        "payment_state": "paid",
+        "payment_committed": true,
+        "verification_method": "deterministic_module",
+        "verification_ready": true,
+        "terms_hash": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "reward": { "amount": "2000000", "currency": "USDC", "decimals": 6, "unit": "base_units" },
+        "cash_economics": {
+          "solver_reward": { "amount": "2000000", "currency": "USDC", "decimals": 6, "unit": "base_units" },
+          "refundable_claim_bond": { "amount": "10000", "currency": "USDC", "decimals": 6, "unit": "base_units" },
+          "required_external_spend": { "amount": "0", "currency": "USDC", "decimals": 6, "unit": "base_units" },
+          "gross_cash_margin": { "amount": "2000000", "currency": "USDC", "decimals": 6, "unit": "base_units", "gross_cash_margin_positive": true }
+        },
+        "source_type": "canonical_base",
+        "evidence_boundary": "Only BountySettled proves payment.",
+        "next_action": null
+      },
+      "tags": ["canonical_base", "settled", "paid"],
+      "date_published": "2026-07-29T00:00:00Z"
+    }
+  ]
+}
