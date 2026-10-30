@@ -26,9 +26,9 @@ DEFAULT_REPOSITORY = "NSPG13/agent-bounties"
 DEFAULT_PROPERTY = "https://agentizable.ai/"
 CREDENTIAL_NAMES = (
     "DISCOVERABILITY_INGEST_TOKEN",
-    "GSC_SERVICE_ACCOUNT_JSON",
     "REPOSITORY_TRAFFIC_TOKEN",
 )
+GSC_CREDENTIAL_NAMES = ("GSC_ACCESS_TOKEN", "GSC_SERVICE_ACCOUNT_JSON")
 
 
 def iso_z(value: datetime) -> str:
@@ -128,20 +128,26 @@ def search_console_date_ranges(observed_at: datetime) -> tuple[date, date, date]
 
 def collect_search_console(
     *,
-    service_account_json: str,
+    service_account_json: str = "",
+    access_token: str = "",
     property_url: str,
     observed_at: datetime,
 ) -> Snapshot:
     try:
         from google.auth.transport.requests import AuthorizedSession
-        from google.oauth2 import service_account
+        from google.oauth2 import credentials as oauth_credentials, service_account
     except ImportError as error:  # pragma: no cover - workflow installs dependency
         raise RuntimeError("google-auth is required for Search Console collection") from error
 
-    credentials_info = json.loads(service_account_json)
-    credentials = service_account.Credentials.from_service_account_info(
-        credentials_info, scopes=[GSC_SCOPE]
-    )
+    if access_token:
+        # A workflow-minted token has no local key or refresh credential. A
+        # rejected/expired token must fail, never retry with the legacy key.
+        credentials = oauth_credentials.Credentials(token=access_token)
+    else:
+        credentials_info = json.loads(service_account_json)
+        credentials = service_account.Credentials.from_service_account_info(
+            credentials_info, scopes=[GSC_SCOPE]
+        )
     session = AuthorizedSession(credentials)
     headline_start_date, recovery_start_date, end_date = search_console_date_ranges(
         observed_at
@@ -152,7 +158,9 @@ def collect_search_console(
     )
 
     def query(body: dict[str, Any]) -> dict[str, Any]:
-        response = session.post(endpoint, json=body, timeout=60)
+        response = session.post(endpoint, json=body, timeout=60, allow_redirects=False)
+        if 300 <= response.status_code < 400:
+            raise RuntimeError("unexpected Search Console redirect")
         response.raise_for_status()
         return response.json()
 
@@ -401,6 +409,9 @@ def main() -> int:
     args = parser.parse_args()
     observed_at = datetime.now(timezone.utc)
     missing_configuration = [name for name in CREDENTIAL_NAMES if not os.environ.get(name, "").strip()]
+    gsc_credentials = {name: os.environ.get(name, "").strip() for name in GSC_CREDENTIAL_NAMES}
+    if not any(gsc_credentials.values()):
+        missing_configuration.extend(GSC_CREDENTIAL_NAMES)
     print(
         "discoverability_configuration "
         f"mode={'dry_run' if args.dry_run else 'upload'} "
@@ -414,7 +425,8 @@ def main() -> int:
         (
             "search_console",
             lambda: collect_search_console(
-                service_account_json=required_env("GSC_SERVICE_ACCOUNT_JSON"),
+                service_account_json=gsc_credentials["GSC_SERVICE_ACCOUNT_JSON"],
+                access_token=gsc_credentials["GSC_ACCESS_TOKEN"],
                 property_url=args.property,
                 observed_at=observed_at,
             ),
