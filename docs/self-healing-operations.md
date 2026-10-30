@@ -22,6 +22,12 @@ actions, and recovery-corpus regressions.
 
 ## Current Recovery Topology
 
+The read-only marketplace readiness probe accepts the three established protocol
+readers and, when configured by the service, one additional autonomous-v2 reader.
+Every reported reader must pass the same freshness, cursor, head and failure
+checks. Missing base readers, duplicate protocols and unknown protocols remain
+invalid. Recognizing autonomous-v2 grants no restart or payment authority.
+
 When hosted services are pinned to a reviewed release, set the GitHub Actions
 repository variable `PRODUCTION_EXPECTED_REVISION` to its full commit SHA.
 Production Smoke and Operational Control Loop use a manual `expected_revision`

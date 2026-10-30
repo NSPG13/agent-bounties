@@ -20,6 +20,11 @@
     const value = BigInt(units), fraction = (value % 1000000n).toString().padStart(6, '0').replace(/0+$/, '');
     return `${value / 1000000n}${fraction ? `.${fraction}` : ''} USDC`;
   }
+  function usd(units) {
+    // Round only the display; accounting and transfer evidence retain integer base units.
+    const cents = (BigInt(units) + 5000n) / 10000n;
+    return `$${(cents / 100n).toLocaleString('en-US')}.${(cents % 100n).toString().padStart(2, '0')}`;
+  }
   function validate(payload) {
     if (payload?.schema_version !== 'agent-bounties/creator-awards-v1' || !Array.isArray(payload.awards)) throw new Error('Award records are unavailable.');
     const ids = new Set(), payments = new Set();
@@ -62,7 +67,7 @@
     return pending;
   }
   function card(row) {
-    return `<article class="creator-award-card"><h3>${escape(row.title)}</h3><p><strong>${amount(row.payment.amount_base_units)} paid separately</strong> · Direct creator award</p><p>The contract expired. The creator paid a reviewed GitHub design separately. Read why it was chosen and see every review.</p><a class="market-button market-button-primary" href="${pageUrl(row)}">View Submissions</a></article>`;
+    return `<article class="creator-award-card"><h3>${escape(row.title)}</h3><p><strong>${usd(row.payment.amount_base_units)} paid separately</strong> · Direct creator award</p><p>The contract expired. The creator paid a reviewed GitHub design separately. Read why it was chosen and see every review.</p><a class="market-button market-button-primary" href="${pageUrl(row)}">View Submissions</a></article>`;
   }
   function renderDetail(row) {
     const w = row.winner, p = row.payment;
@@ -102,7 +107,7 @@
           try { selected = summarize(rows, host.awardWindow).rows; } catch (_) { host.textContent = 'Separate award reporting dates are unavailable.'; continue; }
         }
         const sum = summarize(selected);
-        host.innerHTML = `<h2>${isRelated ? 'This bounty has a separate award' : 'Separate creator awards'}</h2><p><strong>${sum.count} paid ${sum.count === 1 ? 'award' : 'awards'} · ${amount(sum.amount_base_units)}</strong>${mode === 'metrics' ? ' in the selected period' : ' · All time'}</p><p>Direct payments reviewed by maintainers. Shown separately from contract payouts and completed bounties.</p>${selected.map(row => mode === 'summary' || mode === 'metrics' ? `<p><a href="${pageUrl(row)}">${escape(row.title)} — see the winning work</a>${mode === 'metrics' ? ` · ${link(receiptUrl(row), amount(row.payment.amount_base_units))}` : ''}</p>` : card(row)).join('')}${board && !selected.length ? '<p>No separate awards match these filters.</p>' : ''}${mode === 'metrics' ? `<small>Only reviewed public awards are listed. <a href="${DATA}">Source records</a>. These payments are excluded from the contract totals and charts above.</small>` : ''}`;
+        host.innerHTML = `<h2>${isRelated ? 'This bounty has a separate award' : 'Separate creator awards'}</h2><p><strong>${sum.count} paid ${sum.count === 1 ? 'award' : 'awards'} · ${usd(sum.amount_base_units)}</strong>${mode === 'metrics' ? ' in the selected period' : ' · All time'}</p><p>Direct payments reviewed by maintainers. Shown separately from contract payouts and completed bounties. Summaries use USD at $1 per USDC face value; transaction links retain exact USDC.</p>${selected.map(row => mode === 'summary' || mode === 'metrics' ? `<p><a href="${pageUrl(row)}">${escape(row.title)} — see the winning work</a>${mode === 'metrics' ? ` · ${link(receiptUrl(row), amount(row.payment.amount_base_units))}` : ''}</p>` : card(row)).join('')}${board && !selected.length ? '<p>No separate awards match these filters.</p>' : ''}${mode === 'metrics' ? `<small>Only reviewed public awards are listed. <a href="${DATA}">Source records</a>. These payments are excluded from the contract totals and charts above.</small>` : ''}`;
       }
     }
     hosts.forEach(host => { host.renderAwards = render; });
@@ -112,5 +117,5 @@
     doc.querySelector('[data-submissions-refresh]')?.addEventListener('click', refresh);
     render(); void refresh();
   }
-  return { validate, summarize, related, amount, pageUrl, receiptUrl, load, renderDetail, setWindow, start };
+  return { validate, summarize, related, amount, usd, pageUrl, receiptUrl, load, renderDetail, setWindow, start };
 });
