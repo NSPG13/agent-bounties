@@ -59,8 +59,38 @@ an already confirmed payout from immutable historical totals. The homepage and
 dashboard both read lifetime payout volume and settlement-event count from this
 same aggregate instead of recomputing them from the current opportunity feed.
 
-Platform revenue is reported separately as `0 USDC — monetization not active`.
-Marketplace payout volume is not platform revenue.
+Money summaries display USD equivalents. Onchain USDC uses a disclosed $1 face-value
+convention, not a current market price or executed conversion. Audit rows and wallet
+actions retain exact USDC units. Marketplace payout volume is not platform revenue.
+
+### Card receipts and refunds
+
+The additive, optional `card_payments` object (`agent-bounties/card-payment-metrics-v1`)
+reports aggregate live managed card payments in the same UTC window: paid orders,
+successful refund operations, `gross_received_usd`, `refunded_usd`,
+`net_received_usd`, and `platform_fees_collected_usd`. Decimal strings have six places.
+The UI treats missing, invalid or mismatched-window coverage as unavailable, never zero.
+
+Only receipts reconciled from verified Stripe webhooks count. The first paid event
+places each order in its period; repeated deliveries cannot add sales. Only bound,
+processed successful refund events count, once per refund operation, with failure
+and cancellation taking precedence. A refund in this period can relate to an older
+payment, so net receipts or net collected fees can be negative. Live launch tests
+are included; sandbox records are excluded. No customer, wallet, order, payment,
+refund or event identifiers are exposed.
+
+USD cents convert directly to dollars. MXN converts using the accepted quote's
+original offered-price basis, rounded down to microdollars per operation. This is
+an estimate of USD value, not bank settlement or a live FX quote. Card platform fees
+are quoted platform-fee lines minus full-order refunds, before costs, and exclude
+solver funds, review deposits, conversion and processing charges. They are not
+profit or total platform revenue. The legacy revenue field is unmeasured; clients
+must not use it to infer that monetization is inactive.
+
+Card receipts are shown separately from onchain payouts and GMV. A card-funded
+bounty contributes to canonical payout/GMV exactly once, on settlement, under the
+existing public policy. Adding the receipt to that same total would double count.
+The service-order receipt and agreed price always retain the charged currency.
 
 ### Demand growth and GMV
 
@@ -103,7 +133,7 @@ The default period is `7d`. Schema `agent-bounties/platform-metrics-v3` includes
 platform identity aggregates, payment totals and splits, mature claims,
 one unified current funded-inventory total across marketplace mechanisms,
 rolling demand-growth metrics,
-daily series, zero platform revenue, freshness, coverage, and plain-language
+daily series, optional card-payment aggregates, freshness, coverage, and plain-language
 definitions. Coverage exposes one `marketplace_indexers_fresh` flag rather than
 mechanism-specific health fields. Combined inventory is withheld when any
 required canonical source is unavailable.
