@@ -52,9 +52,14 @@ Do not provision broader credentials as part of a read-only benchmark.
 
 Record manual observations against the fixed cases in
 [`ops/distribution/discovery-query-cases.json`](../ops/distribution/discovery-query-cases.json).
-Save timestamp, provider/engine, locale, exact input, returned links, brand
-accuracy, destination, and coverage limitations. A web-search result is not a
-ChatGPT/Claude/Gemini answer. Record direct answer-engine cases as `not_run`
+Preserve each case ID and exact input, including search quotation marks. A
+changed input requires a new case or an explicitly versioned baseline. Save
+timestamp, provider/engine, mode, locale, exact input, returned links, brand
+accuracy, destination, and coverage limitations. Record locale as
+`unknown/uncontrolled` when it is not exposed; the user time zone does not
+establish search locale. Record the model as `unspecified` unless the provider
+identifies it; a provider name or Search mode is not a model identity. A
+web-search result is not a ChatGPT/Claude/Gemini answer. Record direct answer-engine cases as `not_run`
 unless actually observed. Do not manufacture citations, ranking or visibility
 percentages from a limited query tool.
 
