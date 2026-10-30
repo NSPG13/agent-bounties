@@ -52,7 +52,10 @@ no partial values.
 ## Collection schedule
 
 `.github/workflows/discoverability-snapshot.yml` runs every Monday and can be
-dispatched manually. It:
+dispatched manually. Manual runs default to `dry_run=true`: collection and
+validation only, with no snapshot upload. A scheduled run retains the existing
+upload behavior. A manual upload requires deliberately setting `dry_run=false`
+and the already-authorized ingestion configuration. The collector:
 
 1. queries 28-day Search Console headline totals through D-3 while retaining an
    overlapping 35-day private query/page recovery window;
@@ -65,6 +68,51 @@ dispatched manually. It:
 
 Overlapping windows recover one missed weekly run. The operator report derives
 and exposes longer coverage gaps rather than silently interpolating them.
+
+First-party response windows end at the API's `generated_at`; their observation
+time is captured after the response arrives. A later-generated response must
+not be rejected just because collection started earlier. Time-zone-free,
+inverted or future response windows remain invalid. Each provider's exact
+request is validated before upload or dry-run success, so an invalid provider
+does not prevent valid providers from being processed.
+
+The collector requires the documented first-party schema and collections,
+integer nonnegative counts, and a defined session-based market click-through
+rate consistent with its numerator and denominator. Missing evidence, malformed
+counts and an undefined rate are unavailable, not zero. Under the existing
+numeric-rate ingestion contract, a zero-denominator rate leaves the
+first-party provider unavailable. A measured zero rate with a positive
+denominator is valid. An absent event row inside a valid grouped event-count
+collection means zero occurrences of that event.
+
+## Diagnose missing snapshots without uploading
+
+```bash
+python scripts/discoverability_snapshot.py --dry-run
+```
+
+This mode needs no ingestion credential. It collects first-party analytics
+and uses existing read credentials for other providers when configured. Missing
+provider credentials are named as configuration gaps; private credential
+values, exception text, query/page rows and GitHub path/referrer rows are never
+printed. Search Console's read-only query API uses POST, but dry-run never
+calls the snapshot ingestion endpoint or changes provider configuration.
+Exit status remains nonzero when a provider is unavailable or invalid. A
+partial dry-run is useful diagnostic evidence, not a healthy combined pipeline.
+
+Normal upload mode stops before collection if `DISCOVERABILITY_INGEST_TOKEN`
+is missing. Safe diagnostics distinguish missing configuration from collection
+or validation failures. Inspect the relevant workflow's dated step result and
+these aggregate diagnostics before drawing a production conclusion; a past
+missing-configuration observation does not establish current secret state.
+
+The public summary reads stored snapshots, not the live analytics endpoint.
+The API derives its route-interaction snapshot when it accepts an ingestion
+batch. Therefore direct first-party analytics and route counters can work while
+the public summary has no provider observations. All-null provider timestamps
+indicate missing retained snapshots; stale snapshots keep their dated windows.
+Do not substitute direct analytics for missing stored provider coverage or
+disable the all-provider freshness requirement to make the headline appear.
 
 ## Credential boundary (separate R3 action)
 
@@ -80,6 +128,10 @@ and grant three narrowly scoped secrets:
 Never put credential values, Search Console query rows, GitHub path/referrer
 rows, or raw provider payloads in issues, workflow logs, public artifacts, or
 the public Metrics page.
+
+Changing credential grants or property access is separate from a read-only
+diagnostic or collector repair. Claim pipeline restoration only after an
+authorized ingestion result and fresh public provider observations verify it.
 
 ## Weekly operating rule and day-30 readout
 

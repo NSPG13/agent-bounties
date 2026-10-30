@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import sys
 from dataclasses import dataclass
@@ -23,6 +24,11 @@ GSC_SCOPE = "https://www.googleapis.com/auth/webmasters.readonly"
 DEFAULT_API = "https://api.agentizable.ai"
 DEFAULT_REPOSITORY = "NSPG13/agent-bounties"
 DEFAULT_PROPERTY = "https://agentizable.ai/"
+CREDENTIAL_NAMES = (
+    "DISCOVERABILITY_INGEST_TOKEN",
+    "GSC_SERVICE_ACCOUNT_JSON",
+    "REPOSITORY_TRAFFIC_TOKEN",
+)
 
 
 def iso_z(value: datetime) -> str:
@@ -31,7 +37,7 @@ def iso_z(value: datetime) -> str:
 
 def canonical_json(value: Any) -> bytes:
     return json.dumps(
-        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
     ).encode("utf-8")
 
 
@@ -71,6 +77,10 @@ class Snapshot:
     def as_request(self) -> dict[str, Any]:
         if self.provider not in PROVIDERS:
             raise ValueError("unsupported provider")
+        if any(value.utcoffset() is None for value in (
+            self.observed_at, self.window_started_at, self.window_ended_at, self.data_through
+        )):
+            raise ValueError("snapshot timestamps require time zones")
         if not (
             self.window_started_at
             <= self.data_through
@@ -278,38 +288,80 @@ def channel_is_chatgpt(source: str) -> bool:
 
 def collect_first_party(*, api_base: str, observed_at: datetime) -> Snapshot:
     report = request_json("GET", f"{api_base}/v1/analytics/site?window_hours=672")
-    event_counts = {
-        row.get("event_name"): row for row in report.get("event_counts", [])
-    }
-    channels = report.get("channels", [])
+    completed_at = datetime.now(timezone.utc)
+    if completed_at < observed_at:
+        raise ValueError("collection clock moved backwards")
+    if (not isinstance(report, dict)
+            or report.get("schema_version") != "agent-bounties/site-analytics-v2"
+            or report.get("window_hours") != 672
+            or not isinstance(report.get("overview"), dict)):
+        raise ValueError("unexpected first-party aggregate contract")
+    for key in ("event_counts", "channels", "rates", "daily"):
+        if not isinstance(report.get(key), list):
+            raise ValueError("missing first-party aggregate collection")
+
+    def keyed_rows(rows: list[Any], key: str) -> dict[str, dict[str, Any]]:
+        result = {}
+        for row in rows:
+            if (not isinstance(row, dict) or not isinstance(row.get(key), str)
+                    or not row[key] or row[key] in result):
+                raise ValueError("invalid or duplicate first-party aggregate row")
+            result[row[key]] = row
+        return result
+
+    event_counts = keyed_rows(report["event_counts"], "event_name")
+    for row in event_counts.values():
+        nonnegative_int(row.get("events"), "event count")
+    channels = report["channels"]
+    channel_keys = set()
+    for row in channels:
+        if (not isinstance(row, dict) or not isinstance(row.get("source"), str)
+                or not row["source"] or not (row.get("campaign") is None
+                                             or isinstance(row["campaign"], str))):
+            raise ValueError("invalid first-party acquisition row")
+        channel_key = (row["source"], row.get("campaign"))
+        if channel_key in channel_keys:
+            raise ValueError("duplicate first-party acquisition row")
+        channel_keys.add(channel_key)
+        nonnegative_int(row.get("visitors"), "channel visitors")
     chatgpt_referrals = sum(
-        nonnegative_int(int(row.get("visitors", 0)), "channel visitors")
+        row["visitors"]
         for row in channels
-        if channel_is_chatgpt(str(row.get("source", "")))
+        if channel_is_chatgpt(row["source"])
     )
-    rates = {row.get("metric"): row for row in report.get("rates", [])}
-    ctr = rates.get("market_to_funded_bounty_click", {}).get("value")
-    ctr = 0.0 if ctr is None else bounded_rate(ctr, "market click-through")
+    rates = keyed_rows(report["rates"], "metric")
+    rate = rates.get("market_to_funded_bounty_click", {})
+    numerator = nonnegative_int(rate.get("numerator_sessions"), "market numerator")
+    denominator = nonnegative_int(rate.get("denominator_sessions"), "market denominator")
+    # The existing ingestion contract requires a numeric rate. An undefined
+    # rate makes this provider unavailable; zero would invent evidence.
+    ctr = bounded_rate(rate.get("value"), "market click-through")
+    if (denominator == 0 or numerator > denominator
+            or not math.isclose(ctr, numerator / denominator, rel_tol=0, abs_tol=1e-9)):
+        raise ValueError("undefined or inconsistent market click-through")
     totals = {
         "captured_chatgpt_referrals": chatgpt_referrals,
         "opportunity_feed_clicks": nonnegative_int(
-            int(event_counts.get("opportunity_feed_click", {}).get("events", 0)),
+            event_counts.get("opportunity_feed_click", {}).get("events", 0),
             "opportunity feed clicks",
         ),
         "market_views": nonnegative_int(
-            int(event_counts.get("market_view", {}).get("events", 0)), "market views"
+            event_counts.get("market_view", {}).get("events", 0), "market views"
         ),
         "funded_bounty_clicks": nonnegative_int(
-            int(event_counts.get("funded_bounty_click", {}).get("events", 0)),
+            event_counts.get("funded_bounty_click", {}).get("events", 0),
             "funded bounty clicks",
         ),
         "market_to_funded_opportunity_ctr": ctr,
     }
-    started = datetime.fromisoformat(report["window_started_at"].replace("Z", "+00:00"))
-    generated = datetime.fromisoformat(report["generated_at"].replace("Z", "+00:00"))
+    try:
+        started = datetime.fromisoformat(report["window_started_at"].replace("Z", "+00:00"))
+        generated = datetime.fromisoformat(report["generated_at"].replace("Z", "+00:00"))
+    except (KeyError, AttributeError, TypeError) as error:
+        raise ValueError("missing first-party timestamps") from error
     payload = {
         "totals": totals,
-        "daily": report.get("daily", []),
+        "daily": report["daily"],
         "acquisition": channels,
         "coverage": {
             "headline_window_days": 28,
@@ -317,7 +369,9 @@ def collect_first_party(*, api_base: str, observed_at: datetime) -> Snapshot:
             "last_event_at": report.get("overview", {}).get("last_event_at"),
         },
     }
-    return Snapshot("first_party", observed_at, started, generated, generated, payload)
+    snapshot = Snapshot("first_party", completed_at, started, generated, generated, payload)
+    snapshot.as_request()
+    return snapshot
 
 
 def upload_snapshots(
@@ -345,8 +399,16 @@ def main() -> int:
     parser.add_argument("--property", default=DEFAULT_PROPERTY)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-    observed_at = datetime.now(timezone.utc).replace(microsecond=0)
-    ingest_token = required_env("DISCOVERABILITY_INGEST_TOKEN")
+    observed_at = datetime.now(timezone.utc)
+    missing_configuration = [name for name in CREDENTIAL_NAMES if not os.environ.get(name, "").strip()]
+    print(
+        "discoverability_configuration "
+        f"mode={'dry_run' if args.dry_run else 'upload'} "
+        f"missing={','.join(missing_configuration) or 'none'}"
+    )
+    if not args.dry_run and "DISCOVERABILITY_INGEST_TOKEN" in missing_configuration:
+        return 1
+    ingest_token = None if args.dry_run else required_env("DISCOVERABILITY_INGEST_TOKEN")
     collectors: list[tuple[str, Callable[[], Snapshot]]] = []
     collectors.append(
         (
@@ -376,11 +438,25 @@ def main() -> int:
     )
     snapshots: list[Snapshot] = []
     failures: list[str] = []
+    provider_credentials = {
+        "search_console": "GSC_SERVICE_ACCOUNT_JSON",
+        "github": "REPOSITORY_TRAFFIC_TOKEN",
+    }
     for provider, collect in collectors:
-        try:
-            snapshots.append(collect())
-        except Exception:
+        if provider_credentials.get(provider) in missing_configuration:
             failures.append(provider)
+            print(f"discoverability_provider provider={provider} available=false reason=missing_configuration")
+            continue
+        stage = "collect"
+        try:
+            snapshot = collect()
+            stage = "validate"
+            snapshot.as_request()
+            snapshots.append(snapshot)
+        except Exception as error:
+            failures.append(provider)
+            reason = "invalid_evidence" if isinstance(error, ValueError) else "collection_failed"
+            print(f"discoverability_provider provider={provider} available=false stage={stage} reason={reason}")
     print(
         "discoverability_collection "
         f"available={','.join(sorted(snapshot.provider for snapshot in snapshots)) or 'none'} "
@@ -391,6 +467,7 @@ def main() -> int:
     if args.dry_run:
         print(f"discoverability_upload dry_run=true snapshots={len(snapshots)}")
         return 0 if not failures else 1
+    assert ingest_token is not None
     result = upload_snapshots(
         api_base=args.api_base,
         ingest_token=ingest_token,

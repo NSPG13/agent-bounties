@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "17 13 * * 1"
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Collect and validate available providers without uploading snapshots
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -37,4 +42,11 @@ jobs:
         run: python -m unittest scripts/test_discoverability_snapshot.py
 
       - name: Snapshot overlapping provider windows
-        run: python scripts/discoverability_snapshot.py
+        env:
+          DISCOVERABILITY_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          args=()
+          if [ "$DISCOVERABILITY_DRY_RUN" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          python scripts/discoverability_snapshot.py "${args[@]}"

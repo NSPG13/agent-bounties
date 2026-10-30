@@ -50,6 +50,32 @@ scoped `AGENT_BOUNTIES_ANALYTICS_EXCLUSION_TOKEN` when available and check the
 server acknowledgement; a self-test user agent alone does not exclude traffic.
 Do not provision broader credentials as part of a read-only benchmark.
 
+Optionally add `--capture-readiness-on-partial` to the benchmark command. Only
+after partial MCP inventory, it makes one additional GET to the configured
+API origin's `/readiness/marketplace` (at most 16 requests instead of 15).
+It never retries the feed or changes the original failed journey or exit code.
+A healthy diagnostic describes a later observation, not the original failure's
+cause or permission to restart services or pay. Stale, future, malformed and
+HTTP-inconsistent evidence remains unavailable. Diagnostic receipts retain
+validated fields, the raw-body hash and analytics-exclusion acknowledgment;
+arbitrary provider text and redirect metadata are discarded.
+
+Compact inventory statuses include bounded protocol coverage/error codes and
+validated counts. Missing or malformed counts stay null. A partial zero-item
+inventory never establishes a complete empty marketplace. The receipt records
+both benchmark and readiness-validator file hashes. Keep the local checkout,
+deployed website and API/MCP runtime revisions separate; verify each runtime
+SHA against its service's authoritative repository. Private repository mappings
+and operator paths belong only in private release evidence.
+
+For missing stored provider snapshots, use
+`python scripts/discoverability_snapshot.py --dry-run`. It validates available
+collections without an ingestion credential or snapshot upload. Provider read
+credentials remain optional for diagnostics; missing providers keep the exit
+status nonzero. Read [the snapshot runbook](discoverability-measurement.md)
+before diagnosing missing configuration, collection failures or stale coverage.
+Successful direct analytics retrieval does not populate the stored summary.
+
 Record manual observations against the fixed cases in
 [`ops/distribution/discovery-query-cases.json`](../ops/distribution/discovery-query-cases.json).
 Preserve each case ID and exact input, including search quotation marks. A
@@ -62,6 +88,30 @@ identifies it; a provider name or Search mode is not a model identity. A
 web-search result is not a ChatGPT/Claude/Gemini answer. Record direct answer-engine cases as `not_run`
 unless actually observed. Do not manufacture citations, ranking or visibility
 percentages from a limited query tool.
+
+## Keep interface and canonical outcomes separate
+
+| Measure | Observed scope | Interpretation |
+| --- | --- | --- |
+| Browser posting starts | Posting CTA/assistant-chooser opens and the composer's funding-start path | Intent, not a submitted transaction, payment or created order |
+| Browser posting confirmations | The public composer observes canonical creation, funding, claimability and public inventory reconciliation | A browser-observed completed path; absence does not establish no canonical creation elsewhere |
+| Unfunded-publication conversion | The selected public unfunded cohort joined by immutable terms hash | An empty cohort is not an empty marketplace |
+| Canonical lifecycle activity | Confirmed protocol events in the event window | Authoritative lifecycle/payment evidence within its coverage; not a browser/channel attribution join |
+
+Use the same-session ordered denominator/numerator in the first-party report
+for interface conversion. Do not divide canonical creations or settlements by
+browser posting starts. Direct API, CLI and MCP paths, browser opt-outs,
+delivery failures and cross-browser/tab boundaries can produce different
+counts. The isolated managed-card account/order page deliberately has no
+marketing analytics. Do not add wallet, customer or cross-interface identity
+tracking to force those totals to match.
+
+Retain the scope and exact window of each source. Browser identifiers are not
+verified people; wallets are not independent agents. Unavailable attribution
+stays unavailable. A canonical event can establish an outcome without proving
+which referral or campaign caused it. Source contracts are
+[site analytics](site-analytics.md) and
+[opportunity conversion](opportunity-conversion-analytics.md).
 
 ## Prioritization and attribution
 
