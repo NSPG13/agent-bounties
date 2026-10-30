@@ -1,0 +1,27 @@
+{
+  "guard_report": {
+    "repository": "NSPG13/agent-bounties",
+    "meta_replenishment_target": 2,
+    "meta_claimable_bounty_ids": ["meta-01"],
+    "meta_replenishment_count": 1,
+    "inventory_evidence_valid": true
+  },
+  "candidate_tasks": [
+    {
+      "task_id": "task-stale",
+      "title": "Old evidence task",
+      "funding_usdc": 1.0,
+      "solver_margin_usdc": 0.25,
+      "verifier_ready": true,
+      "evidence_updated_at": "2026-07-01T00:00:00Z",
+      "evidence_ref": "benchmarks/direct-inventory-v1/replenishment-plan/check.py"
+    }
+  ],
+  "wallet": {
+    "wallet_balance": 100.0,
+    "period_spent": 0.0,
+    "max_per_period": 500.0,
+    "lifetime_spent": 0.0,
+    "max_lifetime": 5000.0
+  }
+}
