@@ -1,0 +1,16 @@
+{
+  "feed_url": "https://api.agentbounties.app/v1/base/autonomous-bounties/feed?network=base-mainnet",
+  "network": "base-mainnet",
+  "refresh_interval_seconds": 300,
+  "discovery_fields": [
+    "bounty_id",
+    "platform",
+    "title",
+    "status"
+  ],
+  "indexed": [
+    "claimable",
+    "claimed",
+    "settled"
+  ]
+}
