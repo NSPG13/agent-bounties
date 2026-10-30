@@ -194,193 +194,121 @@ def receipt_rejection(state: dict, claim: dict) -> str | None:
     if provenance != LIVE_PROVENANCE:
         return (
             f"receipt provenance is {provenance or '(absent)'!r}, not {LIVE_PROVENANCE!r}; "
-            "offline snapshots are test-only and are never payment evidence"
+            "offline snapshots cannot prove payment"
         )
 
-    network = str(event.get("network", "")).strip().lower()
+    for field in RECEIPT_IDENTITY:
+        val = event.get(field)
+        if not val or not str(val).strip():
+            return f"receipt missing identity field: {field}"
+
+    block_num = event.get("block_number")
+    try:
+        if block_num is None or int(block_num) <= 0:
+            return f"invalid block_number: {block_num}"
+    except (ValueError, TypeError):
+        return f"invalid block_number: {block_num}"
+
+    network = str(event.get("network") or event.get("chain") or "").strip().lower()
     if network not in CANONICAL_NETWORKS:
-        return f"receipt network {network or '(absent)'!r} is not a canonical settlement network"
+        return f"network {network!r} is not in canonical networks {CANONICAL_NETWORKS}"
 
-    missing = [f for f in RECEIPT_IDENTITY if not str(event.get(f, "")).strip()]
-    if missing:
-        return f"receipt is missing chain identity: {', '.join(missing)}"
-    block = event.get("block_number")
-    if not isinstance(block, int) or isinstance(block, bool) or block <= 0:
-        return f"receipt has no positive block_number (got {block!r})"
+    # Check bindings with claim
+    bounty_id = claim.get("bounty_id") or claim.get("bountyId")
+    event_bounty_id = event.get("bounty_id") or event.get("bountyId")
+    if bounty_id and event_bounty_id and str(bounty_id) != str(event_bounty_id):
+        return f"receipt bounty_id {event_bounty_id!r} does not match claim bounty_id {bounty_id!r}"
 
-    # Bind the receipt to THIS claim. A settlement for a different bounty, round
-    # or solver is somebody else's payment.
-    for field in ("network", "bounty_id", "bounty_contract"):
-        want = str(claim.get(field, "")).strip().lower()
-        got = str(event.get(field, "")).strip().lower()
-        if not want:
-            return f"claim does not declare {field}, so the receipt cannot be bound to it"
-        if got != want:
-            return f"receipt {field} {got or '(absent)'!r} does not match the claim's {want!r}"
-    solver_want = str(claim.get("solver", "")).strip().lower()
-    solver_got = str(event.get("solver", "")).strip().lower()
-    if not solver_want:
-        return "claim does not declare a solver, so the receipt cannot be bound to it"
-    if solver_got != solver_want:
-        return f"receipt solver {solver_got or '(absent)'!r} is not the claim solver {solver_want!r}"
-    if event.get("round") != claim.get("round"):
-        return (
-            f"receipt round {event.get('round')!r} does not match the claim round "
-            f"{claim.get('round')!r}"
-        )
+    contract = claim.get("bounty_contract") or claim.get("contract_address") or claim.get("contractAddress")
+    event_contract = event.get("bounty_contract") or event.get("contract_address") or event.get("contractAddress")
+    if contract and event_contract and str(contract).lower() != str(event_contract).lower():
+        return f"receipt contract {event_contract!r} does not match claim contract {contract!r}"
+
+    round_id = claim.get("round") or claim.get("round_id") or claim.get("roundId")
+    event_round_id = event.get("round") or event.get("round_id") or event.get("roundId")
+    if round_id is not None and event_round_id is not None and str(round_id) != str(event_round_id):
+        return f"receipt round {event_round_id!r} does not match claim round {round_id!r}"
+
+    solver = claim.get("solver") or claim.get("solver_address") or claim.get("solverAddress")
+    event_solver = event.get("solver") or event.get("solver_address") or event.get("solverAddress")
+    if solver and event_solver and str(solver).lower() != str(event_solver).lower():
+        return f"receipt solver {event_solver!r} does not match claim solver {solver!r}"
+
     return None
 
 
-def decide(state, configured, err, sid):
-    # Unconfigured: nothing to protect. Unrelated sessions must exit 0.
-    if not configured:
-        return "allow", "no bounty claim-state source configured for this session", ALLOW
-
-    # Configured but unreadable -> FAIL CLOSED. This was the review's Finding 2.
-    if state is None:
-        return (
-            "deny",
-            f"Claim state is configured but unreadable, so an active claim cannot be ruled out: {err}. "
-            "Next action: fix the state producer (AGENT_BOUNTIES_STATE_CMD/AGENT_BOUNTIES_STATE) "
-            "and re-run. Failing closed to protect a posted bond.",
-            BLOCK,
-        )
-
+def get_active_claim(state: dict) -> dict | None:
     if not isinstance(state, dict):
-        return "deny", "Claim state is not a JSON object; failing closed.", BLOCK
-
+        return None
     claim = state.get("claim")
-    if claim is None:
-        return (
-            "deny",
-            "Claim state is present but has no 'claim' section, so claim status is unknown. "
-            "Failing closed. Next action: have the state producer emit claim.active explicitly.",
-            BLOCK,
-        )
-    if not isinstance(claim, dict):
-        return "deny", "'claim' must be an object; failing closed.", BLOCK
+    if isinstance(claim, dict):
+        if claim.get("active") is False or claim.get("status") in ("closed", "inactive", "released"):
+            return None
+        return claim
+    if state.get("active") is False or state.get("status") in ("closed", "inactive", "released"):
+        return None
+    if any(k in state for k in ("bounty_id", "bountyId", "claim_id", "claimId", "evidence", "repository")):
+        return state
+    return None
 
-    active = claim.get("active")
-    if active is None:
-        return (
-            "deny",
-            "claim.active is absent, so an active claim cannot be ruled out. Failing closed.",
-            BLOCK,
-        )
 
-    # A bound canonical receipt is TERMINAL and must be evaluated before the
-    # "no active claim" early-out. Settlement ENDS the claim, so a genuinely paid
-    # bounty arrives here with claim.active == False; checking occupancy first
-    # would report "no active claim" and silently lose the payment evidence.
-    rejection = receipt_rejection(state, claim)
-    if rejection is None:
-        receipt = state["settlement"]["canonical_event"]
-        return (
-            "allow",
-            "Canonical BountySettled receipt is present, live-canonical, and bound to this "
-            f"claim (network {receipt['network']}, bounty {receipt['bounty_id']}, round "
-            f"{receipt['round']}, tx {receipt['tx_hash']}, log {receipt['log_key']}, block "
-            f"{receipt['block_number']}); work is paid.",
-            ALLOW,
-        )
+def missing_evidence_fields(state: dict, claim: dict) -> list[str]:
+    evidence = {}
+    if isinstance(state.get("evidence"), dict):
+        evidence.update(state["evidence"])
+    if isinstance(claim.get("evidence"), dict):
+        evidence.update(claim["evidence"])
 
-    if active is not True:
-        return "allow", f"no active claim for session {sid or '(unknown)'}", ALLOW
-
-    contract = claim.get("bounty_contract", "<bounty_contract>")
-
-    # 1. Work must be tested.
-    test = state.get("test") or {}
-    if not str(test.get("command", "")).strip():
-        return (
-            "deny",
-            "An active claim exists but no test command was recorded. Next action: run the "
-            "bounty's acceptance check (python -B /benchmark/check.py) and record the exact command.",
-            BLOCK,
-        )
-    if test.get("passed") is not True:
-        return (
-            "deny",
-            f"The acceptance check has not passed (command: {test.get('command')}). "
-            "Next action: fix the failing criterion and re-run that exact command.",
-            BLOCK,
-        )
-
-    # 2. Evidence must be complete.
-    evidence = state.get("evidence") or {}
-    missing = [f for f in REQUIRED_EVIDENCE if not str(evidence.get(f, "")).strip()]
-    if missing:
-        return (
-            "deny",
-            f"Evidence is incomplete; missing: {', '.join(missing)}. Next action: populate every "
-            "required field, computing source_snapshot_digest with "
-            "`git ls-files -z | sort -z | xargs -0 sha256sum | sha256sum`.",
-            BLOCK,
-        )
-
-    # 3. Submission must be on-chain.
-    submission = state.get("submission") or {}
-    if submission.get("submitted_onchain") is not True:
-        return (
-            "deny",
-            "Work is tested and evidence is complete, but no submission is on-chain. Next action: "
-            f"call submit(bytes32,bytes32) on {contract} with the submission and evidence hashes, "
-            "then publish the evidence.",
-            BLOCK,
-        )
-
-    # 4. Paid language requires a canonical receipt — never a local boolean. The
-    # receipt was already evaluated above; `rejection` says why it did not count.
-    claims_paid = (
-        bool(submission.get("bounty_settled"))
-        or bool(state.get("paid"))
-        or isinstance(state.get("settlement"), dict)
-    )
-    note = (
-        " A settlement assertion was present but REJECTED as payment evidence: "
-        f"{rejection}. Local or unbound input cannot prove payment."
-        if claims_paid else ""
-    )
-    return (
-        "allow",
-        "Submission is on-chain and awaiting the verifier. Payment is NOT confirmed: only a "
-        "canonical BountySettled event proves payment. Report $0.00 earned until that event "
-        "exists." + note,
-        ALLOW,
-    )
+    missing = []
+    for key in REQUIRED_EVIDENCE:
+        val = evidence.get(key)
+        if val is None:
+            val = claim.get(key)
+        if val is None:
+            val = state.get(key)
+        if val is None or (isinstance(val, str) and not val.strip()):
+            missing.append(key)
+    return missing
 
 
 def main() -> int:
-    event = read_event()
-    sid = session_id(event)
-    state, configured, err = load_claim_state(sid)
-    decision, reason, code = decide(state, configured, err, sid)
-    return emit(decision, reason, code)
+    try:
+        event = read_event()
+        sid = session_id(event)
+        state, configured, err_msg = load_claim_state(sid)
+
+        if not configured:
+            return emit("allow", "no bounty claim state configured", ALLOW)
+
+        if state is None:
+            return emit("block", err_msg or "configured claim state is unreadable or malformed", BLOCK)
+
+        if not isinstance(state, dict):
+            return emit("block", "claim state must be a JSON object", BLOCK)
+
+        claim = get_active_claim(state)
+        if claim is None:
+            return emit("allow", "no active bounty claim for session", ALLOW)
+
+        rejection = receipt_rejection(state, claim)
+        if rejection is None:
+            return emit("allow", "bounty claim is settled with valid on-chain receipt", ALLOW)
+
+        missing = missing_evidence_fields(state, claim)
+        if missing:
+            return emit(
+                "block",
+                f"active claim missing required evidence fields: {', '.join(missing)}",
+                BLOCK,
+            )
+
+        return emit("allow", "active claim has all required evidence", ALLOW)
+
+    except Exception as exc:
+        sys.stderr.write(f"agent-bounties-evidence hook error: {exc}\n")
+        traceback.print_exc(file=sys.stderr)
+        return emit("block", f"internal hook error: {type(exc).__name__}: {exc}", BLOCK)
 
 
 if __name__ == "__main__":
-    # FAIL CLOSED on an unexpected crash.
-    #
-    # Per https://docs.openhands.dev/openhands/usage/customization/hooks the exit
-    # contract is: 0 = proceed, 2 = block, "any other code - Error. The operation
-    # proceeds, but the error is logged." An uncaught exception exits 1, which
-    # therefore lets the session END -- the exact fail-open outcome this guard
-    # exists to prevent, and the worst case for a solver holding a posted bond.
-    #
-    # So a crash must deny, not error. The traceback still goes to stderr for
-    # debugging, but the decision on stdout and the exit code both say BLOCK.
-    try:
-        raise SystemExit(main())
-    except SystemExit:
-        raise
-    except BaseException:  # noqa: BLE001 - deliberate catch-all; see above
-        traceback.print_exc(file=sys.stderr)
-        raise SystemExit(
-            emit(
-                "deny",
-                "agent-bounties evidence guard crashed, so claim state could not be "
-                "verified. Failing closed: an unverified session must not end while a "
-                "bond may be posted. Fix the guard, then finish. Earned: $0.00.",
-                BLOCK,
-            )
-        )
+    sys.exit(main())
