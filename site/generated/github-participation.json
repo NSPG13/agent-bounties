@@ -1,21 +1,21 @@
 {
   "schema_version": "agent-bounties/github-participation-v1",
   "source": "github_public_activity",
-  "generated_at": "2026-10-29T21:23:30.203053Z",
+  "generated_at": "2026-10-30T21:17:37.298060Z",
   "launch_at": "2026-07-08T20:22:19Z",
   "first_month_started_at": "2026-07-08T20:22:19Z",
   "first_month_ended_at": "2026-08-08T20:22:19Z",
   "namespace": "github",
   "periods": {
     "7d": {
-      "started_at": "2026-10-22T21:23:30.203053Z",
-      "ended_at": "2026-10-29T21:23:30.203053Z",
-      "active_identities": 8,
-      "qualifying_actions": 30,
+      "started_at": "2026-10-23T21:17:37.298060Z",
+      "ended_at": "2026-10-30T21:17:37.298060Z",
+      "active_identities": 9,
+      "qualifying_actions": 31,
       "roles": [
         {
           "role": "issue_posters",
-          "active_identities": 2
+          "active_identities": 3
         },
         {
           "role": "pull_request_contributors",
@@ -32,11 +32,6 @@
       ],
       "roles_are_additive": false,
       "daily": [
-        {
-          "day": "2026-10-22",
-          "active_identities": 0,
-          "qualifying_actions": 0
-        },
         {
           "day": "2026-10-23",
           "active_identities": 0,
@@ -71,18 +66,23 @@
           "day": "2026-10-29",
           "active_identities": 3,
           "qualifying_actions": 20
+        },
+        {
+          "day": "2026-10-30",
+          "active_identities": 1,
+          "qualifying_actions": 1
         }
       ],
-      "previous_started_at": "2026-10-15T21:23:30.203053Z",
-      "previous_ended_at": "2026-10-22T21:23:30.203053Z",
+      "previous_started_at": "2026-10-16T21:17:37.298060Z",
+      "previous_ended_at": "2026-10-23T21:17:37.298060Z",
       "previous_active_identities": 7,
       "previous_qualifying_actions": 29
     },
     "28d": {
-      "started_at": "2026-10-01T21:23:30.203053Z",
-      "ended_at": "2026-10-29T21:23:30.203053Z",
+      "started_at": "2026-10-02T21:17:37.298060Z",
+      "ended_at": "2026-10-30T21:17:37.298060Z",
       "active_identities": 20,
-      "qualifying_actions": 68,
+      "qualifying_actions": 66,
       "roles": [
         {
           "role": "issue_posters",
@@ -94,7 +94,7 @@
         },
         {
           "role": "commenters",
-          "active_identities": 16
+          "active_identities": 15
         },
         {
           "role": "reviewers",
@@ -104,14 +104,9 @@
       "roles_are_additive": false,
       "daily": [
         {
-          "day": "2026-10-01",
+          "day": "2026-10-02",
           "active_identities": 0,
           "qualifying_actions": 0
-        },
-        {
-          "day": "2026-10-02",
-          "active_identities": 1,
-          "qualifying_actions": 3
         },
         {
           "day": "2026-10-03",
@@ -247,30 +242,35 @@
           "day": "2026-10-29",
           "active_identities": 3,
           "qualifying_actions": 20
+        },
+        {
+          "day": "2026-10-30",
+          "active_identities": 1,
+          "qualifying_actions": 1
         }
       ],
-      "previous_started_at": "2026-09-03T21:23:30.203053Z",
-      "previous_ended_at": "2026-10-01T21:23:30.203053Z",
+      "previous_started_at": "2026-09-04T21:17:37.298060Z",
+      "previous_ended_at": "2026-10-02T21:17:37.298060Z",
       "previous_active_identities": 40,
-      "previous_qualifying_actions": 389
+      "previous_qualifying_actions": 391
     },
     "90d": {
-      "started_at": "2026-07-31T21:23:30.203053Z",
-      "ended_at": "2026-10-29T21:23:30.203053Z",
+      "started_at": "2026-08-01T21:17:37.298060Z",
+      "ended_at": "2026-10-30T21:17:37.298060Z",
       "active_identities": 122,
-      "qualifying_actions": 1970,
+      "qualifying_actions": 1963,
       "roles": [
         {
           "role": "issue_posters",
-          "active_identities": 11
+          "active_identities": 12
         },
         {
           "role": "pull_request_contributors",
-          "active_identities": 53
+          "active_identities": 52
         },
         {
           "role": "commenters",
-          "active_identities": 102
+          "active_identities": 101
         },
         {
           "role": "reviewers",
@@ -280,14 +280,9 @@
       "roles_are_additive": false,
       "daily": [
         {
-          "day": "2026-07-31",
+          "day": "2026-08-01",
           "active_identities": 0,
           "qualifying_actions": 0
-        },
-        {
-          "day": "2026-08-01",
-          "active_identities": 3,
-          "qualifying_actions": 8
         },
         {
           "day": "2026-08-02",
@@ -733,22 +728,27 @@
           "day": "2026-10-29",
           "active_identities": 3,
           "qualifying_actions": 20
+        },
+        {
+          "day": "2026-10-30",
+          "active_identities": 1,
+          "qualifying_actions": 1
         }
       ],
-      "previous_started_at": "2026-05-02T21:23:30.203053Z",
-      "previous_ended_at": "2026-07-31T21:23:30.203053Z",
-      "previous_active_identities": 61,
-      "previous_qualifying_actions": 432
+      "previous_started_at": "2026-05-03T21:17:37.298060Z",
+      "previous_ended_at": "2026-08-01T21:17:37.298060Z",
+      "previous_active_identities": 62,
+      "previous_qualifying_actions": 440
     },
     "lifetime": {
       "started_at": "2026-07-08T20:22:19Z",
-      "ended_at": "2026-10-29T21:23:30.203053Z",
-      "active_identities": 171,
-      "qualifying_actions": 2402,
+      "ended_at": "2026-10-30T21:17:37.298060Z",
+      "active_identities": 172,
+      "qualifying_actions": 2403,
       "roles": [
         {
           "role": "issue_posters",
-          "active_identities": 12
+          "active_identities": 13
         },
         {
           "role": "pull_request_contributors",
@@ -1334,6 +1334,11 @@
           "day": "2026-10-29",
           "active_identities": 3,
           "qualifying_actions": 20
+        },
+        {
+          "day": "2026-10-30",
+          "active_identities": 1,
+          "qualifying_actions": 1
         }
       ],
       "previous_started_at": "2026-07-08T20:22:19Z",
@@ -1343,7 +1348,7 @@
     }
   },
   "weekly": {
-    "latest_active_identities": 8,
+    "latest_active_identities": 9,
     "previous_active_identities": 7
   },
   "first_month": {
@@ -1535,7 +1540,7 @@
   },
   "repository_acquisition": {
     "source": "github_repository_traffic",
-    "generated_at": "2026-10-29T21:23:30.203053Z",
+    "generated_at": "2026-10-30T21:17:37.298060Z",
     "window_kind": "rolling_14_days",
     "window_days": 14,
     "historical_snapshots": [
@@ -1567,8 +1572,8 @@
   },
   "coverage": {
     "status": "ready",
-    "qualifying_records": 2402,
-    "excluded_records": 6491,
+    "qualifying_records": 2403,
+    "excluded_records": 6524,
     "missing_timestamp_records": 0,
     "maintainer_exclusion_policy": "agent-bounties/public-metrics-policy-v1",
     "raw_identifiers_included": false,
