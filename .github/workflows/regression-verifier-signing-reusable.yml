@@ -27,6 +27,10 @@ permissions:
 
 jobs:
   sign:
+    if: >-
+      github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/main' &&
+      github.event_name != 'pull_request' && contains(fromJSON('["one","two"]'), inputs.signer_slot)
+    environment: ${{ inputs.signer_slot == 'one' && 'legacy-verifier-one' || 'legacy-verifier-two' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -35,7 +39,7 @@ jobs:
       BASE_MAINNET_RPC_URL: ${{ vars.REGRESSION_VERIFIER_RPC_URL || 'https://mainnet.base.org' }}
     steps:
       # Only protected workflow code may decide which release code can run.
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ github.workflow_sha }}
           fetch-depth: 0
@@ -46,15 +50,15 @@ jobs:
           REGRESSION_VERIFIER_RELEASE_JSON: ${{ vars.REGRESSION_VERIFIER_RELEASE_JSON }}
           EXPECTED_RELEASE_REVISION: ${{ inputs.revision }}
         run: python3 -I scripts/verifier_release_provenance.py
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ steps.provenance.outputs.revision }}
           persist-credentials: false
-      - uses: actions/setup-python@v7.0.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: regression-candidates-${{ inputs.candidate_run_id }}
           path: target/regression-candidates

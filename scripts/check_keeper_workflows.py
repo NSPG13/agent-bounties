@@ -6,8 +6,12 @@ import sys
 import yaml
 
 ROOT=Path(__file__).resolve().parents[1]
-KEY=re.compile(r'secrets\.(?:[A-Z0-9_]*PRIVATE_KEY|KEEPER_KEY)\b')
+KEY=re.compile(r'secrets\.(?:[A-Z0-9_]*PRIVATE_KEY|KEEPER_KEY)\b', re.IGNORECASE)
 PIN=re.compile(r'[^@]+@[0-9a-f]{40}$')
+SIGNING_WORKFLOWS = {
+    './.github/workflows/regression-verifier-signing-reusable.yml',
+    './.github/workflows/leaderboard-reward-signing-reusable.yml',
+}
 
 def violations(document):
     errors=[]
@@ -15,7 +19,12 @@ def violations(document):
     for name,job in document.get('jobs',{}).items():
         if not KEY.search(str(job)): continue
         prefix=f'{name}: '
-        if not job.get('environment'): errors.append(prefix+'missing protected environment')
+        if job.get('uses'):
+            if job['uses'] not in SIGNING_WORKFLOWS:
+                errors.append(prefix+'unreviewed reusable signing workflow')
+            if job.get('environment'):
+                errors.append(prefix+'environment must protect the called execution job')
+        elif not job.get('environment'): errors.append(prefix+'missing protected environment')
         guard=str(job.get('if',''))
         for required in ["github.repository == 'NSPG13/agent-bounties'", "github.ref == 'refs/heads/main'", "github.event_name != 'pull_request'"]:
             if required not in guard: errors.append(prefix+'missing trusted-main boundary: '+required)

@@ -64,7 +64,7 @@ jobs:
         --fuzz-runs 1000 -vv
 
     - name: Contract build and size
-      run: forge build --root contracts/base-escrow --sizes
+      run: forge build --root contracts/base-escrow --sizes --skip script --skip test
 
     - name: Read-only Base preflight
       env:

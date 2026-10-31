@@ -34,7 +34,7 @@ jobs:
         python scripts/test_verify_leaderboard_reward_deployment.py -v
         python -m py_compile scripts/verify_leaderboard_reward_deployment.py
         forge test --root contracts/base-escrow --match-contract SolverLeaderboardRewardsTest
-        forge build --root contracts/base-escrow --sizes
+        forge build --root contracts/base-escrow --sizes --skip script --skip test
 
   base-sepolia-rehearsal:
     if: github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (github.event_name ==

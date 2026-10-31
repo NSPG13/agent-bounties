@@ -21,7 +21,7 @@ jobs:
     env:
       BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:

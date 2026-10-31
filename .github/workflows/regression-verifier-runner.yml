@@ -46,11 +46,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@1.94.0
       - uses: Swatinem/rust-cache@v2
       - run: |
           python -m unittest scripts.test_verifier_release_provenance -v
@@ -70,7 +70,7 @@ jobs:
       VERIFIER_TWO: ${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}
     steps:
       # Only protected workflow code may decide which release code can run.
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ github.workflow_sha }}
           fetch-depth: 0
@@ -81,7 +81,7 @@ jobs:
           REGRESSION_VERIFIER_RELEASE_JSON: ${{ vars.REGRESSION_VERIFIER_RELEASE_JSON }}
           EXPECTED_RELEASE_REVISION: ""
         run: python3 -I scripts/verifier_release_provenance.py
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ steps.provenance.outputs.revision }}
           persist-credentials: false

@@ -80,7 +80,6 @@ jobs:
     secrets:
       signer_private_key: ${{ secrets.REGRESSION_VERIFIER_ONE_PRIVATE_KEY }}
 
-    environment: legacy-verifier-one
   sign-two:
     if: >-
       github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (needs.authorize-run.outputs.authorized
@@ -96,7 +95,6 @@ jobs:
     secrets:
       signer_private_key: ${{ secrets.REGRESSION_VERIFIER_TWO_PRIVATE_KEY }}
 
-    environment: legacy-verifier-two
   relay:
     if: github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' &&
       (needs.authorize-run.outputs.authorized == 'true')

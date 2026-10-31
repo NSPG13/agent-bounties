@@ -33,12 +33,12 @@ jobs:
         builder: [a, b]
         profile: [public-vector-metric-v1, structured-artifact-metric-v1, forward-canonical-gmv-attribution-metric-v2]
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: "1.96.1"
       - uses: ./.github/actions/setup-protoc
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: NSPG13/sp1
           ref: f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d
@@ -80,7 +80,7 @@ jobs:
       matrix:
         profile: [public-vector-metric-v1, structured-artifact-metric-v1, forward-canonical-gmv-attribution-metric-v2]
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: metric-evidence-${{ matrix.profile }}-*

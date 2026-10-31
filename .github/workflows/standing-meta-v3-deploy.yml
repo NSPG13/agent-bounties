@@ -82,7 +82,7 @@ jobs:
       run: forge test --root contracts/base-escrow --match-contract CanonicalIndependentChildVerifierV3Test -vv
 
     - name: V3 contract build and size
-      run: forge build --root contracts/base-escrow --sizes
+      run: forge build --root contracts/base-escrow --sizes --skip script --skip test
 
     - name: Read-only Base activation and funding preflight
       env:

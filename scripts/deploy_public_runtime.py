@@ -39,6 +39,11 @@ class Render:
 def validate_service(service, expected, manifest, migrate):
     if any(service.get(field)!=expected[field] for field in ('id','name','type')) or service.get('ownerId')!=manifest['workspace_id']:
         raise ReleaseError('service identity or workspace does not match the reviewed inventory')
+    if expected.get('dockerfile'):
+        build=service.get('serviceDetails',{}).get('envSpecificDetails',{})
+        if (service.get('rootDir','')!='' or build.get('dockerfilePath')!=expected['dockerfile']
+                or build.get('dockerContext')!='.' or build.get('dockerCommand','')!=''):
+            raise ReleaseError('production build recipe differs from reviewed source')
     repos={PUBLIC}
     if migrate:repos.add(manifest['migration_from_repository'])
     if service.get('repo','').removesuffix('.git') not in repos:

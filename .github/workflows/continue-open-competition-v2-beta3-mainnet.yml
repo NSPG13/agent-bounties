@@ -55,7 +55,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         ref: ${{ env.RELEASE_SOURCE_COMMIT }}
     - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -151,10 +151,10 @@ jobs:
         if [ -d "$GITHUB_WORKSPACE/target" ]; then
           sudo rm -rf "$GITHUB_WORKSPACE/target"
         fi
-    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         ref: ${{ env.RELEASE_SOURCE_COMMIT }}
-    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         ref: ${{ github.sha }}
         path: .release-control

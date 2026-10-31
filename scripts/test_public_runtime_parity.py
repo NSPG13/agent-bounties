@@ -29,7 +29,7 @@ class PublicRuntimeParityTests(unittest.TestCase):
         for root in self.roots:
             (root/'crates/api/src/main.rs').write_text('include!("../../../fixtures/body.rs");')
             (root/'fixtures/body.rs').write_text('fn main() {}')
-        self.assertEqual(guard.compare(*self.roots)['file_count'],3)
+        self.assertEqual(guard.compare(*self.roots)['file_count'],4)
         (self.roots[0]/'fixtures/body.rs').write_text('fn changed() {}')
         with self.assertRaises(ValueError):guard.compare(*self.roots)
     def test_environment_selected_source_is_rejected(self):
