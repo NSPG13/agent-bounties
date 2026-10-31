@@ -36,7 +36,7 @@ sol! {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AgentWalletPolicyDeclaration {
     #[serde(default)]
@@ -48,7 +48,7 @@ pub struct AgentWalletPolicyDeclaration {
     pub human_approval_policy: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PrepareAgentToEarnInput {
     pub network: String,
@@ -850,7 +850,7 @@ mod tests {
     }
 
     fn address_word(address: &str) -> String {
-        format!("0x{}{}", "0".repeat(24), address[2..].to_ascii_lowercase())
+        format!("0x{}{}", "0".repeat(24), &address[2..].to_ascii_lowercase())
     }
 
     fn multicall_result(words: Vec<String>) -> String {

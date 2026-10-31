@@ -559,7 +559,7 @@ async fn process_relay_job(
         return Ok((job.state, action));
     }
 
-    let (chain_id, rpc_url, _) = chain.rpc(&job.network)?;
+    let (_, rpc_url, _) = chain.rpc(&job.network)?;
     if let Some(tx_hash) = job.relay_tx_hash.as_deref() {
         let safe = fetch_safe_block_identity(&rpc_url, 71).await?;
         let receipt = fetch_transaction_receipt(&rpc_url, tx_hash, 72)
@@ -664,28 +664,19 @@ async fn process_relay_job(
         }
     };
     intent.from = Some(chain.relayer.address());
-    let transaction = match chain
-        .relayer
-        .simulate_and_broadcast(
-            &rpc_url,
-            chain_id,
-            &intent,
-            chain.max_gas,
-            chain.max_fee_per_gas_wei,
-        )
-        .await
-    {
-        Ok(transaction) => transaction,
-        Err(error) => match relay_failure_disposition(&error) {
-            RelayFailureDisposition::Retry => {
-                return Ok((job.state, "relay_retry".to_string()));
-            }
-            RelayFailureDisposition::Refund { code, message } => {
-                *job = mark_refund_due(store, config, job, code, message).await?;
-                return Ok((job.state, "refund_due".to_string()));
-            }
-        },
-    };
+    let transaction =
+        match crate::shared_relay::broadcast(store, &job.network, chain, &intent).await {
+            Ok(transaction) => transaction,
+            Err(error) => match relay_failure_disposition(&error) {
+                RelayFailureDisposition::Retry => {
+                    return Ok((job.state, "relay_retry".to_string()));
+                }
+                RelayFailureDisposition::Refund { code, message } => {
+                    *job = mark_refund_due(store, config, job, code, message).await?;
+                    return Ok((job.state, "refund_due".to_string()));
+                }
+            },
+        };
     *job = store
         .transition_open_competition_v2_proof_job(
             job.id,
@@ -827,7 +818,7 @@ async fn process_refund_job(
         .maximum_charge
         .parse::<u64>()
         .context("proof job maximum charge is invalid")?;
-    let (chain_id, rpc_url, settlement_token) = chain.rpc(&job.network)?;
+    let (_, rpc_url, settlement_token) = chain.rpc(&job.network)?;
     let refund_nonce = refund_nonce(job);
     if let Some((tx_hash, block_number, evidence)) = find_canonical_refund(
         &rpc_url,
@@ -887,16 +878,7 @@ async fn process_refund_job(
         &chain.relayer.address(),
         &authorization,
     )?;
-    let transaction = chain
-        .relayer
-        .simulate_and_broadcast(
-            &rpc_url,
-            chain_id,
-            &intent,
-            chain.max_gas,
-            chain.max_fee_per_gas_wei,
-        )
-        .await?;
+    let transaction = crate::shared_relay::broadcast(store, &job.network, chain, &intent).await?;
     *job = store
         .transition_open_competition_v2_proof_job(
             job.id,

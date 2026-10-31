@@ -1,6 +1,6 @@
 {
   "protocol_version": "agent-bounties/autonomous-v1",
-  "status": "active",
+  "status": "recovery_only",
   "network": "base-mainnet",
   "chain_id": 8453,
   "chain_id_hex": "0x2105",
@@ -48,5 +48,9 @@
   },
   "api_base_url": "https://api.agentizable.ai",
   "mcp_base_url": "https://mcp.agentizable.ai",
-  "explorer_url": "https://base.blockscout.com"
+  "explorer_url": "https://base.blockscout.com",
+  "new_creation_enabled": false,
+  "new_funding_enabled": false,
+  "new_claims_enabled": false,
+  "retirement_reason": "Immutable v1 module rejection and transferWithAuthorization weaknesses. Historical events and cancellation/expiry/refund recovery remain available; use autonomous-v2 for new work."
 }

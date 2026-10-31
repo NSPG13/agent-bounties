@@ -10,17 +10,17 @@ on:
         default: false
   pull_request:
     paths:
-      - ".github/workflows/standing-meta-v2-deploy.yml"
-      - "contracts/base-escrow/**"
-      - "scripts/standing_meta_v2_deploy.py"
-      - "scripts/test_standing_meta_v2_deploy.py"
+    - ".github/workflows/standing-meta-v2-deploy.yml"
+    - "contracts/base-escrow/**"
+    - "scripts/standing_meta_v2_deploy.py"
+    - "scripts/test_standing_meta_v2_deploy.py"
   push:
     branches: [main]
     paths:
-      - ".github/workflows/standing-meta-v2-deploy.yml"
-      - "contracts/base-escrow/**"
-      - "scripts/standing_meta_v2_deploy.py"
-      - "scripts/test_standing_meta_v2_deploy.py"
+    - ".github/workflows/standing-meta-v2-deploy.yml"
+    - "contracts/base-escrow/**"
+    - "scripts/standing_meta_v2_deploy.py"
+    - "scripts/test_standing_meta_v2_deploy.py"
 
 permissions:
   contents: read
@@ -29,20 +29,21 @@ jobs:
   deterministic-gates:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: foundry-rs/foundry-toolchain@v1
-      - uses: actions/setup-python@v7.0.0
-        with:
-          python-version: "3.12"
-      - name: Contract and deployment harnesses
-        run: |
-          python -m unittest scripts.test_standing_meta_v2_deploy -v
-          forge test --root contracts/base-escrow --match-contract CanonicalIndependentChildVerifierV2Test -vv
-          forge test --root contracts/base-escrow --match-contract BaseSepoliaStandingMetaV2RehearsalBalanceTest -vv
-          forge build --root contracts/base-escrow --sizes
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: foundry-rs/foundry-toolchain@dba66c27052e63476d886f22216e119ba7e615bf
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: "3.12"
+    - name: Contract and deployment harnesses
+      run: |
+        python -m unittest scripts.test_standing_meta_v2_deploy -v
+        forge test --root contracts/base-escrow --match-contract CanonicalIndependentChildVerifierV2Test -vv
+        forge test --root contracts/base-escrow --match-contract BaseSepoliaStandingMetaV2RehearsalBalanceTest -vv
+        forge build --root contracts/base-escrow --sizes --skip script --skip test
 
   base-sepolia-rehearsal:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (github.event_name ==
+      'workflow_dispatch')
     needs: deterministic-gates
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -50,32 +51,37 @@ jobs:
       group: agent-bounties-shared-base-keeper
       cancel-in-progress: false
     env:
-      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
-      PARTICIPANT_ATTESTER_PRIVATE_KEY: ${{ secrets.PARTICIPANT_ATTESTER_PRIVATE_KEY }}
-      REGRESSION_VERIFIER_ONE_PRIVATE_KEY: ${{ secrets.REGRESSION_VERIFIER_ONE_PRIVATE_KEY }}
-      REGRESSION_VERIFIER_TWO_PRIVATE_KEY: ${{ secrets.REGRESSION_VERIFIER_TWO_PRIVATE_KEY }}
       PARTICIPANT_ATTESTER_ADDRESS: ${{ vars.PARTICIPANT_ATTESTER_ADDRESS }}
       REGRESSION_VERIFIER_ONE_ADDRESS: ${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}
       REGRESSION_VERIFIER_TWO_ADDRESS: ${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: foundry-rs/foundry-toolchain@v1
-      - uses: actions/setup-python@v7.0.0
-        with:
-          python-version: "3.12"
-      - name: Execute full funded Base Sepolia loop
-        run: >-
-          python scripts/standing_meta_v2_deploy.py sepolia
-          --rpc-url https://sepolia.base.org
-          --output target/base-sepolia-standing-meta-v2-rehearsal.json
-      - uses: actions/upload-artifact@v7.0.2
-        with:
-          name: base-sepolia-standing-meta-v2-rehearsal
-          path: target/base-sepolia-standing-meta-v2-*.json
-          if-no-files-found: error
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - uses: foundry-rs/foundry-toolchain@dba66c27052e63476d886f22216e119ba7e615bf
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: "3.12"
+    - name: Execute full funded Base Sepolia loop
+      run: >-
+        python scripts/standing_meta_v2_deploy.py sepolia
+        --rpc-url https://sepolia.base.org
+        --output target/base-sepolia-standing-meta-v2-rehearsal.json
+      env:
+        BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+        PARTICIPANT_ATTESTER_PRIVATE_KEY: ${{ secrets.PARTICIPANT_ATTESTER_PRIVATE_KEY }}
+        REGRESSION_VERIFIER_ONE_PRIVATE_KEY: ${{ secrets.REGRESSION_VERIFIER_ONE_PRIVATE_KEY }}
+        REGRESSION_VERIFIER_TWO_PRIVATE_KEY: ${{ secrets.REGRESSION_VERIFIER_TWO_PRIVATE_KEY }}
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: base-sepolia-standing-meta-v2-rehearsal
+        path: target/base-sepolia-standing-meta-v2-*.json
+        if-no-files-found: error
 
+    environment: legacy-keeper
   base-mainnet-deploy:
-    if: github.event_name == 'workflow_dispatch' && inputs.deploy_mainnet
+    if: github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (github.event_name ==
+      'workflow_dispatch' && inputs.deploy_mainnet)
     needs: base-sepolia-rehearsal
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -83,23 +89,27 @@ jobs:
       group: agent-bounties-shared-base-keeper
       cancel-in-progress: false
     env:
-      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
       PARTICIPANT_ATTESTER_ADDRESS: ${{ vars.PARTICIPANT_ATTESTER_ADDRESS }}
       REGRESSION_VERIFIER_ONE_ADDRESS: ${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}
       REGRESSION_VERIFIER_TWO_ADDRESS: ${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: foundry-rs/foundry-toolchain@v1
-      - uses: actions/setup-python@v7.0.0
-        with:
-          python-version: "3.12"
-      - name: Deploy exact mainnet components after successful rehearsal
-        run: >-
-          python scripts/standing_meta_v2_deploy.py mainnet
-          --rpc-url https://mainnet.base.org
-          --output target/base-mainnet-standing-meta-v2-deployment.json
-      - uses: actions/upload-artifact@v7.0.2
-        with:
-          name: base-mainnet-standing-meta-v2-deployment
-          path: target/base-mainnet-standing-meta-v2-*.json
-          if-no-files-found: error
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - uses: foundry-rs/foundry-toolchain@dba66c27052e63476d886f22216e119ba7e615bf
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: "3.12"
+    - name: Deploy exact mainnet components after successful rehearsal
+      run: >-
+        python scripts/standing_meta_v2_deploy.py mainnet
+        --rpc-url https://mainnet.base.org
+        --output target/base-mainnet-standing-meta-v2-deployment.json
+      env:
+        BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: base-mainnet-standing-meta-v2-deployment
+        path: target/base-mainnet-standing-meta-v2-*.json
+        if-no-files-found: error
+    environment: legacy-keeper

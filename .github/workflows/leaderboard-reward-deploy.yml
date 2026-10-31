@@ -10,12 +10,12 @@ on:
         default: false
   pull_request:
     paths:
-      - ".github/workflows/leaderboard-reward-deploy.yml"
-      - "contracts/base-escrow/script/DeploySolverLeaderboardRewards.s.sol"
-      - "contracts/base-escrow/src/SolverLeaderboardRewards.sol"
-      - "contracts/base-escrow/test/SolverLeaderboardRewards*.t.sol"
-      - "scripts/verify_leaderboard_reward_deployment.py"
-      - "scripts/test_verify_leaderboard_reward_deployment.py"
+    - ".github/workflows/leaderboard-reward-deploy.yml"
+    - "contracts/base-escrow/script/DeploySolverLeaderboardRewards.s.sol"
+    - "contracts/base-escrow/src/SolverLeaderboardRewards.sol"
+    - "contracts/base-escrow/test/SolverLeaderboardRewards*.t.sol"
+    - "scripts/verify_leaderboard_reward_deployment.py"
+    - "scripts/test_verify_leaderboard_reward_deployment.py"
 
 permissions:
   contents: read
@@ -25,19 +25,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
-      - uses: actions/setup-python@v7.0.0
-        with:
-          python-version: "3.12"
-      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
-      - run: |
-          python scripts/test_verify_leaderboard_reward_deployment.py -v
-          python -m py_compile scripts/verify_leaderboard_reward_deployment.py
-          forge test --root contracts/base-escrow --match-contract SolverLeaderboardRewardsTest
-          forge build --root contracts/base-escrow --sizes
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: "3.12"
+    - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+    - run: |
+        python scripts/test_verify_leaderboard_reward_deployment.py -v
+        python -m py_compile scripts/verify_leaderboard_reward_deployment.py
+        forge test --root contracts/base-escrow --match-contract SolverLeaderboardRewardsTest
+        forge build --root contracts/base-escrow --sizes --skip script --skip test
 
   base-sepolia-rehearsal:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    if: github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (github.event_name ==
+      'workflow_dispatch' && github.ref == 'refs/heads/main')
     needs: deterministic-gates
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -45,48 +46,57 @@ jobs:
       group: agent-bounties-shared-base-keeper
       cancel-in-progress: false
     env:
-      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
       BASE_SEPOLIA_RPC_URL: https://sepolia.base.org
       LEADERBOARD_SIGNER_A: ${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}
       LEADERBOARD_SIGNER_B: ${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}
-      REGRESSION_VERIFIER_ONE_PRIVATE_KEY: ${{ secrets.REGRESSION_VERIFIER_ONE_PRIVATE_KEY }}
-      REGRESSION_VERIFIER_TWO_PRIVATE_KEY: ${{ secrets.REGRESSION_VERIFIER_TWO_PRIVATE_KEY }}
       RUN_LEADERBOARD_SEPOLIA_FORK: "true"
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
-      - uses: actions/setup-python@v7.0.0
-        with:
-          python-version: "3.12"
-      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
-      - name: Deploy and attest Base Sepolia contract
-        run: |
-          mkdir -p target
-          export LEADERBOARD_DEPLOYMENT_OUTPUT="../../target/base-sepolia-leaderboard-raw.json"
-          pushd contracts/base-escrow
-          forge script \
-            script/DeploySolverLeaderboardRewards.s.sol:DeploySolverLeaderboardRewards \
-            --rpc-url "$BASE_SEPOLIA_RPC_URL" --broadcast --slow
-          popd
-          python scripts/verify_leaderboard_reward_deployment.py \
-            --network base-sepolia \
-            --rpc-url "$BASE_SEPOLIA_RPC_URL" \
-            --manifest target/base-sepolia-leaderboard-raw.json \
-            --broadcast contracts/base-escrow/broadcast/DeploySolverLeaderboardRewards.s.sol/84532/run-latest.json \
-            --output target/base-sepolia-leaderboard-deployment.json
-          python -c "import json; print('LEADERBOARD_SEPOLIA_REWARD_CONTRACT=' + json.load(open('target/base-sepolia-leaderboard-deployment.json'))['reward_contract'])" >> "$GITHUB_ENV"
-      - name: Rehearse both exact payouts on a Base Sepolia fork
-        run: >-
-          forge test --root contracts/base-escrow
-          --match-contract SolverLeaderboardRewardsSepoliaForkTest -vv
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: base-sepolia-leaderboard-rehearsal
-          path: target/base-sepolia-leaderboard-*.json
-          if-no-files-found: error
-          retention-days: 30
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: "3.12"
+    - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+    - name: Deploy and attest Base Sepolia contract
+      run: |
+        mkdir -p target
+        export LEADERBOARD_DEPLOYMENT_OUTPUT="../../target/base-sepolia-leaderboard-raw.json"
+        pushd contracts/base-escrow
+        forge script \
+          script/DeploySolverLeaderboardRewards.s.sol:DeploySolverLeaderboardRewards \
+          --rpc-url "$BASE_SEPOLIA_RPC_URL" --broadcast --slow
+        popd
+        python scripts/verify_leaderboard_reward_deployment.py \
+          --network base-sepolia \
+          --rpc-url "$BASE_SEPOLIA_RPC_URL" \
+          --manifest target/base-sepolia-leaderboard-raw.json \
+          --broadcast contracts/base-escrow/broadcast/DeploySolverLeaderboardRewards.s.sol/84532/run-latest.json \
+          --output target/base-sepolia-leaderboard-deployment.json
+        python -c "import json; print('LEADERBOARD_SEPOLIA_REWARD_CONTRACT=' + json.load(open('target/base-sepolia-leaderboard-deployment.json'))['reward_contract'])" >> "$GITHUB_ENV"
+      env:
+        BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+        REGRESSION_VERIFIER_ONE_PRIVATE_KEY: ${{ secrets.REGRESSION_VERIFIER_ONE_PRIVATE_KEY }}
+        REGRESSION_VERIFIER_TWO_PRIVATE_KEY: ${{ secrets.REGRESSION_VERIFIER_TWO_PRIVATE_KEY }}
+    - name: Rehearse both exact payouts on a Base Sepolia fork
+      run: >-
+        forge test --root contracts/base-escrow
+        --match-contract SolverLeaderboardRewardsSepoliaForkTest -vv
+      env:
+        BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+        REGRESSION_VERIFIER_ONE_PRIVATE_KEY: ${{ secrets.REGRESSION_VERIFIER_ONE_PRIVATE_KEY }}
+        REGRESSION_VERIFIER_TWO_PRIVATE_KEY: ${{ secrets.REGRESSION_VERIFIER_TWO_PRIVATE_KEY }}
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: base-sepolia-leaderboard-rehearsal
+        path: target/base-sepolia-leaderboard-*.json
+        if-no-files-found: error
+        retention-days: 30
 
+    environment: legacy-keeper
   base-mainnet-deploy:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.deploy_mainnet
+    if: github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (github.event_name ==
+      'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.deploy_mainnet)
     needs: base-sepolia-rehearsal
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -94,34 +104,38 @@ jobs:
       group: agent-bounties-shared-base-keeper
       cancel-in-progress: false
     env:
-      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
       BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
       LEADERBOARD_SIGNER_A: ${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}
       LEADERBOARD_SIGNER_B: ${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
-      - uses: actions/setup-python@v7.0.0
-        with:
-          python-version: "3.12"
-      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
-      - name: Deploy and attest Base mainnet contract
-        run: |
-          mkdir -p target
-          export LEADERBOARD_DEPLOYMENT_OUTPUT="../../target/base-mainnet-leaderboard-raw.json"
-          pushd contracts/base-escrow
-          forge script \
-            script/DeploySolverLeaderboardRewards.s.sol:DeploySolverLeaderboardRewards \
-            --rpc-url "$BASE_MAINNET_RPC_URL" --broadcast --slow
-          popd
-          python scripts/verify_leaderboard_reward_deployment.py \
-            --network base-mainnet \
-            --rpc-url "$BASE_MAINNET_RPC_URL" \
-            --manifest target/base-mainnet-leaderboard-raw.json \
-            --broadcast contracts/base-escrow/broadcast/DeploySolverLeaderboardRewards.s.sol/8453/run-latest.json \
-            --output target/base-mainnet-leaderboard-deployment.json
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: base-mainnet-leaderboard-deployment
-          path: target/base-mainnet-leaderboard-*.json
-          if-no-files-found: error
-          retention-days: 90
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: "3.12"
+    - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+    - name: Deploy and attest Base mainnet contract
+      run: |
+        mkdir -p target
+        export LEADERBOARD_DEPLOYMENT_OUTPUT="../../target/base-mainnet-leaderboard-raw.json"
+        pushd contracts/base-escrow
+        forge script \
+          script/DeploySolverLeaderboardRewards.s.sol:DeploySolverLeaderboardRewards \
+          --rpc-url "$BASE_MAINNET_RPC_URL" --broadcast --slow
+        popd
+        python scripts/verify_leaderboard_reward_deployment.py \
+          --network base-mainnet \
+          --rpc-url "$BASE_MAINNET_RPC_URL" \
+          --manifest target/base-mainnet-leaderboard-raw.json \
+          --broadcast contracts/base-escrow/broadcast/DeploySolverLeaderboardRewards.s.sol/8453/run-latest.json \
+          --output target/base-mainnet-leaderboard-deployment.json
+      env:
+        BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: base-mainnet-leaderboard-deployment
+        path: target/base-mainnet-leaderboard-*.json
+        if-no-files-found: error
+        retention-days: 90
+    environment: legacy-keeper

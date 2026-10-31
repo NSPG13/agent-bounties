@@ -61,21 +61,21 @@ pub(crate) struct A2aAgentCard {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-struct A2aAgentInterface {
+pub(crate) struct A2aAgentInterface {
     url: String,
     protocol_binding: String,
     protocol_version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-struct A2aAgentProvider {
+pub(crate) struct A2aAgentProvider {
     url: String,
     organization: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-struct A2aAgentCapabilities {
+pub(crate) struct A2aAgentCapabilities {
     streaming: bool,
     push_notifications: bool,
     extended_agent_card: bool,
@@ -83,7 +83,7 @@ struct A2aAgentCapabilities {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-struct A2aAgentSkill {
+pub(crate) struct A2aAgentSkill {
     id: String,
     name: String,
     description: String,
@@ -1020,6 +1020,7 @@ async fn discover_bounties(state: &SharedState, parameters: &Value) -> Execution
             });
         reward_matches && category_matches && skills_match
     });
+    let has_more = projection.has_more || projection.items.len() > limit;
     projection.items.truncate(limit);
     let items = projection
         .items
@@ -1057,6 +1058,9 @@ async fn discover_bounties(state: &SharedState, parameters: &Value) -> Execution
             "generatedAt": projection.generated_at,
             "network": projection.network,
             "degraded": projection.degraded,
+            "coverage": projection.coverage,
+            "coverageScope": projection.coverage_scope,
+            "hasMore": has_more,
             "sourceStatuses": projection.source_statuses,
             "items": items,
             "evidenceBoundary": projection.evidence_boundary,
@@ -1090,7 +1094,16 @@ async fn explain_opportunity(state: &SharedState, parameters: &Value) -> Executi
         state,
         OpportunityQuery {
             network: Some("base-mainnet".to_string()),
-            limit: Some(300),
+            view: Some("recent".to_string()),
+            opportunity_id: Some(opportunity_id.clone()),
+            source_type: if opportunity_id.starts_with("legacy:") {
+                Some("legacy_bounty".to_string())
+            } else if opportunity_id.starts_with("unfunded:") {
+                Some("unfunded_offchain".to_string())
+            } else {
+                Some("canonical_base".to_string())
+            },
+            limit: Some(1),
             ..OpportunityQuery::default()
         },
     )
@@ -1111,11 +1124,20 @@ async fn explain_opportunity(state: &SharedState, parameters: &Value) -> Executi
         .into_iter()
         .find(|item| item.opportunity_id == opportunity_id)
     else {
+        if projection.coverage != super::OpportunityCoverage::Complete || projection.has_more {
+            return ExecutionOutcome {
+                state: A2aTaskState::Failed,
+                summary: "This exact public lookup is unavailable. Its existence and state are unknown; retry after the reader recovers. No absence, expiry or payment was inferred.".to_string(),
+                artifact_name: Some("Opportunity lookup unavailable".to_string()),
+                data: Some(json!({"opportunityId": opportunity_id, "found": null, "status": "unavailable", "generatedAt": projection.generated_at,
+                    "coverage": projection.coverage, "coverageScope": projection.coverage_scope, "sourceStatuses": projection.source_statuses})),
+            };
+        }
         return ExecutionOutcome {
             state: A2aTaskState::Completed,
             summary: format!("No current public opportunity matched {opportunity_id:?}. It may have changed state or expired; refresh discovery before acting."),
             artifact_name: Some("Opportunity lookup result".to_string()),
-            data: Some(json!({"opportunityId": opportunity_id, "found": false, "generatedAt": projection.generated_at, "degraded": projection.degraded})),
+            data: Some(json!({"opportunityId": opportunity_id, "found": false, "generatedAt": projection.generated_at, "degraded": projection.degraded, "coverage": projection.coverage, "coverageScope": projection.coverage_scope})),
         };
     };
     let canonical_url = item.public_url.clone();
@@ -1132,6 +1154,8 @@ async fn explain_opportunity(state: &SharedState, parameters: &Value) -> Executi
             "found": true,
             "generatedAt": projection.generated_at,
             "degraded": projection.degraded,
+            "coverage": projection.coverage,
+            "coverageScope": projection.coverage_scope,
             "opportunity": item,
             "discoveryLinks": {
                 "canonicalUrl": canonical_url,
@@ -1528,6 +1552,23 @@ mod tests {
             list_task(task, None, true)
                 .artifacts
                 .as_ref()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+    #[tokio::test]
+    async fn a2a_exact_opportunity_unavailable_is_unknown_not_absent() {
+        let state = crate::tests::test_state(app::BountyNetwork::default());
+        let id = format!("canonical:base-mainnet:0x{}", "12".repeat(20));
+        let outcome = explain_opportunity(&state, &json!({"opportunityId": id})).await;
+        let data = outcome.data.unwrap();
+        assert_eq!(data["coverageScope"], "canonical_identity");
+        assert_eq!(data["status"], "unavailable");
+        assert!(data["found"].is_null());
+        assert_eq!(
+            data["sourceStatuses"][0]["protocol_statuses"]
+                .as_array()
                 .unwrap()
                 .len(),
             1

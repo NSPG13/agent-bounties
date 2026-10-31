@@ -1,0 +1,53 @@
+{
+  "synthetic": true,
+  "plan": {
+    "schema": "agent-bounties/managed-bridge-transfer-v1",
+    "operation_id": "33333333-3333-4333-8333-333333333333",
+    "order_id": "44444444-4444-4444-8444-444444444444",
+    "quote_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "company": {
+      "environment": "sandbox",
+      "customer_id": "11111111-1111-4111-8111-111111111111",
+      "base_treasury_address": "0x1111111111111111111111111111111111111111"
+    },
+    "route": {
+      "kind": "supplier_mxn_payout",
+      "obligation_id": "55555555-5555-4555-8555-555555555555",
+      "external_account_id": "66666666-6666-4666-8666-666666666666",
+      "input_micro_usdc": 102000000,
+      "output_minor": 200000,
+      "external_account_snapshot_digest": "203e8b497da08e417d2f8c86910603165d18ef657f45151772ce8726462c22a1"
+    },
+    "created_at": 1792627200
+  },
+  "response": {
+    "id": "77777777-7777-4777-8777-777777777777",
+    "client_reference_id": "33333333-3333-4333-8333-333333333333",
+    "state": "awaiting_funds",
+    "on_behalf_of": "11111111-1111-4111-8111-111111111111",
+    "amount": "102.000000",
+    "currency": "usd",
+    "developer_fee": "0.0",
+    "source": {
+      "payment_rail": "base",
+      "currency": "usdc",
+      "from_address": "0x1111111111111111111111111111111111111111",
+      "amount": "102.000000"
+    },
+    "destination": {
+      "payment_rail": "spei",
+      "currency": "mxn",
+      "external_account_id": "66666666-6666-4666-8666-666666666666",
+      "amount": "2000.00"
+    },
+    "source_deposit_instructions": {
+      "payment_rail": "base",
+      "currency": "usdc",
+      "amount": "102.000000",
+      "from_address": "0x1111111111111111111111111111111111111111",
+      "to_address": "0x2222222222222222222222222222222222222222"
+    },
+    "created_at": "2026-10-22T00:00:01Z",
+    "updated_at": "2026-10-22T00:00:01Z"
+  }
+}

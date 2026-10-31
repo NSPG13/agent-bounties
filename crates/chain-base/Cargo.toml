@@ -6,7 +6,12 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+# Adds the publicly known Anvil account #9 as a customer-review signer. Tests only.
+testing-customer-review-signer = []
+
 [dependencies]
+utoipa.workspace = true
 alloy.workspace = true
 async-trait.workspace = true
 chrono.workspace = true

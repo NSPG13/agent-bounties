@@ -92,6 +92,10 @@ pub struct LiveMoneyReadinessConfig {
     pub stripe_live_execution_enabled: bool,
     pub stripe_payment_method_configuration_configured: bool,
     pub stripe_webhook_secret_configured: bool,
+    #[serde(default)]
+    pub stripe_webhook_livemode: Option<bool>,
+    #[serde(default)]
+    pub durable_store_configured: bool,
     pub allow_unsigned_stripe_webhooks: bool,
     pub operator_auth_configured: bool,
     pub base_rpc_url_configured: bool,
@@ -143,6 +147,17 @@ struct ReadinessWarningInputs<'a> {
     native_usdc_token_address: &'a str,
 }
 
+/// An unset or malformed payment mode must never fall back to a usable mode.
+pub fn parse_stripe_webhook_livemode(value: &str) -> Option<bool> {
+    if value.eq_ignore_ascii_case("true") {
+        Some(true)
+    } else if value.eq_ignore_ascii_case("false") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 pub fn build_live_money_readiness_report(
     config: LiveMoneyReadinessConfig,
 ) -> Result<LiveMoneyReadinessReport, ChainBaseError> {
@@ -179,6 +194,27 @@ pub fn build_live_money_readiness_report(
         });
     let token_matches_native = supplied_usdc_token_matches_native.unwrap_or(false);
 
+    let mode_matches_key = match stripe_secret_key_mode.as_str() {
+        "live" => config.stripe_webhook_livemode == Some(true),
+        "test" => config.stripe_webhook_livemode == Some(false),
+        _ => true, // Receiving a signed event does not itself require an API key.
+    };
+    let stripe_webhook_ready = mode_matches_key
+        && match config.stripe_webhook_livemode {
+            Some(true) => {
+                stripe_webhook_secret
+                    && config.durable_store_configured
+                    && !unsigned_stripe_webhooks
+            }
+            Some(false) => stripe_webhook_secret || unsigned_stripe_webhooks,
+            None => false,
+        };
+    let stripe_live_mode_ready = stripe_secret_key_mode == "live"
+        && config.stripe_live_execution_enabled
+        && config.stripe_webhook_livemode == Some(true)
+        && stripe_webhook_ready
+        && operator_token;
+
     let checks = vec![
         readiness_check(
             "local deterministic rehearsal",
@@ -205,27 +241,21 @@ pub fn build_live_money_readiness_report(
         ),
         readiness_check(
             "Stripe live-money execution gate",
-            stripe_secret_key_mode == "live"
-                && config.stripe_live_execution_enabled
-                && stripe_webhook_secret
-                && !unsigned_stripe_webhooks
-                && operator_token,
+            stripe_live_mode_ready,
             "creating live Stripe Checkout Sessions, live Connect accounts, and live transfer requests",
             vec![
                 "STRIPE_SECRET_KEY".to_string(),
                 "ENABLE_STRIPE_LIVE_EXECUTION".to_string(),
                 "STRIPE_WEBHOOK_SECRET".to_string(),
+                "STRIPE_WEBHOOK_LIVEMODE".to_string(),
+                "DATABASE_URL".to_string(),
                 "OPERATOR_API_TOKEN".to_string(),
             ],
-            if stripe_secret_key_mode == "live"
-                && config.stripe_live_execution_enabled
-                && stripe_webhook_secret
-                && !unsigned_stripe_webhooks
-                && operator_token
+            if stripe_live_mode_ready
             {
                 "Live Stripe execution is operator-gated and signed webhook reconciliation is configured."
             } else {
-                "Use sk_live_ only in a hosted environment with ENABLE_STRIPE_LIVE_EXECUTION=true, STRIPE_WEBHOOK_SECRET, OPERATOR_API_TOKEN, and ALLOW_UNSIGNED_STRIPE_WEBHOOKS=false."
+                "Live credentials require ENABLE_STRIPE_LIVE_EXECUTION=true, signed webhooks, STRIPE_WEBHOOK_LIVEMODE=true, durable DATABASE_URL storage, operator auth, and unsigned webhooks disabled."
             },
         ),
         readiness_check(
@@ -241,13 +271,17 @@ pub fn build_live_money_readiness_report(
         ),
         readiness_check(
             "Stripe webhook evidence gate",
-            stripe_webhook_secret || unsigned_stripe_webhooks,
-            "crediting fiat balances and marking fiat transfer evidence in local/test environments",
+            stripe_webhook_ready,
+            "reconciling Stripe evidence with explicit mode and durable live storage",
             vec![
                 "STRIPE_WEBHOOK_SECRET".to_string(),
                 "ALLOW_UNSIGNED_STRIPE_WEBHOOKS".to_string(),
+                "STRIPE_WEBHOOK_LIVEMODE".to_string(),
+                "DATABASE_URL".to_string(),
             ],
-            if stripe_webhook_secret {
+            if !stripe_webhook_ready {
+                "Set explicit STRIPE_WEBHOOK_LIVEMODE and signed webhook verification; live mode also requires durable storage and unsigned simulation disabled."
+            } else if stripe_webhook_secret {
                 "Signed Stripe webhooks are configured."
             } else if unsigned_stripe_webhooks {
                 "Unsigned Stripe webhook simulation is enabled; use only for local or mock-provider rehearsal."
@@ -305,12 +339,6 @@ pub fn build_live_money_readiness_report(
 
     let stripe_test_mode_ready =
         stripe_secret_key_mode == "test" && config.stripe_live_execution_enabled;
-    let stripe_live_mode_ready = stripe_secret_key_mode == "live"
-        && config.stripe_live_execution_enabled
-        && stripe_webhook_secret
-        && !unsigned_stripe_webhooks
-        && operator_token;
-    let stripe_webhook_ready = stripe_webhook_secret || unsigned_stripe_webhooks;
     let base_testnet_ready = network_descriptor.name == "Base Sepolia"
         && base_rpc
         && factory_configured
@@ -376,9 +404,9 @@ pub fn stripe_secret_key_mode_from_secret(secret: Option<&str>) -> String {
             let value = value.trim();
             if value.is_empty() {
                 "unset"
-            } else if value.starts_with("sk_test_") {
+            } else if value.starts_with("sk_test_") || value.starts_with("rk_test_") {
                 "test"
-            } else if value.starts_with("sk_live_") {
+            } else if value.starts_with("sk_live_") || value.starts_with("rk_live_") {
                 "live"
             } else if value.starts_with("rk_") {
                 "restricted"
@@ -416,13 +444,13 @@ fn readiness_warnings(input: ReadinessWarningInputs<'_>) -> Vec<String> {
     }
     if !input.stripe_live_mode_ready {
         warnings.push(
-            "Stripe live-money execution is not ready; hosted live flows require sk_live_ credentials, signed webhooks, ENABLE_STRIPE_LIVE_EXECUTION=true, OPERATOR_API_TOKEN, and unsigned webhooks disabled."
+            "Stripe live-money execution is not ready; hosted live flows require live credentials, signed webhooks, STRIPE_WEBHOOK_LIVEMODE=true, durable DATABASE_URL storage, ENABLE_STRIPE_LIVE_EXECUTION=true, OPERATOR_API_TOKEN, and unsigned webhooks disabled."
                 .to_string(),
         );
     }
     if !input.stripe_webhook_ready {
         warnings.push(
-            "Stripe fiat ledger credits will be rejected until signed webhooks or local unsigned webhook simulation are configured."
+            "Stripe fiat ledger credits require an explicit webhook mode, verified signatures or test-only simulation, and durable storage for live events."
                 .to_string(),
         );
     }
@@ -587,13 +615,13 @@ fn interaction_kind_key(kind: AudienceInteractionKind) -> &'static str {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RegisterAgentRequest {
     pub handle: String,
     pub payout_wallet: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct UpsertContributorContactRequest {
     pub github_login: String,
     pub email: Option<String>,
@@ -611,7 +639,7 @@ pub struct UpsertContributorContactRequest {
     pub notes: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct UpsertAudienceMemberRequest {
     pub provider: AudienceProvider,
     pub external_id: String,
@@ -622,7 +650,7 @@ pub struct UpsertAudienceMemberRequest {
     pub observed_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RecordAudienceInteractionRequest {
     pub audience_member_id: Id,
     pub provider_event_id: String,
@@ -634,7 +662,7 @@ pub struct RecordAudienceInteractionRequest {
     pub source_interaction_id: Option<Id>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RecordDiscoveryResponseRequest {
     pub audience_member_id: Id,
     pub interaction_id: Option<Id>,
@@ -649,7 +677,7 @@ pub struct RecordDiscoveryResponseRequest {
     pub captured_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RecordOutreachAttemptRequest {
     pub audience_member_id: Id,
     pub provider_event_id: String,
@@ -660,7 +688,7 @@ pub struct RecordOutreachAttemptRequest {
     pub sent_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct PostBountyRequest {
     pub title: String,
     pub template_slug: String,
@@ -670,7 +698,7 @@ pub struct PostBountyRequest {
     pub privacy: PrivacyLevel,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct OpenPooledBountyRequest {
     #[serde(default)]
     pub bounty_id: Option<Id>,
@@ -686,7 +714,7 @@ pub struct OpenPooledBountyRequest {
     pub funding_targets: Vec<FundingPartitionTargetRequest>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AddFundingContributionRequest {
     pub bounty_id: Id,
     pub contributor_agent_id: Option<Id>,
@@ -697,14 +725,14 @@ pub struct AddFundingContributionRequest {
     pub external_reference: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct FundingPartitionTargetRequest {
     pub rail: PaymentRail,
     pub amount_minor: i64,
     pub currency: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateFundingIntentRequest {
     pub bounty_id: Id,
     pub contributor_agent_id: Option<Id>,
@@ -717,7 +745,7 @@ pub struct CreateFundingIntentRequest {
     pub stripe_cancel_url: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RegisterCapabilityRequest {
     pub agent_id: Id,
     pub class: CapabilityClass,
@@ -729,7 +757,7 @@ pub struct RegisterCapabilityRequest {
     pub supported_verifiers: Vec<VerifierKind>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateHelpRequestRequest {
     pub requester_agent_id: Id,
     pub goal: String,
@@ -752,20 +780,20 @@ pub struct QuoteSet {
     pub quotes: Vec<Quote>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct FundQuoteRequest {
     pub quote_id: Id,
     pub title: Option<String>,
     pub funding_mode: Option<FundingMode>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ClaimBountyRequest {
     pub bounty_id: Id,
     pub solver_agent_id: Id,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SubmitResultRequest {
     pub bounty_id: Id,
     pub solver_agent_id: Id,
@@ -773,7 +801,7 @@ pub struct SubmitResultRequest {
     pub artifact_body: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct VerifySubmissionRequest {
     pub bounty_id: Id,
     pub submission_id: Id,
@@ -856,7 +884,7 @@ pub struct RiskEventFilter {
     pub limit: Option<usize>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ApproveRiskBountyRequest {
     pub risk_event_id: Id,
     pub title: String,
@@ -869,14 +897,14 @@ pub struct ApproveRiskBountyRequest {
     pub note: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ApproveRiskPayoutRequest {
     pub risk_event_id: Id,
     pub operator_id: String,
     pub note: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RejectRiskEventRequest {
     pub risk_event_id: Id,
     pub operator_id: String,
@@ -960,7 +988,44 @@ pub struct StripeFundingReconciliation {
     pub funding_report: Option<PooledFundingReport>,
 }
 
-#[derive(Debug)]
+// Bind processor objects independently of delivery event IDs. The digest stays
+// with the ledger through hydration and excludes webhook timestamps/status so
+// a second legitimate delivery can reconcile without crediting money twice.
+fn stripe_funding_binding_memo(credit: &StripeFundingCredit) -> String {
+    let binding = serde_json::json!({
+        "schema": "stripe-checkout-binding-v1",
+        "organization_id": credit.organization_id,
+        "amount": credit.amount,
+        "checkout_session_id": credit.checkout_session_id,
+        "payment_intent_id": credit.payment_intent_id,
+        "bounty_id": credit.bounty_id,
+        "funding_intent_id": credit.funding_intent_id,
+    });
+    format!(
+        "stripe checkout top-up; binding_sha256={}",
+        hash_artifact(&binding.to_string())
+    )
+}
+
+fn stripe_transfer_binding_memo(evidence: &ConnectTransferEvidence) -> String {
+    let binding = serde_json::json!({
+        "schema": "stripe-transfer-binding-v1",
+        "transfer_id": evidence.transfer_id,
+        "connected_account_id": evidence.connected_account_id,
+        "bounty_id": evidence.bounty_id,
+        "proof_record_id": evidence.proof_record_id,
+        "settlement_id": evidence.settlement_id,
+        "payout_intent_id": evidence.payout_intent_id,
+        "agent_id": evidence.agent_id,
+        "amount": evidence.amount,
+    });
+    format!(
+        "stripe connect transfer paid; binding_sha256={}",
+        hash_artifact(&binding.to_string())
+    )
+}
+
+#[derive(Debug, Clone)]
 pub struct BountyNetwork {
     pub agents: HashMap<Id, Agent>,
     pub contributor_contacts: HashMap<Id, ContributorContact>,
@@ -2340,7 +2405,12 @@ impl BountyNetwork {
             verifier_result_id: result.id,
             proof_hash: hash_proof(&submission.artifact_digest, &result.signed_payload_hash),
             public_summary: result.summary.clone(),
-            privacy: PrivacyLevel::Public,
+            privacy: self
+                .bounties
+                .get(&request.bounty_id)
+                .ok_or(AppError::BountyNotFound)?
+                .privacy
+                .clone(),
             created_at: Utc::now(),
         };
 
@@ -2497,18 +2567,56 @@ impl BountyNetwork {
 
     pub fn apply_stripe_transfer_evidence(
         &mut self,
+        evidence: ConnectTransferEvidence,
+    ) -> AppResult<StripeTransferReconciliation> {
+        let mut candidate = self.clone();
+        let outcome = candidate.apply_stripe_transfer_evidence_staged(evidence)?;
+        *self = candidate;
+        Ok(outcome)
+    }
+
+    fn apply_stripe_transfer_evidence_staged(
+        &mut self,
         mut evidence: ConnectTransferEvidence,
     ) -> AppResult<StripeTransferReconciliation> {
-        let external_event_id = format!(
-            "stripe-connect-transfer:{}:{}",
-            evidence.transfer_id, evidence.payout_intent_id
-        );
-        let duplicate = self.payment_events.values().any(|event| {
-            event.external_id == evidence.payment_event.external_id
-                && event.status == PaymentEventStatus::Applied
-        }) || self.ledger.has_external_event(&external_event_id);
-        if duplicate {
+        if evidence.payment_event.rail != PaymentRail::StripeFiat
+            || evidence.payment_event.status != PaymentEventStatus::Applied
+        {
+            return Err(AppError::InvalidStripePayout(
+                "invalid Stripe payment evidence".into(),
+            ));
+        }
+        let previous_event = self
+            .payment_events
+            .values()
+            .find(|event| event.external_id == evidence.payment_event.external_id);
+        if previous_event.is_some_and(|event| {
+            event.rail != PaymentRail::StripeFiat
+                || event.payload_hash != evidence.payment_event.payload_hash
+        }) {
+            return Err(AppError::InvalidStripePayout(
+                "conflicting Stripe event replay".into(),
+            ));
+        }
+        let external_event_id = format!("stripe-connect-transfer:{}", evidence.transfer_id);
+        let binding_memo = stripe_transfer_binding_memo(&evidence);
+        if let Some(entry) = self
+            .ledger
+            .entries()
+            .iter()
+            .find(|entry| entry.external_event_id.as_deref() == Some(&external_event_id))
+        {
+            if entry.memo != binding_memo {
+                return Err(AppError::InvalidStripePayout(
+                    "conflicting Stripe transfer replay".into(),
+                ));
+            }
+            let new_event = previous_event.is_none();
             evidence.payment_event.status = PaymentEventStatus::IgnoredDuplicate;
+            if new_event {
+                self.payment_events
+                    .insert(evidence.payment_event.id, evidence.payment_event.clone());
+            }
             return Ok(StripeTransferReconciliation {
                 evidence,
                 duplicate: true,
@@ -2516,6 +2624,16 @@ impl BountyNetwork {
                 bounty: None,
                 ledger_entries: vec![],
             });
+        }
+        if previous_event.is_some()
+            || self.ledger.has_external_event(&format!(
+                "stripe-connect-transfer:{}:{}",
+                evidence.transfer_id, evidence.payout_intent_id
+            ))
+        {
+            return Err(AppError::InvalidStripePayout(
+                "Stripe transfer replay has no bound financial outcome".into(),
+            ));
         }
 
         let settlement = self
@@ -2545,11 +2663,16 @@ impl BountyNetwork {
                 "Stripe transfer evidence does not match payout intent".to_string(),
             ));
         }
+        if payout_intent.status == PayoutStatus::Paid {
+            return Err(AppError::InvalidStripePayout(
+                "payout intent was already paid by another transfer".into(),
+            ));
+        }
 
         let mut ledger_entries = Vec::new();
         if payout_intent.status != PayoutStatus::Paid {
             let entry = LedgerEntry::new(
-                "stripe connect transfer paid",
+                binding_memo,
                 Some(external_event_id),
                 vec![
                     debit("bounty_liability", payout_intent.amount.clone()),
@@ -2589,20 +2712,70 @@ impl BountyNetwork {
         })
     }
 
+    /// Stage the full transition so a validation failure cannot leave a credit
+    /// or paid marker behind. Durable callers persist the result before caching it.
     pub fn apply_stripe_funding_credit(
+        &mut self,
+        evidence: StripeFundingCredit,
+    ) -> AppResult<StripeFundingReconciliation> {
+        let mut candidate = self.clone();
+        let outcome = candidate.apply_stripe_funding_credit_staged(evidence)?;
+        *self = candidate;
+        Ok(outcome)
+    }
+
+    fn apply_stripe_funding_credit_staged(
         &mut self,
         mut funding_credit: StripeFundingCredit,
     ) -> AppResult<StripeFundingReconciliation> {
+        if funding_credit.bounty_id.is_some() != funding_credit.funding_intent_id.is_some() {
+            return Err(AppError::InvalidFundingIntent(
+                "incomplete Stripe funding binding".into(),
+            ));
+        }
+        if funding_credit.payment_event.rail != PaymentRail::StripeFiat
+            || funding_credit.payment_event.status != PaymentEventStatus::Applied
+        {
+            return Err(AppError::InvalidFundingIntent(
+                "invalid Stripe payment evidence".into(),
+            ));
+        }
+        let previous_event = self
+            .payment_events
+            .values()
+            .find(|event| event.external_id == funding_credit.payment_event.external_id);
+        if previous_event.is_some_and(|event| {
+            event.rail != PaymentRail::StripeFiat
+                || event.payload_hash != funding_credit.payment_event.payload_hash
+        }) {
+            return Err(AppError::InvalidFundingIntent(
+                "conflicting Stripe event replay".into(),
+            ));
+        }
         let external_event_id = format!(
-            "stripe-checkout-top-up:{}",
-            funding_credit.payment_event.external_id
+            "stripe-checkout-session:{}",
+            funding_credit.checkout_session_id
         );
-        let duplicate = self.payment_events.values().any(|event| {
-            event.external_id == funding_credit.payment_event.external_id
-                && event.status == PaymentEventStatus::Applied
-        }) || self.ledger.has_external_event(&external_event_id);
-        if duplicate {
+        let binding_memo = stripe_funding_binding_memo(&funding_credit);
+        if let Some(entry) = self
+            .ledger
+            .entries()
+            .iter()
+            .find(|entry| entry.external_event_id.as_deref() == Some(&external_event_id))
+        {
+            if entry.memo != binding_memo {
+                return Err(AppError::InvalidFundingIntent(
+                    "conflicting Stripe checkout session replay".into(),
+                ));
+            }
+            let new_event = previous_event.is_none();
             funding_credit.payment_event.status = PaymentEventStatus::IgnoredDuplicate;
+            if new_event {
+                self.payment_events.insert(
+                    funding_credit.payment_event.id,
+                    funding_credit.payment_event.clone(),
+                );
+            }
             return Ok(StripeFundingReconciliation {
                 funding_credit,
                 duplicate: true,
@@ -2611,9 +2784,36 @@ impl BountyNetwork {
                 funding_report: None,
             });
         }
+        if previous_event.is_some() {
+            return Err(AppError::InvalidFundingIntent(
+                "Stripe checkout replay has no bound financial outcome".into(),
+            ));
+        }
+
+        // Legacy credits identify an event, not the Checkout Session. A new event
+        // ID cannot prove it is a new payment. Quarantine the affected organization
+        // until its old rows have been reconciled against authenticated Stripe data.
+        let legacy_accounts = [
+            format!("stripe_cash:{}", funding_credit.organization_id),
+            format!("platform_balance:{}", funding_credit.organization_id),
+        ];
+        if self.ledger.entries().iter().any(|entry| {
+            entry
+                .external_event_id
+                .as_deref()
+                .is_some_and(|id| id.starts_with("stripe-checkout-top-up:"))
+                && entry
+                    .postings
+                    .iter()
+                    .any(|posting| legacy_accounts.contains(&posting.account.0))
+        }) {
+            return Err(AppError::InvalidFundingIntent(
+                "legacy Stripe checkout credits for this organization require verified session binding before new credits".into(),
+            ));
+        }
 
         let entry = LedgerEntry::new(
-            "stripe checkout top-up",
+            binding_memo,
             Some(external_event_id),
             vec![
                 debit(
@@ -4183,6 +4383,95 @@ mod tests {
     }
 
     #[test]
+    fn stripe_secret_key_mode_recognizes_restricted_keys_without_disclosing_them() {
+        for (key, expected) in [
+            (None, "unset"),
+            (Some("  "), "unset"),
+            (Some("sk_test_fixture"), "test"),
+            (Some("rk_test_fixture"), "test"),
+            (Some("sk_live_fixture"), "live"),
+            (Some("  rk_live_fixture  "), "live"),
+            (Some("rk_unrecognized_fixture"), "restricted"),
+            (Some("pk_live_fixture"), "unknown"),
+        ] {
+            assert_eq!(stripe_secret_key_mode_from_secret(key), expected);
+        }
+    }
+
+    #[test]
+    fn stripe_restricted_key_does_not_bypass_live_execution_gate() {
+        let report = build_live_money_readiness_report(LiveMoneyReadinessConfig {
+            network: "base-mainnet".to_string(),
+            escrow_contract: None,
+            usdc_token: None,
+            stripe_secret_key_mode: stripe_secret_key_mode_from_secret(Some("rk_live_fixture")),
+            stripe_live_execution_enabled: false,
+            stripe_payment_method_configuration_configured: false,
+            stripe_webhook_secret_configured: true,
+            stripe_webhook_livemode: Some(false),
+            durable_store_configured: false,
+            allow_unsigned_stripe_webhooks: false,
+            operator_auth_configured: true,
+            base_rpc_url_configured: false,
+            base_broadcast_enabled: false,
+        })
+        .unwrap();
+        assert_eq!(report.stripe_secret_key_mode, "live");
+        assert!(!report.stripe_live_mode_ready);
+        assert!(!report.stripe_test_mode_ready);
+        assert!(!report.live_money_ready);
+    }
+
+    #[test]
+    fn stripe_readiness_requires_matching_explicit_mode_and_durable_live_storage() {
+        let baseline = LiveMoneyReadinessConfig {
+            network: "base-mainnet".into(),
+            escrow_contract: None,
+            usdc_token: None,
+            stripe_secret_key_mode: "live".into(),
+            stripe_live_execution_enabled: true,
+            stripe_payment_method_configuration_configured: false,
+            stripe_webhook_secret_configured: true,
+            stripe_webhook_livemode: Some(true),
+            durable_store_configured: true,
+            allow_unsigned_stripe_webhooks: false,
+            operator_auth_configured: true,
+            base_rpc_url_configured: false,
+            base_broadcast_enabled: false,
+        };
+        let ready = build_live_money_readiness_report(baseline.clone()).unwrap();
+        assert!(ready.stripe_live_mode_ready && ready.stripe_webhook_ready);
+        for (mode, durable) in [(None, true), (Some(false), true), (Some(true), false)] {
+            let mut config = baseline.clone();
+            config.stripe_webhook_livemode = mode;
+            config.durable_store_configured = durable;
+            let report = build_live_money_readiness_report(config).unwrap();
+            assert!(!report.stripe_webhook_ready && !report.stripe_live_mode_ready);
+            assert!(report
+                .checks
+                .iter()
+                .filter(|c| matches!(
+                    c.name.as_str(),
+                    "Stripe webhook evidence gate" | "Stripe live-money execution gate"
+                ))
+                .all(|c| !c.configured));
+        }
+        for malformed in ["", "0", "1", "test", "live", " false "] {
+            assert_eq!(parse_stripe_webhook_livemode(malformed), None);
+        }
+        assert_eq!(parse_stripe_webhook_livemode("TRUE"), Some(true));
+        assert_eq!(parse_stripe_webhook_livemode("false"), Some(false));
+        let mut local = baseline;
+        local.stripe_secret_key_mode = "test".into();
+        local.stripe_webhook_livemode = Some(false);
+        local.durable_store_configured = false;
+        local.stripe_webhook_secret_configured = false;
+        local.allow_unsigned_stripe_webhooks = true;
+        let report = build_live_money_readiness_report(local).unwrap();
+        assert!(report.stripe_webhook_ready && !report.stripe_live_mode_ready);
+    }
+
+    #[test]
     fn live_money_readiness_uses_autonomous_base_without_stripe_or_operator() {
         let report = build_live_money_readiness_report(LiveMoneyReadinessConfig {
             network: "base-mainnet".to_string(),
@@ -4192,6 +4481,8 @@ mod tests {
             stripe_live_execution_enabled: false,
             stripe_payment_method_configuration_configured: true,
             stripe_webhook_secret_configured: false,
+            stripe_webhook_livemode: None,
+            durable_store_configured: false,
             allow_unsigned_stripe_webhooks: false,
             operator_auth_configured: false,
             base_rpc_url_configured: true,
@@ -4234,6 +4525,8 @@ mod tests {
             stripe_live_execution_enabled: true,
             stripe_payment_method_configuration_configured: false,
             stripe_webhook_secret_configured: true,
+            stripe_webhook_livemode: Some(false),
+            durable_store_configured: false,
             allow_unsigned_stripe_webhooks: false,
             operator_auth_configured: true,
             base_rpc_url_configured: true,
@@ -4309,6 +4602,244 @@ mod tests {
                 payload_hash: hash_artifact(transfer_id),
                 received_at: Utc::now(),
             },
+        }
+    }
+
+    fn stripe_financial_snapshot(network: &BountyNetwork) -> Value {
+        serde_json::json!({
+            "bounties": network.bounties,
+            "funding_intents": network.funding_intents,
+            "funding_contributions": network.funding_contributions,
+            "settlements": network.settlements,
+            "payment_events": network.payment_events,
+            "ledger": network.ledger.entries(),
+        })
+    }
+
+    fn stripe_funding_intent_fixture() -> (BountyNetwork, StripeFundingCredit) {
+        let mut network = BountyNetwork::default();
+        let organization_id = Uuid::new_v4();
+        let bounty = network
+            .open_pooled_bounty(OpenPooledBountyRequest {
+                bounty_id: None,
+                idempotency_key: None,
+                title: "Stripe staged funding fixture".into(),
+                template_slug: "write-docs-for-area".into(),
+                target_amount_minor: 1_000,
+                currency: "usd".into(),
+                funding_mode: FundingMode::StripeFiatLedger,
+                privacy: PrivacyLevel::Public,
+                funding_targets: vec![],
+            })
+            .unwrap();
+        let intent = network
+            .create_funding_intent(
+                CreateFundingIntentRequest {
+                    bounty_id: bounty.id,
+                    contributor_agent_id: None,
+                    source_organization_id: Some(organization_id),
+                    amount_minor: 700,
+                    currency: "usd".into(),
+                    rail: PaymentRail::StripeFiat,
+                    external_reference: Some("staged-funding-fixture".into()),
+                    stripe_success_url: None,
+                    stripe_cancel_url: None,
+                },
+                "https://agentbounties.test",
+            )
+            .unwrap()
+            .intent;
+        let mut evidence = stripe_funding_credit(organization_id, 700, "usd", "evt_staged_funding");
+        evidence.bounty_id = Some(bounty.id);
+        evidence.funding_intent_id = Some(intent.id);
+        (network, evidence)
+    }
+
+    #[test]
+    fn stripe_invalid_funding_binding_rolls_back_every_financial_state() {
+        let (baseline, valid) = stripe_funding_intent_fixture();
+        let mut cases = vec![];
+        let mut unknown = valid.clone();
+        unknown.funding_intent_id = Some(Uuid::new_v4());
+        cases.push(unknown);
+        let mut partial = valid.clone();
+        partial.bounty_id = None;
+        cases.push(partial);
+        let mut organization = valid.clone();
+        organization.organization_id = Uuid::new_v4();
+        cases.push(organization);
+        let mut amount = valid.clone();
+        amount.amount.amount += 1;
+        cases.push(amount);
+        let mut bounty = valid.clone();
+        bounty.bounty_id = Some(Uuid::new_v4());
+        cases.push(bounty);
+        for evidence in cases {
+            let mut network = baseline.clone();
+            let before = stripe_financial_snapshot(&network);
+            assert!(network.apply_stripe_funding_credit(evidence).is_err());
+            assert_eq!(stripe_financial_snapshot(&network), before);
+            assert!(network.apply_stripe_funding_credit(valid.clone()).is_ok());
+        }
+    }
+
+    #[test]
+    fn stripe_overfunding_delivery_rolls_back_credit_event_and_intent() {
+        let (mut network, evidence) = stripe_funding_intent_fixture();
+        network
+            .apply_stripe_funding_credit(stripe_funding_credit(
+                evidence.organization_id,
+                500,
+                "usd",
+                "evt_other_funding",
+            ))
+            .unwrap();
+        network
+            .add_funding_contribution(AddFundingContributionRequest {
+                bounty_id: evidence.bounty_id.unwrap(),
+                contributor_agent_id: None,
+                source_organization_id: Some(evidence.organization_id),
+                amount_minor: 500,
+                currency: "usd".into(),
+                rail: PaymentRail::StripeFiat,
+                external_reference: Some("prior-contribution".into()),
+            })
+            .unwrap();
+        let before = stripe_financial_snapshot(&network);
+        assert!(matches!(
+            network.apply_stripe_funding_credit(evidence.clone()),
+            Err(AppError::InvalidFundingContribution(_))
+        ));
+        assert_eq!(stripe_financial_snapshot(&network), before);
+        assert_eq!(
+            network.stripe_platform_balance_available_minor(evidence.organization_id, "usd"),
+            0
+        );
+        assert_eq!(
+            network.funding_intents[&evidence.funding_intent_id.unwrap()].status,
+            FundingIntentStatus::AwaitingEvidence
+        );
+    }
+
+    #[test]
+    fn stripe_checkout_object_replay_is_once_and_bound_to_original_economics() {
+        let mut network = BountyNetwork::default();
+        let original = stripe_funding_credit(Uuid::new_v4(), 700, "usd", "evt_checkout_original");
+        network
+            .apply_stripe_funding_credit(original.clone())
+            .unwrap();
+        let mut alias = original.clone();
+        alias.payment_event.id = Uuid::new_v4();
+        alias.payment_event.external_id = "evt_checkout_async_succeeded".into();
+        alias.payment_event.payload_hash =
+            hash_artifact("new snapshot with same financial binding");
+        let duplicate = network.apply_stripe_funding_credit(alias.clone()).unwrap();
+        assert!(duplicate.duplicate);
+        assert!(duplicate.ledger_entries.is_empty());
+        assert_eq!(network.ledger.entries().len(), 1);
+        assert_eq!(
+            network.stripe_platform_balance_available_minor(original.organization_id, "usd"),
+            700
+        );
+        assert_eq!(network.payment_events.len(), 2);
+
+        let baseline = stripe_financial_snapshot(&network);
+        let mut cases = vec![];
+        let mut organization = alias.clone();
+        organization.organization_id = Uuid::new_v4();
+        cases.push(organization);
+        let mut amount = alias.clone();
+        amount.amount.amount += 1;
+        cases.push(amount);
+        let mut currency = alias.clone();
+        currency.amount.currency = "eur".into();
+        cases.push(currency);
+        let mut payment_intent = alias.clone();
+        payment_intent.payment_intent_id = Some("pi_other_payment".into());
+        cases.push(payment_intent);
+        let mut binding = alias.clone();
+        binding.bounty_id = Some(Uuid::new_v4());
+        binding.funding_intent_id = Some(Uuid::new_v4());
+        cases.push(binding);
+        let mut object = alias.clone();
+        object.checkout_session_id = "cs_other_object".into();
+        cases.push(object);
+        let mut event_payload = alias.clone();
+        event_payload.payment_event.payload_hash = hash_artifact("conflicting replay");
+        cases.push(event_payload);
+        for evidence in cases {
+            assert!(matches!(
+                network.apply_stripe_funding_credit(evidence),
+                Err(AppError::InvalidFundingIntent(_))
+            ));
+            assert_eq!(stripe_financial_snapshot(&network), baseline);
+        }
+
+        // Hydration retains the semantic binding in the ledger without a cache.
+        let mut hydrated = BountyNetwork {
+            ledger: Ledger::from_entries(network.ledger.entries().to_vec()).unwrap(),
+            ..BountyNetwork::default()
+        };
+        assert!(
+            hydrated
+                .apply_stripe_funding_credit(original.clone())
+                .unwrap()
+                .duplicate
+        );
+        assert_eq!(hydrated.ledger.entries().len(), 1);
+        let mut legacy_entries = network.ledger.entries().to_vec();
+        legacy_entries[0].memo = "stripe checkout top-up".into();
+        hydrated.ledger = Ledger::from_entries(legacy_entries).unwrap();
+        assert!(matches!(
+            hydrated.apply_stripe_funding_credit(original),
+            Err(AppError::InvalidFundingIntent(_))
+        ));
+    }
+
+    #[test]
+    fn legacy_event_keyed_top_up_blocks_new_event_ids_without_session_evidence() {
+        let org = Uuid::new_v4();
+        let original = stripe_funding_credit(org, 700, "usd", "evt_legacy_top_up");
+        let entry = LedgerEntry::new(
+            "stripe checkout top-up",
+            Some(format!(
+                "stripe-checkout-top-up:{}",
+                original.payment_event.external_id
+            )),
+            vec![
+                debit(format!("stripe_cash:{org}"), original.amount.clone()),
+                credit(format!("platform_balance:{org}"), original.amount.clone()),
+            ],
+        )
+        .unwrap();
+        for keep_event in [false, true] {
+            let mut network = BountyNetwork {
+                ledger: Ledger::from_entries(vec![entry.clone()]).unwrap(),
+                ..BountyNetwork::default()
+            };
+            if keep_event {
+                network
+                    .payment_events
+                    .insert(original.payment_event.id, original.payment_event.clone());
+            }
+            let mut alias = original.clone();
+            alias.payment_event.id = Uuid::new_v4();
+            alias.payment_event.external_id = "evt_later_paid_snapshot".into();
+            alias.payment_event.payload_hash = hash_artifact("later snapshot same payment");
+            let before = stripe_financial_snapshot(&network);
+            assert!(network.apply_stripe_funding_credit(alias).is_err());
+            assert_eq!(stripe_financial_snapshot(&network), before);
+            assert_eq!(
+                network.stripe_platform_balance_available_minor(org, "usd"),
+                700
+            );
+            let unrelated = stripe_funding_credit(Uuid::new_v4(), 100, "usd", "evt_new_org");
+            assert!(
+                !network
+                    .apply_stripe_funding_credit(unrelated)
+                    .unwrap()
+                    .duplicate
+            );
         }
     }
 
@@ -5177,6 +5708,25 @@ mod tests {
         );
         assert!(transfer_plan.requires_reconciliation);
 
+        // Force finalization to fail after staging the transfer debit and paid
+        // marker. Neither change may escape the staged transition.
+        let mut failed_finalization = network.clone();
+        failed_finalization.bounties.remove(&bounty.id);
+        let before_failure = stripe_financial_snapshot(&failed_finalization);
+        assert!(matches!(
+            failed_finalization.apply_stripe_transfer_evidence(stripe_transfer_evidence(
+                &status.settlements[0],
+                &status.settlements[0].payout_intents[0],
+                "acct_test",
+                "tr_failed_finalization",
+            )),
+            Err(AppError::BountyNotFound)
+        ));
+        assert_eq!(
+            stripe_financial_snapshot(&failed_finalization),
+            before_failure
+        );
+
         let transfer = network
             .apply_stripe_transfer_evidence(stripe_transfer_evidence(
                 &status.settlements[0],
@@ -5202,6 +5752,45 @@ mod tests {
         assert!(replay.duplicate);
         assert!(replay.ledger_entries.is_empty());
         assert_eq!(network.ledger.entries().len(), 3);
+
+        let mut alias = transfer.evidence.clone();
+        alias.payment_event.id = Uuid::new_v4();
+        alias.payment_event.external_id = "evt_same_transfer_second_delivery".into();
+        alias.payment_event.payload_hash = hash_artifact("later snapshot of same transfer");
+        assert!(
+            network
+                .apply_stripe_transfer_evidence(alias.clone())
+                .unwrap()
+                .duplicate
+        );
+        assert_eq!(network.ledger.entries().len(), 3);
+        let before_replays = stripe_financial_snapshot(&network);
+        let mut conflicts = vec![];
+        let mut recipient = alias.clone();
+        recipient.connected_account_id = "acct_someone_else".into();
+        conflicts.push(recipient);
+        let mut amount = alias.clone();
+        amount.amount.amount += 1;
+        conflicts.push(amount);
+        let mut payout = alias.clone();
+        payout.payout_intent_id = Uuid::new_v4();
+        conflicts.push(payout);
+        let mut payload = alias.clone();
+        payload.payment_event.payload_hash = hash_artifact("tampered Stripe event");
+        conflicts.push(payload);
+        let mut second_transfer = alias;
+        second_transfer.transfer_id = "tr_second_payment_for_paid_intent".into();
+        second_transfer.payment_event.id = Uuid::new_v4();
+        second_transfer.payment_event.external_id = "evt_second_payment_for_paid_intent".into();
+        second_transfer.payment_event.payload_hash = hash_artifact("second transfer");
+        conflicts.push(second_transfer);
+        for conflict in conflicts {
+            assert!(matches!(
+                network.apply_stripe_transfer_evidence(conflict),
+                Err(AppError::InvalidStripePayout(_))
+            ));
+            assert_eq!(stripe_financial_snapshot(&network), before_replays);
+        }
     }
 
     #[test]

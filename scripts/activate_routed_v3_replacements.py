@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import argparse
-import terms_publication_client
+if __package__:
+    from . import terms_publication_client
+else:
+    import terms_publication_client
 import gas_sponsorship_budget
 import json
 import os

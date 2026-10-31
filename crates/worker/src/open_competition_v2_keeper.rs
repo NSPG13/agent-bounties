@@ -82,16 +82,8 @@ pub async fn poll_open_competition_v2_keeper_once(
         action.action,
         action.contributor.as_deref(),
     )?;
-    let transaction = chain
-        .relayer
-        .simulate_and_broadcast(
-            &rpc_url,
-            chain_base::base_network_descriptor(&config.network)?.chain_id,
-            &plan.wallet_call,
-            chain.max_gas,
-            chain.max_fee_per_gas_wei,
-        )
-        .await?;
+    let transaction =
+        crate::shared_relay::broadcast(store, &config.network, chain, &plan.wallet_call).await?;
     Ok(OpenCompetitionV2KeeperReport {
         network: config.network.clone(),
         safe_block_number: safe.number,

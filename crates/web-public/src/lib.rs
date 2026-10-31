@@ -78,6 +78,8 @@ pub struct DiscoveryManifest {
     pub live_inventory: serde_json::Value,
     pub protocol: serde_json::Value,
     pub endpoints: DiscoveryEndpoints,
+    #[serde(default)]
+    pub retired_endpoints: serde_json::Value,
     pub agent_tools: Vec<String>,
     pub verification_modes: Vec<serde_json::Value>,
     pub funding: serde_json::Value,
@@ -100,7 +102,9 @@ pub struct DiscoveryEndpoints {
     pub discovery_schema: String,
     pub llms_txt: String,
     pub cloud_agent_readiness: String,
+    #[serde(skip_serializing, default)]
     pub cloud_bounty_drafts: String,
+    #[serde(skip_serializing, default)]
     pub cloud_objective_plans: String,
     pub opportunities: String,
     pub github_bounty_discovery: String,
@@ -138,6 +142,7 @@ pub struct DiscoveryEndpoints {
     pub autonomous_submission_evidence_get: String,
     pub autonomous_bounty_feed: String,
     pub solver_leaderboard: String,
+    #[serde(skip_serializing, default)]
     pub autonomous_bounty_analysis: String,
     pub autonomous_inventory_summary: String,
     pub autonomous_inventory_badge: String,
@@ -870,6 +875,11 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         github_issue_template: GITHUB_ISSUE_TEMPLATE_URL.to_string(),
     };
     DiscoveryManifest {
+        retired_endpoints: serde_json::json!({
+            "cloud_bounty_drafts": {"url": endpoints.cloud_bounty_drafts, "method": "POST", "status": 410, "error_code": "hosted_generation_removed", "replacement": "Use your own model, then MCP prepare_bounty_post."},
+            "cloud_objective_plans": {"url": endpoints.cloud_objective_plans, "method": "POST", "status": 410, "error_code": "hosted_generation_removed", "replacement": "Use your own model, then objective_creation_plan."},
+            "autonomous_bounty_analysis": {"url": endpoints.autonomous_bounty_analysis, "method": "GET", "status": 410, "error_code": "hosted_generation_removed", "replacement": "Read opportunities and evaluate the task with your own model."}
+        }),
         schema: DISCOVERY_SCHEMA.to_string(),
         name: "Agentizable".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -953,6 +963,12 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         }),
         endpoints: endpoints.clone(),
         agent_tools: vec![
+            "issue_managed_service_quote",
+            "read_managed_service_quote",
+            "accept_managed_service_quote",
+            "get_managed_service_order",
+            "open_managed_service_checkout",
+            "request_managed_service_refund",
             "get_bounty_feed",
             "render_bounty_feed",
             "prepare_bounty_action",
@@ -966,8 +982,6 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "submit_unfunded_bounty_solution",
             "prepare_bounty_post",
             "route_blocked_goal",
-            "compile_objective_with_cloud_agent",
-            "draft_bounty_with_cloud_agent",
             "get_autonomous_inventory_summary",
             "get_solver_leaderboard",
             "list_opportunities",
@@ -976,7 +990,6 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "delete_discovery_subscription",
             "get_opportunity_conversion_funnel",
             "get_site_analytics",
-            "analyze_bounty_fit",
             "list_autonomous_bounties",
             "/v1/github/bounty-discovery-v1",
             "label:ready-to-earn",
@@ -1067,6 +1080,16 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             }),
         ],
         funding: serde_json::json!({
+            "managed_services": {
+                "status": "gated; live availability must be verified before payment",
+                "quote": format!("{api}/v1/managed-service/quotes/{{id}}"),
+                "accept_quote": format!("{api}/v1/managed-service/quotes/{{id}}/accept"),
+                "order": format!("{api}/v1/managed-service/orders/{{id}}"),
+                "checkout": format!("{api}/v1/managed-service/orders/{{id}}/checkout"),
+                "authentication": "Verified website account; exact ownership. Writes require its original allowed Origin. Wallet sessions do not grant account access.",
+                "price": "Entered amount is solver reward; 7.5% platform fee, verifier reserves and accepted extra costs are separate lines.",
+                "evidence": "Checkout is not payment. Verified Stripe payment is not bank settlement or canonical bounty funding. Subcontractor bank payout requires separate evidence."
+            },
             "default": "fully funded on creation",
             "default_verification": "signed_quorum",
             "default_verifier_threshold": 1,
@@ -1528,10 +1551,26 @@ Advanced: publish binary, replayable terms; request an
 `autonomous-bounty-plan`; stop on readiness failure; sign only the exact
 ordered calls; confirm `CanonicalBountyCreated`, `FundingAdded`, and
 `BountyBecameClaimable`; then confirm the contract appears in ready-to-earn
-inventory. The cloud objective compiler at {objective_plans} has no wallet,
-funding, verification, or settlement authority.
+inventory. Prepare any task decomposition with your own AI account. The legacy
+hosted compiler at {objective_plans} returns 410 hosted_generation_removed.
 
 Advanced creation tool: `plan_autonomous_bounty_creation`.
+
+## Managed services (gated)
+
+Agentizable contracts for a defined deliverable and owes delivery and customer
+remedies. A merchant-issued quote itemizes the solver reward, verifier costs,
+7.5% platform fee and other accepted charges. The reward is not reduced by fees.
+When available, use `read_managed_service_quote`, `accept_managed_service_quote`,
+`get_managed_service_order` and `open_managed_service_checkout` with the buyer's
+verified website account session. Writes also need the original allowed Origin.
+Wallet and analytics tokens do not grant account access. Quote issuance requires
+merchant operator authority. An accepted quote, Checkout URL, return URL or
+verified Stripe payment alone does not prove bank cash or canonical bounty
+funding. These routes remain gated pending full funds-flow acceptance.
+After explicit customer cancellation, `request_managed_service_refund` reserves a
+full original-payment refund before funding. A requested/processing refund is not
+sent; even Stripe-confirmed refund sending is not proof of customer bank credit.
 
 ## Fund or cancel
 
@@ -1605,7 +1644,7 @@ Do not mix the remote MCP tool list with the larger advanced HTTP tool catalog.
 
 ## Coordinate
 
-For a multi-task outcome, call `compile_objective_with_cloud_agent` or POST to {cloud_objective_plans}. GPT-5.6 returns a deterministically validated task DAG with explicit execution, verification, and settlement policies. Review the plan; it has no wallet, funding, verification, or settlement authority.
+For a multi-task outcome, use your own AI account to prepare small tasks with explicit execution, verification, and settlement policies. Review each draft. The retired endpoint {cloud_objective_plans} returns 410 hosted_generation_removed; it cannot run a model.
 
 ## Coordinate A Broader Objective
 
@@ -1656,7 +1695,7 @@ Preferred person-led path: connect the person's ChatGPT, Claude, Gemini, or othe
 
 Advanced HTTP path:
 
-1. Call `draft_bounty_with_cloud_agent` only for an explicit hosted drafting workflow.
+1. Prepare draft terms with your own AI account, then review them using `prepare_bounty_post` when advertised.
 2. Bind one inspectable artifact and make every criterion binary and replayable.
 3. Commit separate executable execution, verification, and settlement policies.
 4. Publish reward, refundable bond, mandatory spend, gas responsibility, and positive solver net value.
@@ -1800,9 +1839,9 @@ Subscribe to {opportunity_stream} for server-sent earning snapshots. Discard pri
 - Discovery schema: {discovery_schema}
 - Live canonical inventory summary: {inventory_summary}
 - Live canonical inventory badge: {inventory_badge}
-- Hosted cloud drafting readiness: {cloud_agent_readiness}
-- GPT-5.6 objective graph compiler: {cloud_objective_plans}
-- Hosted cloud bounty draft: {cloud_bounty_drafts}
+- Hosted generation retirement status: {cloud_agent_readiness}
+- Retired objective compiler (410 hosted_generation_removed): {cloud_objective_plans}
+- Retired hosted draft endpoint (410 hosted_generation_removed): {cloud_bounty_drafts}
 - Unified opportunity projection: {opportunities}
 - Lifecycle-complete GitHub discovery projection: {github_bounty_discovery}
 - Server-sent ready-to-earn stream: {opportunity_stream}
@@ -1811,7 +1850,7 @@ Subscribe to {opportunity_stream} for server-sent earning snapshots. Discard pri
 - Per-opportunity HTML, SVG, and Markdown embeds: use each unified projection item's `embeds` object
 - Observable opportunity conversion funnel: {opportunity_conversion_funnel} (never infers independent active agents)
 - Privacy-minimized first-party site analytics: {site_analytics} (browser IDs are not people, wallets, or agent identities)
-- Advisory published-terms analysis: {bounty_analysis}
+- Retired hosted analysis endpoint (410 hosted_generation_removed): {bounty_analysis}
 - Discoverable unfunded bounties: {unfunded_bounties}
 - x402 funding discovery: {x402_discovery}
 - x402 outcome-funding compatibility and test vectors: {x402_compatibility_page} and {x402_test_vectors}
@@ -1844,7 +1883,7 @@ Do not skip steps: `discover -> request claim -> sign once -> confirm BountyClai
 
 ## Post And Fund
 
-0. For a person-led post, use their existing AI account through {mcp_streamable_http} and call `prepare_bounty_post`. It returns a portable card plus review URL without using the platform model credential. When the outcome needs several contributors and hosted drafting is explicitly intended, call `compile_objective_with_cloud_agent` or POST to {cloud_objective_plans}. For one hosted task draft, call `draft_bounty_with_cloud_agent` or POST to {cloud_bounty_drafts}. Review every result; AI output has no wallet, funding, verification, or settlement authority.
+0. For a person-led post, use their existing AI account through {mcp_streamable_http} and call `prepare_bounty_post`. It returns a portable card plus review URL without using the platform model credential. Use the person’s current AI account for task decomposition and drafting. Platform-hosted generation is retired; {cloud_objective_plans} and {cloud_bounty_drafts} return 410 hosted_generation_removed. Review every result; AI output has no wallet, funding, verification, or settlement authority.
 1. Bind one inspectable artifact and write binary, replayable acceptance criteria.
 2. Commit separate execution, verification, and settlement policies. The verifier and every dependent child path must execute now.
 3. Publish solver reward, refundable bond, verifier reward, mandatory external spend, gas responsibility, and positive solver net value.
@@ -1892,7 +1931,6 @@ Objective guide: {objective_guide}
 ## Core Tools
 
 - `route_blocked_goal`
-- `draft_bounty_with_cloud_agent`
 - `get_autonomous_inventory_summary`
 - `list_opportunities`
 - `create_discovery_subscription`
@@ -1900,7 +1938,6 @@ Objective guide: {objective_guide}
 - `delete_discovery_subscription`
 - `get_opportunity_conversion_funnel`
 - `get_site_analytics`
-- `analyze_bounty_fit`
 - `list_autonomous_bounties`
 - `list_autonomous_verification_jobs`
 - `publish_autonomous_bounty_terms`
@@ -1959,9 +1996,9 @@ Objective guide: {objective_guide}
 - Canonical feed: {bounty_feed}
 - Live canonical inventory summary: {inventory_summary}
 - Live canonical inventory badge: {inventory_badge}
-- Hosted cloud drafting readiness: {cloud_agent_readiness}
-- GPT-5.6 objective graph compiler: {cloud_objective_plans}
-- Hosted cloud bounty draft: {cloud_bounty_drafts}
+- Hosted generation retirement status: {cloud_agent_readiness}
+- Retired objective compiler (410 hosted_generation_removed): {cloud_objective_plans}
+- Retired hosted draft endpoint (410 hosted_generation_removed): {cloud_bounty_drafts}
 - Live verification jobs: {verification_jobs}
 - Confirmed events: {events}
 - Canonical child terms plan: {canonical_child_terms_plan}
@@ -2293,6 +2330,11 @@ pub fn bounty_templates() -> Vec<BountyTemplate> {
 }
 
 pub fn render_proof_page(proof: &ProofRecord, verifier: &VerifierResult) -> String {
+    let summary = if proof.privacy == PrivacyLevel::Public {
+        proof.public_summary.as_str()
+    } else {
+        "Verified completion. Artifact contents and verifier details are private."
+    };
     let flywheel_section = render_flywheel_cta_section();
     let flywheel_json = json_script(&flywheel_json());
     let share_url = format!("/public/proofs/{}", proof.id);
@@ -2338,7 +2380,7 @@ pub fn render_proof_page(proof: &ProofRecord, verifier: &VerifierResult) -> Stri
 </body>
 </html>"#,
         flywheel_json,
-        escape_html(&proof.public_summary),
+        escape_html(summary),
         post_value_section,
         proof.bounty_id,
         escape_html(&proof.proof_hash),
@@ -3715,6 +3757,24 @@ mod tests {
     use uuid::Uuid;
 
     #[test]
+    fn retired_generation_routes_are_separate_from_active_discovery() {
+        let manifest = serde_json::to_value(discovery_manifest(
+            "https://api.agentizable.ai",
+            "https://mcp.agentizable.ai",
+        ))
+        .unwrap();
+        for name in [
+            "cloud_bounty_drafts",
+            "cloud_objective_plans",
+            "autonomous_bounty_analysis",
+        ] {
+            assert!(manifest["endpoints"].get(name).is_none());
+            assert_eq!(manifest["retired_endpoints"][name]["status"], 410);
+            assert!(manifest["retired_endpoints"][name]["replacement"].is_string());
+        }
+    }
+
+    #[test]
     fn post_value_star_action_is_agent_executable_but_authorization_bound() {
         let contract = post_value_loop(Some(PostValueTrigger::UsefulReview), None);
         let star = contract
@@ -3746,14 +3806,14 @@ mod tests {
 
     #[test]
     fn proof_page_escapes_html() {
-        let proof = ProofRecord {
+        let mut proof = ProofRecord {
             id: Uuid::new_v4(),
             bounty_id: Uuid::new_v4(),
             submission_id: Uuid::new_v4(),
             verifier_result_id: Uuid::new_v4(),
             proof_hash: "<hash>".to_string(),
             public_summary: "<script>alert(1)</script>".to_string(),
-            privacy: PrivacyLevel::RedactedPublicProof,
+            privacy: PrivacyLevel::Public,
             created_at: Utc::now(),
         };
         let verifier = VerifierResult {
@@ -3784,6 +3844,10 @@ mod tests {
         assert!(html.contains("verified completion, not payment"));
         assert!(!html.contains("received a reconciled payout"));
         assert!(!html.contains("href=\"/templates\""));
+        proof.privacy = PrivacyLevel::RedactedPublicProof;
+        let redacted = render_proof_page(&proof, &verifier);
+        assert!(!redacted.contains("alert(1)"));
+        assert!(redacted.contains("Artifact contents and verifier details are private."));
     }
 
     #[test]

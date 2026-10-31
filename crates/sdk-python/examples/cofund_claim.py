@@ -4,6 +4,7 @@ import time
 import uuid
 
 from agent_bounties import AgentBountiesClient, hash_artifact
+from agent_bounties.smoke import local_fixture_client
 
 
 def require(condition: bool, message: str) -> None:
@@ -11,7 +12,7 @@ def require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
-def run_example(client: AgentBountiesClient) -> dict:
+def run_example(client: AgentBountiesClient, solver_client: AgentBountiesClient) -> dict:
     suffix = f"{int(time.time())}-{uuid.uuid4().hex[:8]}"
 
     discovery = client.get_discovery_manifest()
@@ -30,7 +31,7 @@ def run_example(client: AgentBountiesClient) -> dict:
         "autonomous protocol must not require a settlement operator",
     )
 
-    solver = client.register_agent(
+    solver = solver_client.register_agent(
         f"python-example-solver-{suffix}",
         "0x2222222222222222222222222222222222222222",
     )
@@ -75,7 +76,7 @@ def run_example(client: AgentBountiesClient) -> dict:
     claimable = client.list_claimable_bounties()
     require(any(item["id"] == bounty_id for item in claimable), "bounty missing from claimable feed")
 
-    claimed = client.claim_bounty(bounty_id, solver["id"])
+    claimed = solver_client.claim_bounty(bounty_id, solver["id"])
     require(claimed["status"] == "Claimed", "claim did not move bounty to Claimed")
 
     claim_plan = client.plan_github_claim_comment(
@@ -96,7 +97,7 @@ def run_example(client: AgentBountiesClient) -> dict:
     )
 
     artifact_body = json.dumps({"sdk": "python", "cofunded": True}, separators=(",", ":"))
-    submission = client.submit_result(
+    submission = solver_client.submit_result(
         bounty_id,
         solver["id"],
         "memory://python-sdk-cofund-claim.json",
@@ -130,7 +131,7 @@ def main() -> None:
     parser.add_argument("--base-url", default="http://127.0.0.1:8080")
     args = parser.parse_args()
 
-    result = run_example(AgentBountiesClient(args.base_url))
+    result = run_example(local_fixture_client(args.base_url), local_fixture_client(args.base_url, wallet=True))
     print(json.dumps(result, indent=2, sort_keys=True))
 
 

@@ -94,7 +94,7 @@ pub struct OpenCompetitionV2BrokerPaymentAuthorization {
     pub s: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum OpenCompetitionV2WinnerMode {
     FirstProven,
@@ -110,7 +110,7 @@ impl OpenCompetitionV2WinnerMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum OpenCompetitionV2ScoreDirection {
     HigherIsBetter,
@@ -126,7 +126,7 @@ impl OpenCompetitionV2ScoreDirection {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum OpenCompetitionV2ProofSystem {
     Groth16,

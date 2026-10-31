@@ -60,7 +60,7 @@ jobs:
 
       - uses: ./.github/actions/setup-rust
         with:
-          toolchain: "1.88.0"
+          toolchain: "1.94.0"
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
 
@@ -101,24 +101,25 @@ jobs:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_USER: agent_bounties
+          POSTGRES_USER: agent_bounties_test
           POSTGRES_PASSWORD: agent_bounties
-          POSTGRES_DB: agent_bounties
+          POSTGRES_DB: agent_bounties_test
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U agent_bounties"
+          --health-cmd "pg_isready -U agent_bounties_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 12
     env:
-      AGENT_BOUNTIES_TEST_DATABASE_URL: postgres://agent_bounties:agent_bounties@localhost:5432/agent_bounties
+      AGENT_BOUNTIES_LOCAL_TEST_DATABASE: "1"
+      AGENT_BOUNTIES_TEST_DATABASE_URL: postgres://agent_bounties_test:agent_bounties@localhost:5432/agent_bounties_test
     steps:
       - uses: actions/checkout@v4
 
       - uses: ./.github/actions/setup-rust
         with:
-          toolchain: "1.88.0"
+          toolchain: "1.94.0"
       - uses: Swatinem/rust-cache@v2
 
       - name: Verify Postgres test configuration
@@ -133,8 +134,11 @@ jobs:
           python3 scripts/run-required-postgres-test.py -p api github_issue_api_sync_postgres
           python3 scripts/run-required-postgres-test.py -p db scoped_submission_history_reads_only_selected_bounty_postgres
           python3 scripts/run-required-postgres-test.py -p db tests::autonomous_v2_events_round_trip_through_postgres --exact
-          python3 scripts/run-required-postgres-test.py -p db tests::invoice_order_events_are_sequenced_and_evidence_is_unique_postgres --exact
-          python3 scripts/run-required-postgres-test.py -p api tests::invoiced_seller_of_record_path_runs_end_to_end_postgres --exact
+          python3 scripts/run-required-postgres-test.py -p db managed_service_orders::refunds::tests::
+          python3 scripts/run-required-postgres-test.py -p service-runtime managed_checkout::tests::
           python3 scripts/run-required-postgres-test.py -p api opportunity_exact_unfunded_lookup_crosses_list_window_postgres
           python3 scripts/run-required-postgres-test.py -p api tests::bounty_status_reads_scoped_postgres_after_cross_process_funding --exact
           python3 scripts/run-required-postgres-test.py -p mcp-server tests::mcp_bounty_status_reads_scoped_postgres_after_cross_process_funding --exact
+
+      - name: Verify complete production durability inventory
+        run: python3 scripts/application_release_gate.py postgres

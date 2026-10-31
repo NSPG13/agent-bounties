@@ -1,0 +1,27 @@
+# syntax=docker/dockerfile:1
+# Prepared replacement image for the existing always-running legacy indexer.
+# This file does not provision a service or enable creator-open indexing.
+FROM rust:1.94-bookworm AS builder
+WORKDIR /workspace
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY bounties ./bounties
+COPY contracts ./contracts
+COPY fixtures ./fixtures
+COPY migrations ./migrations
+COPY ops ./ops
+COPY schemas ./schemas
+COPY site ./site
+COPY deployments/base-mainnet.json ./deployments/base-mainnet.json
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/workspace/target,sharing=locked \
+    find crates bounties contracts fixtures migrations ops schemas site deployments -type f -exec touch {} + \
+    && cargo build --locked --release -p worker \
+    && cp target/release/worker /tmp/posting-indexer
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* && useradd --create-home --uid 10001 app
+COPY --from=builder /tmp/posting-indexer /usr/local/bin/posting-indexer
+COPY scripts/run-posting-indexers.sh /usr/local/bin/run-posting-indexers
+USER app
+ENTRYPOINT ["/bin/bash", "/usr/local/bin/run-posting-indexers"]

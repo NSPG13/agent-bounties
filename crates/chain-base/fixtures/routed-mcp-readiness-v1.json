@@ -1,0 +1,630 @@
+[
+  {
+    "bounty_contract": "0x15fe9336ddd83f87335d27f39f83750e6f86fcef",
+    "bounty_id": "0xebad06e2af596702f1b141baf304f32eb128c6f6af90ff28bbcb67553c182f68",
+    "claim_bond": "10000",
+    "creator": "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+    "events": [
+      {
+        "block_number": 49247246,
+        "bounty_id": "0xebad06e2af596702f1b141baf304f32eb128c6f6af90ff28bbcb67553c182f68",
+        "contract_address": "0x15fe9336ddd83f87335d27f39f83750e6f86fcef",
+        "data": {
+          "amount": 2010000,
+          "contributor": "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+          "funded_amount": 2010000,
+          "target_amount": 2010000
+        },
+        "id": "972224e6-ba01-5428-90e8-6afbf9b30005",
+        "kind": "funding_added",
+        "log_index": 105,
+        "log_key": "0x0328c1a39f491f1f75e62a0363202a434fc55fcf762d1df7bd21718ff151d672:105",
+        "occurred_at": "2026-07-29T00:10:39Z",
+        "tx_hash": "0x0328c1a39f491f1f75e62a0363202a434fc55fcf762d1df7bd21718ff151d672"
+      },
+      {
+        "block_number": 49247246,
+        "bounty_id": "0xebad06e2af596702f1b141baf304f32eb128c6f6af90ff28bbcb67553c182f68",
+        "contract_address": "0x15fe9336ddd83f87335d27f39f83750e6f86fcef",
+        "data": {
+          "funded_amount": 2010000
+        },
+        "id": "e1cc1154-8e51-593a-b240-0bfb1b20b479",
+        "kind": "bounty_became_claimable",
+        "log_index": 106,
+        "log_key": "0x0328c1a39f491f1f75e62a0363202a434fc55fcf762d1df7bd21718ff151d672:106",
+        "occurred_at": "2026-07-29T00:10:39Z",
+        "tx_hash": "0x0328c1a39f491f1f75e62a0363202a434fc55fcf762d1df7bd21718ff151d672"
+      },
+      {
+        "block_number": 49247246,
+        "bounty_id": "0xebad06e2af596702f1b141baf304f32eb128c6f6af90ff28bbcb67553c182f68",
+        "contract_address": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+        "data": {
+          "bounty_contract": "0x15fe9336ddd83f87335d27f39f83750e6f86fcef",
+          "creation_nonce": "0xc8225eddf66478da2b0b1fc006b513af981bd01de178485b3b0ebda859f3e76c",
+          "creator": "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+          "policy_hash": "0x8d8e5cca196fcc8ba123d6ffdbb4659c014d82d27cfe1f587f9d031059e23e58",
+          "terms_hash": "0xd4cfce36ac6318a6cd373731aa2dfb9a6113fa685622b6021fb6dd77f0ea9015"
+        },
+        "id": "9ce7dbde-ca72-5e7a-92f1-56a29433283e",
+        "kind": "canonical_bounty_created",
+        "log_index": 107,
+        "log_key": "0x0328c1a39f491f1f75e62a0363202a434fc55fcf762d1df7bd21718ff151d672:107",
+        "occurred_at": "2026-07-29T00:10:39Z",
+        "tx_hash": "0x0328c1a39f491f1f75e62a0363202a434fc55fcf762d1df7bd21718ff151d672"
+      },
+      {
+        "block_number": 49247246,
+        "bounty_id": "0xebad06e2af596702f1b141baf304f32eb128c6f6af90ff28bbcb67553c182f68",
+        "contract_address": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+        "data": {
+          "acceptance_criteria_hash": "0xba3b04ab970dfd91f5ccf1b7eda6670b5a38a854bca16dc980ec8362ed2bcaf9",
+          "benchmark_hash": "0x312eeaa170f76dad9c45fa14eeeb02152cd6ac18a24d3253f878689fcf219008",
+          "evidence_schema_hash": "0xa700a6a69f5e31b509d9436910eb112c4d0e6a326f9203bd4ea62fbd5cf5553e"
+        },
+        "id": "812943dd-9210-5eb2-b316-3a222e727a98",
+        "kind": "canonical_bounty_terms_committed",
+        "log_index": 108,
+        "log_key": "0x0328c1a39f491f1f75e62a0363202a434fc55fcf762d1df7bd21718ff151d672:108",
+        "occurred_at": "2026-07-29T00:10:39Z",
+        "tx_hash": "0x0328c1a39f491f1f75e62a0363202a434fc55fcf762d1df7bd21718ff151d672"
+      },
+      {
+        "block_number": 49247246,
+        "bounty_id": "0xebad06e2af596702f1b141baf304f32eb128c6f6af90ff28bbcb67553c182f68",
+        "contract_address": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+        "data": {
+          "claim_bond": 10000,
+          "claim_window_seconds": 1209600,
+          "funding_deadline": 1791676800,
+          "initial_funding": 2010000,
+          "solver_reward": 2000000,
+          "target_amount": 2010000,
+          "verification_window_seconds": 1209600,
+          "verifier_reward": 10000
+        },
+        "id": "692e68de-dc52-53a8-a163-e165915db72b",
+        "kind": "canonical_bounty_economics_configured",
+        "log_index": 109,
+        "log_key": "0x0328c1a39f491f1f75e62a0363202a434fc55fcf762d1df7bd21718ff151d672:109",
+        "occurred_at": "2026-07-29T00:10:39Z",
+        "tx_hash": "0x0328c1a39f491f1f75e62a0363202a434fc55fcf762d1df7bd21718ff151d672"
+      },
+      {
+        "block_number": 49247246,
+        "bounty_id": "0xebad06e2af596702f1b141baf304f32eb128c6f6af90ff28bbcb67553c182f68",
+        "contract_address": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+        "data": {
+          "threshold": 1,
+          "verification_mode": 0,
+          "verifier_module": "0x380c1af742593dd88b6f20387e9ee693a0536731",
+          "verifier_reward_recipient": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+          "verifier_set_hash": "0x0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "id": "f323c6b9-99bb-5f8a-ae34-b8d5cf107a66",
+        "kind": "canonical_bounty_verification_configured",
+        "log_index": 110,
+        "log_key": "0x0328c1a39f491f1f75e62a0363202a434fc55fcf762d1df7bd21718ff151d672:110",
+        "occurred_at": "2026-07-29T00:10:39Z",
+        "tx_hash": "0x0328c1a39f491f1f75e62a0363202a434fc55fcf762d1df7bd21718ff151d672"
+      },
+      {
+        "block_number": 49439661,
+        "bounty_id": "0xebad06e2af596702f1b141baf304f32eb128c6f6af90ff28bbcb67553c182f68",
+        "contract_address": "0x15fe9336ddd83f87335d27f39f83750e6f86fcef",
+        "data": {
+          "claim_bond": 10000,
+          "claim_expires_at": 1786878269,
+          "policy_hash": "0x8d8e5cca196fcc8ba123d6ffdbb4659c014d82d27cfe1f587f9d031059e23e58",
+          "round": 1,
+          "solver": "0x8e61edc567503a7d3b3554c51230f512c4ea7b1e",
+          "terms_hash": "0xd4cfce36ac6318a6cd373731aa2dfb9a6113fa685622b6021fb6dd77f0ea9015"
+        },
+        "id": "eb4a413b-a53f-5da3-ad05-daf942b01f55",
+        "kind": "bounty_claimed",
+        "log_index": 228,
+        "log_key": "0x1b9fe25464760543464bb0cd44473374839c0c635e4fd4d0a99942c3bb28ecb6:228",
+        "occurred_at": "2026-08-02T11:04:29Z",
+        "tx_hash": "0x1b9fe25464760543464bb0cd44473374839c0c635e4fd4d0a99942c3bb28ecb6"
+      },
+      {
+        "block_number": 50549122,
+        "bounty_id": "0xebad06e2af596702f1b141baf304f32eb128c6f6af90ff28bbcb67553c182f68",
+        "contract_address": "0x15fe9336ddd83f87335d27f39f83750e6f86fcef",
+        "data": {
+          "claim_bond_forfeited": 10000,
+          "round": 1,
+          "solver": "0x8e61edc567503a7d3b3554c51230f512c4ea7b1e",
+          "timeout_bond_pool": 10000
+        },
+        "id": "41d1c477-d90b-5205-91f0-075bf2667c36",
+        "kind": "claim_expired",
+        "log_index": 142,
+        "log_key": "0x7ad665d3a9bc9956f0eaefc00111ab1d2676650500182750e466559c160deb4f:142",
+        "occurred_at": "2026-08-28T03:26:31Z",
+        "tx_hash": "0x7ad665d3a9bc9956f0eaefc00111ab1d2676650500182750e466559c160deb4f"
+      },
+      {
+        "block_number": 51135471,
+        "bounty_id": "0xebad06e2af596702f1b141baf304f32eb128c6f6af90ff28bbcb67553c182f68",
+        "contract_address": "0x15fe9336ddd83f87335d27f39f83750e6f86fcef",
+        "data": {
+          "claim_bond": 10000,
+          "claim_expires_at": 1790269889,
+          "policy_hash": "0x8d8e5cca196fcc8ba123d6ffdbb4659c014d82d27cfe1f587f9d031059e23e58",
+          "round": 2,
+          "solver": "0x556ca364ea9512fca9e501349630eff15f16b9a9",
+          "terms_hash": "0xd4cfce36ac6318a6cd373731aa2dfb9a6113fa685622b6021fb6dd77f0ea9015"
+        },
+        "id": "0d5522ea-450e-5f9c-b666-29455250a843",
+        "kind": "bounty_claimed",
+        "log_index": 575,
+        "log_key": "0x072daf16368496c7f424625347b93b645cf346a5786b9927293cdf4ff058de48:575",
+        "occurred_at": "2026-09-10T17:11:29Z",
+        "tx_hash": "0x072daf16368496c7f424625347b93b645cf346a5786b9927293cdf4ff058de48"
+      },
+      {
+        "block_number": 51943743,
+        "bounty_id": "0xebad06e2af596702f1b141baf304f32eb128c6f6af90ff28bbcb67553c182f68",
+        "contract_address": "0x15fe9336ddd83f87335d27f39f83750e6f86fcef",
+        "data": {
+          "claim_bond_forfeited": 10000,
+          "round": 2,
+          "solver": "0x556ca364ea9512fca9e501349630eff15f16b9a9",
+          "timeout_bond_pool": 20000
+        },
+        "id": "18b1a323-d51f-59f1-9b42-51aa72ea6376",
+        "kind": "claim_expired",
+        "log_index": 213,
+        "log_key": "0xa47d356e3dfc4e1589842f636a0c818595db08b2683df6fabd0d8709e15bdb95:213",
+        "occurred_at": "2026-09-29T10:13:53Z",
+        "tx_hash": "0xa47d356e3dfc4e1589842f636a0c818595db08b2683df6fabd0d8709e15bdb95"
+      }
+    ],
+    "funded_amount": "2010000",
+    "gross_cash_margin": "1000000",
+    "required_external_spend": "1000000",
+    "runner_identifier": "standing_meta_v3_routed_parent",
+    "solver_reward": "2000000",
+    "status": "claimable",
+    "target_amount": "2010000",
+    "terms": {
+      "acceptance_criteria_hash": "0xba3b04ab970dfd91f5ccf1b7eda6670b5a38a854bca16dc980ec8362ed2bcaf9",
+      "benchmark_hash": "0x312eeaa170f76dad9c45fa14eeeb02152cd6ac18a24d3253f878689fcf219008",
+      "created_at": "2026-07-28T10:43:08.981932Z",
+      "creator_wallet": "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+      "document": {
+        "acceptance_criteria": [
+          "Publish the exact child terms on Base from the parent solver wallet before claiming this bounty.",
+          "Create and fully fund a parent-bound canonical child with a total target of at least 1.00 USDC.",
+          "Keep the child total target at least 1.00 USDC below this bounty solver reward so the parent has positive gross profit.",
+          "Use the committed sandboxed-regression signed verifier quorum and immutable task criteria.",
+          "Have a participant registered before the parent claim, with a different participant ID, complete the child.",
+          "Receive canonical child settlement before submitting the child address to this verifier."
+        ],
+        "benchmark": {
+          "engine": "standing_meta_v3_routed_parent",
+          "lane": "mcp_interoperability",
+          "minimum_child_target": 1000000,
+          "minimum_parent_gross_margin": 1000000,
+          "participant_registry": "0x9875dcaf570bde8ff1aa62275d3c8985f4fd1294",
+          "required_child_engine": "sandboxed_regression_v1",
+          "required_child_status": "settled",
+          "required_child_verifier_set_hash": "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd",
+          "required_child_verifier_threshold": 2,
+          "terms_registry": "0x35e5d49c12b75c119d33951c2c4f054c5732208c"
+        },
+        "contract_terms": {
+          "claim_bond": {
+            "amount": 10000,
+            "currency": "usdc"
+          },
+          "claim_window_seconds": 1209600,
+          "creation_nonce": "0xc8225eddf66478da2b0b1fc006b513af981bd01de178485b3b0ebda859f3e76c",
+          "creator_wallet": "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+          "funding_deadline": 1791676800,
+          "initial_funding": {
+            "amount": 2010000,
+            "currency": "usdc"
+          },
+          "network": "base-mainnet",
+          "protocol_version": "agent-bounties/autonomous-v1",
+          "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "solver_reward": {
+            "amount": 2000000,
+            "currency": "usdc"
+          },
+          "verification_window_seconds": 1209600,
+          "verifier_reward": {
+            "amount": 10000,
+            "currency": "usdc"
+          }
+        },
+        "discovery_source": "maintainer-seeded profitable routed standing-meta-v3 inventory",
+        "evidence_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "child_bounty_contract": {
+              "pattern": "^0x[0-9a-fA-F]{40}$",
+              "type": "string"
+            },
+            "discovery_source": {
+              "type": "string"
+            },
+            "improvement_feedback": {
+              "type": "string"
+            },
+            "participation_reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "child_bounty_contract",
+            "discovery_source",
+            "participation_reason",
+            "improvement_feedback"
+          ],
+          "type": "object"
+        },
+        "goal": "Create and fully fund a concrete 1 USDC MCP interoperability bounty that a different registered participant completes and receives canonical settlement for, then receive the 2 USDC parent reward.",
+        "schema_version": "agent-bounties/terms-v1",
+        "source_url": "https://github.com/NSPG13/agent-bounties/issues/648",
+        "title": "Earn 1 USDC profit by creating a paid MCP interoperability child bounty",
+        "verification_policy": {
+          "activation_model": "append_only_policy_hash_with_delayed_registration",
+          "mechanism": "deterministic_module",
+          "module_id": "policy_bound_verifier_router_v1",
+          "routed_protocol": "agent-bounties/independent-child-v3-routed",
+          "rubric": "The immutable routed standing-meta-v3 policy requires a meaningful child, at least 1 USDC gross parent margin, pre-claim terms, distinct participants, the committed regression quorum, and canonical child settlement.",
+          "self_verification_forbidden": true,
+          "threshold": 1,
+          "verifier_module": "0x380c1af742593dd88b6f20387e9ee693a0536731",
+          "verifier_reward_recipient": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+          "verifiers": []
+        }
+      },
+      "evidence_schema_hash": "0xa700a6a69f5e31b509d9436910eb112c4d0e6a326f9203bd4ea62fbd5cf5553e",
+      "policy_hash": "0x8d8e5cca196fcc8ba123d6ffdbb4659c014d82d27cfe1f587f9d031059e23e58",
+      "terms_hash": "0xd4cfce36ac6318a6cd373731aa2dfb9a6113fa685622b6021fb6dd77f0ea9015"
+    },
+    "terms_hash": "0xd4cfce36ac6318a6cd373731aa2dfb9a6113fa685622b6021fb6dd77f0ea9015",
+    "terms_valid": true,
+    "timeout_bond_pool": "20000",
+    "validation_errors": [],
+    "verification_details": {
+      "blocker_codes": [],
+      "claim": "Authenticated service health only; not a verdict, payment approval or cryptographic proof of computation.",
+      "evaluated_at": "2026-10-02T21:18:49.902961850Z",
+      "last_check_at": "2026-10-02T20:57:08.722662Z",
+      "maximum_age_seconds": 2700,
+      "operational_ready": true,
+      "profile_id": null,
+      "profile_registry_digest": "sha256:0ebdb5adf731e8a2ecea2af7d847ba762acb8388a3a040861727a4b29785b64f",
+      "ready": true,
+      "reason": "the routed-v3 verifier and profitable child dependency are supported",
+      "release_id": "sha256:3a33c431838e0eee9503d102391c955e83bf1142a7f9727e722bfa75dbe45d6f"
+    },
+    "verification_mode": "deterministic_module",
+    "verification_readiness_reason": "the routed-v3 verifier and profitable child dependency are supported",
+    "verification_ready": true,
+    "verifier_module": "0x380c1af742593dd88b6f20387e9ee693a0536731",
+    "verifier_reward": "10000",
+    "verifier_set_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "verifier_threshold": 1
+  },
+  {
+    "bounty_contract": "0x61679a2658f75e957d21d4da6122876ae6ddbf7d",
+    "bounty_id": "0x2bfcbfe1dda226de102bfec5853e631c198ce541820bbe8c5c03536200de1876",
+    "claim_bond": "10000",
+    "creator": "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+    "events": [
+      {
+        "block_number": 49070836,
+        "bounty_id": "0x2bfcbfe1dda226de102bfec5853e631c198ce541820bbe8c5c03536200de1876",
+        "contract_address": "0x61679a2658f75e957d21d4da6122876ae6ddbf7d",
+        "data": {
+          "amount": 2010000,
+          "contributor": "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+          "funded_amount": 2010000,
+          "target_amount": 2010000
+        },
+        "id": "0e7a1f3c-c52d-52e5-a322-2bfbfaee9e50",
+        "kind": "funding_added",
+        "log_index": 144,
+        "log_key": "0x410eaef931c65af56edf7ccca2ca53f587fdf36806d05def9cea270c84f7be60:144",
+        "occurred_at": "2026-07-24T22:10:19Z",
+        "tx_hash": "0x410eaef931c65af56edf7ccca2ca53f587fdf36806d05def9cea270c84f7be60"
+      },
+      {
+        "block_number": 49070836,
+        "bounty_id": "0x2bfcbfe1dda226de102bfec5853e631c198ce541820bbe8c5c03536200de1876",
+        "contract_address": "0x61679a2658f75e957d21d4da6122876ae6ddbf7d",
+        "data": {
+          "funded_amount": 2010000
+        },
+        "id": "387d25fa-c4bb-5d85-8269-7e209eb4cf03",
+        "kind": "bounty_became_claimable",
+        "log_index": 145,
+        "log_key": "0x410eaef931c65af56edf7ccca2ca53f587fdf36806d05def9cea270c84f7be60:145",
+        "occurred_at": "2026-07-24T22:10:19Z",
+        "tx_hash": "0x410eaef931c65af56edf7ccca2ca53f587fdf36806d05def9cea270c84f7be60"
+      },
+      {
+        "block_number": 49070836,
+        "bounty_id": "0x2bfcbfe1dda226de102bfec5853e631c198ce541820bbe8c5c03536200de1876",
+        "contract_address": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+        "data": {
+          "bounty_contract": "0x61679a2658f75e957d21d4da6122876ae6ddbf7d",
+          "creation_nonce": "0x6269b579503b5c78d1f737b7bed621f2d6501c7ae07e0771c96926a7d542107a",
+          "creator": "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+          "policy_hash": "0x8d8e5cca196fcc8ba123d6ffdbb4659c014d82d27cfe1f587f9d031059e23e58",
+          "terms_hash": "0xc6170c651ed944d90e779233d00a34c6ab0a913fc482ac0416d52e83de0d57ee"
+        },
+        "id": "6eae7464-bc5a-543f-ba7e-ef671092d64c",
+        "kind": "canonical_bounty_created",
+        "log_index": 146,
+        "log_key": "0x410eaef931c65af56edf7ccca2ca53f587fdf36806d05def9cea270c84f7be60:146",
+        "occurred_at": "2026-07-24T22:10:19Z",
+        "tx_hash": "0x410eaef931c65af56edf7ccca2ca53f587fdf36806d05def9cea270c84f7be60"
+      },
+      {
+        "block_number": 49070836,
+        "bounty_id": "0x2bfcbfe1dda226de102bfec5853e631c198ce541820bbe8c5c03536200de1876",
+        "contract_address": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+        "data": {
+          "acceptance_criteria_hash": "0xba3b04ab970dfd91f5ccf1b7eda6670b5a38a854bca16dc980ec8362ed2bcaf9",
+          "benchmark_hash": "0x9d49207c3de09a6f99d1aed110d9d3481bd5c63feb7ebf398a50c4da6289f1bd",
+          "evidence_schema_hash": "0xa700a6a69f5e31b509d9436910eb112c4d0e6a326f9203bd4ea62fbd5cf5553e"
+        },
+        "id": "30cdb977-ba3c-5fc9-a1af-d2a6c8203689",
+        "kind": "canonical_bounty_terms_committed",
+        "log_index": 147,
+        "log_key": "0x410eaef931c65af56edf7ccca2ca53f587fdf36806d05def9cea270c84f7be60:147",
+        "occurred_at": "2026-07-24T22:10:19Z",
+        "tx_hash": "0x410eaef931c65af56edf7ccca2ca53f587fdf36806d05def9cea270c84f7be60"
+      },
+      {
+        "block_number": 49070836,
+        "bounty_id": "0x2bfcbfe1dda226de102bfec5853e631c198ce541820bbe8c5c03536200de1876",
+        "contract_address": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+        "data": {
+          "claim_bond": 10000,
+          "claim_window_seconds": 1209600,
+          "funding_deadline": 1791676800,
+          "initial_funding": 2010000,
+          "solver_reward": 2000000,
+          "target_amount": 2010000,
+          "verification_window_seconds": 1209600,
+          "verifier_reward": 10000
+        },
+        "id": "415751ce-2aa9-5524-8993-ee8daaed070d",
+        "kind": "canonical_bounty_economics_configured",
+        "log_index": 148,
+        "log_key": "0x410eaef931c65af56edf7ccca2ca53f587fdf36806d05def9cea270c84f7be60:148",
+        "occurred_at": "2026-07-24T22:10:19Z",
+        "tx_hash": "0x410eaef931c65af56edf7ccca2ca53f587fdf36806d05def9cea270c84f7be60"
+      },
+      {
+        "block_number": 49070836,
+        "bounty_id": "0x2bfcbfe1dda226de102bfec5853e631c198ce541820bbe8c5c03536200de1876",
+        "contract_address": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+        "data": {
+          "threshold": 1,
+          "verification_mode": 0,
+          "verifier_module": "0x380c1af742593dd88b6f20387e9ee693a0536731",
+          "verifier_reward_recipient": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+          "verifier_set_hash": "0x0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "id": "4a44cf84-d186-5b19-aa22-849585e17b1e",
+        "kind": "canonical_bounty_verification_configured",
+        "log_index": 149,
+        "log_key": "0x410eaef931c65af56edf7ccca2ca53f587fdf36806d05def9cea270c84f7be60:149",
+        "occurred_at": "2026-07-24T22:10:19Z",
+        "tx_hash": "0x410eaef931c65af56edf7ccca2ca53f587fdf36806d05def9cea270c84f7be60"
+      },
+      {
+        "block_number": 49695484,
+        "bounty_id": "0x2bfcbfe1dda226de102bfec5853e631c198ce541820bbe8c5c03536200de1876",
+        "contract_address": "0x61679a2658f75e957d21d4da6122876ae6ddbf7d",
+        "data": {
+          "claim_bond": 10000,
+          "claim_expires_at": 1787389915,
+          "policy_hash": "0x8d8e5cca196fcc8ba123d6ffdbb4659c014d82d27cfe1f587f9d031059e23e58",
+          "round": 1,
+          "solver": "0xded9a4deb75a0508cf36ac0f7ccf58a624983d0b",
+          "terms_hash": "0xc6170c651ed944d90e779233d00a34c6ab0a913fc482ac0416d52e83de0d57ee"
+        },
+        "id": "cc2a9896-725d-57bf-957c-ce66d238337a",
+        "kind": "bounty_claimed",
+        "log_index": 148,
+        "log_key": "0x106c2eb603d78e4acf65388f5d9f1b24a59f90a03d674f9cdccfac62383ee5bd:148",
+        "occurred_at": "2026-08-08T09:11:55Z",
+        "tx_hash": "0x106c2eb603d78e4acf65388f5d9f1b24a59f90a03d674f9cdccfac62383ee5bd"
+      },
+      {
+        "block_number": 50549052,
+        "bounty_id": "0x2bfcbfe1dda226de102bfec5853e631c198ce541820bbe8c5c03536200de1876",
+        "contract_address": "0x61679a2658f75e957d21d4da6122876ae6ddbf7d",
+        "data": {
+          "claim_bond_forfeited": 10000,
+          "round": 1,
+          "solver": "0xded9a4deb75a0508cf36ac0f7ccf58a624983d0b",
+          "timeout_bond_pool": 10000
+        },
+        "id": "bd83261e-d5d3-5535-8a73-755b768cf4d3",
+        "kind": "claim_expired",
+        "log_index": 166,
+        "log_key": "0x75085684d7675e537d05426d9ef36be9441393f463919ce4fd8dc60a082f43b1:166",
+        "occurred_at": "2026-08-28T03:24:11Z",
+        "tx_hash": "0x75085684d7675e537d05426d9ef36be9441393f463919ce4fd8dc60a082f43b1"
+      },
+      {
+        "block_number": 51187053,
+        "bounty_id": "0x2bfcbfe1dda226de102bfec5853e631c198ce541820bbe8c5c03536200de1876",
+        "contract_address": "0x61679a2658f75e957d21d4da6122876ae6ddbf7d",
+        "data": {
+          "claim_bond": 10000,
+          "claim_expires_at": 1790373053,
+          "policy_hash": "0x8d8e5cca196fcc8ba123d6ffdbb4659c014d82d27cfe1f587f9d031059e23e58",
+          "round": 2,
+          "solver": "0x5ddb82001422c93c129bf965e14756fd40653bf2",
+          "terms_hash": "0xc6170c651ed944d90e779233d00a34c6ab0a913fc482ac0416d52e83de0d57ee"
+        },
+        "id": "7f75b1ba-4f53-5c41-9087-53479b4c6838",
+        "kind": "bounty_claimed",
+        "log_index": 732,
+        "log_key": "0x239dedac6224933526b0a2c39a6e090e711a8c5feeed386a70018662bd6eac47:732",
+        "occurred_at": "2026-09-11T21:50:53Z",
+        "tx_hash": "0x239dedac6224933526b0a2c39a6e090e711a8c5feeed386a70018662bd6eac47"
+      },
+      {
+        "block_number": 51943683,
+        "bounty_id": "0x2bfcbfe1dda226de102bfec5853e631c198ce541820bbe8c5c03536200de1876",
+        "contract_address": "0x61679a2658f75e957d21d4da6122876ae6ddbf7d",
+        "data": {
+          "claim_bond_forfeited": 10000,
+          "round": 2,
+          "solver": "0x5ddb82001422c93c129bf965e14756fd40653bf2",
+          "timeout_bond_pool": 20000
+        },
+        "id": "f479fc17-b613-5224-9313-5e73020c9106",
+        "kind": "claim_expired",
+        "log_index": 295,
+        "log_key": "0x7e90c71f3c6dc48e10189439be7eba9204b9106e99f443443b53c966863e19c4:295",
+        "occurred_at": "2026-09-29T10:11:53Z",
+        "tx_hash": "0x7e90c71f3c6dc48e10189439be7eba9204b9106e99f443443b53c966863e19c4"
+      }
+    ],
+    "funded_amount": "2010000",
+    "gross_cash_margin": "1000000",
+    "required_external_spend": "1000000",
+    "runner_identifier": "standing_meta_v3_routed_parent",
+    "solver_reward": "2000000",
+    "status": "claimable",
+    "target_amount": "2010000",
+    "terms": {
+      "acceptance_criteria_hash": "0xba3b04ab970dfd91f5ccf1b7eda6670b5a38a854bca16dc980ec8362ed2bcaf9",
+      "benchmark_hash": "0x9d49207c3de09a6f99d1aed110d9d3481bd5c63feb7ebf398a50c4da6289f1bd",
+      "created_at": "2026-07-24T21:40:10.144634Z",
+      "creator_wallet": "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+      "document": {
+        "acceptance_criteria": [
+          "Publish the exact child terms on Base from the parent solver wallet before claiming this bounty.",
+          "Create and fully fund a parent-bound canonical child with a total target of at least 1.00 USDC.",
+          "Keep the child total target at least 1.00 USDC below this bounty solver reward so the parent has positive gross profit.",
+          "Use the committed sandboxed-regression signed verifier quorum and immutable task criteria.",
+          "Have a participant registered before the parent claim, with a different participant ID, complete the child.",
+          "Receive canonical child settlement before submitting the child address to this verifier."
+        ],
+        "benchmark": {
+          "engine": "standing_meta_v3_routed_parent",
+          "lane": "mcp",
+          "minimum_child_target": 1000000,
+          "minimum_parent_gross_margin": 1000000,
+          "participant_registry": "0x9875dcaf570bde8ff1aa62275d3c8985f4fd1294",
+          "required_child_engine": "sandboxed_regression_v1",
+          "required_child_status": "settled",
+          "required_child_verifier_set_hash": "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd",
+          "required_child_verifier_threshold": 2,
+          "terms_registry": "0x35e5d49c12b75c119d33951c2c4f054c5732208c"
+        },
+        "contract_terms": {
+          "claim_bond": {
+            "amount": 10000,
+            "currency": "usdc"
+          },
+          "claim_window_seconds": 1209600,
+          "creation_nonce": "0x6269b579503b5c78d1f737b7bed621f2d6501c7ae07e0771c96926a7d542107a",
+          "creator_wallet": "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+          "funding_deadline": 1791676800,
+          "initial_funding": {
+            "amount": 2010000,
+            "currency": "usdc"
+          },
+          "network": "base-mainnet",
+          "protocol_version": "agent-bounties/autonomous-v1",
+          "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "solver_reward": {
+            "amount": 2000000,
+            "currency": "usdc"
+          },
+          "verification_window_seconds": 1209600,
+          "verifier_reward": {
+            "amount": 10000,
+            "currency": "usdc"
+          }
+        },
+        "discovery_source": "maintainer-seeded profitable routed standing-meta-v3 inventory",
+        "evidence_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "child_bounty_contract": {
+              "pattern": "^0x[0-9a-fA-F]{40}$",
+              "type": "string"
+            },
+            "discovery_source": {
+              "type": "string"
+            },
+            "improvement_feedback": {
+              "type": "string"
+            },
+            "participation_reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "child_bounty_contract",
+            "discovery_source",
+            "participation_reason",
+            "improvement_feedback"
+          ],
+          "type": "object"
+        },
+        "goal": "Create and fully fund a concrete 1 USDC MCP bounty that a different registered participant completes and receives canonical settlement for, then receive the 2 USDC parent reward.",
+        "schema_version": "agent-bounties/terms-v1",
+        "source_url": "https://github.com/NSPG13/agent-bounties/issues/335",
+        "title": "Earn 1 USDC profit by creating a paid MCP child bounty",
+        "verification_policy": {
+          "activation_model": "append_only_policy_hash_with_delayed_registration",
+          "mechanism": "deterministic_module",
+          "module_id": "policy_bound_verifier_router_v1",
+          "routed_protocol": "agent-bounties/independent-child-v3-routed",
+          "rubric": "The immutable routed standing-meta-v3 policy requires a meaningful child, at least 1 USDC gross parent margin, pre-claim terms, distinct participants, the committed regression quorum, and canonical child settlement.",
+          "self_verification_forbidden": true,
+          "threshold": 1,
+          "verifier_module": "0x380c1af742593dd88b6f20387e9ee693a0536731",
+          "verifier_reward_recipient": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+          "verifiers": []
+        }
+      },
+      "evidence_schema_hash": "0xa700a6a69f5e31b509d9436910eb112c4d0e6a326f9203bd4ea62fbd5cf5553e",
+      "policy_hash": "0x8d8e5cca196fcc8ba123d6ffdbb4659c014d82d27cfe1f587f9d031059e23e58",
+      "terms_hash": "0xc6170c651ed944d90e779233d00a34c6ab0a913fc482ac0416d52e83de0d57ee"
+    },
+    "terms_hash": "0xc6170c651ed944d90e779233d00a34c6ab0a913fc482ac0416d52e83de0d57ee",
+    "terms_valid": true,
+    "timeout_bond_pool": "20000",
+    "validation_errors": [],
+    "verification_details": {
+      "blocker_codes": [],
+      "claim": "Authenticated service health only; not a verdict, payment approval or cryptographic proof of computation.",
+      "evaluated_at": "2026-10-02T21:18:49.902961850Z",
+      "last_check_at": "2026-10-02T20:57:08.722662Z",
+      "maximum_age_seconds": 2700,
+      "operational_ready": true,
+      "profile_id": null,
+      "profile_registry_digest": "sha256:0ebdb5adf731e8a2ecea2af7d847ba762acb8388a3a040861727a4b29785b64f",
+      "ready": true,
+      "reason": "the routed-v3 verifier and profitable child dependency are supported",
+      "release_id": "sha256:3a33c431838e0eee9503d102391c955e83bf1142a7f9727e722bfa75dbe45d6f"
+    },
+    "verification_mode": "deterministic_module",
+    "verification_readiness_reason": "the routed-v3 verifier and profitable child dependency are supported",
+    "verification_ready": true,
+    "verifier_module": "0x380c1af742593dd88b6f20387e9ee693a0536731",
+    "verifier_reward": "10000",
+    "verifier_set_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "verifier_threshold": 1
+  }
+]

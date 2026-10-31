@@ -1,5 +1,7 @@
 # ADR 0002: GitHub-Controlled Render Deploys
 
+> The environment-reconciling controller described below is superseded by [Public Runtime Release](../public-runtime-provenance.md). Keep the legacy workflow disabled. The replacement preserves runtime configuration and requires publicly reachable green source.
+
 - Status: accepted
 - Date: 2026-07-14
 - Change class: R2, with R3-R4 exclusions

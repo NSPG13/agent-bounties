@@ -1,3 +1,5 @@
+See [public runtime provenance](public-runtime-provenance.md) for the current release controller and source policy. The older environment-reconciliation controller is historical and remains disabled.
+
 # Deployment
 
 For the hosted production release, use
@@ -22,7 +24,8 @@ review and verification.
 ## Current State
 
 `site/protocol.json` and `deployments/base-mainnet.json` are authoritative.
-They report the capped autonomous-v1 deployment as `active` and pin its exact
+The historical deployment record remains `active`; the public protocol is now
+`recovery_only` and denies new hosted v1 exposure. Both retain the exact
 factory, implementation, transaction, block, and runtime hashes. Any future
 address or hash change requires a new deployment record and chain attestation.
 
@@ -47,18 +50,16 @@ records; it does not migrate or rewrite historical bounty rows.
 
 `CLOUD_AGENT_API_KEY` is a direct `sync: false` secret on
 `agent-bounties-api`; Render ignores `sync: false` inside environment groups.
-MCP proxies the API and must not receive this secret. The exact-SHA controller
-reconciles nonsecret model settings and copies the optional repository Actions
-secret `CLOUD_AGENT_API_KEY` into the API service without logging it. Verify
+MCP proxies the API and must not receive this secret. Manage this credential
+directly in Render; application releases preserve it and do not copy repository
+secrets into service environments. Verify
 `GET /v1/cloud-agent/readiness`; see
 [`cloud-agent-operations.md`](cloud-agent-operations.md).
 
 MoonPay signed external checkout uses two direct `sync: false` values on
 `agent-bounties-mcp`: `MOONPAY_PUBLISHABLE_KEY` and `MOONPAY_SECRET_KEY`.
-Store both as repository Actions secrets. The exact-SHA controller installs
-them all-or-none, verifies that their test/live prefixes match the repository
-`MOONPAY_ENVIRONMENT` variable (default `sandbox`), and records only redacted
-configuration evidence. The MCP service returns a signed external MoonPay URL;
+Manage both directly in Render with matching test/live configuration; application
+releases preserve them without reading or copying their values. The MCP service returns a signed external MoonPay URL;
 it does not embed checkout, complete a purchase, transfer crypto, or prove
 canonical bounty funding.
 

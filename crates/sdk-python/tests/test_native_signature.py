@@ -245,25 +245,29 @@ class NativeSignatureTests(unittest.TestCase):
             },
         )
 
-    def test_stripe_event_methods_share_identical_transport_contract(self):
+    def test_stripe_event_methods_preserve_raw_bytes_and_reject_reserialization(self):
         client = AgentBountiesClient("https://example.test", "operator")
         response = httpx.Response(200, json={"ok": True}, request=httpx.Request("POST", "https://example.test"))
+        raw = '{ "id" : "evt_fixture", "label":"méxico" }\n'
         with patch("agent_bounties.client.httpx.request", return_value=response) as request:
             for method, path in (
                 (client.reconcile_stripe_checkout_webhook, "/v1/stripe/checkout-webhooks"),
                 (client.reconcile_stripe_transfer_event, "/v1/stripe/transfer-events"),
             ):
-                with self.subTest(path=path):
-                    self.assertEqual(method({"id": "evt"}, "signature"), {"ok": True})
-                    self.assertEqual(request.call_args.args, ("POST", f"https://example.test{path}"))
-                    self.assertEqual(
-                        request.call_args.kwargs["headers"],
-                        {
-                            "x-agent-bounties-interface": "api",
-                            "x-operator-token": "operator",
-                            "stripe-signature": "signature",
-                        },
-                    )
+                for body in (raw, raw.encode("utf-8")):
+                    with self.subTest(path=path, kind=type(body)):
+                        self.assertEqual(method(body, "signature"), {"ok": True})
+                        self.assertEqual(request.call_args.args, ("POST", f"https://example.test{path}"))
+                        self.assertEqual(request.call_args.kwargs["content"], body)
+                        self.assertNotIn("json", request.call_args.kwargs)
+                        self.assertEqual(request.call_args.kwargs["headers"]["stripe-signature"], "signature")
+                        self.assertEqual(request.call_args.kwargs["headers"]["content-type"], "application/json")
+                before = request.call_count
+                with self.assertRaisesRegex(ValueError, "original raw body"):
+                    method(json.loads(raw), "signature")
+                self.assertEqual(request.call_count, before)
+                method(json.loads(raw))
+                self.assertEqual(request.call_args.kwargs["json"], json.loads(raw))
 
 
 if __name__ == "__main__":

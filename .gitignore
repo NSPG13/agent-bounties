@@ -24,3 +24,6 @@ broadcast/
 /site/vendor/coinbase-embedded-wallet.bundle.css
 /site/assets/fonts/Satoshi-Variable.woff2
 /.ui-review/
+
+# Disposable local production-compose smoke environment
+.production-compose.*.env

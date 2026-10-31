@@ -7,12 +7,18 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+base64.workspace = true
+async-trait.workspace = true
+reqwest.workspace = true
+broad-verification = { path = "../broad-verification" }
 chain-base = { path = "../chain-base" }
 chrono.workspace = true
 domain = { path = "../domain" }
 hex.workspace = true
 hmac.workspace = true
 ledger = { path = "../ledger" }
+managed-orders = { path = "../managed-orders" }
+payments-stripe = { path = "../payments-stripe" }
 serde.workspace = true
 serde_json.workspace = true
 serde_jcs = "=0.2.0"
@@ -23,4 +29,5 @@ uuid.workspace = true
 
 [dev-dependencies]
 alloy.workspace = true
+chain-base = { path = "../chain-base", features = ["testing-customer-review-signer"] }
 tokio.workspace = true

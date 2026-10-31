@@ -3,34 +3,34 @@ name: Regression Verifier Signer
 on:
   pull_request:
     paths:
-      - "scripts/verifier_release_provenance.py"
-      - "scripts/test_verifier_release_provenance.py"
-      - ".github/verifier-releases/**"
-      - "scripts/verifier_release.py"
-      - "scripts/test_verifier_release.py"
-      - "scripts/gas_sponsorship_budget.py"
-      - "scripts/test_gas_sponsorship_budget.py"
-      - ".cargo/**"
-      - ".github/workflows/regression-verifier-runner.yml"
-      - ".github/workflows/regression-verifier-signer.yml"
-      - ".github/workflows/regression-verifier-signing-reusable.yml"
-      - "Cargo.lock"
-      - "Cargo.toml"
-      - "bounties/**"
-      - "crates/**"
-      - "contracts/base-escrow/fixtures/**"
-      - "migrations/**"
-      - "ops/**"
-      - "programs/**"
-      - "rust-toolchain"
-      - "rust-toolchain.toml"
-      - "schemas/**"
-      - "scripts/regression_verifier_pipeline.py"
-      - "scripts/regression_verifier_source_guard.py"
-      - "scripts/fixtures/terms-publication-readback.json"
-      - "scripts/test_regression_verifier_pipeline.py"
-      - "scripts/test_regression_verifier_source_guard.py"
-      - "site/**"
+    - "scripts/verifier_release_provenance.py"
+    - "scripts/test_verifier_release_provenance.py"
+    - ".github/verifier-releases/**"
+    - "scripts/verifier_release.py"
+    - "scripts/test_verifier_release.py"
+    - "scripts/gas_sponsorship_budget.py"
+    - "scripts/test_gas_sponsorship_budget.py"
+    - ".cargo/**"
+    - ".github/workflows/regression-verifier-runner.yml"
+    - ".github/workflows/regression-verifier-signer.yml"
+    - ".github/workflows/regression-verifier-signing-reusable.yml"
+    - "Cargo.lock"
+    - "Cargo.toml"
+    - "bounties/**"
+    - "crates/**"
+    - "contracts/base-escrow/fixtures/**"
+    - "migrations/**"
+    - "ops/**"
+    - "programs/**"
+    - "rust-toolchain"
+    - "rust-toolchain.toml"
+    - "schemas/**"
+    - "scripts/regression_verifier_pipeline.py"
+    - "scripts/regression_verifier_source_guard.py"
+    - "scripts/fixtures/terms-publication-readback.json"
+    - "scripts/test_regression_verifier_pipeline.py"
+    - "scripts/test_regression_verifier_source_guard.py"
+    - "site/**"
   workflow_run:
     workflows: ["Regression Verifier Runner"]
     types: [completed]
@@ -46,14 +46,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
-      - uses: actions/setup-python@v7.0.0
-        with:
-          python-version: "3.12"
-      - run: python -m unittest scripts.test_verifier_release_provenance -v
-      - run: python scripts/test_gas_sponsorship_budget.py -v
-      - run: python scripts/test_regression_verifier_pipeline.py -v
-      - run: python scripts/test_regression_verifier_source_guard.py -v
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: "3.12"
+    - run: python -m unittest scripts.test_verifier_release_provenance -v
+    - run: python scripts/test_gas_sponsorship_budget.py -v
+    - run: python scripts/test_regression_verifier_pipeline.py -v
+    - run: python scripts/test_regression_verifier_source_guard.py -v
 
   authorize-run:
     if: >-
@@ -70,42 +70,44 @@ jobs:
       run_id: ${{ steps.main.outputs.run_id }}
     steps:
       # Only protected workflow code may decide which release code can run.
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
-        with:
-          ref: ${{ github.workflow_sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - id: provenance
-        name: Authorize protected release before selected source or credentials
-        env:
-          REGRESSION_VERIFIER_RELEASE_JSON: ${{ vars.REGRESSION_VERIFIER_RELEASE_JSON }}
-          EXPECTED_RELEASE_REVISION: ""
-        run: python3 -I scripts/verifier_release_provenance.py
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
-        with:
-          ref: ${{ steps.provenance.outputs.revision }}
-          persist-credentials: false
-      - name: Load approved release identity
-        env:
-          REGRESSION_VERIFIER_RELEASE_JSON: ${{ vars.REGRESSION_VERIFIER_RELEASE_JSON }}
-        run: |
-          mkdir -p target
-          python -c 'import os,pathlib; pathlib.Path("target/verifier-release.json").write_text(os.environ["REGRESSION_VERIFIER_RELEASE_JSON"])'
-      - uses: actions/download-artifact@v8
-        with:
-          name: regression-candidates-${{ github.event.workflow_run.id }}
-          path: target/regression-candidates
-          github-token: ${{ github.token }}
-          run-id: ${{ github.event.workflow_run.id }}
-      - id: main
-        env:
-          CANDIDATE_RUN_ID: ${{ github.event.workflow_run.id }}
-        run: >-
-          python scripts/verifier_release.py authorize --manifest target/verifier-release.json
-          --candidates target/regression-candidates --run-id "$CANDIDATE_RUN_ID"
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ github.workflow_sha }}
+        fetch-depth: 0
+        persist-credentials: false
+    - id: provenance
+      name: Authorize protected release before selected source or credentials
+      env:
+        REGRESSION_VERIFIER_RELEASE_JSON: ${{ vars.REGRESSION_VERIFIER_RELEASE_JSON }}
+        EXPECTED_RELEASE_REVISION: ""
+      run: python3 -I scripts/verifier_release_provenance.py
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ steps.provenance.outputs.revision }}
+        persist-credentials: false
+    - name: Load approved release identity
+      env:
+        REGRESSION_VERIFIER_RELEASE_JSON: ${{ vars.REGRESSION_VERIFIER_RELEASE_JSON }}
+      run: |
+        mkdir -p target
+        python -c 'import os,pathlib; pathlib.Path("target/verifier-release.json").write_text(os.environ["REGRESSION_VERIFIER_RELEASE_JSON"])'
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: regression-candidates-${{ github.event.workflow_run.id }}
+        path: target/regression-candidates
+        github-token: ${{ github.token }}
+        run-id: ${{ github.event.workflow_run.id }}
+    - id: main
+      env:
+        CANDIDATE_RUN_ID: ${{ github.event.workflow_run.id }}
+      run: >-
+        python scripts/verifier_release.py authorize --manifest target/verifier-release.json
+        --candidates target/regression-candidates --run-id "$CANDIDATE_RUN_ID"
 
   sign-one:
-    if: needs.authorize-run.outputs.authorized == 'true'
+    if: >-
+      github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (needs.authorize-run.outputs.authorized
+      == 'true')
     needs: authorize-run
     uses: ./.github/workflows/regression-verifier-signing-reusable.yml
     with:
@@ -118,7 +120,9 @@ jobs:
       checkpoint_token: ${{ secrets.REGRESSION_SIGNER_ONE_CHECKPOINT_TOKEN }}
 
   sign-two:
-    if: needs.authorize-run.outputs.authorized == 'true'
+    if: >-
+      github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (needs.authorize-run.outputs.authorized
+      == 'true')
     needs: authorize-run
     uses: ./.github/workflows/regression-verifier-signing-reusable.yml
     with:
@@ -131,7 +135,8 @@ jobs:
       checkpoint_token: ${{ secrets.REGRESSION_SIGNER_TWO_CHECKPOINT_TOKEN }}
 
   relay:
-    if: needs.authorize-run.outputs.authorized == 'true'
+    if: github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' &&
+      (needs.authorize-run.outputs.authorized == 'true')
     needs: [authorize-run, sign-one, sign-two]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -147,74 +152,75 @@ jobs:
       VERIFIER_TWO: ${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}
     steps:
       # Only protected workflow code may decide which release code can run.
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
-        with:
-          ref: ${{ github.workflow_sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - id: provenance
-        name: Authorize protected release before selected source or credentials
-        env:
-          REGRESSION_VERIFIER_RELEASE_JSON: ${{ vars.REGRESSION_VERIFIER_RELEASE_JSON }}
-          EXPECTED_RELEASE_REVISION: ${{ needs.authorize-run.outputs.revision }}
-        run: python3 -I scripts/verifier_release_provenance.py
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
-        with:
-          ref: ${{ steps.provenance.outputs.revision }}
-          persist-credentials: false
-      - uses: actions/setup-python@v7.0.0
-        with:
-          python-version: "3.12"
-      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
-      - uses: actions/download-artifact@v8
-        with:
-          name: regression-candidates-${{ needs.authorize-run.outputs.run_id }}
-          path: target/regression-candidates
-          github-token: ${{ github.token }}
-          run-id: ${{ needs.authorize-run.outputs.run_id }}
-      - uses: actions/download-artifact@v8
-        with:
-          name: regression-attestations-one
-          path: target/attestations-one
-      - uses: actions/download-artifact@v8
-        with:
-          name: regression-attestations-two
-          path: target/attestations-two
-      - name: Load approved release identity
-        env:
-          REGRESSION_VERIFIER_RELEASE_JSON: ${{ vars.REGRESSION_VERIFIER_RELEASE_JSON }}
-        run: |
-          mkdir -p target
-          python -c 'import os,pathlib; pathlib.Path("target/verifier-release.json").write_text(os.environ["REGRESSION_VERIFIER_RELEASE_JSON"])'
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
-        with:
-          path: target/release/worker
-          key: reviewed-verifier-${{ runner.os }}-${{ runner.arch }}-${{ fromJSON(vars.REGRESSION_VERIFIER_RELEASE_JSON).worker_binary_digest }}
-      - name: Verify exact reviewed source and cached or downloaded binary
-        env:
-          REGRESSION_WORKER_URL: ${{ vars.REGRESSION_WORKER_URL }}
-        run: >-
-          python scripts/verifier_release.py fetch
-          --manifest target/verifier-release.json
-          --worker target/release/worker
-          --download-url "$REGRESSION_WORKER_URL"
-      - name: Check candidate release before keeper access
-        run: >-
-          python scripts/verifier_release.py authorize --manifest target/verifier-release.json
-          --candidates target/regression-candidates --run-id "${{ needs.authorize-run.outputs.run_id }}"
-      - name: Revalidate and relay exact quorum
-        env:
-          BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
-          GAS_SPONSOR_BUDGET_TOKEN: ${{ secrets.GAS_SPONSOR_BUDGET_TOKEN }}
-        run: >-
-          python scripts/regression_verifier_pipeline.py relay
-          --api-base "$API_BASE_URL"
-          --network base-mainnet
-          --rpc-url "$BASE_MAINNET_RPC_URL"
-          --candidates target/regression-candidates
-          --attestations target/attestations-one
-          --attestations target/attestations-two
-          --verifier "$VERIFIER_ONE"
-          --verifier "$VERIFIER_TWO"
-          --worker target/release/worker
-          --expected-keeper "$KEEPER_ADDRESS"
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ github.workflow_sha }}
+        fetch-depth: 0
+        persist-credentials: false
+    - id: provenance
+      name: Authorize protected release before selected source or credentials
+      env:
+        REGRESSION_VERIFIER_RELEASE_JSON: ${{ vars.REGRESSION_VERIFIER_RELEASE_JSON }}
+        EXPECTED_RELEASE_REVISION: ${{ needs.authorize-run.outputs.revision }}
+      run: python3 -I scripts/verifier_release_provenance.py
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ steps.provenance.outputs.revision }}
+        persist-credentials: false
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: "3.12"
+    - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: regression-candidates-${{ needs.authorize-run.outputs.run_id }}
+        path: target/regression-candidates
+        github-token: ${{ github.token }}
+        run-id: ${{ needs.authorize-run.outputs.run_id }}
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: regression-attestations-one
+        path: target/attestations-one
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: regression-attestations-two
+        path: target/attestations-two
+    - name: Load approved release identity
+      env:
+        REGRESSION_VERIFIER_RELEASE_JSON: ${{ vars.REGRESSION_VERIFIER_RELEASE_JSON }}
+      run: |
+        mkdir -p target
+        python -c 'import os,pathlib; pathlib.Path("target/verifier-release.json").write_text(os.environ["REGRESSION_VERIFIER_RELEASE_JSON"])'
+    - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+      with:
+        path: target/release/worker
+        key: reviewed-verifier-${{ runner.os }}-${{ runner.arch }}-${{ fromJSON(vars.REGRESSION_VERIFIER_RELEASE_JSON).worker_binary_digest }}
+    - name: Verify exact reviewed source and cached or downloaded binary
+      env:
+        REGRESSION_WORKER_URL: ${{ vars.REGRESSION_WORKER_URL }}
+      run: >-
+        python scripts/verifier_release.py fetch
+        --manifest target/verifier-release.json
+        --worker target/release/worker
+        --download-url "$REGRESSION_WORKER_URL"
+    - name: Check candidate release before keeper access
+      run: >-
+        python scripts/verifier_release.py authorize --manifest target/verifier-release.json
+        --candidates target/regression-candidates --run-id "${{ needs.authorize-run.outputs.run_id }}"
+    - name: Revalidate and relay exact quorum
+      env:
+        BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+        GAS_SPONSOR_BUDGET_TOKEN: ${{ secrets.GAS_SPONSOR_BUDGET_TOKEN }}
+      run: >-
+        python scripts/regression_verifier_pipeline.py relay
+        --api-base "$API_BASE_URL"
+        --network base-mainnet
+        --rpc-url "$BASE_MAINNET_RPC_URL"
+        --candidates target/regression-candidates
+        --attestations target/attestations-one
+        --attestations target/attestations-two
+        --verifier "$VERIFIER_ONE"
+        --verifier "$VERIFIER_TWO"
+        --worker target/release/worker
+        --expected-keeper "$KEEPER_ADDRESS"
+    environment: legacy-keeper

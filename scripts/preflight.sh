@@ -36,7 +36,7 @@ fi
 failures=()
 warnings=()
 minimum_rust_major=1
-minimum_rust_minor=88
+minimum_rust_minor=90
 
 require_command() {
   local name="$1"
