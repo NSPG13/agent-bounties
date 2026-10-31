@@ -168,7 +168,7 @@ jobs:
         if-no-files-found: error
 
   deploy-consumers:
-    if: github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (github.event_name == 
+    if: github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (github.event_name ==
       'workflow_dispatch' && github.event.inputs.operation == 'deploy-consumers')
     needs: deterministic-review
     runs-on: ubuntu-latest
@@ -249,7 +249,7 @@ jobs:
         if-no-files-found: error
 
   fund-subscription:
-    if: github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (github.event_name == 
+    if: github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (github.event_name ==
       'workflow_dispatch' && github.event.inputs.operation == 'fund-subscription')
     needs: deterministic-review
     runs-on: ubuntu-latest

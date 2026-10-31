@@ -65,11 +65,11 @@ jobs:
       run: python -m unittest scripts.test_activate_standing_meta_v3_replacements.ActivateStandingMetaV3Tests.test_migration_economics_are_exact -v
 
     - name: V3 creation payload assertion
-      run: python -m unittest 
+      run: python -m unittest
         scripts.test_activate_standing_meta_v3_replacements.ActivateStandingMetaV3Tests.test_create_payload_uses_published_commitments_and_v3 -v
 
     - name: V3 issue evidence assertion
-      run: python -m unittest 
+      run: python -m unittest
         scripts.test_activate_standing_meta_v3_replacements.ActivateStandingMetaV3Tests.test_issue_body_advertises_profit_and_evidence_boundary -v
 
     - name: V3 temporary policy assertion

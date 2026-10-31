@@ -98,7 +98,7 @@ jobs:
 
     environment: legacy-verifier-two
   relay:
-    if: github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 
+    if: github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' &&
       (needs.authorize-run.outputs.authorized == 'true')
     needs: [authorize-run, sign-one, sign-two]
     runs-on: ubuntu-latest

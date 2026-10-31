@@ -37,7 +37,7 @@ jobs:
         forge build --root contracts/base-escrow --sizes
 
   base-sepolia-rehearsal:
-    if: github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (github.event_name == 
+    if: github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (github.event_name ==
       'workflow_dispatch' && github.ref == 'refs/heads/main')
     needs: deterministic-gates
     runs-on: ubuntu-latest
@@ -95,7 +95,7 @@ jobs:
 
     environment: legacy-keeper
   base-mainnet-deploy:
-    if: github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (github.event_name == 
+    if: github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (github.event_name ==
       'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.deploy_mainnet)
     needs: base-sepolia-rehearsal
     runs-on: ubuntu-latest

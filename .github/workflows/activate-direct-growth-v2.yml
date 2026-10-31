@@ -37,7 +37,7 @@ jobs:
           benchmarks/direct-growth-v2/mini-swe-agent-environment/check.py
 
   activate:
-    if: github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (github.event_name == 
+    if: github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (github.event_name ==
       'workflow_dispatch' && github.ref == 'refs/heads/main')
     needs: checks
     runs-on: ubuntu-latest
