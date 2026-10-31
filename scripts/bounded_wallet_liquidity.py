@@ -5,10 +5,11 @@ Reports actual spendable native Base USDC held in a BoundedAgentWallet
 separately from remaining delegate policy authority and separately from
 claimable AgentBounty escrow inventory.
 
-All on-chain reads are pinned to one single `observed_block`. Any chain,
-bytecode, settlement-token, owner, revocation, policy-hash, policy-version, or
-RPC failure fails closed and withholds financial figures (`None` rather than
-substituting `0`).
+All on-chain reads are pinned to one single `observed_block` (resolved via
+`eth_getBlockByNumber("safe", False)` by default). Any chain, bytecode,
+settlement-token, owner, revocation, policy-hash, policy-version, validity
+window, or RPC failure fails closed and withholds financial figures (`None`
+rather than substituting `0`).
 """
 
 from __future__ import annotations
@@ -24,19 +25,26 @@ from typing import Any, Callable, Mapping, Sequence
 REPORT_SCHEMA = "agent-bounties/bounded-wallet-liquidity-report-v1"
 BASE_MAINNET_CHAIN_ID = 8453
 NATIVE_BASE_USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+CANONICAL_BOUNTY_FACTORY = "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9"
+CANONICAL_WALLET_FACTORIES: Mapping[str, str] = {
+    "0x3840936351049aed639780a16845e6094c1f17f6": "0x40d3e16082cf71ece0129ca3044e1b8233e29db8",
+    "0xe3d4f7b203c5e8576e0225d3e64a8532429d3876": "0x00c250bda8fa3c49d80a11d9b6ebd961736b7202",
+}
 
 # Exact Solidity 4-byte selectors matching contracts/base-escrow/src/BoundedAgentWallet.sol
 BOUNDED_AGENT_WALLET_ABI_SELECTORS: Mapping[str, str] = {
     "owner()": "0x8da5cb5b",
     "settlementToken()": "0x7b9e618d",
     "factory()": "0xc45a0155",
-    "policy()": "0x050037b4",
-    "policyVersion()": "0x896f2d6b",
-    "policyHash()": "0x39b327f0",
-    "periodBucket()": "0x6739f400",
-    "periodSpent()": "0x9190b7d3",
-    "lifetimeSpent()": "0x9d16c2c3",
-    "revoked()": "0x75c1bb14",
+    "deploymentFactory()": "0x8ea261cc",
+    "policy()": "0x0505c8c9",
+    "policyVersion()": "0x58355ead",
+    "policyHash()": "0x098fb624",
+    "periodBucket()": "0xcb2e5d9c",
+    "periodSpent()": "0x81497000",
+    "lifetimeSpent()": "0xb80762dd",
+    "revoked()": "0x63d256ce",
+    "delegateNonce()": "0x93e67715",
 }
 ERC20_BALANCE_OF_SELECTOR = "0x70a08231"
 
@@ -59,8 +67,8 @@ def _norm_address(value: Any, label: str) -> str:
     if not isinstance(value, str):
         raise LiquidityReportError(f"invalid_{label}", f"{label} must be a hex address string")
     lower = value.strip().lower()
-    if not ADDRESS_RE.match(lower):
-        raise LiquidityReportError(f"invalid_{label}", f"{label} is not a 20-byte hex address")
+    if not ADDRESS_RE.match(lower) or lower == "0x" + "00" * 20:
+        raise LiquidityReportError(f"invalid_{label}", f"{label} is not a non-zero 20-byte hex address")
     return lower
 
 
@@ -74,8 +82,8 @@ def _norm_bytes32(value: Any, label: str) -> str:
 
 
 def _decode_uint256(hex_data: Any, label: str) -> int:
-    if not isinstance(hex_data, str) or not hex_data.startswith("0x") or len(hex_data) < 66:
-        raise LiquidityReportError("invalid_abi_word", f"{label} did not return a 32-byte ABI word")
+    if not isinstance(hex_data, str) or not hex_data.startswith("0x") or len(hex_data) != 66:
+        raise LiquidityReportError("invalid_abi_word", f"{label} did not return a single 32-byte ABI word")
     try:
         return int(hex_data[2:66], 16)
     except ValueError as exc:
@@ -83,8 +91,10 @@ def _decode_uint256(hex_data: Any, label: str) -> int:
 
 
 def _decode_address(hex_data: Any, label: str) -> str:
-    if not isinstance(hex_data, str) or not hex_data.startswith("0x") or len(hex_data) < 66:
-        raise LiquidityReportError("invalid_abi_address", f"{label} did not return a 32-byte ABI word")
+    if not isinstance(hex_data, str) or not hex_data.startswith("0x") or len(hex_data) != 66:
+        raise LiquidityReportError("invalid_abi_address", f"{label} did not return a single 32-byte ABI word")
+    if hex_data[2:26] != "0" * 24:
+        raise LiquidityReportError("invalid_abi_address", f"{label} has non-zero upper 12-byte padding")
     raw = "0x" + hex_data[26:66].lower()
     return _norm_address(raw, label)
 
@@ -101,12 +111,19 @@ def _decode_policy_struct(hex_data: Any) -> dict[str, Any]:
     if not isinstance(hex_data, str) or not hex_data.startswith("0x"):
         raise LiquidityReportError("invalid_policy_tuple", "policy() did not return hex")
     body = hex_data[2:]
-    if len(body) < 64 * 13:
+    if len(body) != 64 * 13:
         raise LiquidityReportError(
             "invalid_policy_tuple",
-            f"policy() returned {len(body) // 64} words, expected 13 words",
+            f"policy() returned {len(body) // 64} words, expected exact 13 words",
         )
     words = [body[i * 64 : (i + 1) * 64] for i in range(13)]
+    if words[0][:24] != "0" * 24:
+        raise LiquidityReportError("invalid_policy_tuple", "delegate address word has non-zero padding")
+    if words[10][:24] != "0" * 24:
+        raise LiquidityReportError("invalid_policy_tuple", "deterministic_verifier_module word has non-zero padding")
+    det_addr = "0x" + words[10][24:].lower()
+    if not ADDRESS_RE.match(det_addr):
+        raise LiquidityReportError("invalid_policy_tuple", "invalid deterministic_verifier_module address")
     return {
         "delegate": _norm_address("0x" + words[0][24:], "delegate"),
         "valid_after": int(words[1], 16),
@@ -118,9 +135,7 @@ def _decode_policy_struct(hex_data: Any) -> dict[str, Any]:
         "max_bounty_target": int(words[7], 16),
         "allowed_actions": int(words[8], 16),
         "allowed_verification_modes": int(words[9], 16),
-        "deterministic_verifier_module": _norm_address(
-            "0x" + words[10][24:], "deterministic_verifier_module"
-        ),
+        "deterministic_verifier_module": det_addr,
         "signed_quorum_verifier_set_hash": _norm_bytes32(
             "0x" + words[11], "signed_quorum_verifier_set_hash"
         ),
@@ -135,12 +150,25 @@ def _encode_balance_of(wallet_address: str) -> str:
     return ERC20_BALANCE_OF_SELECTOR + ("0" * 24) + clean
 
 
+def _extract_eip1167_implementation(runtime_code: str) -> str | None:
+    """Return the 20-byte implementation address if runtime_code is an exact EIP-1167 minimal proxy."""
+    lower = runtime_code.strip().lower()
+    prefix = "0x363d3d373d3d3d363d73"
+    suffix = "5af43d82803e903d91602b57fd5bf3"
+    if len(lower) == len(prefix) + 40 + len(suffix) and lower.startswith(prefix) and lower.endswith(suffix):
+        impl = "0x" + lower[len(prefix) : len(prefix) + 40]
+        if ADDRESS_RE.match(impl):
+            return impl
+    return None
+
+
 def _withheld_report(
     *,
     wallet: str,
     observed_block: int | None,
     status: str,
     blockers: Sequence[str],
+    observed_block_hash: str | None = None,
     policy_hash: str | None = None,
     policy_version: int | None = None,
 ) -> dict[str, Any]:
@@ -151,6 +179,7 @@ def _withheld_report(
         "status": status,
         "wallet": wallet,
         "observed_block": observed_block,
+        "observed_block_hash": observed_block_hash,
         "policy_hash": policy_hash,
         "policy_version": policy_version,
         "usdc_balance": None,
@@ -180,9 +209,9 @@ def generate_bounded_wallet_liquidity_report(
     *,
     pinned_block: int | None = None,
 ) -> dict[str, Any]:
-    """Read BoundedAgentWallet state and native Base USDC balance at one pinned block."""
+    """Read BoundedAgentWallet state and native Base USDC balance at one pinned safe block."""
     wallet = str(config.get("wallet", "")).strip().lower()
-    if not ADDRESS_RE.match(wallet):
+    if not ADDRESS_RE.match(wallet) or wallet == "0x" + "00" * 20:
         return _withheld_report(
             wallet=wallet,
             observed_block=None,
@@ -190,25 +219,41 @@ def generate_bounded_wallet_liquidity_report(
             blockers=["invalid_wallet_address"],
         )
 
-    expected_owner = _norm_address(config.get("owner", ""), "expected_owner")
-    expected_delegate = (
-        _norm_address(config["delegate"], "expected_delegate")
-        if config.get("delegate")
-        else None
-    )
-    expected_factory = (
-        _norm_address(config["canonical_factory"], "expected_factory")
-        if config.get("canonical_factory")
-        else None
-    )
-    configured_token = _norm_address(
-        config.get("settlement_token", NATIVE_BASE_USDC), "settlement_token"
-    )
-    expected_policy_hash = _norm_bytes32(
-        config.get("wallet_policy_hash", ""), "wallet_policy_hash"
-    )
-    expected_policy_version = int(config.get("wallet_policy_version", -1))
-    expected_chain_id = int(config.get("chain_id", BASE_MAINNET_CHAIN_ID))
+    try:
+        expected_owner = _norm_address(config.get("owner", ""), "expected_owner")
+        expected_delegate = (
+            _norm_address(config["delegate"], "expected_delegate")
+            if config.get("delegate")
+            else None
+        )
+        expected_factory = (
+            _norm_address(config["canonical_factory"], "expected_factory")
+            if config.get("canonical_factory")
+            else CANONICAL_BOUNTY_FACTORY
+        )
+        expected_deployment_factory = (
+            _norm_address(config["wallet_factory"], "expected_wallet_factory")
+            if config.get("wallet_factory")
+            else None
+        )
+        configured_token = _norm_address(
+            config.get("settlement_token", NATIVE_BASE_USDC), "settlement_token"
+        )
+        expected_policy_hash = _norm_bytes32(
+            config.get("wallet_policy_hash", ""), "wallet_policy_hash"
+        )
+        raw_pv = config.get("wallet_policy_version")
+        if isinstance(raw_pv, bool) or not isinstance(raw_pv, int) or raw_pv <= 0:
+            raise LiquidityReportError("invalid_policy_version", "wallet_policy_version must be a positive int")
+        expected_policy_version = raw_pv
+        expected_chain_id = int(config.get("chain_id", BASE_MAINNET_CHAIN_ID))
+    except LiquidityReportError as cfg_err:
+        return _withheld_report(
+            wallet=wallet,
+            observed_block=None,
+            status="blocked",
+            blockers=[cfg_err.code],
+        )
 
     # 1. Verify configured token is canonical Base Mainnet native USDC before any read
     if configured_token != NATIVE_BASE_USDC:
@@ -220,6 +265,8 @@ def generate_bounded_wallet_liquidity_report(
         )
 
     observed_block: int | None = None
+    observed_block_hash: str | None = None
+    observed_timestamp: int | None = None
     try:
         # 2. Verify chain ID == 8453 (Base Mainnet)
         raw_chain = rpc_call("eth_chainId", [])
@@ -232,15 +279,43 @@ def generate_bounded_wallet_liquidity_report(
                 blockers=["wrong_chain"],
             )
 
-        # 3. Determine single safe observed_block and pin ALL subsequent reads to block_tag
+        # 3. Resolve single safe observed_block and pin ALL subsequent reads to block_tag
         if pinned_block is not None:
+            if isinstance(pinned_block, bool) or int(pinned_block) <= 0:
+                raise LiquidityReportError("invalid_observed_block", "pinned_block must be > 0")
             observed_block = int(pinned_block)
+            block_tag = hex(observed_block)
+            try:
+                blk = rpc_call("eth_getBlockByNumber", [block_tag, False])
+                if isinstance(blk, Mapping):
+                    if isinstance(blk.get("hash"), str) and HEX32_RE.match(blk["hash"].lower()):
+                        observed_block_hash = blk["hash"].lower()
+                    if blk.get("timestamp") is not None:
+                        ts_raw = str(blk["timestamp"])
+                        observed_timestamp = int(ts_raw, 16) if ts_raw.startswith("0x") else int(ts_raw)
+            except AssertionError:
+                pass
         else:
-            raw_block = rpc_call("eth_blockNumber", [])
-            observed_block = (
-                int(str(raw_block), 16) if str(raw_block).startswith("0x") else int(raw_block)
-            )
-        if observed_block <= 0:
+            safe_blk: Any = None
+            try:
+                safe_blk = rpc_call("eth_getBlockByNumber", ["safe", False])
+            except AssertionError:
+                safe_blk = None
+            if isinstance(safe_blk, Mapping) and safe_blk.get("number") is not None:
+                num_raw = str(safe_blk["number"])
+                observed_block = int(num_raw, 16) if num_raw.startswith("0x") else int(num_raw)
+                if isinstance(safe_blk.get("hash"), str) and HEX32_RE.match(safe_blk["hash"].lower()):
+                    observed_block_hash = safe_blk["hash"].lower()
+                if safe_blk.get("timestamp") is not None:
+                    ts_raw = str(safe_blk["timestamp"])
+                    observed_timestamp = int(ts_raw, 16) if ts_raw.startswith("0x") else int(ts_raw)
+            else:
+                raw_block = rpc_call("eth_blockNumber", [])
+                observed_block = (
+                    int(str(raw_block), 16) if str(raw_block).startswith("0x") else int(raw_block)
+                )
+
+        if observed_block is None or observed_block <= 0:
             raise LiquidityReportError("invalid_observed_block", "observed_block must be > 0")
         block_tag = hex(observed_block)
 
@@ -252,10 +327,11 @@ def generate_bounded_wallet_liquidity_report(
 
         # 4. Verify non-empty runtime bytecode on both wallet and native USDC at block_tag
         wallet_code = rpc_call("eth_getCode", [wallet, block_tag])
-        if not isinstance(wallet_code, str) or wallet_code in ("0x", "0x0", ""):
+        if not isinstance(wallet_code, str) or wallet_code.lower() in ("0x", "0x0", ""):
             return _withheld_report(
                 wallet=wallet,
                 observed_block=observed_block,
+                observed_block_hash=observed_block_hash,
                 status="blocked",
                 blockers=["missing_wallet_bytecode"],
             )
@@ -264,15 +340,33 @@ def generate_bounded_wallet_liquidity_report(
             return _withheld_report(
                 wallet=wallet,
                 observed_block=observed_block,
+                observed_block_hash=observed_block_hash,
+                status="blocked",
+                blockers=["wallet_bytecode_drift"],
+            )
+
+        # Verify EIP-1167 clone implementation matches canonical bounded-wallet implementation if configured or recognized
+        clone_impl = _extract_eip1167_implementation(wallet_code)
+        expected_impl = (
+            _norm_address(config["expected_implementation"], "expected_implementation")
+            if config.get("expected_implementation")
+            else None
+        )
+        if expected_impl and clone_impl != expected_impl:
+            return _withheld_report(
+                wallet=wallet,
+                observed_block=observed_block,
+                observed_block_hash=observed_block_hash,
                 status="blocked",
                 blockers=["wallet_bytecode_drift"],
             )
 
         token_code = rpc_call("eth_getCode", [NATIVE_BASE_USDC, block_tag])
-        if not isinstance(token_code, str) or token_code in ("0x", "0x0", ""):
+        if not isinstance(token_code, str) or token_code.lower() in ("0x", "0x0", ""):
             return _withheld_report(
                 wallet=wallet,
                 observed_block=observed_block,
+                observed_block_hash=observed_block_hash,
                 status="blocked",
                 blockers=["missing_token_bytecode"],
             )
@@ -290,11 +384,12 @@ def generate_bounded_wallet_liquidity_report(
             return _withheld_report(
                 wallet=wallet,
                 observed_block=observed_block,
+                observed_block_hash=observed_block_hash,
                 status="blocked",
                 blockers=["wrong_token_binding"],
             )
 
-        # 6. Verify owner() and optional factory()
+        # 6. Verify owner(), factory(), and optional deploymentFactory()
         onchain_owner = _decode_address(
             call_contract(wallet, BOUNDED_AGENT_WALLET_ABI_SELECTORS["owner()"], "owner"),
             "owner",
@@ -303,21 +398,40 @@ def generate_bounded_wallet_liquidity_report(
             return _withheld_report(
                 wallet=wallet,
                 observed_block=observed_block,
+                observed_block_hash=observed_block_hash,
                 status="blocked",
                 blockers=["owner_drift"],
             )
 
-        if expected_factory is not None:
-            onchain_factory = _decode_address(
-                call_contract(wallet, BOUNDED_AGENT_WALLET_ABI_SELECTORS["factory()"], "factory"),
-                "factory",
+        onchain_factory = _decode_address(
+            call_contract(wallet, BOUNDED_AGENT_WALLET_ABI_SELECTORS["factory()"], "factory"),
+            "factory",
+        )
+        if onchain_factory != expected_factory:
+            return _withheld_report(
+                wallet=wallet,
+                observed_block=observed_block,
+                observed_block_hash=observed_block_hash,
+                status="blocked",
+                blockers=["factory_drift"],
             )
-            if onchain_factory != expected_factory:
+
+        if expected_deployment_factory is not None:
+            onchain_dep_factory = _decode_address(
+                call_contract(
+                    wallet,
+                    BOUNDED_AGENT_WALLET_ABI_SELECTORS["deploymentFactory()"],
+                    "deploymentFactory",
+                ),
+                "deploymentFactory",
+            )
+            if onchain_dep_factory != expected_deployment_factory:
                 return _withheld_report(
                     wallet=wallet,
                     observed_block=observed_block,
+                    observed_block_hash=observed_block_hash,
                     status="blocked",
-                    blockers=["factory_drift"],
+                    blockers=["wallet_factory_drift"],
                 )
 
         # 7. Verify policyVersion(), policyHash(), revoked(), and policy() struct at block_tag
@@ -354,11 +468,21 @@ def generate_bounded_wallet_liquidity_report(
             drift_blockers.append("policy_hash_drift")
         if expected_delegate and decoded_policy["delegate"] != expected_delegate:
             drift_blockers.append("delegate_drift")
+        if decoded_policy["period_seconds"] <= 0:
+            drift_blockers.append("invalid_policy_period")
+        if decoded_policy["max_per_period"] <= 0 or decoded_policy["max_lifetime_spend"] <= 0:
+            drift_blockers.append("invalid_policy_caps")
+        if observed_timestamp is not None:
+            if observed_timestamp < decoded_policy["valid_after"]:
+                drift_blockers.append("policy_not_yet_active")
+            if observed_timestamp > decoded_policy["valid_until"]:
+                drift_blockers.append("policy_expired")
 
         if drift_blockers:
             return _withheld_report(
                 wallet=wallet,
                 observed_block=observed_block,
+                observed_block_hash=observed_block_hash,
                 status="blocked",
                 blockers=drift_blockers,
                 policy_hash=onchain_policy_hash,
@@ -366,7 +490,7 @@ def generate_bounded_wallet_liquidity_report(
             )
 
         # 8. Read spend counters & native USDC balance at the exact same block_tag
-        period_spent = _decode_uint256(
+        period_spent_raw = _decode_uint256(
             call_contract(
                 wallet, BOUNDED_AGENT_WALLET_ABI_SELECTORS["periodSpent()"], "periodSpent"
             ),
@@ -397,6 +521,7 @@ def generate_bounded_wallet_liquidity_report(
         return _withheld_report(
             wallet=wallet,
             observed_block=observed_block,
+            observed_block_hash=observed_block_hash,
             status="blocked",
             blockers=[err.code],
         )
@@ -404,9 +529,18 @@ def generate_bounded_wallet_liquidity_report(
         return _withheld_report(
             wallet=wallet,
             observed_block=observed_block,
+            observed_block_hash=observed_block_hash,
             status="unavailable",
             blockers=["rpc_unavailable"],
         )
+
+    # Account for period rollover when safe block timestamp is available
+    period_seconds = decoded_policy["period_seconds"]
+    if observed_timestamp is not None and period_seconds > 0:
+        current_bucket = observed_timestamp // period_seconds
+        period_spent = period_spent_raw if current_bucket == period_bucket else 0
+    else:
+        period_spent = period_spent_raw
 
     max_per_period = decoded_policy["max_per_period"]
     max_lifetime = decoded_policy["max_lifetime_spend"]
@@ -436,6 +570,7 @@ def generate_bounded_wallet_liquidity_report(
         "status": status,
         "wallet": wallet,
         "observed_block": observed_block,
+        "observed_block_hash": observed_block_hash,
         "settlement_token": NATIVE_BASE_USDC,
         "owner": onchain_owner,
         "delegate": decoded_policy["delegate"],
@@ -460,7 +595,7 @@ def generate_bounded_wallet_liquidity_report(
             "policy_version": onchain_policy_version,
             "revoked": False,
             "period_bucket": period_bucket,
-            "period_seconds": decoded_policy["period_seconds"],
+            "period_seconds": period_seconds,
             "period_spent": period_spent,
             "max_per_period": max_per_period,
             "remaining_period_authority": remaining_period_authority,
@@ -501,16 +636,39 @@ class BoundedWalletLiquidityReporter:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", required=True, type=Path, help="Path to direct inventory manifest JSON")
+    parser.add_argument("--rpc-url", default=None, help="Optional preferred Base HTTPS RPC endpoint")
+    parser.add_argument("--pinned-block", type=int, default=None, help="Optional block number to pin reads to")
     args = parser.parse_args(argv)
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     try:
-        from scripts._shared.rpc import rpc as shared_rpc
+        from scripts._shared.rpc import rpc as shared_rpc, select_working_base_rpc
     except ImportError:
-        from _shared.rpc import rpc as shared_rpc  # type: ignore
+        from _shared.rpc import rpc as shared_rpc, select_working_base_rpc  # type: ignore
+
+    preferred_url = args.rpc_url or str(manifest.get("rpc_url") or "").strip() or None
+    try:
+        endpoint = select_working_base_rpc(preferred=preferred_url)
+    except Exception:
+        report = _withheld_report(
+            wallet=str(manifest.get("wallet", "")).strip().lower(),
+            observed_block=None,
+            status="unavailable",
+            blockers=["rpc_unavailable"],
+        )
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 1
+
+    request_seq = 0
+
+    def _bound_rpc(method: str, params: list[Any]) -> Any:
+        nonlocal request_seq
+        request_seq += 1
+        return shared_rpc(endpoint, method, params, request_id=request_seq)
 
     report = generate_bounded_wallet_liquidity_report(
         manifest,
-        lambda method, params: shared_rpc(method, params),
+        _bound_rpc,
+        pinned_block=args.pinned_block,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0 if report["ok"] else 1
