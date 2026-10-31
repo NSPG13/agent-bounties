@@ -58,12 +58,13 @@ def public_ci_revision(revision):
     head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
     if revision!=head:raise ReleaseError('controller checkout must equal deployment revision')
     subprocess.run(['python3','scripts/check_public_runtime_parity.py','--published'],cwd=ROOT,check=True)
-    query=f'https://api.github.com/repos/NSPG13/agent-bounties/actions/workflows/ci.yml/runs?head_sha={revision}&event=push&per_page=100'
-    with urllib.request.urlopen(urllib.request.Request(query,headers={'Accept':'application/vnd.github+json','User-Agent':'agentizable-public-release'}),timeout=30) as response:
-        runs=json.load(response)['workflow_runs']
-    eligible=[run for run in runs if run.get('head_sha')==revision and run.get('head_branch')=='main' and run.get('event')=='push']
-    if not eligible or max(eligible,key=lambda run:run['id']).get('conclusion')!='success':
-        raise ReleaseError('latest public main CI attempt must have succeeded for this exact revision')
+    for workflow in ('ci.yml', 'containers.yml'):
+        query=f'https://api.github.com/repos/NSPG13/agent-bounties/actions/workflows/{workflow}/runs?head_sha={revision}&event=push&per_page=100'
+        with urllib.request.urlopen(urllib.request.Request(query,headers={'Accept':'application/vnd.github+json','User-Agent':'agentizable-public-release'}),timeout=30) as response:
+            runs=json.load(response)['workflow_runs']
+        eligible=[run for run in runs if run.get('head_sha')==revision and run.get('head_branch')=='main' and run.get('event')=='push']
+        if not eligible or max(eligible,key=lambda run:run['id']).get('conclusion')!='success':
+            raise ReleaseError(f'latest public main {workflow} attempt must have succeeded for this exact revision')
 
 def prepare(client, manifest, migrate):
     if manifest.get('repository')!=PUBLIC or manifest.get('branch')!='main':raise ReleaseError('invalid public source policy')

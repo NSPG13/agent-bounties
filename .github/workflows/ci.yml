@@ -139,3 +139,6 @@ jobs:
           python3 scripts/run-required-postgres-test.py -p api opportunity_exact_unfunded_lookup_crosses_list_window_postgres
           python3 scripts/run-required-postgres-test.py -p api tests::bounty_status_reads_scoped_postgres_after_cross_process_funding --exact
           python3 scripts/run-required-postgres-test.py -p mcp-server tests::mcp_bounty_status_reads_scoped_postgres_after_cross_process_funding --exact
+
+      - name: Verify complete production durability inventory
+        run: python3 scripts/application_release_gate.py postgres

@@ -8,7 +8,9 @@ on:
       - "Cargo.lock"
       - "Cargo.toml"
       - "bounties/**"
-      - "Dockerfile"
+      - "Dockerfile*"
+      - "scripts/run-posting-*.sh"
+      - "deployments/**"
       - "contracts/**"
       - "crates/**"
       - "docker-compose.production.yml"
@@ -25,27 +27,6 @@ on:
       - "site/**"
   push:
     branches: [main]
-    paths:
-      - ".dockerignore"
-      - ".env.example"
-      - "Cargo.lock"
-      - "Cargo.toml"
-      - "bounties/**"
-      - "Dockerfile"
-      - "contracts/**"
-      - "crates/**"
-      - "docker-compose.production.yml"
-      - "docs/deployment.md"
-      - "fixtures/**"
-      - "migrations/**"
-      - "ops/**"
-      - "schemas/**"
-      - "scripts/check-containers.ps1"
-      - "scripts/check-containers.sh"
-      - "scripts/check-production-compose.ps1"
-      - "scripts/check-production-compose.sh"
-      - "scripts/check-production-smoke.sh"
-      - "site/**"
   workflow_dispatch:
 
 permissions:
