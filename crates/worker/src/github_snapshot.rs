@@ -87,6 +87,8 @@ fn extract_zip(
 ) -> Result<()> {
     let mut zip =
         zip::ZipArchive::new(fs::File::open(archive)?).context("artifact_archive_invalid")?;
+    // Open separately: File::try_clone shares the seek position on Unix.
+    let mut header_reader = fs::File::open(archive)?;
     if zip.len() > MAX_ENTRIES {
         bail!("artifact_archive_entry_limit");
     }
@@ -98,6 +100,13 @@ fn extract_zip(
     let mut root = None;
     for index in 0..zip.len() {
         let mut entry = zip.by_index(index).context("artifact_archive_invalid")?;
+        // Check even unselected members before any subdirectory filtering.
+        crate::zip_headers::require_matching_name(
+            &mut header_reader,
+            entry.header_start(),
+            entry.name_raw(),
+        )
+        .context("artifact_archive_unsafe_headers")?;
         let path = std::str::from_utf8(entry.name_raw())
             .context("artifact_archive_non_utf8_path")?
             .trim_end_matches('/')
@@ -415,6 +424,34 @@ mod tests {
         zip.finish().unwrap();
         path
     }
+    #[test]
+    fn snapshot_rejects_contradictory_zip_names_in_selected_and_unselected_members() {
+        for subdirectory in [".", "other"] {
+            let temp = tempfile::tempdir().unwrap();
+            let output = temp.path().join("files");
+            fs::create_dir(&output).unwrap();
+            let path = archive(temp.path(), &[("root/safe.txt", b"payload")]);
+            let mut bytes = fs::read(&path).unwrap();
+            let offset = {
+                let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+                let offset = archive.by_index(0).unwrap().header_start() as usize;
+                offset
+            };
+            bytes[offset + 30..offset + 43].copy_from_slice(b"../escape.txt");
+            fs::write(&path, &bytes).unwrap();
+            let mut parsed = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+            assert_eq!(parsed.by_index(0).unwrap().name_raw(), b"root/safe.txt");
+            assert_eq!(
+                extract_zip(&path, &output, subdirectory, 100, 10, MAX_EXPANDED)
+                    .unwrap_err()
+                    .to_string(),
+                "artifact_archive_unsafe_headers"
+            );
+            assert_eq!(fs::read_dir(&output).unwrap().count(), 0);
+            assert!(!temp.path().join("escape.txt").exists());
+        }
+    }
+
     #[test]
     fn exact_public_commit_only() {
         let url = format!("https://github.com/owner/repo/commit/{}", "a".repeat(40));

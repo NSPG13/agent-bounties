@@ -1,8 +1,8 @@
 use serde::Serialize;
 use std::future::Future;
 use worker::{
-    indexer_error_is_retryable, redact_operational_error, IndexerRecoveryDecision,
-    IndexerRecoveryPolicy,
+    indexer_error_is_retryable, indexer_provider_delay, redact_operational_error,
+    IndexerRecoveryDecision, IndexerRecoveryPolicy,
 };
 
 // Inject the poll and interruptible clock so failure recovery can be exercised
@@ -29,11 +29,13 @@ where
             value.len() == 40 && value.chars().all(|character| character.is_ascii_hexdigit())
         })
         .unwrap_or_else(|| "local".to_string());
-    let mut consecutive_failures = 0_u32;
+    let mut ordinary_failures = 0_u32;
+    let mut provider_holds = 0_u32;
     loop {
         let wait_seconds = match poll().await {
             Ok(report) => {
-                consecutive_failures = 0;
+                ordinary_failures = 0;
+                provider_holds = 0;
                 println!("{}", serde_json::to_string(&report)?);
                 if once {
                     return Ok(());
@@ -41,9 +43,26 @@ where
                 poll_seconds
             }
             Err(error) => {
-                consecutive_failures = consecutive_failures.saturating_add(1);
                 let retryable = keeper_error_is_retryable(&error);
-                let decision = policy.decision(consecutive_failures, retryable);
+                let provider_delay = indexer_provider_delay(&error);
+                let (consecutive_failures, decision) = if provider_delay.is_some() {
+                    // A typed read hold cannot be repaired by restarting. Keep
+                    // the ordinary budget intact until an actual poll succeeds.
+                    provider_holds = provider_holds.saturating_add(1);
+                    (
+                        provider_holds,
+                        policy.decision_for_error(provider_holds, &error),
+                    )
+                } else {
+                    // Keep the existing pre-send Alloy classification. Raw
+                    // provider text cannot create a trusted Retry-After hold.
+                    provider_holds = 0;
+                    ordinary_failures = ordinary_failures.saturating_add(1);
+                    (
+                        ordinary_failures,
+                        policy.decision(ordinary_failures, retryable),
+                    )
+                };
                 let (action, backoff_seconds) = if once {
                     ("exit_after_failed_poll", None)
                 } else {
@@ -55,7 +74,9 @@ where
                             "retry_from_safe_projection",
                             Some(jittered_backoff_seconds(
                                 backoff_seconds,
-                                poll_seconds.max(policy.initial_backoff_seconds),
+                                poll_seconds
+                                    .max(policy.initial_backoff_seconds)
+                                    .max(provider_delay.unwrap_or(0)),
                                 random(),
                             )),
                         ),
@@ -76,6 +97,8 @@ where
                         "error": redact_operational_error(&error.to_string()),
                         "decision": action,
                         "consecutive_failures": consecutive_failures,
+                        "ordinary_failures": ordinary_failures,
+                        "provider_hold": provider_delay.is_some(),
                         "retryable": retryable,
                         "backoff_seconds": backoff_seconds,
                         "evidence_boundary": "Each retry re-reads safe canonical projections; transaction submission errors halt for investigation. Only safe canonical V2 events prove outcomes."
@@ -372,6 +395,7 @@ mod tests {
             "eth_estimateGas",
             "eth_feeHistory",
             "eth_getBalance",
+            "eth_getTransactionCount", // Explicit nonce preflight occurs before any send.
         ] {
             let error = actionable_relayer_error(method, 429, serde_json::Value::Null).await;
             assert!(
@@ -408,8 +432,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ambiguous_submission_and_filler_failures_halt_without_another_poll() {
-        for method in ["eth_getTransactionCount", "eth_sendRawTransaction"] {
+    async fn ambiguous_submission_failures_halt_without_another_poll() {
+        for method in ["eth_sendRawTransaction"] {
             let error = actionable_relayer_error(method, 503, serde_json::Value::Null).await;
             assert!(
                 matches!(&error, ChainBaseError::RelayerProvider(message) if message.starts_with("transaction submission failed: HTTP error 503 with "))
@@ -515,12 +539,127 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn repeated_429s_back_off_and_exhaust_the_existing_budget() {
-        let trace = scripted_run((0..8).map(|_| throttled()).collect(), false, 5, usize::MAX).await;
+    async fn repeated_429s_keep_bounded_backoff_without_restarting() {
+        let trace = scripted_run((0..12).map(|_| throttled()).collect(), false, 5, 12).await;
 
+        assert!(trace.result.is_ok());
+        assert_eq!(trace.polls_at.len(), 12);
+        assert_eq!(trace.waits, [5, 8, 15, 30, 60, 90, 90, 90, 90, 90, 90, 90]);
+    }
+
+    fn held(status: u16, seconds: u64) -> anyhow::Result<&'static str> {
+        Err(anyhow::Error::new(ChainBaseError::RpcRetryAfter {
+            status,
+            retry_after_seconds: seconds,
+        }))
+    }
+
+    fn unavailable() -> anyhow::Result<&'static str> {
+        Err(anyhow::Error::new(ChainBaseError::RpcHttpStatus(503)))
+    }
+
+    #[tokio::test]
+    async fn long_wire_or_sibling_admission_holds_survive_more_than_eight_polls() {
+        for status in [429, 503] {
+            let trace =
+                scripted_run((0..12).map(|_| held(status, 7200)).collect(), false, 5, 12).await;
+            assert!(trace.result.is_ok());
+            assert_eq!(trace.waits, [7200; 12]);
+            assert_eq!(
+                trace.polls_at,
+                (0..12).map(|i| i * 7200).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn structured_provider_rate_limits_keep_the_existing_shared_hold_policy() {
+        let outcomes = (0..12)
+            .map(|_| {
+                Err(anyhow::Error::new(ChainBaseError::RpcProviderError {
+                    code: -32016,
+                    message: "rate limited".into(),
+                }))
+            })
+            .collect();
+        let trace = scripted_run(outcomes, false, 5, 12).await;
+        assert!(trace.result.is_ok());
+        assert_eq!(trace.polls_at.len(), 12);
+        assert_eq!(trace.waits, [5, 8, 15, 30, 60, 90, 90, 90, 90, 90, 90, 90]);
+    }
+
+    #[tokio::test]
+    async fn provider_holds_neither_spend_nor_reset_ordinary_failure_budget() {
+        let mut outcomes = Vec::new();
+        for _ in 0..8 {
+            outcomes.extend((0..4).map(|_| held(429, 7200)));
+            outcomes.push(unavailable());
+        }
+        let trace = scripted_run(outcomes, false, 5, usize::MAX).await;
         assert!(trace.result.unwrap_err().to_string().contains("exhausted"));
-        assert_eq!(trace.waits, [5, 8, 15, 30, 60, 90, 90]);
-        assert_eq!(trace.polls_at, [0, 5, 13, 28, 58, 118, 208, 298]);
+        assert_eq!(trace.polls_at.len(), 40);
+        let ordinary_waits: Vec<_> = trace
+            .waits
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| i % 5 == 4)
+            .map(|(_, wait)| *wait)
+            .collect();
+        assert_eq!(ordinary_waits, [5, 8, 15, 30, 60, 90, 90]);
+        assert!(trace
+            .waits
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| i % 5 != 4)
+            .all(|(_, wait)| *wait == 7200));
+    }
+
+    #[tokio::test]
+    async fn real_success_resets_both_budgets_after_long_holds() {
+        let mut outcomes: Vec<_> = (0..7).map(|_| unavailable()).collect();
+        outcomes.extend((0..12).map(|_| held(503, 7200)));
+        outcomes.push(Ok("idle"));
+        outcomes.extend((0..7).map(|_| unavailable()));
+        outcomes.push(Ok("idle"));
+        let trace = scripted_run(outcomes, false, 5, 28).await;
+        assert!(trace.result.is_ok());
+        assert_eq!(trace.waits[..7], [5, 8, 15, 30, 60, 90, 90]);
+        assert_eq!(trace.waits[20..27], trace.waits[..7]);
+        assert_eq!(trace.waits[7..19], [7200; 12]);
+        assert_eq!(trace.waits[19], 5);
+        assert_eq!(trace.waits[27], 5);
+    }
+
+    #[tokio::test]
+    async fn saturated_retry_after_remains_interruptible_without_shortening() {
+        let trace = scripted_run(vec![held(429, u64::MAX)], false, 5, 1).await;
+        assert!(trace.result.is_ok());
+        assert_eq!(trace.polls_at, [0]);
+        assert_eq!(trace.waits, [u64::MAX]);
+    }
+
+    #[tokio::test]
+    async fn integrity_and_submission_errors_still_halt_after_provider_holds() {
+        for error in [
+            anyhow::Error::new(ChainBaseError::InvalidRpcResponse("bad safe block".into())),
+            anyhow::anyhow!("factory mismatch"),
+            anyhow::Error::new(ChainBaseError::RelayerProvider(
+                "transaction submission failed: HTTP error 429 with empty body".into(),
+            )),
+        ] {
+            let trace = scripted_run(vec![held(429, 7200), Err(error)], false, 5, 2).await;
+            assert!(trace.result.is_ok());
+            assert_eq!(trace.polls_at, [0, 7200]);
+            assert_eq!(trace.waits, [7200, 86_400]);
+        }
+    }
+
+    #[tokio::test]
+    async fn once_mode_does_not_retry_a_typed_provider_hold() {
+        let trace = scripted_run(vec![held(503, 7200)], true, 5, usize::MAX).await;
+        assert!(trace.result.is_err());
+        assert_eq!(trace.polls_at, [0]);
+        assert!(trace.waits.is_empty());
     }
 
     #[tokio::test]

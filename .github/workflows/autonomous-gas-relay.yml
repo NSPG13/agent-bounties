@@ -5,46 +5,48 @@ on:
     types: [created, edited]
   workflow_dispatch:
   schedule:
-    - cron: "17 */6 * * *"
+  - cron: "17 */6 * * *"
 
 permissions:
   contents: read
 
 jobs:
   keeper-health:
-    if: github.event_name != 'issue_comment'
+    if: github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (github.event_name != 
+      'issue_comment')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     concurrency:
       group: agent-bounties-shared-base-keeper
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      with:
+        persist-credentials: false
+    - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
 
-      - name: Validate keeper signer, chain, and gas reserve
-        env:
-          BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
-          GAS_SPONSOR_BUDGET_TOKEN: ${{ secrets.GAS_SPONSOR_BUDGET_TOKEN }}
-          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
-        run: python scripts/relay_autonomous_action.py --health-check
+    - name: Validate keeper signer, chain, and gas reserve
+      env:
+        BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+        GAS_SPONSOR_BUDGET_TOKEN: ${{ secrets.GAS_SPONSOR_BUDGET_TOKEN }}
+        BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+      run: python scripts/relay_autonomous_action.py --health-check
 
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        if: always()
-        with:
-          name: autonomous-gas-relay-health-${{ github.run_id }}
-          path: target/autonomous-gas-relay.json
-          if-no-files-found: warn
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      if: always()
+      with:
+        name: autonomous-gas-relay-health-${{ github.run_id }}
+        path: target/autonomous-gas-relay.json
+        if-no-files-found: warn
 
+    environment: legacy-keeper
   relay:
     if: >-
-      github.event_name == 'issue_comment'
-      && github.event.issue.pull_request == null
-      && contains(github.event.issue.labels.*.name, 'funded-live')
-      && !contains(github.event.issue.labels.*.name, 'verification-unavailable')
-      && !contains(github.event.issue.labels.*.name, 'legacy-canary')
-      && startsWith(github.event.comment.body, '/agent-bounty relay')
+      github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (github.event_name
+      == 'issue_comment' && github.event.issue.pull_request == null && contains(github.event.issue.labels.*.name, 'funded-live') && !contains(github.event.issue.labels.*.name,
+      'verification-unavailable') && !contains(github.event.issue.labels.*.name, 'legacy-canary') && startsWith(github.event.comment.body, '/agent-bounty
+      relay'))
     permissions:
       contents: read
       issues: write
@@ -54,31 +56,34 @@ jobs:
       group: agent-bounties-shared-base-keeper
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      with:
+        persist-credentials: false
+    - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
 
-      - name: Validate, simulate, and relay the bounded action
-        env:
-          BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
-          GAS_SPONSOR_BUDGET_TOKEN: ${{ secrets.GAS_SPONSOR_BUDGET_TOKEN }}
-          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
-          BASE_RELAY_STATE_WAIT_SECONDS: "120"
-          BASE_RELAY_STATE_POLL_SECONDS: "3"
-          BASE_RELAY_COMMAND_TIMEOUT_SECONDS: "30"
-          BASE_RELAY_OPERATION_TIMEOUT_SECONDS: "240"
-          GH_TOKEN: ${{ github.token }}
-        run: >-
-          python scripts/relay_autonomous_action.py
-          --event "$GITHUB_EVENT_PATH"
-          --execute
-          --publish
+    - name: Validate, simulate, and relay the bounded action
+      env:
+        BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+        GAS_SPONSOR_BUDGET_TOKEN: ${{ secrets.GAS_SPONSOR_BUDGET_TOKEN }}
+        BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+        BASE_RELAY_STATE_WAIT_SECONDS: "120"
+        BASE_RELAY_STATE_POLL_SECONDS: "3"
+        BASE_RELAY_COMMAND_TIMEOUT_SECONDS: "30"
+        BASE_RELAY_OPERATION_TIMEOUT_SECONDS: "240"
+        GH_TOKEN: ${{ github.token }}
+      run: >-
+        python scripts/relay_autonomous_action.py
+        --event "$GITHUB_EVENT_PATH"
+        --execute
+        --publish
 
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        if: always()
-        with:
-          name: autonomous-gas-relay-${{ github.event.comment.id || github.run_id }}
-          path: |
-            target/autonomous-gas-relay.json
-            target/autonomous-gas-relay.md
-          if-no-files-found: warn
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      if: always()
+      with:
+        name: autonomous-gas-relay-${{ github.event.comment.id || github.run_id }}
+        path: |
+          target/autonomous-gas-relay.json
+          target/autonomous-gas-relay.md
+        if-no-files-found: warn
+    environment: legacy-keeper

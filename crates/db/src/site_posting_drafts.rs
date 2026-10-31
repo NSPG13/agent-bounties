@@ -91,6 +91,68 @@ fn from_row(row: PgRow) -> Result<SitePostingDraft, sqlx::Error> {
 }
 
 impl PostgresStore {
+    pub async fn posting_replacement(
+        &self,
+        account_id: &str,
+        operation_id: Uuid,
+    ) -> Result<Option<Uuid>, PostingDraftError> {
+        Ok(sqlx::query_scalar("SELECT replacement_operation_id FROM posting_authorization_retirements WHERE account_id=$1 AND operation_id=$2")
+            .bind(account_id).bind(operation_id).fetch_optional(&self.pool).await?)
+    }
+
+    /// Internal use only after API verification of the exact saved signature and
+    /// finalized chain evidence. Never accept a client's claimed recovery proof.
+    pub async fn retire_site_posting_authorization(
+        &self,
+        account_id: &str,
+        operation_id: Uuid,
+        revision: i64,
+        continuation_hash: &str,
+        proof: &Value,
+    ) -> Result<SitePostingDraft, PostingDraftError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,3671))")
+            .bind(account_id)
+            .execute(&mut *tx)
+            .await?;
+        if let Some(id) = sqlx::query_scalar::<_,Uuid>("SELECT replacement_operation_id FROM posting_authorization_retirements WHERE account_id=$1 AND operation_id=$2")
+            .bind(account_id).bind(operation_id).fetch_optional(&mut *tx).await? {
+            let row = sqlx::query("SELECT * FROM site_posting_drafts WHERE account_id=$1 AND operation_id=$2").bind(account_id).bind(id).fetch_one(&mut *tx).await?;
+            return Ok(from_row(row)?);
+        }
+        let source = sqlx::query(
+            "SELECT * FROM site_posting_drafts WHERE account_id=$1 AND operation_id=$2 FOR UPDATE",
+        )
+        .bind(account_id)
+        .bind(operation_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(PostingDraftError::Conflict)?;
+        let source = from_row(source)?;
+        if source.revision != revision
+            || source.recovery_state["continuation_hash"] != continuation_hash
+            || source.recovery_state["authorizationIssued"] != true
+            || proof["schema"] != "agent-bounties/inert-creation-proof-v1"
+            || proof["bounty_contract"] != source.recovery_state["bounty_contract"]
+            || proof["bounty_id"] != source.recovery_state["bounty_id"]
+        {
+            return Err(PostingDraftError::Conflict);
+        }
+        let replacement = Uuid::new_v4();
+        let mut draft = source.draft;
+        draft["id"] = replacement.to_string().into();
+        if draft["draft"].is_object() {
+            draft["draft"]["posting_operation_id"] = replacement.to_string().into();
+        }
+        let hash = draft_hash(&draft)?;
+        sqlx::query("INSERT INTO posting_authorization_retirements(account_id,operation_id,replacement_operation_id,source_revision,continuation_hash,chain_proof) VALUES($1,$2,$3,$4,$5,$6)")
+            .bind(account_id).bind(operation_id).bind(replacement).bind(revision).bind(continuation_hash).bind(proof).execute(&mut *tx).await?;
+        let row = sqlx::query("INSERT INTO site_posting_drafts(account_id,operation_id,draft,draft_hash,recovery_state,revision,expires_at) VALUES($1,$2,$3,$4,'{}'::jsonb,1,now()+interval '30 days') RETURNING *")
+            .bind(account_id).bind(replacement).bind(draft).bind(hash).fetch_one(&mut *tx).await?;
+        let result = from_row(row)?;
+        tx.commit().await?;
+        Ok(result)
+    }
     /// Account-scoped metadata only. Pending operations survive draft expiry so
     /// a missing conversation cannot cause someone to repeat a funding request.
     pub async fn list_site_posting_drafts(
@@ -98,7 +160,7 @@ impl PostgresStore {
         account_id: &str,
         offset: u32,
     ) -> Result<Vec<SitePostingDraftSummary>, PostingDraftError> {
-        let rows = sqlx::query("SELECT operation_id, left(COALESCE(NULLIF(draft->'draft'->>'title', ''), NULLIF(draft->>'goal', ''), 'Untitled bounty'), 160) AS title, updated_at, expires_at, revision, recovery_state ? 'bounty_id' AS needs_reconciliation, recovery_state->>'bounty_contract' AS bounty_contract, recovery_state->>'bounty_id' AS bounty_id FROM site_posting_drafts WHERE account_id = $1 AND (expires_at > now() OR recovery_state ? 'bounty_id') ORDER BY updated_at DESC, operation_id DESC LIMIT 51 OFFSET $2")
+        let rows = sqlx::query("SELECT operation_id, left(COALESCE(NULLIF(draft->'draft'->>'title', ''), NULLIF(draft->>'goal', ''), 'Untitled bounty'), 160) AS title, updated_at, expires_at, revision, recovery_state ? 'bounty_id' AS needs_reconciliation, recovery_state->>'bounty_contract' AS bounty_contract, recovery_state->>'bounty_id' AS bounty_id FROM site_posting_drafts WHERE account_id = $1 AND NOT EXISTS (SELECT 1 FROM posting_authorization_retirements r WHERE r.account_id=site_posting_drafts.account_id AND r.operation_id=site_posting_drafts.operation_id) AND (expires_at > now() OR recovery_state ? 'bounty_id') ORDER BY updated_at DESC, operation_id DESC LIMIT 51 OFFSET $2")
             .bind(account_id).bind(i64::from(offset)).fetch_all(&self.pool).await?;
         rows.into_iter()
             .map(|row| {
@@ -153,6 +215,11 @@ impl PostgresStore {
             .bind(account_id)
             .execute(&mut *tx)
             .await?;
+        let retired: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM posting_authorization_retirements WHERE account_id=$1 AND operation_id=$2)")
+            .bind(account_id).bind(operation_id).fetch_one(&mut *tx).await?;
+        if retired {
+            return Err(PostingDraftError::Conflict);
+        }
         sqlx::query("DELETE FROM site_posting_drafts WHERE expires_at <= now() AND NOT (recovery_state ? 'bounty_id')")
             .execute(&mut *tx)
             .await?;
@@ -223,7 +290,7 @@ impl PostgresStore {
                 return Err(PostingDraftError::Conflict);
             }
             let count: i64 = sqlx::query_scalar(
-                "SELECT count(*) FROM site_posting_drafts WHERE account_id = $1 AND expires_at > now()",
+                "SELECT count(*) FROM site_posting_drafts WHERE account_id = $1 AND expires_at > now() AND NOT EXISTS (SELECT 1 FROM posting_authorization_retirements r WHERE r.account_id=site_posting_drafts.account_id AND r.operation_id=site_posting_drafts.operation_id)",
             )
             .bind(account_id)
             .fetch_one(&mut *tx)
@@ -276,11 +343,94 @@ mod tests {
             draft_hash(&json!({"\u{e000}":1,"\u{10000}":2})).unwrap(),
             "9d4cdc71dda603c42f9b21d88d0c2ffc31a76cd1bd461d7359406cf169845f1e"
         );
-        let unsupported = json!({"number":9_007_199_254_740_992u64});
-        assert!(matches!(
-            draft_hash(&unsupported),
-            Err(PostingDraftError::NonCanonicalJson)
-        ));
+        for unsupported in [json!({"number":9_007_199_254_740_992u64})] {
+            assert!(matches!(
+                draft_hash(&unsupported),
+                Err(PostingDraftError::NonCanonicalJson)
+            ));
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn finalized_retirement_is_private_atomic_and_returns_one_unapproved_replacement() {
+        let store =
+            PostgresStore::connect(&std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap())
+                .await
+                .unwrap();
+        store.migrate().await.unwrap();
+        let owner = Uuid::new_v4().to_string();
+        let id = Uuid::new_v4();
+        let contract = format!("0x{}", "11".repeat(20));
+        let bounty = format!("0x{}", "22".repeat(32));
+        let hash = format!("0x{}", "33".repeat(32));
+        let draft = json!({"id":id,"schema":"agent-bounties/posting-draft-v1","draft":{"title":"Preserve my work","posting_operation_id":id}});
+        let recovery = json!({"bounty_id":bounty,"bounty_contract":contract,"continuation_hash":hash,"authorizationIssued":true,"phase":"authorized"});
+        let first = store
+            .save_site_posting_draft(
+                &owner,
+                id,
+                &draft,
+                0,
+                Some(&draft_hash(&draft).unwrap()),
+                &recovery,
+            )
+            .await
+            .unwrap();
+        let proof = json!({"schema":"agent-bounties/inert-creation-proof-v1","bounty_contract":contract,"bounty_id":bounty});
+        assert!(store
+            .retire_site_posting_authorization("other", id, first.revision, &hash, &proof)
+            .await
+            .is_err());
+        assert!(store
+            .retire_site_posting_authorization(&owner, id, first.revision + 1, &hash, &proof)
+            .await
+            .is_err());
+        assert!(store
+            .retire_site_posting_authorization(&owner, id, first.revision, "wrong", &proof)
+            .await
+            .is_err());
+        let (a, b) = tokio::join!(
+            store.retire_site_posting_authorization(&owner, id, first.revision, &hash, &proof),
+            store.retire_site_posting_authorization(&owner, id, first.revision, &hash, &proof)
+        );
+        let next = a.unwrap();
+        assert_eq!(next.operation_id, b.unwrap().operation_id);
+        assert_ne!(next.operation_id, id);
+        assert!(next.approved_draft_hash.is_none());
+        assert_eq!(next.recovery_state, json!({}));
+        assert_eq!(next.draft["draft"]["title"], "Preserve my work");
+        assert_eq!(next.draft["id"], next.operation_id.to_string());
+        assert_eq!(
+            next.draft["draft"]["posting_operation_id"],
+            next.operation_id.to_string()
+        );
+        assert!(store
+            .save_site_posting_draft(&owner, id, &draft, first.revision, None, &recovery)
+            .await
+            .is_err());
+        assert_eq!(
+            store
+                .get_site_posting_draft(&owner, id)
+                .await
+                .unwrap()
+                .unwrap()
+                .recovery_state,
+            recovery
+        );
+        assert_eq!(
+            store
+                .list_site_posting_drafts(&owner, 0)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(store
+            .posting_replacement("other", id)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]

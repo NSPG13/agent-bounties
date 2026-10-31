@@ -1,4 +1,8 @@
+pub mod artifact_store;
+mod autonomous_canonicality;
+pub mod broad_checks;
 pub mod github_snapshot;
+mod zip_headers;
 use anyhow::{anyhow, Context};
 use app::BountyNetwork;
 use chain_base::{
@@ -33,12 +37,25 @@ use verifier_sdk::{VerificationInput, Verifier, VerifierResultType};
 
 mod open_competition_v2_broker;
 mod regression_sandbox;
+mod review_deadline_notifications;
+mod review_notifications;
 pub use open_competition_v2_broker::*;
+pub use review_notifications::*;
 mod open_competition_v2_keeper;
 pub use open_competition_v2_keeper::*;
 mod open_competition_v2_shadow;
 pub use open_competition_v2_shadow::*;
 pub use regression_sandbox::*;
+mod creator_open_indexer;
+mod creator_open_notifications;
+pub use creator_open_notifications::CreatorOpenNotificationRuntime;
+mod creator_push;
+pub use creator_open_indexer::poll_creator_open_indexer;
+pub mod managed_funding;
+mod shared_relay;
+pub use creator_push::CreatorPushSender;
+mod review_email;
+pub use review_email::*;
 
 const AUTONOMOUS_LOG_ADDRESS_BATCH_SIZE: usize = 500;
 const INDEXER_HEARTBEAT_SUCCESS: &str = "success";
@@ -53,6 +70,7 @@ pub fn redact_operational_error(message: &str) -> String {
 struct IndexerOperationalError {
     message: String,
     retryable: bool,
+    provider_delay_seconds: Option<u64>,
 }
 
 impl fmt::Display for IndexerOperationalError {
@@ -73,9 +91,38 @@ pub fn indexer_error_is_retryable(error: &anyhow::Error) -> bool {
             ChainBaseError::RpcTransport(_)
                 | ChainBaseError::RpcHttpStatus(_)
                 | ChainBaseError::RpcProviderError { .. }
+                | ChainBaseError::RpcRetryAfter { .. }
         );
     }
     matches!(error.downcast_ref::<DbError>(), Some(DbError::Sqlx(_)))
+}
+
+fn indexer_persistence_failure(error: &anyhow::Error, persistence: DbError) -> anyhow::Error {
+    anyhow::Error::new(IndexerOperationalError {
+        message: format!(
+            "{}; failed to persist indexer failure: {}",
+            redact_operational_error(&error.to_string()),
+            redact_operational_error(&persistence.to_string())
+        ),
+        retryable: indexer_error_is_retryable(error) && matches!(persistence, DbError::Sqlx(_)),
+        provider_delay_seconds: indexer_provider_delay(error),
+    })
+}
+
+/// Typed provider holds survive heartbeat wrapping; raw text never authorizes retry.
+pub fn indexer_provider_delay(error: &anyhow::Error) -> Option<u64> {
+    if let Some(error) = error.downcast_ref::<IndexerOperationalError>() {
+        return error.provider_delay_seconds.filter(|_| error.retryable);
+    }
+    match error.downcast_ref::<ChainBaseError>() {
+        Some(ChainBaseError::RpcRetryAfter {
+            retry_after_seconds,
+            ..
+        }) => Some(*retry_after_seconds),
+        Some(ChainBaseError::RpcHttpStatus(429)) => Some(0),
+        Some(ChainBaseError::RpcProviderError { code: -32016, .. }) => Some(0),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,6 +130,36 @@ pub struct IndexerRecoveryPolicy {
     pub initial_backoff_seconds: u64,
     pub max_backoff_seconds: u64,
     pub exit_after_consecutive_failures: u32,
+}
+
+/// Provider throttling has its own backoff and never spends the ordinary
+/// transient-failure budget. Only a successful poll clears that budget.
+#[derive(Debug, Default)]
+pub struct IndexerRecoveryState {
+    ordinary_failures: u32,
+    provider_holds: u32,
+}
+
+impl IndexerRecoveryState {
+    pub fn on_success(&mut self) {
+        *self = Self::default();
+    }
+
+    pub fn on_error(
+        &mut self,
+        policy: &IndexerRecoveryPolicy,
+        error: &anyhow::Error,
+    ) -> IndexerRecoveryDecision {
+        let count = if indexer_provider_delay(error).is_some() {
+            self.provider_holds = self.provider_holds.saturating_add(1);
+            self.provider_holds
+        } else {
+            self.provider_holds = 0;
+            self.ordinary_failures = self.ordinary_failures.saturating_add(1);
+            self.ordinary_failures
+        };
+        policy.decision_for_error(count, error)
+    }
 }
 
 impl Default for IndexerRecoveryPolicy {
@@ -134,6 +211,30 @@ impl IndexerRecoveryPolicy {
             max_backoff_seconds,
             exit_after_consecutive_failures,
         })
+    }
+
+    pub fn decision_for_error(
+        &self,
+        consecutive_failures: u32,
+        error: &anyhow::Error,
+    ) -> IndexerRecoveryDecision {
+        if let Some(provider_delay) = indexer_provider_delay(error) {
+            // Repeated rate limits cannot be fixed by resetting the process.
+            // Preserve the provider's delay even when it exceeds our usual cap.
+            let multiplier = 1_u64
+                .checked_shl(consecutive_failures.saturating_sub(1).min(63))
+                .unwrap_or(u64::MAX);
+            let backoff_seconds = self
+                .initial_backoff_seconds
+                .saturating_mul(multiplier)
+                .min(self.max_backoff_seconds)
+                .max(provider_delay);
+            return IndexerRecoveryDecision::RetryFromPersistedCursor {
+                consecutive_failures,
+                backoff_seconds,
+            };
+        }
+        self.decision(consecutive_failures, indexer_error_is_retryable(error))
     }
 
     pub fn decision(&self, consecutive_failures: u32, retryable: bool) -> IndexerRecoveryDecision {
@@ -605,11 +706,13 @@ pub async fn poll_autonomous_indexer_once_with_heartbeat(
                         redact_operational_error(&heartbeat_error.to_string())
                     ),
                     retryable: retryable && matches!(heartbeat_error, DbError::Sqlx(_)),
+                    provider_delay_seconds: indexer_provider_delay(&error),
                 }));
             }
             Err(anyhow::Error::new(IndexerOperationalError {
                 message: error_message,
                 retryable,
+                provider_delay_seconds: indexer_provider_delay(&error),
             }))
         }
     }
@@ -622,10 +725,20 @@ pub async fn poll_autonomous_indexer_once(
     let descriptor = config.network_descriptor()?;
     backfill_autonomous_event_block_times(store, config).await?;
     let latest_block = fetch_block_number(&config.rpc_url, config.request_id).await?;
-    let confirmed_to_block = latest_block.checked_sub(config.confirmations);
+    let safe = fetch_safe_block_identity(&config.rpc_url, config.request_id + 30_000).await?;
+    let confirmed_to_block = latest_block
+        .checked_sub(config.confirmations)
+        .map(|n| n.min(safe.number));
     let scan_cursor = store
         .get_base_log_cursor(&config.network, &config.factory_contract)
         .await?;
+    let checkpoint = autonomous_canonicality::verify_previous(
+        store,
+        config,
+        scan_cursor.as_ref().map(|c| c.last_scanned_block),
+        &safe,
+    )
+    .await?;
     let from_block = next_indexer_from_block(
         scan_cursor.as_ref().map(|cursor| cursor.last_scanned_block),
         None,
@@ -661,6 +774,11 @@ pub async fn poll_autonomous_indexer_once(
     }
 
     let to_block = bounded_to_block(from_block, confirmed_to_block, config.max_blocks_per_query);
+    let before =
+        fetch_exact_block_identity(&config.rpc_url, to_block, config.request_id + 30_005).await?;
+    if before.number != to_block {
+        return Err(anyhow!("RPC returned the wrong canonical block number"));
+    }
     let topics = autonomous_bounty_event_topics();
     let factory_query = BaseContractLogQuery::new(
         &config.factory_contract,
@@ -775,6 +893,11 @@ pub async fn poll_autonomous_indexer_once(
         .await?;
         block_times.insert(block_number, timestamp);
     }
+    let after =
+        fetch_exact_block_identity(&config.rpc_url, to_block, config.request_id + 30_006).await?;
+    if before != after {
+        return Err(anyhow!("canonical chain changed during autonomous scan"));
+    }
     for event in &mut events {
         event.occurred_at = *block_times
             .get(&event.block_number)
@@ -788,16 +911,18 @@ pub async fn poll_autonomous_indexer_once(
             .confirm_autonomous_event_block_time(&config.network, block_number, occurred_at)
             .await?;
     }
-    enqueue_canonical_discovery_events(store, &config.network, &config.public_base_url, &events)
-        .await?;
     let last_log_key = events.last().map(|event| event.log_key.as_str());
     store
-        .upsert_base_log_cursor(
+        .commit_autonomous_canonical_checkpoint(
             &config.network,
             &config.factory_contract,
-            to_block,
+            scan_cursor.as_ref().map(|c| c.last_scanned_block),
+            checkpoint.as_ref(),
+            &after,
             last_log_key,
         )
+        .await?;
+    enqueue_canonical_discovery_events(store, &config.network, &config.public_base_url, &events)
         .await?;
 
     Ok(AutonomousIndexerPollReport {
@@ -1101,11 +1226,13 @@ pub async fn poll_open_competition_indexer_once_with_heartbeat(
                         redact_operational_error(&heartbeat_error.to_string())
                     ),
                     retryable: retryable && matches!(heartbeat_error, DbError::Sqlx(_)),
+                    provider_delay_seconds: indexer_provider_delay(&error),
                 }));
             }
             Err(anyhow::Error::new(IndexerOperationalError {
                 message: error_message,
                 retryable,
+                provider_delay_seconds: indexer_provider_delay(&error),
             }))
         }
     }
@@ -1369,7 +1496,7 @@ pub async fn poll_open_competition_v2_indexer_once_with_heartbeat(
         }
         Err(error) => {
             let message = redact_operational_error(&error.to_string());
-            store
+            let persisted = store
                 .upsert_base_indexer_heartbeat(&BaseIndexerHeartbeat {
                     network: config.network.clone(),
                     escrow_contract: config.factory_contract.clone(),
@@ -1386,10 +1513,14 @@ pub async fn poll_open_competition_v2_indexer_once_with_heartbeat(
                     error_message: Some(message.clone()),
                     updated_at: completed_at,
                 })
-                .await?;
+                .await;
+            if let Err(persistence) = persisted {
+                return Err(indexer_persistence_failure(&error, persistence));
+            }
             Err(anyhow::Error::new(IndexerOperationalError {
                 message,
                 retryable: indexer_error_is_retryable(&error),
+                provider_delay_seconds: indexer_provider_delay(&error),
             }))
         }
     }
@@ -2175,5 +2306,153 @@ mod tests {
         );
         assert!(!redacted.contains("secret"));
         assert!(!redacted.contains("API_KEY"));
+    }
+}
+
+#[cfg(test)]
+mod provider_backoff_tests {
+    use super::*;
+    #[test]
+    fn provider_holds_do_not_spend_or_reset_the_ordinary_failure_budget() {
+        let policy = IndexerRecoveryPolicy::default();
+        let mut state = IndexerRecoveryState::default();
+        let hold = anyhow::Error::new(ChainBaseError::RpcRetryAfter {
+            status: 429,
+            retry_after_seconds: 7200,
+        });
+        let transport = anyhow::Error::new(ChainBaseError::RpcHttpStatus(503));
+        for ordinary_count in 1..=8 {
+            for _ in 0..12 {
+                assert!(matches!(
+                    state.on_error(&policy, &hold),
+                    IndexerRecoveryDecision::RetryFromPersistedCursor {
+                        backoff_seconds: 7200,
+                        ..
+                    }
+                ));
+            }
+            let decision = state.on_error(&policy, &transport);
+            if ordinary_count < 8 {
+                assert!(matches!(decision,
+                    IndexerRecoveryDecision::RetryFromPersistedCursor {
+                        consecutive_failures, ..
+                    } if consecutive_failures == ordinary_count));
+            } else {
+                assert_eq!(
+                    decision,
+                    IndexerRecoveryDecision::ExitForSupervisorRestart {
+                        consecutive_failures: 8,
+                    }
+                );
+            }
+        }
+        state.on_success();
+        let zero_floor_hold = anyhow::Error::new(ChainBaseError::RpcHttpStatus(429));
+        assert_eq!(
+            state.on_error(&policy, &zero_floor_hold),
+            IndexerRecoveryDecision::RetryFromPersistedCursor {
+                consecutive_failures: 1,
+                backoff_seconds: 5,
+            }
+        );
+        assert_eq!(
+            state.on_error(&policy, &transport),
+            IndexerRecoveryDecision::RetryFromPersistedCursor {
+                consecutive_failures: 1,
+                backoff_seconds: 5,
+            }
+        );
+        let malformed = anyhow::Error::new(ChainBaseError::InvalidRpcResponse("bad block".into()));
+        state.on_error(&policy, &hold);
+        assert!(matches!(
+            state.on_error(&policy, &malformed),
+            IndexerRecoveryDecision::HaltForOperatorInvestigation { .. }
+        ));
+    }
+    #[test]
+    fn persistent_rate_limits_keep_backoff_without_supervisor_restart() {
+        let policy = IndexerRecoveryPolicy::default();
+        for failures in [1, 8, 100, u32::MAX] {
+            for delay in [0, 7200, u64::MAX] {
+                let error = anyhow::Error::new(ChainBaseError::RpcRetryAfter {
+                    status: 429,
+                    retry_after_seconds: delay,
+                });
+                let IndexerRecoveryDecision::RetryFromPersistedCursor {
+                    backoff_seconds, ..
+                } = policy.decision_for_error(failures, &error)
+                else {
+                    panic!("rate limit must not restart the worker");
+                };
+                assert!(backoff_seconds >= delay);
+                assert!(backoff_seconds >= policy.initial_backoff_seconds);
+            }
+        }
+        let error = anyhow::Error::new(ChainBaseError::RpcHttpStatus(429));
+        assert!(matches!(
+            policy.decision_for_error(100, &error),
+            IndexerRecoveryDecision::RetryFromPersistedCursor {
+                backoff_seconds: 120,
+                ..
+            }
+        ));
+    }
+    #[test]
+    fn heartbeat_wrapping_preserves_provider_hold_but_malformed_data_still_halts() {
+        let policy = IndexerRecoveryPolicy::default();
+        let error = anyhow::Error::new(IndexerOperationalError {
+            message: "redacted".into(),
+            retryable: true,
+            provider_delay_seconds: Some(7200),
+        });
+        assert!(matches!(
+            policy.decision_for_error(100, &error),
+            IndexerRecoveryDecision::RetryFromPersistedCursor {
+                backoff_seconds: 7200,
+                ..
+            }
+        ));
+        let error = anyhow::Error::new(ChainBaseError::InvalidRpcResponse(
+            "missing id even if text says rate limit".into(),
+        ));
+        assert!(matches!(
+            policy.decision_for_error(1, &error),
+            IndexerRecoveryDecision::HaltForOperatorInvestigation { .. }
+        ));
+    }
+}
+
+#[cfg(test)]
+mod double_failure_tests {
+    use super::*;
+    #[test]
+    fn failed_failure_persistence_keeps_hold_and_integrity_boundary() {
+        let policy = IndexerRecoveryPolicy::default();
+        let rate = anyhow::Error::new(ChainBaseError::RpcRetryAfter {
+            status: 429,
+            retry_after_seconds: 7200,
+        });
+        let error = indexer_persistence_failure(&rate, DbError::Sqlx(sqlx::Error::PoolClosed));
+        assert!(matches!(
+            policy.decision_for_error(100, &error),
+            IndexerRecoveryDecision::RetryFromPersistedCursor {
+                backoff_seconds: 7200,
+                ..
+            }
+        ));
+        let error = indexer_persistence_failure(
+            &rate,
+            DbError::InvalidEnum("invalid persisted state".into()),
+        );
+        assert!(matches!(
+            policy.decision_for_error(1, &error),
+            IndexerRecoveryDecision::HaltForOperatorInvestigation { .. }
+        ));
+        let bad = anyhow::Error::new(ChainBaseError::InvalidRpcResponse("malformed".into()));
+        let error = indexer_persistence_failure(&bad, DbError::Sqlx(sqlx::Error::PoolClosed));
+        assert!(matches!(
+            policy.decision_for_error(1, &error),
+            IndexerRecoveryDecision::HaltForOperatorInvestigation { .. }
+        ));
     }
 }

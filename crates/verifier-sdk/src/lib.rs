@@ -195,7 +195,7 @@ pub const REGRESSION_SANDBOX_POLICY_VERSION: &str = "agent-bounties/regression-s
 pub const REGRESSION_SANDBOX_RECEIPT_VERSION: &str = "agent-bounties/regression-sandbox-receipt-v1";
 const MIB: u64 = 1024 * 1024;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RegressionSandboxPolicy {
     pub schema_version: String,

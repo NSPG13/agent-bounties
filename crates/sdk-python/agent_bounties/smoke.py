@@ -1,9 +1,31 @@
 import argparse
 import json
+import os
 import time
 import uuid
+from urllib.parse import urlsplit
 
 from .client import AgentBountiesClient, hash_artifact
+
+
+def local_fixture_client(base_url: str, *, wallet: bool = False) -> AgentBountiesClient:
+    """Create a privileged fixture client only for an explicitly local service."""
+    url = urlsplit(base_url)
+    if (
+        url.scheme != "http"
+        or url.hostname not in ("127.0.0.1", "localhost")
+        or url.username is not None
+        or url.password is not None
+        or url.path not in ("", "/")
+        or url.query
+        or url.fragment
+    ):
+        raise ValueError("Fixture smoke requires an http://127.0.0.1 or http://localhost base URL")
+    token_name = "AGENT_BOUNTIES_SMOKE_WALLET_SESSION" if wallet else "OPERATOR_API_TOKEN"
+    token = os.getenv(token_name, "")
+    if not token.strip():
+        raise ValueError(f"{token_name} is required for intentional local fixture writes")
+    return AgentBountiesClient(base_url, session_token=token) if wallet else AgentBountiesClient(base_url, operator_api_token=token)
 
 
 def _require(condition: bool, message: str) -> None:
@@ -11,7 +33,7 @@ def _require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
-def exercise_surface(client: AgentBountiesClient) -> dict:
+def exercise_surface(client: AgentBountiesClient, solver_client: AgentBountiesClient) -> dict:
     suffix = f"{int(time.time())}-{uuid.uuid4().hex[:8]}"
 
     discovery = client.get_discovery_manifest()
@@ -36,7 +58,6 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         "get_discovery_subscription",
         "delete_discovery_subscription",
         "get_opportunity_conversion_funnel",
-        "analyze_bounty_fit",
         "list_autonomous_bounties",
         "get_solver_leaderboard",
         "plan_autonomous_canonical_child_terms",
@@ -54,6 +75,12 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
     _require(
         not any(tool.startswith(("plan_base_", "reconcile_base_")) for tool in tools),
         "discovery manifest leaked retired V1 tools",
+    )
+    _require(
+        not any(tool in tools for tool in (
+            "analyze_bounty_fit", "draft_bounty_with_cloud_agent", "compile_objective_with_cloud_agent"
+        )),
+        "discovery manifest advertises retired hosted generation",
     )
     endpoints = discovery.get("endpoints", {})
     for endpoint in (
@@ -132,7 +159,7 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
     ):
         _require(callable(getattr(client, method, None)), f"Python SDK missing {method}")
 
-    solver = client.register_agent(
+    solver = solver_client.register_agent(
         f"python-autonomous-smoke-solver-{suffix}",
         "0x2222222222222222222222222222222222222222",
     )
@@ -153,10 +180,10 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
         external_reference=f"python-autonomous-smoke-{suffix}",
     )
     _require(funded["bounty"]["status"] == "Claimable", "funding did not reach target")
-    claimed = client.claim_bounty(bounty_id, solver["id"])
+    claimed = solver_client.claim_bounty(bounty_id, solver["id"])
     _require(claimed["status"] == "Claimed", "claim did not become active")
     artifact = json.dumps({"sdk": "python", "autonomous": True}, separators=(",", ":"))
-    submission = client.submit_result(
+    submission = solver_client.submit_result(
         bounty_id,
         solver["id"],
         "memory://python-autonomous-smoke.json",
@@ -188,7 +215,7 @@ def main() -> None:
     args = parser.parse_args()
     print(
         json.dumps(
-            exercise_surface(AgentBountiesClient(args.base_url)),
+            exercise_surface(local_fixture_client(args.base_url), local_fixture_client(args.base_url, wallet=True)),
             indent=2,
             sort_keys=True,
         )

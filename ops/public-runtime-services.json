@@ -1,0 +1,18 @@
+{
+  "schema": "agentizable/public-runtime-services-v1",
+  "workspace_id": "tea-d4tk87f5r7bs73au55lg",
+  "repository": "https://github.com/NSPG13/agent-bounties",
+  "branch": "main",
+  "migration_from_repository": "https://github.com/NSPG13/AB-PRIVATE",
+  "services": [
+    {"name":"agent-bounties-api","id":"srv-d982ftu7r5hc73ar4stg","type":"web_service","health_url":"https://api.agentizable.ai/health"},
+    {"name":"agent-bounties-mcp","id":"srv-d982ftu7r5hc73ar4su0","type":"web_service","health_url":"https://mcp.agentizable.ai/health"},
+    {"name":"agent-bounties-base-indexer","id":"srv-d982ftu7r5hc73ar4st0","type":"background_worker"},
+    {"name":"agent-bounties-open-competition-v1-indexer","id":"srv-d9r19q2ju40c73e1nr20","type":"background_worker"},
+    {"name":"agent-bounties-open-competition-v2-beta3-indexer","id":"srv-da32s4qjnfac73bjctn0","type":"background_worker"},
+    {"name":"agent-bounties-open-competition-v2-beta3-shadow","id":"srv-da32s5ht0dsc73ckfvkg","type":"background_worker"},
+    {"name":"agent-bounties-open-competition-v2-beta3-keeper","id":"srv-da32s6ek1f9s73duedlg","type":"background_worker"},
+    {"name":"agent-bounties-open-competition-v2-beta3-broker","id":"srv-da32s70ae00c73a01ffg","type":"background_worker"},
+    {"name":"agent-bounties-managed-funding","id":"srv-dbgltpon74is73cro2c0","type":"background_worker"}
+  ]
+}

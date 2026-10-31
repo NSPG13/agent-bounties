@@ -11,9 +11,9 @@
 use super::*;
 use ::invoicing::{
     contractor_attestation, invoice_contractor_source_hash, keccak_hex, project_order,
-    quote_invoice_order, summarize_contractor_payments, ContractorPayment, ContractorRecord,
-    ContractorTaxSummary, InvoicePaidEvidence, InvoicePolicy, OrderEvent, OrderState, OrderStatus,
-    INVOICE_CONTRACTOR_SOURCE,
+    quote_invoice_order, summarize_contractor_payments, BuyerRefund, ContractorPayment,
+    ContractorRecord, ContractorTaxSummary, InvoicePaidEvidence, InvoicePolicy, OrderEvent,
+    OrderState, OrderStatus, INVOICE_CONTRACTOR_SOURCE,
 };
 use chain_base::{
     autonomous_v2_create_from_terms, plan_participant_attestation, plan_participant_registration,
@@ -22,9 +22,10 @@ use chain_base::{
     BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
 };
 use payments_stripe::invoicing::{
-    parse_invoice_webhook, plan_credit_note_refund, plan_finalize_invoice, plan_retrieve_invoice,
-    plan_send_invoice, plan_void_invoice, CreditNoteRefund, InvoiceWebhookEvidence,
-    StripeInvoiceLine, StripeInvoiceOrder,
+    parse_credit_note_refund_bindings, parse_invoice_refund_snapshot, parse_invoice_webhook,
+    plan_credit_note_refund, plan_finalize_invoice, plan_retrieve_credit_note,
+    plan_retrieve_invoice, plan_retrieve_invoice_refund, plan_send_invoice, plan_void_invoice,
+    CreditNoteRefund, InvoiceWebhookEvidence, StripeInvoiceLine, StripeInvoiceOrder,
 };
 use serde_json::{json, Value};
 
@@ -306,6 +307,7 @@ pub(crate) struct InvoiceOrderView {
     pub order: db::InvoiceOrderRecord,
     pub state: OrderState,
     pub refund_due_cents: u64,
+    pub refund_outstanding_cents: u64,
     pub events: Vec<db::InvoiceOrderEventRecord>,
 }
 
@@ -342,6 +344,7 @@ async fn load_order(
         InvoiceOrderView {
             order,
             refund_due_cents: state.refund_due_cents(),
+            refund_outstanding_cents: state.refund_outstanding_cents(),
             state,
             events: records,
         },
@@ -368,10 +371,17 @@ async fn append_order_event(
     for _ in 0..3 {
         let (_, mut events) = load_order(store, config, order_id).await?;
         if let Some(id) = event.evidence_id() {
-            if events
+            if let Some(existing) = events
                 .iter()
-                .any(|existing| existing.evidence_id() == Some(id))
+                .find(|existing| existing.evidence_id() == Some(id))
             {
+                if existing != &event {
+                    return Err(conflict(
+                        "invoice_evidence_conflict",
+                        "the evidence id is already bound to different payment facts",
+                        "Inspect the original evidence; do not replay changed data.",
+                    ));
+                }
                 return Ok(InvoiceEventOutcome {
                     applied: false,
                     duplicate: true,
@@ -414,12 +424,16 @@ async fn append_order_event(
                 })
             }
             db::InvoiceEventAppend::DuplicateEvidence => {
+                let (view, saved) = load_order(store, config, order_id).await?;
+                if !saved.iter().any(|existing| existing == &event) {
+                    return Err(conflict("invoice_evidence_conflict", "the evidence id is already bound to another order or different payment facts", "Inspect the original evidence; do not replay changed data."));
+                }
                 return Ok(InvoiceEventOutcome {
                     applied: false,
                     duplicate: true,
                     reason: Some("evidence already recorded".to_string()),
-                    state: None,
-                })
+                    state: Some(view.state),
+                });
             }
             db::InvoiceEventAppend::SequenceConflict => continue,
         }
@@ -872,9 +886,16 @@ pub(crate) async fn reconcile_invoice_webhook(
             invoice_id,
             status,
             total_cents,
+            currency,
             livemode,
             ..
         } => {
+            if currency != "usd" {
+                return Err(bad_request(
+                    "invalid_credit_note_currency",
+                    "credit note currency differs from the order",
+                ));
+            }
             if status != "issued" {
                 return Ok(Json(InvoiceEventOutcome {
                     applied: false,
@@ -1090,7 +1111,8 @@ pub(crate) struct InvoiceReconciliation {
 }
 
 /// Applies indexed canonical events for the order's bounty: treasury `FundingAdded`,
-/// `BountySettled`, and the treasury's `RefundWithdrawn`.
+/// `BountySettled`, and the treasury's `RefundWithdrawn`. Once a credit note
+/// exists, also reconcile its linked customer refunds through read-only Stripe calls.
 pub(crate) async fn reconcile_invoice_order(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -1098,20 +1120,122 @@ pub(crate) async fn reconcile_invoice_order(
 ) -> InvoicingResult<Json<InvoiceReconciliation>> {
     let (config, store) = require_invoicing_operator(&state, &headers)?;
     let (view, _) = load_order(store, &config, &order_id).await?;
-    let Some(contract) = view.state.bounty_contract.clone() else {
+    if view.state.bounty_contract.is_none() && view.state.credit_note_id.is_none() {
         return Err(conflict(
             "invoice_not_planned",
             "the order has no planned bounty yet",
             &view.state.next_action,
         ));
+    }
+    let (mut applied, mut rejected) = if let Some(contract) = &view.state.bounty_contract {
+        apply_indexed_chain_events(store, &config, &order_id, contract).await?
+    } else {
+        (Vec::new(), Vec::new())
     };
-    let (applied, rejected) =
-        apply_indexed_chain_events(store, &config, &order_id, &contract).await?;
+    if let Some((identity, outcome)) =
+        reconcile_buyer_refund(&state, store, &config, &order_id).await?
+    {
+        if outcome.applied {
+            applied.push(identity);
+        } else if !outcome.duplicate {
+            rejected.push(format!(
+                "{identity}: {}",
+                outcome.reason.unwrap_or_default()
+            ));
+        }
+    }
     Ok(Json(InvoiceReconciliation {
         state: load_order(store, &config, &order_id).await?.0.state,
         applied,
         rejected,
     }))
+}
+
+/// Credit notes are not refund receipts. Resolve their exact allocations and
+/// retrieve each refund using the account and mode already checked by config.
+/// All external operations here are GETs, so retries cannot move money again.
+async fn reconcile_buyer_refund(
+    state: &SharedState,
+    store: &PostgresStore,
+    config: &InvoicingConfig,
+    order_id: &str,
+) -> InvoicingResult<Option<(String, InvoiceEventOutcome)>> {
+    let (view, _) = load_order(store, config, order_id).await?;
+    let Some(credit_note) = &view.state.credit_note_id else {
+        return Ok(None);
+    };
+    let invoice = view
+        .state
+        .invoice_id
+        .as_deref()
+        .ok_or_else(|| internal("credit note has no invoice"))?;
+    let credit = execute_stripe(
+        state,
+        &plan_retrieve_credit_note(credit_note).map_err(internal)?,
+    )
+    .await?;
+    let bindings = parse_credit_note_refund_bindings(
+        &credit.response, credit_note, invoice, order_id, view.state.paid_cents, config.policy.livemode,
+    ).map_err(|error| agent_action_error(StatusCode::BAD_GATEWAY, "invoice_refund_evidence_invalid", error.to_string(), false,
+        "Inspect the credit note allocation. Balance credits and external repayment need separate verified evidence; do not issue another refund."))?;
+    let mut refunds = Vec::new();
+    for binding in bindings {
+        let report = execute_stripe(
+            state,
+            &plan_retrieve_invoice_refund(&binding.refund_id).map_err(internal)?,
+        )
+        .await?;
+        let snapshot =
+            parse_invoice_refund_snapshot(&report.response, &binding, config.policy.livemode)
+                .map_err(|error| {
+                    agent_action_error(
+                        StatusCode::BAD_GATEWAY,
+                        "invoice_refund_evidence_invalid",
+                        error.to_string(),
+                        true,
+                        "Reconcile the same refund again; do not send another repayment.",
+                    )
+                })?;
+        refunds.push(BuyerRefund {
+            refund_id: snapshot.refund_id,
+            amount_cents: snapshot.amount_cents,
+            currency: snapshot.currency,
+            status: serde_json::from_value(json!(snapshot.status)).map_err(internal)?,
+        });
+    }
+    if refunds == view.state.buyer_refunds {
+        return Ok(None);
+    }
+    let observed_sequence = view.events.len();
+    let identity = format!(
+        "stripe-refund-snapshot:{}",
+        keccak_hex(
+            &serde_json::to_vec(&(
+                order_id,
+                credit_note,
+                invoice,
+                config.policy.livemode,
+                observed_sequence,
+                &refunds
+            ),)
+            .map_err(internal)?
+        )
+    );
+    let outcome = append_order_event(
+        store,
+        config,
+        order_id,
+        OrderEvent::BuyerRefundReconciled {
+            credit_note_id: credit_note.clone(),
+            invoice_id: invoice.to_string(),
+            refunds,
+            observed_sequence,
+            evidence_id: identity.clone(),
+            livemode: config.policy.livemode,
+        },
+    )
+    .await?;
+    Ok(Some((identity, outcome)))
 }
 
 /// Appends every indexed canonical event for the order's planned bounty, returning the applied
@@ -1250,8 +1374,8 @@ pub(crate) struct RefundInvoiceOrderRequest {
     pub memo: String,
 }
 
-/// Issues the buyer's credit note once no escrow is at risk. The order becomes `refunded` only
-/// when the signed `credit_note.created` webhook arrives.
+/// Issues the buyer's credit note once no escrow is at risk. The signed credit-note
+/// event leaves repayment pending until read-only reconciliation proves successful refunds.
 pub(crate) async fn refund_invoice_order(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -1259,6 +1383,10 @@ pub(crate) async fn refund_invoice_order(
     Json(request): Json<RefundInvoiceOrderRequest>,
 ) -> InvoicingResult<Json<StripeExecutionReport>> {
     let (config, store) = require_invoicing_operator(&state, &headers)?;
+    if matches!(request.refund, CreditNoteRefund::OutOfBand) {
+        return Err(bad_request("external_refund_evidence_required",
+            "external repayment requires a verified provider receipt; a credit note cannot establish that money was returned"));
+    }
     let (view, _) = load_order(store, &config, &order_id).await?;
     if let Some(contract) = view.state.bounty_contract.as_deref() {
         apply_indexed_chain_events(store, &config, &order_id, contract).await?;

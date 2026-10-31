@@ -1402,6 +1402,48 @@ export function generateOpenCompetitionCommitment(
   };
 }
 
+export interface ManagedBountyReviewVerdict {
+  round: number;
+  submission_hash: string;
+  evidence_hash: string;
+  passed: boolean;
+  reason?: string;
+}
+
+export interface CardBountyAppeal {
+  round: number;
+  solver: string;
+  reason: string;
+  /** The solver wallet's EIP-712 signature over `appeal_typed_data` with `message.reason` set. */
+  signature: string;
+}
+
+export interface CardBountyRuling {
+  reversed: boolean;
+  reason: string;
+}
+
+function cardBountyPath(network: string, bountyContract: string): string {
+  if ((network !== "base-mainnet" && network !== "base-sepolia") || !/^0x[0-9a-fA-F]{40}$/.test(bountyContract)) {
+    throw new TypeError("card bounty must name base-mainnet or base-sepolia and a contract address");
+  }
+  return `/v1/managed-service/bounties/${network}/${bountyContract.toLowerCase()}`;
+}
+
+function publicReason(reason: string): string {
+  if (typeof reason !== "string" || reason !== reason.trim() || reason.length < 20 || reason.length > 2000) {
+    throw new TypeError("reason must be a trimmed public reason of 20 to 2000 characters");
+  }
+  return reason;
+}
+
+function managedServiceId(id: string): string {
+  if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id)) {
+    throw new TypeError("Managed-service quote/order ID must be a UUID");
+  }
+  return id.toLowerCase();
+}
+
 export class AgentBountiesClient {
   private readonly baseUrl: string;
   private readonly operatorApiToken?: string;
@@ -2612,6 +2654,133 @@ export class AgentBountiesClient {
     });
   }
 
+  /** Merchant operator only; buyer requests cannot issue or reprice their quote. */
+  async issueManagedServiceQuote(quote: Record<string, unknown>): Promise<unknown> {
+    return this.post("/v1/managed-service/quotes", quote);
+  }
+
+  /**
+   * Prices a posting draft for card payment and binds it to one exact autonomous-v2 bounty.
+   * Requires the buyer's website account cookie; the server owns terms, fee and funding call.
+   */
+  async issueManagedBountyQuote(
+    document: Record<string, unknown>,
+    solverRewardMicroUsdc: number,
+  ): Promise<unknown> {
+    if (!Number.isSafeInteger(solverRewardMicroUsdc) || solverRewardMicroUsdc <= 0) {
+      throw new TypeError("solverRewardMicroUsdc must be a positive safe integer");
+    }
+    return this.post("/v1/managed-service/bounty-quotes", {
+      document, solver_reward_micro_usdc: solverRewardMicroUsdc,
+    });
+  }
+
+  /** Requires the buyer's website account cookie (credentials: "include" in browsers). */
+  async readManagedServiceQuote(quoteId: string): Promise<unknown> {
+    return this.request(`/v1/managed-service/quotes/${managedServiceId(quoteId)}`);
+  }
+
+  async acceptManagedServiceQuote(quoteId: string, quoteDigest: string, idempotencyKey: string): Promise<unknown> {
+    return this.post(`/v1/managed-service/quotes/${managedServiceId(quoteId)}/accept`, {
+      quote_digest: quoteDigest, idempotency_key: idempotencyKey,
+    });
+  }
+
+  async getManagedServiceOrder(orderId: string): Promise<unknown> {
+    return this.request(`/v1/managed-service/orders/${managedServiceId(orderId)}`);
+  }
+
+  /** Opens/retrieves Checkout under launch controls; never accepts card data or paid status. */
+  async openManagedServiceCheckout(orderId: string): Promise<unknown> {
+    return this.post(`/v1/managed-service/orders/${managedServiceId(orderId)}/checkout`, {});
+  }
+
+  /** Explicit full pre-funding refund request; a recorded request is not a bank credit. */
+  async requestManagedServiceRefund(orderId: string): Promise<unknown> {
+    return this.post(`/v1/managed-service/orders/${managedServiceId(orderId)}/refund`, {});
+  }
+
+  /** A funded card bounty's submission awaiting the buyer's review, its evidence and verdicts. */
+  async getManagedBountyReview(orderId: string): Promise<unknown> {
+    return this.request(`/v1/managed-service/orders/${managedServiceId(orderId)}/review`);
+  }
+
+  /**
+   * Records the buyer's verdict on the exact canonical submission before its `decide_by` time.
+   * The platform review key signs an acceptance at once. A rejection waits 48 hours for the
+   * solver's appeal before it is signed. A signed or relayed verdict is not settlement.
+   */
+  async recordManagedBountyReview(orderId: string, verdict: ManagedBountyReviewVerdict): Promise<unknown> {
+    const hash = /^0x[0-9a-f]{64}$/;
+    if (!Number.isSafeInteger(verdict.round) || verdict.round <= 0
+      || !hash.test(verdict.submission_hash) || !hash.test(verdict.evidence_hash)
+      || typeof verdict.passed !== "boolean") {
+      throw new TypeError("verdict must name a positive round, lowercase hashes and a decision");
+    }
+    const reason = verdict.reason ?? "";
+    if (reason !== reason.trim() || reason.length > 2000 || (!verdict.passed && reason.length < 20)) {
+      throw new TypeError("a rejection needs a trimmed reason of 20 to 2000 characters");
+    }
+    return this.post(`/v1/managed-service/orders/${managedServiceId(orderId)}/review`, {
+      round: verdict.round, submission_hash: verdict.submission_hash,
+      evidence_hash: verdict.evidence_hash, passed: verdict.passed, reason,
+    });
+  }
+
+  /**
+   * Public review state of a card bounty: the submission awaiting the customer, each verdict
+   * with its appeal and ruling, and `appeal_typed_data` while a rejection can be appealed.
+   */
+  async getCardBountyReview(network: string, bountyContract: string): Promise<unknown> {
+    return this.request(`${cardBountyPath(network, bountyContract)}/review`);
+  }
+
+  /**
+   * The rejected solver's appeal, signed by the solver's wallet. It keeps the rejection unsigned
+   * until Agentizable rules; a reversal pays the solver and the customer's review deposit.
+   */
+  async appealCardBountyReview(network: string, bountyContract: string, appeal: CardBountyAppeal): Promise<unknown> {
+    if (!Number.isSafeInteger(appeal.round) || appeal.round <= 0
+      || !/^0x[0-9a-fA-F]{40}$/.test(appeal.solver) || !/^0x([0-9a-fA-F]{2})+$/.test(appeal.signature)) {
+      throw new TypeError("appeal must name a positive round, the solver address and its signature");
+    }
+    return this.post(`${cardBountyPath(network, bountyContract)}/appeal`, {
+      round: appeal.round, solver: appeal.solver.toLowerCase(), reason: publicReason(appeal.reason),
+      signature: appeal.signature,
+    });
+  }
+
+  /** Operator only: appealed rejections awaiting a ruling, earliest deadline first. */
+  async listCardBountyAppeals(): Promise<unknown> {
+    return this.request("/v1/managed-service/appeals");
+  }
+
+  /** Operator only: uphold or reverse an appealed rejection; the review key signs the ruling. */
+  async ruleCardBountyAppeal(network: string, bountyContract: string, round: number, ruling: CardBountyRuling): Promise<unknown> {
+    if (!Number.isSafeInteger(round) || round <= 0 || typeof ruling.reversed !== "boolean") {
+      throw new TypeError("ruling must name a positive round and whether it reverses the rejection");
+    }
+    const path = cardBountyPath(network, bountyContract).replace("/bounties/", "/appeals/");
+    return this.post(`${path}/${round}/ruling`, { reversed: ruling.reversed, reason: publicReason(ruling.reason) });
+  }
+
+  /** Operator only: review deposits owed to solvers after reversals, with the exact amount and token. */
+  async listCardBountyDepositPayouts(): Promise<unknown> {
+    return this.request("/v1/managed-service/deposit-payouts");
+  }
+
+  /**
+   * Operator only: record the USDC transfer that paid a forfeited deposit. The API accepts it
+   * only after a successful receipt with that transfer to the solver and 3 confirmations.
+   */
+  async recordCardBountyDepositPayout(network: string, bountyContract: string, txHash: string): Promise<unknown> {
+    if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
+      throw new TypeError("txHash must be a 0x-prefixed 32-byte transaction hash");
+    }
+    const path = cardBountyPath(network, bountyContract).replace("/bounties/", "/deposit-payouts/");
+    return this.post(path, { tx_hash: txHash.toLowerCase() });
+  }
+
   async planStripeCheckoutTopUp(request: PlanStripeCheckoutTopUpRequest): Promise<unknown> {
     return this.post("/v1/stripe/checkout-top-ups", {
       organization_id: request.organization_id,
@@ -2706,26 +2875,36 @@ export class AgentBountiesClient {
     return this.post("/v1/stripe/connect-snapshots", snapshot);
   }
 
+  private stripeEvent(
+    path: string,
+    event: StripeWebhookEvent | string | Uint8Array,
+    signature?: string,
+  ): Promise<unknown> {
+    const raw = typeof event === "string" || event instanceof Uint8Array;
+    if (signature && !raw) {
+      throw new TypeError("Signed Stripe events require the original raw body; do not parse or reserialize it.");
+    }
+    return this.request(path, {
+      method: "POST",
+      headers: signature ? { "stripe-signature": signature } : {},
+      body: typeof event === "string" ? event
+        : event instanceof Uint8Array ? new Uint8Array(event).buffer
+        : JSON.stringify(event),
+    });
+  }
+
   async reconcileStripeCheckoutWebhook(
-    event: StripeWebhookEvent,
+    event: StripeWebhookEvent | string | Uint8Array,
     stripeSignature?: string,
   ): Promise<unknown> {
-    return this.post(
-      "/v1/stripe/checkout-webhooks",
-      event,
-      stripeSignature ? { "stripe-signature": stripeSignature } : undefined,
-    );
+    return this.stripeEvent("/v1/stripe/checkout-webhooks", event, stripeSignature);
   }
 
   async reconcileStripeTransferEvent(
-    event: StripeWebhookEvent,
+    event: StripeWebhookEvent | string | Uint8Array,
     stripeSignature?: string,
   ): Promise<unknown> {
-    return this.post(
-      "/v1/stripe/transfer-events",
-      event,
-      stripeSignature ? { "stripe-signature": stripeSignature } : undefined,
-    );
+    return this.stripeEvent("/v1/stripe/transfer-events", event, stripeSignature);
   }
 
   async runBountyBench(): Promise<unknown> {

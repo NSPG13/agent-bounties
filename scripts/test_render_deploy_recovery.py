@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import yaml
 from pathlib import Path
 from unittest import mock
 
@@ -23,9 +24,8 @@ class PinnedDeploymentSelectionTests(unittest.TestCase):
 
     def select(self, pin, *, event="workflow_run", mode="build_and_deploy", runtime=""):
         workflow = (SCRIPT.parent.parent / ".github/workflows/render-deploy-recovery.yml").read_text()
-        step = workflow.split("      - name: Select latest successful main revision\n", 1)[1]
-        shell = step.split("        run: |\n", 1)[1].split("\n      - name:", 1)[0]
-        shell = "\n".join(line[10:] for line in shell.splitlines())
+        steps = yaml.safe_load(workflow)["jobs"]["deploy-exact-main-revision"]["steps"]
+        shell = next(step["run"] for step in steps if step.get("name") == "Select latest successful main revision")
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             for command, body in {
@@ -1584,16 +1584,17 @@ class RenderDeployRecoveryTests(unittest.TestCase):
                 environment="sandbox",
             )
 
-    def test_workflow_passes_moonpay_values_only_as_runtime_environment(self) -> None:
+    def test_application_deploy_has_only_render_credential(self) -> None:
         workflow = (
             SCRIPT.parent.parent
             / ".github"
             / "workflows"
             / "render-deploy-recovery.yml"
         ).read_text(encoding="utf-8")
-        self.assertEqual(workflow.count("secrets.MOONPAY_PUBLISHABLE_KEY"), 1)
-        self.assertEqual(workflow.count("secrets.MOONPAY_SECRET_KEY"), 1)
-        self.assertEqual(workflow.count("vars.MOONPAY_ENVIRONMENT"), 1)
+        self.assertNotIn("secrets.MOONPAY_PUBLISHABLE_KEY", workflow)
+        self.assertNotIn("secrets.MOONPAY_SECRET_KEY", workflow)
+        self.assertEqual(workflow.count("secrets."), 1)
+        self.assertIn("secrets.RENDER_API_KEY", workflow)
         self.assertNotIn("pk_test_", workflow)
         self.assertNotIn("sk_test_", workflow)
 

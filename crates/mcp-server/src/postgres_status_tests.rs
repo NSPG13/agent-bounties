@@ -1,8 +1,5 @@
 mod status_postgres_fixture {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../scripts/fixtures/postgres-status-support.rs"
-    ));
+    include!("../../../scripts/fixtures/postgres-status-support.rs");
 }
 
 #[tokio::test]
@@ -85,6 +82,7 @@ async fn mcp_bounty_status_reads_scoped_postgres_after_cross_process_funding() {
     Arc::get_mut(&mut restarted).unwrap().store = Some(status_postgres_fixture::store().await);
     let fresh = get_bounty_status(
         State(restarted),
+        HeaderMap::new(),
         Json(BountyIdArgs {
             bounty_id: selected,
         }),

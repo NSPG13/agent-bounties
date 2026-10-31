@@ -328,23 +328,34 @@ test("query methods preserve ordering, false values, and operator headers", asyn
   }
 });
 
-test("webhook requests preserve signature, method, and JSON body", async () => {
+test("signed Stripe webhooks preserve raw bytes and reject reserialized objects", async () => {
   const requests = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
     requests.push({ url, init });
     return new Response("{}", { status: 200 });
   };
-
+  const raw = '{ "id" : "evt_fixture", "object":"event", "livemode":false, "label":"méxico", "data": {"object":{}} }\n';
   try {
     const client = new AgentBountiesClient("https://api.example");
-    const event = { id: "evt_123", type: "checkout.session.completed" };
-    await client.reconcileStripeCheckoutWebhook(event, "stripe-signature");
-
-    assert.equal(requests[0].url, "https://api.example/v1/stripe/checkout-webhooks");
-    assert.equal(requests[0].init.method, "POST");
-    assert.equal(requests[0].init.headers["stripe-signature"], "stripe-signature");
-    assert.deepEqual(JSON.parse(requests[0].init.body), event);
+    for (const [method, path] of [
+      ["reconcileStripeCheckoutWebhook", "/v1/stripe/checkout-webhooks"],
+      ["reconcileStripeTransferEvent", "/v1/stripe/transfer-events"],
+    ]) {
+      for (const body of [raw, new TextEncoder().encode(raw)]) {
+        await client[method](body, "stripe-signature");
+        const request = requests.at(-1);
+        assert.equal(request.url, `https://api.example${path}`);
+        assert.equal(request.init.method, "POST");
+        assert.equal(request.init.headers["stripe-signature"], "stripe-signature");
+        assert.deepEqual(Buffer.from(request.init.body), Buffer.from(raw));
+      }
+      const before = requests.length;
+      await assert.rejects(client[method](JSON.parse(raw), "stripe-signature"), /original raw body/);
+      assert.equal(requests.length, before);
+      await client[method](JSON.parse(raw));
+      assert.deepEqual(JSON.parse(requests.at(-1).init.body), JSON.parse(raw));
+    }
   } finally {
     globalThis.fetch = originalFetch;
   }

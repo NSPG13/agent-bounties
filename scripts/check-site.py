@@ -470,9 +470,9 @@ def check_protocol(protocol: dict, deployment: dict) -> None:
         fail("protocol.json must target Base mainnet chain 8453")
     if protocol.get("native_usdc", "").lower() != "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913":
         fail("protocol.json must use Base native USDC")
-    if protocol.get("status") not in {"pending_external_review_and_deployment", "active"}:
+    if protocol.get("status") not in {"pending_external_review_and_deployment", "active", "recovery_only"}:
         fail("protocol.json has an unsupported status")
-    if protocol.get("status") == "active":
+    if protocol.get("status") in {"active", "recovery_only"}:
         for field in ("factory", "implementation"):
             if not ADDRESS.match(protocol.get(field) or ""):
                 fail(f"active protocol.json requires a valid {field} address")
@@ -480,7 +480,13 @@ def check_protocol(protocol: dict, deployment: dict) -> None:
         fail("pending protocol.json must not advertise undeployed addresses")
     if deployment.get("protocol_version") != protocol.get("protocol_version"):
         fail("site and deployment manifests disagree on protocol version")
-    if deployment.get("status") != protocol.get("status"):
+    if protocol.get("status") == "recovery_only":
+        if deployment.get("status") != "active" or any(
+            protocol.get(key) is not False
+            for key in ("new_creation_enabled", "new_funding_enabled", "new_claims_enabled")
+        ):
+            fail("recovery-only requires the historical deployment and disabled new exposure")
+    elif deployment.get("status") != protocol.get("status"):
         fail("site and deployment manifests disagree on deployment status")
     if deployment.get("factory", {}).get("contract") != protocol.get("factory"):
         fail("site and deployment manifests disagree on factory address")

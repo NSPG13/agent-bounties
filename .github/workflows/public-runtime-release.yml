@@ -1,0 +1,67 @@
+name: Public Runtime Release
+on:
+  workflow_run:
+    workflows: ['CI']
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      migrate_source:
+        description: 'One-time move of the reviewed production service inventory to public main; preserves runtime settings'
+        required: false
+        default: false
+        type: boolean
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: public-runtime-production
+  cancel-in-progress: false
+jobs:
+  release:
+    if: >-
+      github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_repository.full_name == 'NSPG13/agent-bounties'))
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify public-source release contracts
+        run: |
+          python3 scripts/test_deploy_public_runtime.py -v
+          python3 scripts/test_public_runtime_parity.py -v
+          python3 scripts/check_public_runtime_parity.py --published
+      - name: Deploy exact public revision
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          MIGRATE_SOURCE: ${{ inputs.migrate_source || false }}
+          TARGET_REVISION: ${{ github.event.workflow_run.head_sha || github.sha }}
+          PRODUCTION_EXPECTED_REVISION: ${{ vars.PRODUCTION_EXPECTED_REVISION }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${PRODUCTION_EXPECTED_REVISION}" && "${PRODUCTION_EXPECTED_REVISION}" != "${TARGET_REVISION}" ]]; then
+            echo 'Production revision pin differs; update the pin only after reviewing release evidence.' >&2
+            exit 1
+          fi
+          migration_args=()
+          if [[ "${MIGRATE_SOURCE}" == 'true' ]]; then
+            migration_args+=(--migrate-source)
+          elif [[ "${MIGRATE_SOURCE}" != 'false' ]]; then
+            exit 1
+          fi
+          python3 scripts/deploy_public_runtime.py --revision "$TARGET_REVISION" \
+            --evidence-dir target/operations/public-runtime-release "${migration_args[@]}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: public-runtime-release-${{ github.run_id }}
+          path: target/operations/public-runtime-release/
+          if-no-files-found: warn
+          retention-days: 90

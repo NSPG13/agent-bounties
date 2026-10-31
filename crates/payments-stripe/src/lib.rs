@@ -1,3 +1,4 @@
+pub mod invoicing;
 use async_trait::async_trait;
 use chrono::Utc;
 use domain::{Id, Money, PaymentEvent, PaymentEventStatus, PaymentRail, PayoutStatus};
@@ -8,9 +9,6 @@ use std::collections::HashSet;
 use thiserror::Error;
 use uuid::Uuid;
 
-pub mod invoicing;
-pub mod onramp;
-
 type HmacSha256 = Hmac<Sha256>;
 const WEBHOOK_SIGNATURE_TOLERANCE_SECONDS: u64 = 5 * 60;
 
@@ -18,6 +16,8 @@ const WEBHOOK_SIGNATURE_TOLERANCE_SECONDS: u64 = 5 * 60;
 pub enum StripeIntegrationError {
     #[error("invalid webhook signature")]
     InvalidSignature,
+    #[error("Stripe webhook does not match the configured endpoint scope")]
+    UnexpectedWebhookScope,
     #[error("duplicate Stripe event")]
     DuplicateEvent,
     #[error("unsupported Stripe event type: {0}")]
@@ -164,11 +164,144 @@ pub struct StripeFundingCredit {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Normalized event for internal reconciliation. HTTP handlers must use
+/// [`parse_stripe_webhook_event`] after verifying the raw-body signature;
+/// this internal representation is not Stripe's wire format.
 pub struct StripeWebhookEvent {
     pub id: String,
     #[serde(rename = "type")]
     pub event_type: String,
     pub payload: serde_json::Value,
+}
+
+/// Scope authenticated by the signature on a Stripe snapshot webhook.
+/// Callers must compare `livemode` and `account` with their configured endpoint
+/// scope before reconciling money. An absent account means the platform account,
+/// not an arbitrary connected account. Neither field may be inferred from a URL.
+#[derive(Debug, Clone)]
+pub struct StripeWebhookEnvelope {
+    pub event: StripeWebhookEvent,
+    pub livemode: bool,
+    pub account: Option<String>,
+}
+
+/// Authenticate the original bytes and require this endpoint's environment and
+/// platform account scope. The signing secret must belong to that account's
+/// destination; a connected-account event cannot authorize a platform credit.
+pub fn verify_platform_webhook_event(
+    body: &[u8],
+    signature_header: &str,
+    secret: &[u8],
+    expected_livemode: bool,
+) -> Result<StripeWebhookEvent, StripeIntegrationError> {
+    verify_webhook_signature(body, signature_header, secret)?;
+    let envelope = parse_stripe_webhook_event(body)?;
+    if envelope.livemode != expected_livemode || envelope.account.is_some() {
+        return Err(StripeIntegrationError::UnexpectedWebhookScope);
+    }
+    Ok(envelope.event)
+}
+
+#[derive(Deserialize)]
+struct StripeSnapshotEvent {
+    id: String,
+    object: String,
+    #[serde(rename = "type")]
+    event_type: String,
+    livemode: bool,
+    account: Option<String>,
+    data: StripeSnapshotData,
+    #[serde(flatten)]
+    additional_fields: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct StripeSnapshotData {
+    object: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Parse Stripe's snapshot event shape, never the legacy `payload` shape.
+/// This only validates schema: the caller must first authenticate the exact raw
+/// bytes with [`verify_webhook_signature`] and then enforce endpoint scope.
+pub fn parse_stripe_webhook_event(
+    body: &[u8],
+) -> Result<StripeWebhookEnvelope, StripeIntegrationError> {
+    let wire: StripeSnapshotEvent = serde_json::from_slice(body)
+        .map_err(|_| StripeIntegrationError::InvalidField("event".to_string()))?;
+    if wire.object != "event" || wire.additional_fields.contains_key("payload") {
+        return Err(StripeIntegrationError::InvalidField("event".to_string()));
+    }
+    validate_stripe_identifier(&wire.id, "id")?;
+    if wire.event_type.is_empty()
+        || wire.event_type.len() > 255
+        || !wire
+            .event_type
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'_')
+    {
+        return Err(StripeIntegrationError::InvalidField("type".to_string()));
+    }
+    if let Some(account) = &wire.account {
+        validate_stripe_identifier(account, "account")?;
+        if !account.starts_with("acct_") {
+            return Err(StripeIntegrationError::InvalidField("account".to_string()));
+        }
+    }
+    // Organization destinations use a different routing context. They require
+    // an explicit handler; silently treating one as a platform event is unsafe.
+    if wire
+        .additional_fields
+        .get("context")
+        .is_some_and(|context| !context.is_null())
+    {
+        return Err(StripeIntegrationError::InvalidField("context".to_string()));
+    }
+    let payload = serde_json::Value::Object(wire.data.object);
+    let object_id = get_string(&payload, "id")?;
+    validate_stripe_identifier(&object_id, "data.object.id")?;
+    let object_kind = get_string(&payload, "object")?;
+    let expected_kind = match wire.event_type.as_str() {
+        "checkout.session.completed"
+        | "checkout.session.async_payment_succeeded"
+        | "checkout.session.async_payment_failed"
+        | "checkout.session.expired" => Some("checkout.session"),
+        "transfer.created" => Some("transfer"),
+        "payment_intent.succeeded" => Some("payment_intent"),
+        _ => None,
+    };
+    if object_kind.is_empty() || expected_kind.is_some_and(|kind| kind != object_kind) {
+        return Err(StripeIntegrationError::InvalidField(
+            "data.object.object".to_string(),
+        ));
+    }
+    if let Some(livemode) = payload.get("livemode") {
+        if livemode.as_bool() != Some(wire.livemode) {
+            return Err(StripeIntegrationError::InvalidField(
+                "data.object.livemode".to_string(),
+            ));
+        }
+    }
+    Ok(StripeWebhookEnvelope {
+        event: StripeWebhookEvent {
+            id: wire.id,
+            event_type: wire.event_type,
+            payload,
+        },
+        livemode: wire.livemode,
+        account: wire.account,
+    })
+}
+
+fn validate_stripe_identifier(value: &str, field: &str) -> Result<(), StripeIntegrationError> {
+    if value.is_empty()
+        || value.len() > 255
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        return Err(StripeIntegrationError::InvalidField(field.to_string()));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -180,7 +313,7 @@ pub struct ConnectPayoutState {
     pub blocked_reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ConnectAccountSnapshot {
     pub agent_id: Id,
     pub connected_account_id: Option<String>,
@@ -581,11 +714,13 @@ impl StripeEventDeduper {
         &mut self,
         event: &StripeWebhookEvent,
     ) -> Result<PaymentEvent, StripeIntegrationError> {
+        validate_stripe_identifier(&event.id, "id")?;
         if self.applied.contains(&event.id) {
             return Err(StripeIntegrationError::DuplicateEvent);
         }
 
         if event.event_type != "checkout.session.completed"
+            && event.event_type != "checkout.session.async_payment_succeeded"
             && event.event_type != "payment_intent.succeeded"
             && event.event_type != "transfer.created"
         {
@@ -609,39 +744,81 @@ impl StripeEventDeduper {
         &mut self,
         event: &StripeWebhookEvent,
     ) -> Result<StripeFundingCredit, StripeIntegrationError> {
-        if event.event_type != "checkout.session.completed" {
+        if event.event_type != "checkout.session.completed"
+            && event.event_type != "checkout.session.async_payment_succeeded"
+        {
             return Err(StripeIntegrationError::UnsupportedEvent(
                 event.event_type.clone(),
             ));
         }
-        let payment_status = event
+        if event
             .payload
             .get("payment_status")
             .and_then(serde_json::Value::as_str)
-            .unwrap_or("paid");
-        if payment_status != "paid" {
+            != Some("paid")
+        {
             return Err(StripeIntegrationError::CheckoutSessionNotPaid);
         }
 
         let organization_id = get_string(&event.payload, "client_reference_id")?
             .parse()
             .map_err(|_| StripeIntegrationError::InvalidField("client_reference_id".to_string()))?;
+        // One account can serve several products. A caller-controlled reference
+        // alone is not evidence that this payment belongs to Agentizable.
+        if get_string(&event.payload, "mode")? != "payment" {
+            return Err(StripeIntegrationError::InvalidField("mode".to_string()));
+        }
+        let metadata = event
+            .payload
+            .get("metadata")
+            .filter(|value| value.is_object())
+            .ok_or_else(|| StripeIntegrationError::InvalidField("metadata".to_string()))?;
+        if get_string(metadata, "rail")? != "stripe_fiat_ledger" {
+            return Err(StripeIntegrationError::InvalidField(
+                "metadata.rail".to_string(),
+            ));
+        }
+        if required_metadata_uuid(&event.payload, "organization_id")? != organization_id {
+            return Err(StripeIntegrationError::InvalidField(
+                "metadata.organization_id".to_string(),
+            ));
+        }
         let amount = get_i64(&event.payload, "amount_total")?;
         let currency = get_string(&event.payload, "currency")?;
         let checkout_session_id = get_string(&event.payload, "id")?;
-        let payment_intent_id = event
-            .payload
-            .get("payment_intent")
-            .and_then(serde_json::Value::as_str)
-            .map(ToString::to_string);
+        validate_stripe_identifier(&checkout_session_id, "id")?;
+        let payment_intent_id = match event.payload.get("payment_intent") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(serde_json::Value::String(id)) => {
+                validate_stripe_identifier(id, "payment_intent")?;
+                Some(id.clone())
+            }
+            Some(_) => {
+                return Err(StripeIntegrationError::InvalidField(
+                    "payment_intent".to_string(),
+                ));
+            }
+        };
         let bounty_id = metadata_uuid(&event.payload, "bounty_id")?;
         let funding_intent_id = metadata_uuid(&event.payload, "funding_intent_id")?;
+        match (
+            get_string(metadata, "purpose")?.as_str(),
+            bounty_id.is_some(),
+            funding_intent_id.is_some(),
+        ) {
+            ("platform_balance_top_up", false, false) | ("bounty_funding_intent", true, true) => {}
+            _ => {
+                return Err(StripeIntegrationError::InvalidField(
+                    "metadata.purpose".to_string(),
+                ));
+            }
+        }
+        let amount = stripe_money(amount, currency, "amount_total")?;
         let payment_event = self.apply(event)?;
 
         Ok(StripeFundingCredit {
             organization_id,
-            amount: Money::new(amount, currency)
-                .map_err(|_| StripeIntegrationError::InvalidField("amount_total".to_string()))?,
+            amount,
             checkout_session_id,
             payment_intent_id,
             bounty_id,
@@ -659,9 +836,11 @@ impl StripeEventDeduper {
                 event.event_type.clone(),
             ));
         }
-        let object = stripe_event_object(&event.payload);
+        let object = &event.payload;
         let transfer_id = get_string(object, "id")?;
         let connected_account_id = get_string(object, "destination")?;
+        validate_stripe_identifier(&transfer_id, "id")?;
+        validate_stripe_identifier(&connected_account_id, "destination")?;
         let amount = get_i64(object, "amount")?;
         let currency = get_string(object, "currency")?;
         let bounty_id = required_metadata_uuid(object, "bounty_id")?;
@@ -669,6 +848,7 @@ impl StripeEventDeduper {
         let settlement_id = required_metadata_uuid(object, "settlement_id")?;
         let payout_intent_id = required_metadata_uuid(object, "payout_intent_id")?;
         let agent_id = required_metadata_uuid(object, "agent_id")?;
+        let amount = stripe_money(amount, currency, "amount")?;
         let payment_event = self.apply(event)?;
 
         Ok(ConnectTransferEvidence {
@@ -679,18 +859,22 @@ impl StripeEventDeduper {
             settlement_id,
             payout_intent_id,
             agent_id,
-            amount: Money::new(amount, currency)
-                .map_err(|_| StripeIntegrationError::InvalidField("amount".to_string()))?,
+            amount,
             payment_event,
         })
     }
 }
 
-fn stripe_event_object(payload: &serde_json::Value) -> &serde_json::Value {
-    payload
-        .get("data")
-        .and_then(|data| data.get("object"))
-        .unwrap_or(payload)
+fn stripe_money(
+    amount: i64,
+    currency: String,
+    amount_field: &str,
+) -> Result<Money, StripeIntegrationError> {
+    if currency.len() != 3 || !currency.bytes().all(|byte| byte.is_ascii_alphabetic()) {
+        return Err(StripeIntegrationError::InvalidField("currency".to_string()));
+    }
+    Money::new(amount, currency)
+        .map_err(|_| StripeIntegrationError::InvalidField(amount_field.to_string()))
 }
 
 fn required_metadata_uuid(
@@ -705,14 +889,19 @@ fn metadata_uuid(
     payload: &serde_json::Value,
     key: &str,
 ) -> Result<Option<Id>, StripeIntegrationError> {
-    let Some(value) = payload
-        .get("metadata")
-        .and_then(serde_json::Value::as_object)
-        .and_then(|metadata| metadata.get(key))
-        .and_then(serde_json::Value::as_str)
-    else {
+    let metadata = match payload.get("metadata") {
+        None | Some(serde_json::Value::Null) => return Ok(None),
+        Some(serde_json::Value::Object(metadata)) => metadata,
+        Some(_) => {
+            return Err(StripeIntegrationError::InvalidField("metadata".to_string()));
+        }
+    };
+    let Some(value) = metadata.get(key) else {
         return Ok(None);
     };
+    let value = value
+        .as_str()
+        .ok_or_else(|| StripeIntegrationError::InvalidField(format!("metadata.{key}")))?;
     value
         .parse()
         .map(Some)
@@ -733,6 +922,9 @@ fn verify_webhook_signature_at(
     secret: &[u8],
     now_timestamp: i64,
 ) -> Result<(), StripeIntegrationError> {
+    if secret.is_empty() || secret.iter().all(u8::is_ascii_whitespace) {
+        return Err(StripeIntegrationError::InvalidSignature);
+    }
     let timestamp = signature_timestamp(signature_header)?;
     if timestamp.abs_diff(now_timestamp) > WEBHOOK_SIGNATURE_TOLERANCE_SECONDS {
         return Err(StripeIntegrationError::InvalidSignature);
@@ -933,6 +1125,13 @@ mod tests {
                 .unwrap_err(),
             StripeIntegrationError::InvalidSignature
         );
+        for empty_secret in [b"".as_slice(), b" \t\n".as_slice()] {
+            let signature = stripe_signature_header(payload, empty_secret, now_timestamp);
+            assert_eq!(
+                verify_webhook_signature_at(payload, &signature, empty_secret, now_timestamp),
+                Err(StripeIntegrationError::InvalidSignature)
+            );
+        }
     }
 
     #[test]
@@ -1019,7 +1218,13 @@ mod tests {
                 "amount_total": 5_000,
                 "currency": "usd",
                 "payment_status": "paid",
-                "payment_intent": "pi_test_paid"
+                "payment_intent": "pi_test_paid",
+                "mode": "payment",
+                "metadata": {
+                    "organization_id": organization_id.to_string(),
+                    "rail": "stripe_fiat_ledger",
+                    "purpose": "platform_balance_top_up"
+                }
             }),
         };
         let mut deduper = StripeEventDeduper::default();
@@ -1056,6 +1261,370 @@ mod tests {
             deduper.apply_checkout_top_up(&event).unwrap_err(),
             StripeIntegrationError::CheckoutSessionNotPaid
         );
+    }
+
+    fn checkout_snapshot(event_type: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": "evt_checkout_wire",
+            "object": "event",
+            "api_version": "2026-02-25.clover",
+            "created": 1_700_000_000,
+            "livemode": false,
+            "type": event_type,
+            "data": {
+                "object": {
+                    "id": "cs_test_paid",
+                    "object": "checkout.session",
+                    "livemode": false,
+                    "client_reference_id": "00000000-0000-4000-8000-000000000001",
+                    "amount_total": 5_000,
+                    "currency": "usd",
+                    "payment_status": "paid",
+                    "payment_intent": "pi_test_paid",
+                    "mode": "payment",
+                    "metadata": {
+                        "organization_id": "00000000-0000-4000-8000-000000000001",
+                        "rail": "stripe_fiat_ledger",
+                        "purpose": "platform_balance_top_up"
+                    }
+                }
+            },
+            "pending_webhooks": 1,
+            "request": { "id": null, "idempotency_key": null }
+        })
+    }
+
+    #[test]
+    fn platform_webhook_authenticates_raw_bytes_before_parsing() {
+        let secret = b"whsec_local_fixture";
+        let timestamp = Utc::now().timestamp();
+        let snapshot = checkout_snapshot("checkout.session.completed");
+        let body = serde_json::to_vec(&snapshot).unwrap();
+        let signature = stripe_signature_header(&body, secret, timestamp);
+        assert!(verify_platform_webhook_event(&body, &signature, secret, false).is_ok());
+        let mut tampered = snapshot;
+        tampered["data"]["object"]["amount_total"] = serde_json::json!(50_000);
+        for invalid in [serde_json::to_vec(&tampered).unwrap(), b"not json".to_vec()] {
+            assert_eq!(
+                verify_platform_webhook_event(&invalid, &signature, secret, false).unwrap_err(),
+                StripeIntegrationError::InvalidSignature
+            );
+        }
+        assert_eq!(
+            verify_platform_webhook_event(&body, &signature, b"wrong_destination", false)
+                .unwrap_err(),
+            StripeIntegrationError::InvalidSignature
+        );
+    }
+
+    #[test]
+    fn platform_webhook_rejects_wrong_environment_and_connected_account() {
+        let secret = b"whsec_local_fixture";
+        for live in [false, true] {
+            let mut snapshot = checkout_snapshot("checkout.session.completed");
+            snapshot["livemode"] = serde_json::json!(live);
+            snapshot["data"]["object"]["livemode"] = serde_json::json!(live);
+            let body = serde_json::to_vec(&snapshot).unwrap();
+            let signature = stripe_signature_header(&body, secret, Utc::now().timestamp());
+            assert!(verify_platform_webhook_event(&body, &signature, secret, live).is_ok());
+            assert_eq!(
+                verify_platform_webhook_event(&body, &signature, secret, !live).unwrap_err(),
+                StripeIntegrationError::UnexpectedWebhookScope
+            );
+            snapshot["account"] = serde_json::json!("acct_other_account");
+            let body = serde_json::to_vec(&snapshot).unwrap();
+            let signature = stripe_signature_header(&body, secret, Utc::now().timestamp());
+            assert_eq!(
+                verify_platform_webhook_event(&body, &signature, secret, live).unwrap_err(),
+                StripeIntegrationError::UnexpectedWebhookScope
+            );
+        }
+    }
+
+    #[test]
+    fn failure_and_expiration_events_require_a_checkout_session_object() {
+        for event_type in [
+            "checkout.session.async_payment_failed",
+            "checkout.session.expired",
+        ] {
+            let mut snapshot = checkout_snapshot(event_type);
+            assert!(parse_stripe_webhook_event(&serde_json::to_vec(&snapshot).unwrap()).is_ok());
+            snapshot["data"]["object"]["object"] = serde_json::json!("payment_intent");
+            assert!(parse_stripe_webhook_event(&serde_json::to_vec(&snapshot).unwrap()).is_err());
+        }
+    }
+
+    #[test]
+    fn signed_stripe_snapshot_normalizes_checkout_object_and_preserves_scope() {
+        let body = serde_json::to_vec(&checkout_snapshot("checkout.session.completed")).unwrap();
+        let secret = b"whsec_local_fixture";
+        let timestamp = 1_700_000_000;
+        let signature = stripe_signature_header(&body, secret, timestamp);
+        verify_webhook_signature_at(&body, &signature, secret, timestamp).unwrap();
+        let envelope = parse_stripe_webhook_event(&body).unwrap();
+        assert!(!envelope.livemode);
+        assert!(envelope.account.is_none());
+        assert_eq!(envelope.event.id, "evt_checkout_wire");
+        assert_eq!(envelope.event.payload["id"], "cs_test_paid");
+        assert!(envelope.event.payload.get("data").is_none());
+        let credit = StripeEventDeduper::default()
+            .apply_checkout_top_up(&envelope.event)
+            .unwrap();
+        assert_eq!(credit.amount, Money::new(5_000, "usd").unwrap());
+        assert_eq!(credit.payment_event.external_id, "evt_checkout_wire");
+
+        let mut changed = checkout_snapshot("checkout.session.completed");
+        changed["data"]["object"]["amount_total"] = serde_json::json!(50_000);
+        let changed_body = serde_json::to_vec(&changed).unwrap();
+        assert_eq!(
+            verify_webhook_signature_at(&changed_body, &signature, secret, timestamp),
+            Err(StripeIntegrationError::InvalidSignature)
+        );
+
+        changed["livemode"] = serde_json::json!(true);
+        changed["data"]["object"]["livemode"] = serde_json::json!(true);
+        changed["account"] = serde_json::json!("acct_connected_scope");
+        let envelope = parse_stripe_webhook_event(&serde_json::to_vec(&changed).unwrap()).unwrap();
+        assert!(envelope.livemode);
+        assert_eq!(envelope.account.as_deref(), Some("acct_connected_scope"));
+    }
+
+    #[test]
+    fn snapshot_parser_rejects_legacy_ambiguous_and_malformed_envelopes() {
+        let valid = checkout_snapshot("checkout.session.completed");
+        let mut invalid = vec![
+            serde_json::json!({
+                "id": "evt_legacy", "type": "checkout.session.completed",
+                "payload": valid["data"]["object"]
+            }),
+            serde_json::json!(null),
+            serde_json::json!([]),
+        ];
+        for field in ["id", "object", "type", "livemode", "data"] {
+            let mut missing = valid.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            invalid.push(missing);
+            let mut null = valid.clone();
+            null[field] = serde_json::Value::Null;
+            invalid.push(null);
+        }
+        for (field, value) in [
+            ("id", serde_json::json!("")),
+            ("id", serde_json::json!("evt_contains whitespace")),
+            ("id", serde_json::json!("x".repeat(256))),
+            ("object", serde_json::json!("checkout.session")),
+            ("type", serde_json::json!("")),
+            ("livemode", serde_json::json!("false")),
+            ("livemode", serde_json::json!(0)),
+            ("account", serde_json::json!(true)),
+            ("account", serde_json::json!("")),
+            ("account", serde_json::json!("unexpected_scope")),
+            ("context", serde_json::json!("acct_organization_scope")),
+            ("payload", serde_json::Value::Null),
+            ("data", serde_json::json!({"object": []})),
+            ("data", serde_json::json!({"object": null})),
+            ("data", serde_json::json!({})),
+        ] {
+            let mut malformed = valid.clone();
+            malformed[field] = value;
+            invalid.push(malformed);
+        }
+        for (field, value) in [
+            ("id", serde_json::json!("")),
+            ("object", serde_json::json!("transfer")),
+            ("livemode", serde_json::json!(true)),
+            ("livemode", serde_json::json!("false")),
+        ] {
+            let mut malformed = valid.clone();
+            malformed["data"]["object"][field] = value;
+            invalid.push(malformed);
+        }
+        for (index, body) in invalid.iter().enumerate() {
+            assert!(
+                parse_stripe_webhook_event(&serde_json::to_vec(body).unwrap()).is_err(),
+                "invalid envelope case {index} was accepted"
+            );
+        }
+        // Duplicate routing fields must not be accepted with last-value wins.
+        let duplicate_mode = format!(
+            "{},\"livemode\":true}}",
+            valid.to_string().trim_end_matches('}')
+        );
+        assert!(parse_stripe_webhook_event(duplicate_mode.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn checkout_status_must_be_explicitly_paid_for_both_success_event_types() {
+        for event_type in [
+            "checkout.session.completed",
+            "checkout.session.async_payment_succeeded",
+        ] {
+            for status in [
+                None,
+                Some(serde_json::Value::Null),
+                Some(serde_json::json!(false)),
+                Some(serde_json::json!(1)),
+                Some(serde_json::json!({"status": "paid"})),
+                Some(serde_json::json!("unpaid")),
+                Some(serde_json::json!("no_payment_required")),
+                Some(serde_json::json!("")),
+            ] {
+                let mut snapshot = checkout_snapshot(event_type);
+                let object = snapshot["data"]["object"].as_object_mut().unwrap();
+                if let Some(status) = status {
+                    object.insert("payment_status".to_string(), status);
+                } else {
+                    object.remove("payment_status");
+                }
+                let mut event = parse_stripe_webhook_event(&serde_json::to_vec(&snapshot).unwrap())
+                    .unwrap()
+                    .event;
+                let mut deduper = StripeEventDeduper::default();
+                assert_eq!(
+                    deduper.apply_checkout_top_up(&event).unwrap_err(),
+                    StripeIntegrationError::CheckoutSessionNotPaid
+                );
+                // Rejection must not poison a later valid delivery.
+                event.payload["payment_status"] = serde_json::json!("paid");
+                assert!(deduper.apply_checkout_top_up(&event).is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn asynchronous_checkout_only_credits_confirmed_success() {
+        let mut snapshot = checkout_snapshot("checkout.session.completed");
+        snapshot["data"]["object"]["payment_status"] = serde_json::json!("unpaid");
+        let mut deduper = StripeEventDeduper::default();
+        let unpaid = parse_stripe_webhook_event(&serde_json::to_vec(&snapshot).unwrap()).unwrap();
+        assert_eq!(
+            deduper.apply_checkout_top_up(&unpaid.event).unwrap_err(),
+            StripeIntegrationError::CheckoutSessionNotPaid
+        );
+        snapshot["id"] = serde_json::json!("evt_async_payment_succeeded");
+        snapshot["type"] = serde_json::json!("checkout.session.async_payment_succeeded");
+        snapshot["data"]["object"]["payment_status"] = serde_json::json!("paid");
+        let paid = parse_stripe_webhook_event(&serde_json::to_vec(&snapshot).unwrap()).unwrap();
+        assert!(deduper.apply_checkout_top_up(&paid.event).is_ok());
+        assert_eq!(
+            deduper.apply_checkout_top_up(&paid.event).unwrap_err(),
+            StripeIntegrationError::DuplicateEvent
+        );
+        snapshot["id"] = serde_json::json!("evt_async_payment_failed");
+        snapshot["type"] = serde_json::json!("checkout.session.async_payment_failed");
+        let failed = parse_stripe_webhook_event(&serde_json::to_vec(&snapshot).unwrap()).unwrap();
+        assert!(matches!(
+            deduper.apply_checkout_top_up(&failed.event),
+            Err(StripeIntegrationError::UnsupportedEvent(_))
+        ));
+    }
+
+    #[test]
+    fn invalid_financial_fields_do_not_consume_checkout_event() {
+        let envelope = parse_stripe_webhook_event(
+            &serde_json::to_vec(&checkout_snapshot("checkout.session.completed")).unwrap(),
+        )
+        .unwrap();
+        for (field, value) in [
+            ("amount_total", serde_json::json!(-1)),
+            ("amount_total", serde_json::json!(0)),
+            ("amount_total", serde_json::json!("5000")),
+            ("currency", serde_json::json!("")),
+            ("currency", serde_json::json!("dollars")),
+            ("id", serde_json::json!("")),
+            ("id", serde_json::json!("x".repeat(256))),
+            ("payment_intent", serde_json::json!(true)),
+            ("payment_intent", serde_json::json!("")),
+            ("metadata", serde_json::json!("not-an-object")),
+            ("metadata", serde_json::json!({"funding_intent_id": false})),
+            ("metadata", serde_json::json!({"bounty_id": null})),
+        ] {
+            let mut event = envelope.event.clone();
+            event.payload[field] = value;
+            let mut deduper = StripeEventDeduper::default();
+            assert!(deduper.apply_checkout_top_up(&event).is_err(), "{field}");
+            assert!(deduper.apply_checkout_top_up(&envelope.event).is_ok());
+        }
+    }
+
+    #[test]
+    fn checkout_credit_requires_the_platforms_payment_namespace() {
+        for event_type in [
+            "checkout.session.completed",
+            "checkout.session.async_payment_succeeded",
+        ] {
+            let valid = parse_stripe_webhook_event(
+                &serde_json::to_vec(&checkout_snapshot(event_type)).unwrap(),
+            )
+            .unwrap()
+            .event;
+            for (pointer, replacement) in [
+                ("/mode", serde_json::json!("subscription")),
+                ("/mode", serde_json::Value::Null),
+                ("/metadata", serde_json::Value::Null),
+                ("/metadata", serde_json::json!({})),
+                ("/metadata/purpose", serde_json::json!("unrelated_product")),
+                (
+                    "/metadata/purpose",
+                    serde_json::json!("bounty_funding_intent"),
+                ),
+                ("/metadata/purpose", serde_json::Value::Null),
+                ("/metadata/rail", serde_json::json!("another_rail")),
+                ("/metadata/rail", serde_json::Value::Null),
+                (
+                    "/metadata/organization_id",
+                    serde_json::json!(Uuid::new_v4()),
+                ),
+                ("/metadata/organization_id", serde_json::Value::Null),
+            ] {
+                let mut event = valid.clone();
+                *event.payload.pointer_mut(pointer).unwrap() = replacement;
+                let mut deduper = StripeEventDeduper::default();
+                assert!(deduper.apply_checkout_top_up(&event).is_err(), "{pointer}");
+                // Invalid evidence must not consume the event's retry identity.
+                assert!(deduper.apply_checkout_top_up(&valid).is_ok());
+            }
+            for key in ["mode", "metadata"] {
+                let mut event = valid.clone();
+                event.payload.as_object_mut().unwrap().remove(key);
+                assert!(StripeEventDeduper::default()
+                    .apply_checkout_top_up(&event)
+                    .is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn checkout_funding_purpose_requires_both_bound_identifiers() {
+        let mut event = parse_stripe_webhook_event(
+            &serde_json::to_vec(&checkout_snapshot("checkout.session.completed")).unwrap(),
+        )
+        .unwrap()
+        .event;
+        let bounty = Uuid::new_v4();
+        let intent = Uuid::new_v4();
+        event.payload["metadata"]["bounty_id"] = serde_json::json!(bounty);
+        event.payload["metadata"]["funding_intent_id"] = serde_json::json!(intent);
+        // A top-up cannot quietly acquire bounty-funding semantics.
+        assert!(StripeEventDeduper::default()
+            .apply_checkout_top_up(&event)
+            .is_err());
+        event.payload["metadata"]["purpose"] = serde_json::json!("bounty_funding_intent");
+        for key in ["bounty_id", "funding_intent_id"] {
+            let mut incomplete = event.clone();
+            incomplete.payload["metadata"]
+                .as_object_mut()
+                .unwrap()
+                .remove(key);
+            assert!(StripeEventDeduper::default()
+                .apply_checkout_top_up(&incomplete)
+                .is_err());
+        }
+        let credit = StripeEventDeduper::default()
+            .apply_checkout_top_up(&event)
+            .unwrap();
+        assert_eq!(credit.bounty_id, Some(bounty));
+        assert_eq!(credit.funding_intent_id, Some(intent));
     }
 
     fn stripe_signature_header(payload: &[u8], secret: &[u8], timestamp: i64) -> String {
@@ -1200,6 +1769,57 @@ mod tests {
             deduper.apply_connect_transfer(&event).unwrap_err(),
             StripeIntegrationError::DuplicateEvent
         );
+    }
+
+    #[test]
+    fn wire_transfer_normalizes_once_and_invalid_amount_does_not_consume_event() {
+        let body = serde_json::json!({
+            "id": "evt_transfer_snapshot",
+            "object": "event",
+            "type": "transfer.created",
+            "livemode": false,
+            "data": {
+                "object": {
+                    "id": "tr_test_snapshot",
+                    "object": "transfer",
+                    "destination": "acct_recipient",
+                    "amount": 4_500,
+                    "currency": "usd",
+                    "metadata": {
+                        "bounty_id": "00000000-0000-4000-8000-000000000001",
+                        "proof_record_id": "00000000-0000-4000-8000-000000000002",
+                        "settlement_id": "00000000-0000-4000-8000-000000000003",
+                        "payout_intent_id": "00000000-0000-4000-8000-000000000004",
+                        "agent_id": "00000000-0000-4000-8000-000000000005"
+                    }
+                }
+            }
+        });
+        let valid = parse_stripe_webhook_event(&serde_json::to_vec(&body).unwrap())
+            .unwrap()
+            .event;
+        for (field, value) in [
+            ("amount", serde_json::json!(-1)),
+            ("amount", serde_json::json!(0)),
+            ("currency", serde_json::json!("")),
+            ("id", serde_json::json!("")),
+            ("destination", serde_json::json!("")),
+            ("destination", serde_json::json!("x".repeat(256))),
+        ] {
+            let mut invalid = valid.clone();
+            invalid.payload[field] = value;
+            let mut deduper = StripeEventDeduper::default();
+            assert!(deduper.apply_connect_transfer(&invalid).is_err(), "{field}");
+            let evidence = deduper.apply_connect_transfer(&valid).unwrap();
+            assert_eq!(evidence.amount, Money::new(4_500, "usd").unwrap());
+            assert_eq!(evidence.transfer_id, "tr_test_snapshot");
+            assert_eq!(evidence.connected_account_id, "acct_recipient");
+        }
+        let mut nested = valid.clone();
+        nested.payload = serde_json::json!({"data": {"object": valid.payload}});
+        assert!(StripeEventDeduper::default()
+            .apply_connect_transfer(&nested)
+            .is_err());
     }
 
     #[test]

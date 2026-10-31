@@ -252,15 +252,30 @@ def main() -> int:
     )
 
     platform_script("preflight", platform, "-Mode", "full") if platform == "powershell" else platform_script("preflight", platform, "full")
+    py("scripts/test_deploy_public_runtime.py", "-v")
+    py("scripts/test_public_runtime_parity.py", "-v")
+    py("scripts/test_application_release_gate.py", "-v")
+    py("scripts/test_production_public_revision.py", "-v")
+    py("scripts/test_render_public_sources.py", "-v")
     run_many([
         [cargo, "fmt", "--all", "--", "--check"], [cargo, "clippy", "--workspace", "--", "-D", "warnings"],
         [cargo, "test", "--workspace"],
     ])
     platform_script("check-x402-relayer", platform)
+    py("scripts/check-security-postgres.py")
+    py("scripts/check-nonce-retirement.py")
     funding = "/agent-bounty fund 5 USDC via BaseUsdcEscrow" if platform == "powershell" else "/agent-bounty fund 5 USD via StripeFiatLedger"
+    smoke_api_port = int(os.environ.get("PRODUCTION_COMPOSE_API_PORT", "18080"))
+    smoke_mcp_port = int(os.environ.get("PRODUCTION_COMPOSE_MCP_PORT", "18090"))
+    if not (0 < smoke_api_port < 65536 and 0 < smoke_mcp_port < 65536 and smoke_api_port != smoke_mcp_port):
+        raise ValueError("Local smoke ports must be distinct valid TCP ports")
     commands = [
         [cargo, "build", "-p", "api", "-p", "mcp-server"],
-        [cargo, "run", "-p", "cli", "--", "service-smoke-spawn", "--api-base-url", "http://127.0.0.1:18080", "--mcp-base-url", "http://127.0.0.1:18090"],
+        [sys.executable, "scripts/check-hosted-retirement.py"],
+        [sys.executable, "-m", "pip", "install", "-r", "scripts/requirements-evidence-test.txt"],
+        [sys.executable, "scripts/check-broad-evidence.py"],
+        [sys.executable, "scripts/check-http-error-observability.py"],
+        [sys.executable, "scripts/run-with-test-postgres.py", "--", cargo, "run", "-p", "cli", "--", "service-smoke-spawn", "--api-base-url", f"http://127.0.0.1:{smoke_api_port}", "--mcp-base-url", f"http://127.0.0.1:{smoke_mcp_port}", "--verify-restart-persistence"],
         *[[cargo, "run", "-p", "cli", "--", name] for name in ("bountybench", "abusebench", "judgebench", "eval-loops", "risk-policy")],
         [cargo, "run", "-p", "cli", "--", "stripe-plan", "--organization-id", "00000000-0000-0000-0000-000000000001", "--amount-minor", "5000", "--platform-url", "https://agentbounties.local"],
         [cargo, "run", "-p", "cli", "--", "github-plan", "--repository", "agent-bounties/agent-bounties", "--issue-url", "https://github.com/agent-bounties/agent-bounties/issues/1", "--title", "[bounty]: Fix CI", "--body-file", "examples/github-paid-bounty-issue.md"],
@@ -274,6 +289,8 @@ def main() -> int:
     py("scripts/test_github_pr_claim_guard.py", "-v")
     py("scripts/test_opportunity_return.py", "-v")
     py("-m", "pip", "install", "-r", "scripts/requirements-site.txt")
+    py("scripts/check_keeper_workflows.py")
+    py("scripts/test_check_keeper_workflows.py")
     for name in ("sync_hosted_bounty_inventory", "reconcile_github_bounty_labels", "diagnose_hosted_api", "github_audience_audit", "prepare_site_metrics", "refresh_site_metrics", "ruleset_drift_check", "code_size_report", "mcp_tool_registry", "shared_rpc", "relay_autonomous_action", "gas_sponsorship_budget", "relay_bounded_wallet_action", "bounded_agent_budget"):
         py(f"scripts/test_{name}.py", "-v")
     for name in ("standing_meta_v3_deploy", "activate_standing_meta_v3_replacements"):
@@ -295,7 +312,8 @@ def main() -> int:
         "scripts.test_regression_profiles", "scripts.test_regression_verifier_pipeline",
         "-v",
     )
-    py("scripts/rehearse_immutable_watchdog.py")
+    py("scripts/test_rehearse_frozen_verifier.py")
+    py("scripts/rehearse_frozen_verifier.py")
     py("-m", "pip", "install", "-r", "scripts/requirements-wallet.txt")
     py("scripts/test_terms_publication_client.py", "-v")
     for name in ("local_delegate_wallet", "self_heal", "marketplace_readiness", "leaderboard_reward_pipeline"):

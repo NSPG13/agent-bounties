@@ -1,6 +1,9 @@
-mod verifier_health;
+pub mod nonce_retirement;
+pub mod sponsored_setup;
+pub mod timeout_recovery;
 use alloy::{
-    network::TransactionBuilder,
+    eips::Encodable2718,
+    network::{EthereumWallet, TransactionBuilder},
     primitives::{Address, Bytes, B256, U256},
     providers::{Provider, ProviderBuilder},
     rpc::types::TransactionRequest,
@@ -21,24 +24,34 @@ use std::{
 };
 use thiserror::Error;
 use uuid::Uuid;
-pub use verifier_health::*;
 use verifier_sdk::RegressionSandboxPolicy;
 
 mod agent_wallet_readiness;
 mod autonomous_v2;
+pub mod creator_open;
+pub mod creator_open_service;
 mod creator_review;
+mod rpc_read_admission;
+mod rpc_read_diagnostics;
+mod rpc_read_pacing;
+pub use creator_review::submission_on_time as creator_review_submission_on_time;
+#[cfg(any(test, feature = "testing-customer-review-signer"))]
+pub use creator_review::TEST_CUSTOMER_REVIEW_VERIFIER;
+pub use creator_review::{customer_review_verifiers, CUSTOMER_REVIEW_ENGINE};
 mod open_competition;
 mod open_competition_v2;
 mod open_competition_v2_planner;
-mod participant_registry;
+mod parent_submission;
+mod verifier_health;
+pub use verifier_health::*;
 mod standing_meta_v4;
+pub use parent_submission::*;
 
 pub use agent_wallet_readiness::*;
 pub use autonomous_v2::*;
 pub use open_competition::*;
 pub use open_competition_v2::*;
 pub use open_competition_v2_planner::*;
-pub use participant_registry::*;
 pub use standing_meta_v4::*;
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -61,6 +74,14 @@ pub enum ChainBaseError {
     InitialFundingExceedsTarget,
     #[error("invalid autonomous bounty verification configuration: {0}")]
     InvalidVerificationConfiguration(String),
+    #[error("Verification unavailable: the routed parent has no selected approved child profile")]
+    RoutedChildProfileUnavailable,
+    #[error("The child source and complete runner settings must match the profile selected for this parent lane")]
+    RoutedChildProfileMismatch,
+    #[error("The parent funding cutoff has passed. Supply a future funding_deadline for the new child; the parent terms stay unchanged")]
+    ChildFundingDeadlineRequired,
+    #[error("The new child funding_deadline must be strictly in the future; the parent terms stay unchanged")]
+    ChildFundingDeadlineExpired,
     #[error("invalid Open Competition V2 request: {0}")]
     InvalidOpenCompetitionV2(String),
     #[error("invalid canonical JSON commitment: {0}")]
@@ -105,6 +126,11 @@ pub enum ChainBaseError {
     RpcTransport(String),
     #[error("Base RPC returned HTTP status {0}")]
     RpcHttpStatus(u16),
+    #[error("Base RPC read retry delay {retry_after_seconds}s (HTTP class {status})")]
+    RpcRetryAfter {
+        status: u16,
+        retry_after_seconds: u64,
+    },
     #[error("Base RPC provider error {code}: {message}")]
     RpcProviderError { code: i64, message: String },
     #[error("invalid Base RPC response: {0}")]
@@ -127,6 +153,33 @@ pub enum ChainBaseError {
     RelayerProvider(String),
 }
 
+impl ChainBaseError {
+    pub fn standing_meta_child_preparation_problem(&self) -> (&'static str, &'static str) {
+        match self {
+            Self::RoutedChildProfileUnavailable => (
+                "verification_child_profile_unapproved",
+                "Wait for an independently reviewed child profile for this parent. Do not publish terms, fund a child or post a bond.",
+            ),
+            Self::RoutedChildProfileMismatch => (
+                "standing_meta_child_profile_mismatch",
+                "Use the exact immutable source and complete runner settings selected for this parent lane. Do not substitute another approved profile.",
+            ),
+            Self::ChildFundingDeadlineRequired => (
+                "standing_meta_child_funding_deadline_required",
+                "Supply an agreed future funding_deadline for the new child. This does not extend the parent funding cutoff or its claim and review windows.",
+            ),
+            Self::ChildFundingDeadlineExpired => (
+                "standing_meta_child_funding_deadline_expired",
+                "Choose a future funding_deadline for the new child and prepare it again. Keep the funded parent terms unchanged.",
+            ),
+            _ => (
+                "standing_meta_child_invalid",
+                "Correct the task, immutable runner manifest, participants or economics and retry the same routed-V3 preparation. Do not sign a rejected plan.",
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvmTransactionIntent {
     pub from: Option<String>,
@@ -139,6 +192,21 @@ pub struct EvmTransactionIntent {
 #[derive(Clone)]
 pub struct BaseTransactionRelayer {
     signer: PrivateKeySigner,
+    gas_budget: Option<std::sync::Arc<dyn RelayGasBudget>>,
+}
+
+/// Reserve platform spend durably before any broadcast. Failure must stop sending.
+#[async_trait::async_trait]
+pub trait RelayGasBudget: Send + Sync {
+    async fn reserve(&self, chain_id: u64, maximum_fee_wei: u128) -> Result<(), ChainBaseError>;
+    async fn ensure_sender_nonce_available(
+        &self,
+        _chain_id: u64,
+        _sender: &str,
+        _nonce: u64,
+    ) -> Result<(), ChainBaseError> {
+        Ok(())
+    }
 }
 
 impl std::fmt::Debug for BaseTransactionRelayer {
@@ -161,13 +229,33 @@ pub struct BaseRelayedTransaction {
     pub estimated_max_cost_wei: u128,
 }
 
+// Never expose signed bytes through a public status response. Persist before broadcast.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PreparedBaseRelayTransaction {
+    pub nonce: u64,
+    pub signed_transaction: String,
+    pub transaction: BaseRelayedTransaction,
+}
+
 impl BaseTransactionRelayer {
     pub fn from_private_key(private_key: &str) -> Result<Self, ChainBaseError> {
         let signer = private_key
             .trim()
             .parse::<PrivateKeySigner>()
             .map_err(|_| ChainBaseError::InvalidRelayerPrivateKey)?;
-        Ok(Self { signer })
+        Ok(Self {
+            signer,
+            gas_budget: None,
+        })
+    }
+
+    pub fn with_gas_budget(mut self, budget: std::sync::Arc<dyn RelayGasBudget>) -> Self {
+        self.gas_budget = Some(budget);
+        self
+    }
+
+    pub fn has_gas_budget(&self) -> bool {
+        self.gas_budget.is_some()
     }
 
     pub fn address(&self) -> String {
@@ -270,11 +358,51 @@ impl BaseTransactionRelayer {
                 maximum: max_fee_per_gas_wei,
             });
         }
-        let estimated_max_cost_wei = u128::from(gas_limit)
+        let mut estimated_max_cost_wei = u128::from(gas_limit)
             .checked_mul(fees.max_fee_per_gas)
             .ok_or_else(|| {
                 ChainBaseError::InvalidRelayIntent("maximum gas cost overflow".to_string())
             })?;
+        if self.gas_budget.is_some() {
+            // Base charges L1 data and operator fees in addition to execution.
+            // Estimate both from the canonical OP Stack predeploy; never treat
+            // an unavailable fee quote as zero. Pad the unsigned envelope size.
+            let oracle: Address = "0x420000000000000000000000000000000000000F"
+                .parse()
+                .unwrap();
+            for (function, argument) in [
+                ("getL1FeeUpperBound(uint256)", intent.data.len() / 2 + 256),
+                (
+                    "getOperatorFee(uint256)",
+                    usize::try_from(gas_limit)
+                        .map_err(|_| ChainBaseError::InvalidRelayIntent("gas overflow".into()))?,
+                ),
+            ] {
+                let mut input = keccak_word(function.as_bytes())[..4].to_vec();
+                input.extend_from_slice(&encode_uint256(argument as u128)?);
+                let result = provider
+                    .call(
+                        TransactionRequest::default()
+                            .with_to(oracle)
+                            .with_input(input),
+                    )
+                    .await
+                    .map_err(sanitize_relayer_provider_error)?;
+                if result.len() != 32 {
+                    return Err(ChainBaseError::InvalidRelayIntent(
+                        "Base fee oracle returned invalid data".into(),
+                    ));
+                }
+                let fee = u128::try_from(U256::from_be_slice(&result))
+                    .map_err(|_| ChainBaseError::InvalidRelayIntent("Base fee overflow".into()))?;
+                estimated_max_cost_wei = fee
+                    .checked_mul(2)
+                    .and_then(|fee| estimated_max_cost_wei.checked_add(fee))
+                    .ok_or_else(|| {
+                        ChainBaseError::InvalidRelayIntent("Base fee overflow".into())
+                    })?;
+            }
+        }
         let balance = provider
             .get_balance(relayer)
             .await
@@ -293,6 +421,22 @@ impl BaseTransactionRelayer {
             .with_gas_limit(gas_limit)
             .with_max_fee_per_gas(fees.max_fee_per_gas)
             .with_max_priority_fee_per_gas(fees.max_priority_fee_per_gas);
+        let nonce = provider
+            .get_transaction_count(relayer)
+            .pending()
+            .await
+            .map_err(sanitize_relayer_provider_error)?;
+        let transaction = transaction
+            .with_nonce(nonce)
+            .with_chain_id(expected_chain_id);
+        if let Some(budget) = &self.gas_budget {
+            budget
+                .ensure_sender_nonce_available(expected_chain_id, &format!("{relayer:#x}"), nonce)
+                .await?;
+            budget
+                .reserve(expected_chain_id, estimated_max_cost_wei)
+                .await?;
+        }
         let pending = provider
             .send_transaction(transaction)
             .await
@@ -305,6 +449,265 @@ impl BaseTransactionRelayer {
             max_fee_per_gas_wei: fees.max_fee_per_gas,
             max_priority_fee_per_gas_wei: fees.max_priority_fee_per_gas,
             estimated_max_cost_wei,
+        })
+    }
+    /// A retransmission remains the same signed transaction, but reserves the
+    /// current day's allowance again so yesterday's allowance never rolls over.
+    pub async fn reserve_prepared_retransmission(
+        &self,
+        rpc_url: &str,
+        chain_id: u64,
+        saved: &PreparedBaseRelayTransaction,
+    ) -> Result<(), ChainBaseError> {
+        let transaction = &saved.transaction;
+        if !transaction.relayer.eq_ignore_ascii_case(&self.address())
+            || transaction.estimated_max_cost_wei == 0
+        {
+            return Err(ChainBaseError::InvalidRelayIntent(
+                "saved relay identity mismatch".into(),
+            ));
+        }
+        let budget = self.gas_budget.as_ref().ok_or_else(|| {
+            ChainBaseError::InvalidRelayIntent("shared gas budget required".into())
+        })?;
+        let raw = parse_alloy_bytes(&saved.signed_transaction)?;
+        let provider = ProviderBuilder::new().connect_http(rpc_url.parse().map_err(|_| {
+            ChainBaseError::RelayerProvider("configured RPC URL is invalid".into())
+        })?);
+        let observed = provider
+            .get_chain_id()
+            .await
+            .map_err(sanitize_relayer_provider_error)?;
+        if observed != chain_id {
+            return Err(ChainBaseError::RelayerChainMismatch {
+                expected: chain_id,
+                observed,
+            });
+        }
+        let mut maximum = u128::from(transaction.gas_limit)
+            .checked_mul(transaction.max_fee_per_gas_wei)
+            .ok_or_else(|| ChainBaseError::InvalidRelayIntent("saved fee overflow".into()))?;
+        // Re-quote variable L1/operator fees: yesterday's data quote is not a
+        // current reservation, even though execution gas and bytes are fixed.
+        let oracle: Address = "0x420000000000000000000000000000000000000F"
+            .parse()
+            .unwrap();
+        for (function, argument) in [
+            ("getL1FeeUpperBound(uint256)", raw.len() as u128),
+            ("getOperatorFee(uint256)", u128::from(transaction.gas_limit)),
+        ] {
+            let mut input = keccak_word(function.as_bytes())[..4].to_vec();
+            input.extend_from_slice(&encode_uint256(argument)?);
+            let quote = provider
+                .call(
+                    TransactionRequest::default()
+                        .with_to(oracle)
+                        .with_input(input),
+                )
+                .await
+                .map_err(sanitize_relayer_provider_error)?;
+            if quote.len() != 32 {
+                return Err(ChainBaseError::InvalidRelayIntent(
+                    "Base fee oracle returned invalid data".into(),
+                ));
+            }
+            let fee = u128::try_from(U256::from_be_slice(&quote))
+                .map_err(|_| ChainBaseError::InvalidRelayIntent("Base fee overflow".into()))?;
+            maximum = fee
+                .checked_mul(2)
+                .and_then(|fee| maximum.checked_add(fee))
+                .ok_or_else(|| ChainBaseError::InvalidRelayIntent("Base fee overflow".into()))?;
+        }
+        budget
+            .reserve(chain_id, maximum.max(transaction.estimated_max_cost_wei))
+            .await
+    }
+
+    pub async fn prepare_signed_transaction(
+        &self,
+        rpc_url: &str,
+        expected_chain_id: u64,
+        intent: &EvmTransactionIntent,
+        max_gas: u64,
+        max_fee_per_gas_wei: u128,
+    ) -> Result<PreparedBaseRelayTransaction, ChainBaseError> {
+        if max_gas == 0 || max_fee_per_gas_wei == 0 {
+            return Err(ChainBaseError::InvalidRelayIntent(
+                "gas and fee caps must be positive".to_string(),
+            ));
+        }
+        if intent.value_wei != 0 {
+            return Err(ChainBaseError::InvalidRelayIntent(
+                "hosted relays cannot transfer ETH value".to_string(),
+            ));
+        }
+        let relayer = self.signer.address();
+        if let Some(from) = intent.from.as_deref() {
+            let expected = parse_alloy_address(from)?;
+            if expected != relayer {
+                return Err(ChainBaseError::InvalidRelayIntent(
+                    "transaction sender does not match the configured relayer".to_string(),
+                ));
+            }
+        }
+        let to = parse_alloy_address(&intent.to)?;
+        let data = parse_alloy_bytes(&intent.data)?;
+        if data.len() < 4 {
+            return Err(ChainBaseError::InvalidRelayIntent(
+                "transaction calldata is missing a function selector".to_string(),
+            ));
+        }
+        let rpc_url = rpc_url.parse().map_err(|_| {
+            ChainBaseError::RelayerProvider("configured RPC URL is invalid".to_string())
+        })?;
+        let provider = ProviderBuilder::new()
+            .wallet(self.signer.clone())
+            .connect_http(rpc_url);
+        let observed_chain_id = provider
+            .get_chain_id()
+            .await
+            .map_err(sanitize_relayer_provider_error)?;
+        if observed_chain_id != expected_chain_id {
+            return Err(ChainBaseError::RelayerChainMismatch {
+                expected: expected_chain_id,
+                observed: observed_chain_id,
+            });
+        }
+
+        let transaction = TransactionRequest::default()
+            .with_from(relayer)
+            .with_to(to)
+            .with_value(U256::ZERO)
+            .with_input(data);
+        provider
+            .call(transaction.clone())
+            .await
+            .map_err(sanitize_relayer_simulation_error)?;
+        let estimated_gas = provider
+            .estimate_gas(transaction.clone())
+            .await
+            .map_err(sanitize_relayer_provider_error)?;
+        let gas_limit = estimated_gas
+            .checked_mul(120)
+            .and_then(|value| value.checked_add(99))
+            .map(|value| value / 100)
+            .ok_or_else(|| {
+                ChainBaseError::InvalidRelayIntent("gas estimate overflow".to_string())
+            })?;
+        if gas_limit > max_gas {
+            return Err(ChainBaseError::RelayerGasLimitExceeded {
+                estimated: gas_limit,
+                maximum: max_gas,
+            });
+        }
+        let fees = provider
+            .estimate_eip1559_fees()
+            .await
+            .map_err(sanitize_relayer_provider_error)?;
+        if fees.max_fee_per_gas > max_fee_per_gas_wei {
+            return Err(ChainBaseError::RelayerFeeCapExceeded {
+                estimated: fees.max_fee_per_gas,
+                maximum: max_fee_per_gas_wei,
+            });
+        }
+        let mut estimated_max_cost_wei = u128::from(gas_limit)
+            .checked_mul(fees.max_fee_per_gas)
+            .ok_or_else(|| {
+                ChainBaseError::InvalidRelayIntent("maximum gas cost overflow".to_string())
+            })?;
+        if self.gas_budget.is_some() {
+            // Base charges L1 data and operator fees in addition to execution.
+            // Estimate both from the canonical OP Stack predeploy; never treat
+            // an unavailable fee quote as zero. Pad the unsigned envelope size.
+            let oracle: Address = "0x420000000000000000000000000000000000000F"
+                .parse()
+                .unwrap();
+            for (function, argument) in [
+                ("getL1FeeUpperBound(uint256)", intent.data.len() / 2 + 256),
+                (
+                    "getOperatorFee(uint256)",
+                    usize::try_from(gas_limit)
+                        .map_err(|_| ChainBaseError::InvalidRelayIntent("gas overflow".into()))?,
+                ),
+            ] {
+                let mut input = keccak_word(function.as_bytes())[..4].to_vec();
+                input.extend_from_slice(&encode_uint256(argument as u128)?);
+                let result = provider
+                    .call(
+                        TransactionRequest::default()
+                            .with_to(oracle)
+                            .with_input(input),
+                    )
+                    .await
+                    .map_err(sanitize_relayer_provider_error)?;
+                if result.len() != 32 {
+                    return Err(ChainBaseError::InvalidRelayIntent(
+                        "Base fee oracle returned invalid data".into(),
+                    ));
+                }
+                let fee = u128::try_from(U256::from_be_slice(&result))
+                    .map_err(|_| ChainBaseError::InvalidRelayIntent("Base fee overflow".into()))?;
+                estimated_max_cost_wei = fee
+                    .checked_mul(2)
+                    .and_then(|fee| estimated_max_cost_wei.checked_add(fee))
+                    .ok_or_else(|| {
+                        ChainBaseError::InvalidRelayIntent("Base fee overflow".into())
+                    })?;
+            }
+        }
+        let balance = provider
+            .get_balance(relayer)
+            .await
+            .map_err(sanitize_relayer_provider_error)?;
+        let balance = u128::try_from(balance).map_err(|_| {
+            ChainBaseError::InvalidRelayIntent("relayer balance exceeds u128".to_string())
+        })?;
+        if balance < estimated_max_cost_wei {
+            return Err(ChainBaseError::RelayerInsufficientBalance {
+                balance,
+                required: estimated_max_cost_wei,
+            });
+        }
+
+        let transaction = transaction
+            .with_gas_limit(gas_limit)
+            .with_max_fee_per_gas(fees.max_fee_per_gas)
+            .with_max_priority_fee_per_gas(fees.max_priority_fee_per_gas);
+        let nonce = provider
+            .get_transaction_count(relayer)
+            .pending()
+            .await
+            .map_err(sanitize_relayer_provider_error)?;
+        if let Some(budget) = &self.gas_budget {
+            budget
+                .ensure_sender_nonce_available(expected_chain_id, &format!("{relayer:#x}"), nonce)
+                .await?;
+        }
+        let envelope = transaction
+            .with_nonce(nonce)
+            .with_chain_id(expected_chain_id)
+            .build(&EthereumWallet::from(self.signer.clone()))
+            .await
+            .map_err(|_| ChainBaseError::InvalidRelayIntent("transaction signing failed".into()))?;
+        let signed_transaction = format!("0x{}", hex::encode(envelope.encoded_2718()));
+        let tx_hash = format!("{:#x}", envelope.tx_hash());
+        if let Some(budget) = &self.gas_budget {
+            budget
+                .reserve(expected_chain_id, estimated_max_cost_wei)
+                .await?;
+        }
+        Ok(PreparedBaseRelayTransaction {
+            nonce,
+            signed_transaction,
+            transaction: BaseRelayedTransaction {
+                relayer: format!("{relayer:#x}"),
+                tx_hash,
+                estimated_gas,
+                gas_limit,
+                max_fee_per_gas_wei: fees.max_fee_per_gas,
+                max_priority_fee_per_gas_wei: fees.max_priority_fee_per_gas,
+                estimated_max_cost_wei,
+            },
         })
     }
 }
@@ -388,7 +791,7 @@ pub fn redact_provider_urls(message: &str) -> String {
     redacted
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AutonomousVerificationMode {
     DeterministicModule,
@@ -406,7 +809,7 @@ impl AutonomousVerificationMode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AutonomousBountyCreate {
     pub creator: String,
     pub solver_reward: Money,
@@ -542,7 +945,7 @@ pub const CANONICAL_CHILD_ACCEPTANCE_CRITERIA: [&str; 4] = [
     "Have a different wallet complete the child and receive canonical settlement before the parent verification deadline.",
 ];
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CanonicalChildBountyTermsRequest {
     pub parent_bounty_id: String,
     pub parent_round: u64,
@@ -571,7 +974,7 @@ pub struct CanonicalChildBountyTermsPlan {
     pub evidence_boundary: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StandingMetaV2BenchmarkSource {
     pub kind: String,
@@ -580,7 +983,7 @@ pub struct StandingMetaV2BenchmarkSource {
     pub subdirectory: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StandingMetaV2ChildPreparationRequest {
     pub network: Option<String>,
@@ -590,10 +993,13 @@ pub struct StandingMetaV2ChildPreparationRequest {
     pub title: String,
     pub goal: String,
     pub acceptance_criteria: Vec<String>,
+    /// Exact source selected by the reviewed parent lane; other approved profiles do not substitute.
     pub benchmark_source: StandingMetaV2BenchmarkSource,
+    /// Complete execution settings for that exact selected profile.
     pub runner_manifest: RegressionSandboxPolicy,
     pub evidence_schema: Option<Value>,
     pub verifier_reward: Option<Money>,
+    /// New-child Unix cutoff. Defaults to the parent cutoff only while future; otherwise required.
     pub funding_deadline: Option<u64>,
     pub claim_window_seconds: Option<u64>,
     pub verification_window_seconds: Option<u64>,
@@ -605,6 +1011,9 @@ pub struct StandingMetaV2ChildPreparationRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StandingMetaV2ParentContext {
+    /// Derived from reviewed parent terms, never from child request input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewed_child_profile_id: Option<String>,
     pub protocol_version: String,
     pub bounty_contract: String,
     pub bounty_id: String,
@@ -842,7 +1251,7 @@ pub struct AutonomousBountyCreationBatchPlan {
     pub evidence_boundary: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AutonomousBountyAuthorizationSignature {
     pub v: u8,
     pub r: String,
@@ -859,7 +1268,7 @@ pub struct AutonomousBountyAuthorizedCreationPlan {
     pub evidence_boundary: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AutonomousBountyContribution {
     pub bounty_contract: String,
     pub contributor: String,
@@ -945,7 +1354,7 @@ pub struct AtomicSponsoredClaimPlan {
     pub evidence_boundary: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AutonomousBountySubmissionAuthorizationRequest {
     pub bounty_contract: String,
     pub bounty_id: String,
@@ -993,17 +1402,23 @@ pub struct AutonomousBountySubmissionPreparation {
     pub claim_expires_at: u64,
     pub authorization_deadline: u64,
     pub artifact_reference: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checked_artifact: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_eligibility: Option<Value>,
     pub submission_hash: String,
     pub evidence_hash: String,
     pub policy_hash: String,
     pub signing_payload: AutonomousBountySubmissionAuthorizationTypedData,
     pub unsigned_relay_envelope: Value,
+    /// Same hosted transport is available to API, MCP and CLI callers.
+    pub hosted_relay_request: Value,
     pub evidence_publication: Value,
     pub relay_issue_url: Option<String>,
     pub evidence_boundary: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AutonomousVerificationAttestationRequest {
     pub bounty_contract: String,
     pub bounty_id: String,
@@ -1041,7 +1456,7 @@ pub struct AutonomousVerificationAttestationTypedData {
     pub message: AutonomousVerificationAttestationMessage,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AutonomousSignedAttestation {
     pub verifier: String,
     pub passed: bool,
@@ -1150,6 +1565,25 @@ impl AutonomousBountyTxPlanner {
         })
     }
 
+    /// Expiry is a transport permission, not part of immutable bounty terms or CREATE2.
+    pub fn plan_creation_with_expiry(
+        &self,
+        network: &str,
+        create: &AutonomousBountyCreate,
+        valid_before: u64,
+    ) -> Result<AutonomousBountyCreationPlan, ChainBaseError> {
+        if valid_before == 0 || valid_before > create.funding_deadline {
+            return Err(ChainBaseError::InvalidRelayIntent(
+                "invalid creation authorization expiry".into(),
+            ));
+        }
+        let mut plan = self.plan_creation(network, create)?;
+        if let Some(authorization) = plan.eip3009_authorization.as_mut() {
+            authorization.message.valid_before = valid_before.to_string();
+        }
+        Ok(plan)
+    }
+
     pub fn plan_standing_meta_v2_child(
         &self,
         request: &StandingMetaV2ChildPreparationRequest,
@@ -1177,6 +1611,31 @@ impl AutonomousBountyTxPlanner {
             ))
         })?;
         let benchmark_source = standing_meta_v2_benchmark_source(&request.benchmark_source)?;
+        if parent.protocol_version == STANDING_META_V3_ROUTED_PROTOCOL_VERSION {
+            let selected_profile = parent
+                .reviewed_child_profile_id
+                .as_deref()
+                .ok_or(ChainBaseError::RoutedChildProfileUnavailable)?;
+            let registry = verifier_sdk::regression_profile_registry()
+                .map_err(|_| ChainBaseError::RoutedChildProfileUnavailable)?;
+            if !registry
+                .profiles
+                .iter()
+                .any(|profile| profile.id == selected_profile && profile.status == "approved")
+            {
+                return Err(ChainBaseError::RoutedChildProfileUnavailable);
+            }
+            let benchmark = json!({
+                "engine": STANDING_META_V2_REGRESSION_ENGINE,
+                "source": benchmark_source,
+                "runner_manifest": request.runner_manifest,
+            });
+            let requested_profile = verifier_sdk::approved_regression_profile(&benchmark)
+                .map_err(|_| ChainBaseError::RoutedChildProfileMismatch)?;
+            if requested_profile.id != selected_profile {
+                return Err(ChainBaseError::RoutedChildProfileMismatch);
+            }
+        }
 
         let parent_bounty_contract = normalize_address(&request.parent_bounty_contract)?;
         if parent_bounty_contract != normalize_address(&parent.bounty_contract)? {
@@ -1248,12 +1707,16 @@ impl AutonomousBountyTxPlanner {
         .map_err(|_| ChainBaseError::InvalidAmount)?;
         let created_at_unix =
             u64::try_from(created_at.timestamp()).map_err(|_| ChainBaseError::InvalidAmount)?;
-        let funding_deadline = request.funding_deadline.unwrap_or(parent.funding_deadline);
-        if funding_deadline <= created_at_unix {
-            return Err(ChainBaseError::InvalidVerificationConfiguration(
-                "child funding deadline must remain in the future".to_string(),
-            ));
-        }
+        let funding_deadline = match request.funding_deadline {
+            Some(deadline) if deadline <= created_at_unix => {
+                return Err(ChainBaseError::ChildFundingDeadlineExpired);
+            }
+            Some(deadline) => deadline,
+            None if parent.funding_deadline <= created_at_unix => {
+                return Err(ChainBaseError::ChildFundingDeadlineRequired);
+            }
+            None => parent.funding_deadline,
+        };
 
         let task_verifiers = BASE_MAINNET_STANDING_META_V2_VERIFIERS
             .into_iter()
@@ -1619,7 +2082,24 @@ impl AutonomousBountyTxPlanner {
         signature: &AutonomousBountyAuthorizationSignature,
         relayer: Option<&str>,
     ) -> Result<AutonomousBountyAuthorizedCreationPlan, ChainBaseError> {
-        let creation_plan = self.plan_creation(network, create)?;
+        self.plan_authorized_creation_with_expiry(
+            network,
+            create,
+            signature,
+            relayer,
+            create.funding_deadline,
+        )
+    }
+
+    pub fn plan_authorized_creation_with_expiry(
+        &self,
+        network: &str,
+        create: &AutonomousBountyCreate,
+        signature: &AutonomousBountyAuthorizationSignature,
+        relayer: Option<&str>,
+        valid_before: u64,
+    ) -> Result<AutonomousBountyAuthorizedCreationPlan, ChainBaseError> {
+        let creation_plan = self.plan_creation_with_expiry(network, create, valid_before)?;
         let initial_funding = autonomous_money_to_uint256(&create.initial_funding, false)?;
         let params = autonomous_create_param_words(create)?;
         let verifiers = normalized_verifiers(create)?;
@@ -1636,7 +2116,7 @@ impl AutonomousBountyTxPlanner {
                 initial_funding,
                 creation_nonce,
                 0,
-                create.funding_deadline,
+                valid_before,
                 v,
                 parse_bytes32(&signature.r)?,
                 parse_bytes32(&signature.s)?,
@@ -2163,7 +2643,7 @@ impl AutonomousBountyTxPlanner {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct EvmLog {
     pub address: String,
     pub topics: Vec<String>,
@@ -2662,27 +3142,94 @@ pub trait JsonRpcTransport: Send + Sync {
 #[derive(Debug, Clone)]
 pub struct ReqwestJsonRpcTransport {
     client: reqwest::Client,
+    read_pacing: rpc_read_pacing::Pacer,
 }
 
 impl Default for ReqwestJsonRpcTransport {
     fn default() -> Self {
         Self {
             client: reqwest::Client::new(),
+            read_pacing: rpc_read_pacing::Pacer::process(),
         }
     }
 }
 
 impl ReqwestJsonRpcTransport {
+    /// Explicit endpoint transport for recovery: no redirects, failover or unbounded waits.
+    /// The existing admission policy still applies; mutation requests are never retried.
+    pub fn without_redirects(timeout: std::time::Duration) -> Result<Self, ChainBaseError> {
+        if timeout.is_zero() {
+            return Err(ChainBaseError::RpcTransport(
+                "RPC timeout must be positive".into(),
+            ));
+        }
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(timeout)
+            .build()
+            .map_err(|_| ChainBaseError::RpcTransport("RPC client unavailable".into()))?;
+        Ok(Self {
+            client,
+            read_pacing: rpc_read_pacing::Pacer::process(),
+        })
+    }
     async fn post_with_read_retry<T: Serialize + ?Sized>(
         &self,
         rpc_url: &str,
         request: &T,
         read_only: bool,
     ) -> Result<Value, ChainBaseError> {
+        let request_value = serde_json::to_value(request).map_err(|_| {
+            ChainBaseError::InvalidRpcResponse("request serialization failed".into())
+        })?;
         for attempt in 0..3 {
-            match self.post_json_request(rpc_url, request).await {
-                Err(ChainBaseError::RpcHttpStatus(429 | 502 | 503 | 504))
-                    if read_only && attempt < 2 =>
+            // Mutations/unknown methods retain their existing single attempt and
+            // are never queued, replayed or coalesced by read admission.
+            let lease = if read_only {
+                // Every wire attempt, including existing bounded retries, shares
+                // this process endpoint gate. Recheck negative admission AFTER
+                // waiting: a sibling may have established a hold meanwhile.
+                self.read_pacing.wait(rpc_url).await?;
+                Some(rpc_read_admission::ReadLease::acquire(rpc_url)?)
+            } else {
+                None
+            };
+            let probe = lease.as_ref().is_some_and(|lease| lease.probe);
+            let (result, probe_timed_out) = if probe {
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(rpc_read_admission::PROBE_TIMEOUT_SECONDS),
+                    self.post_json_request(rpc_url, request),
+                )
+                .await
+                {
+                    Ok(result) => (result, false),
+                    Err(_) => (
+                        Err(ChainBaseError::RpcTransport("read probe timed out".into())),
+                        true,
+                    ),
+                }
+            } else {
+                (self.post_json_request(rpc_url, request).await, false)
+            };
+            let hold = match &result {
+                Err(ChainBaseError::RpcHttpStatus(429)) => Some((429, 0)),
+                Err(ChainBaseError::RpcRetryAfter {
+                    status: status @ (429 | 503),
+                    retry_after_seconds,
+                }) => Some((*status, *retry_after_seconds)),
+                _ => None,
+            };
+            if let Some(lease) = lease {
+                let valid = result
+                    .as_ref()
+                    .is_ok_and(|response| successful_rpc_envelope(&request_value, response));
+                lease.finish(hold, valid, probe_timed_out);
+            }
+            // A provider-requested hold is returned immediately. Existing bare
+            // 502/503/504 read retries remain bounded, consulting admission again.
+            match result {
+                Err(ChainBaseError::RpcHttpStatus(502..=504))
+                    if read_only && !probe && attempt < 2 =>
                 {
                     tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
                 }
@@ -2691,7 +3238,6 @@ impl ReqwestJsonRpcTransport {
         }
         unreachable!("the third attempt always returns")
     }
-
     async fn post_json_request<T: Serialize + ?Sized>(
         &self,
         rpc_url: &str,
@@ -2717,6 +3263,21 @@ impl ReqwestJsonRpcTransport {
             })?;
         let status = response.status();
         if !status.is_success() {
+            if matches!(status.as_u16(), 429 | 503) {
+                if let Some(retry_after_seconds) = response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| rpc_retry_after_seconds(value, Utc::now()))
+                {
+                    // Return the delay to the polling owner instead of retrying early.
+                    // This also preserves the no-replay boundary for broadcasts.
+                    return Err(ChainBaseError::RpcRetryAfter {
+                        status: status.as_u16(),
+                        retry_after_seconds,
+                    });
+                }
+            }
             return Err(ChainBaseError::RpcHttpStatus(status.as_u16()));
         }
         response
@@ -2724,6 +3285,128 @@ impl ReqwestJsonRpcTransport {
             .await
             .map_err(|error| ChainBaseError::InvalidRpcResponse(error.to_string()))
     }
+}
+
+#[cfg(test)]
+mod explicit_rpc_transport_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    #[tokio::test]
+    async fn explicit_recovery_transport_never_redirects_or_retries_a_mutation() {
+        assert!(ReqwestJsonRpcTransport::without_redirects(std::time::Duration::ZERO).is_err());
+        for status in [307, 503] {
+            let source = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let redirect = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let source_url = format!("http://{}", source.local_addr().unwrap());
+            let redirect_url = format!("http://{}", redirect.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = source.accept().await.unwrap();
+                let mut bytes = [0; 4096];
+                let n = stream.read(&mut bytes).await.unwrap();
+                assert!(String::from_utf8_lossy(&bytes[..n]).contains("eth_sendRawTransaction"));
+                stream.write_all(format!("HTTP/1.1 {status} Test\r\nLocation: {redirect_url}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+                drop(stream);
+                assert!(tokio::time::timeout(
+                    std::time::Duration::from_millis(50),
+                    source.accept()
+                )
+                .await
+                .is_err());
+            });
+            let transport =
+                ReqwestJsonRpcTransport::without_redirects(std::time::Duration::from_secs(1))
+                    .unwrap();
+            let outcome=transport.post_json_value(&source_url,&json!({"jsonrpc":"2.0","id":1,"method":"eth_sendRawTransaction","params":["0x01"]})).await;
+            assert!(matches!(outcome,Err(ChainBaseError::RpcHttpStatus(code)) if code==status));
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(50), redirect.accept())
+                    .await
+                    .is_err()
+            );
+            server.await.unwrap();
+        }
+    }
+}
+
+// This only decides whether a throttled endpoint answered a valid RPC probe.
+// Chain, block, funding and authorization checks still run at their call sites.
+fn successful_rpc_envelope(request: &Value, response: &Value) -> bool {
+    fn one(request: &Value, response: &Value) -> bool {
+        request.get("id").is_some()
+            && response.get("id") == request.get("id")
+            && response.get("jsonrpc").and_then(Value::as_str) == Some("2.0")
+            && response.get("result").is_some()
+            && response.get("error").is_none()
+    }
+    match (request.as_array(), response.as_array()) {
+        (Some(requests), Some(responses)) => {
+            !requests.is_empty()
+                && requests.len() == responses.len()
+                && requests.iter().all(|request| {
+                    responses
+                        .iter()
+                        .filter(|response| one(request, response))
+                        .count()
+                        == 1
+                })
+                && requests.iter().enumerate().all(|(i, request)| {
+                    requests[..i]
+                        .iter()
+                        .all(|other| other.get("id") != request.get("id"))
+                })
+        }
+        (None, None) => one(request, response),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod rpc_probe_envelope_tests {
+    use super::*;
+    #[test]
+    fn only_matching_successful_envelopes_can_release_a_hold() {
+        let request = json!({"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]});
+        assert!(successful_rpc_envelope(
+            &request,
+            &json!({"jsonrpc":"2.0","id":1,"result":"0x2105"})
+        ));
+        for reply in [
+            json!({"jsonrpc":"2.0","id":2,"result":"0x2105"}),
+            json!({"id":1,"result":"0x2105"}),
+            json!({"jsonrpc":"2.0","id":1,"error":{"code":15}}),
+            json!({"jsonrpc":"2.0","id":1,"result":"0x2105","error":null}),
+            json!({"jsonrpc":"2.0","id":1}),
+        ] {
+            assert!(!successful_rpc_envelope(&request, &reply));
+        }
+        let requests = json!([request,{"jsonrpc":"2.0","id":2,"method":"eth_blockNumber"}]);
+        let replies = json!([{"jsonrpc":"2.0","id":2,"result":"0x3"},{"jsonrpc":"2.0","id":1,"result":"0x2105"}]);
+        assert!(successful_rpc_envelope(&requests, &replies));
+        for reply in [
+            json!([]),
+            json!([replies[0], replies[0]]),
+            json!([replies[0]]),
+            json!([replies[0], replies[1], replies[1]]),
+        ] {
+            assert!(!successful_rpc_envelope(&requests, &reply));
+        }
+        assert!(!successful_rpc_envelope(
+            &json!([requests[0], requests[0]]),
+            &json!([replies[1], replies[1]])
+        ));
+    }
+}
+
+fn rpc_retry_after_seconds(value: &str, now: DateTime<Utc>) -> Option<u64> {
+    let value = value.trim();
+    if !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()) {
+        // Overflow must not turn a provider's long hold into an immediate retry.
+        return Some(value.parse().unwrap_or(u64::MAX));
+    }
+    let at = DateTime::parse_from_rfc2822(value)
+        .ok()?
+        .with_timezone(&Utc);
+    Some(at.signed_duration_since(now).num_seconds().max(0) as u64 + 1)
 }
 
 // A positive allowlist is essential: an unfamiliar method or a mixed batch may
@@ -3134,6 +3817,24 @@ pub async fn fetch_block_number(rpc_url: &str, request_id: u64) -> Result<u64, C
         .await
 }
 
+pub async fn fetch_chain_id(rpc_url: &str, request_id: u64) -> Result<u64, ChainBaseError> {
+    let result = rpc_result(
+        ReqwestJsonRpcTransport::default()
+            .post_json_value(
+                rpc_url,
+                &json!({"jsonrpc":"2.0","id":request_id,"method":"eth_chainId","params":[]}),
+            )
+            .await?,
+        request_id,
+        "eth_chainId",
+    )?;
+    parse_rpc_quantity(
+        result
+            .as_str()
+            .ok_or_else(|| ChainBaseError::InvalidRpcResponse("chain ID missing".into()))?,
+    )
+}
+
 pub async fn fetch_block_number_with_transport<T>(
     rpc_url: &str,
     request_id: u64,
@@ -3174,6 +3875,39 @@ pub async fn fetch_safe_block_identity(
         &ReqwestJsonRpcTransport::default(),
     )
     .await
+}
+
+pub async fn fetch_finalized_block_identity(
+    rpc_url: &str,
+    request_id: u64,
+) -> Result<BaseBlockIdentity, ChainBaseError> {
+    fetch_block_identity_with_transport(
+        rpc_url,
+        "finalized",
+        request_id,
+        &ReqwestJsonRpcTransport::default(),
+    )
+    .await
+}
+
+pub async fn fetch_contract_uint128_at(
+    rpc_url: &str,
+    contract: &str,
+    call_data: &str,
+    block_number: u64,
+    request_id: u64,
+) -> Result<u128, ChainBaseError> {
+    let word = fetch_contract_word(
+        rpc_url,
+        &normalize_address(contract)?,
+        &normalize_data(call_data)?,
+        &hex_quantity(block_number),
+        request_id,
+        &ReqwestJsonRpcTransport::default(),
+    )
+    .await?;
+    u128::try_from(U256::from_be_slice(&parse_bytes32(&word)?))
+        .map_err(|_| ChainBaseError::InvalidRpcResponse("contract quantity exceeds uint128".into()))
 }
 
 pub async fn fetch_exact_block_identity(
@@ -3271,6 +4005,7 @@ where
     T: JsonRpcTransport + ?Sized,
 {
     if block_tag != "safe"
+        && block_tag != "finalized"
         && !(block_tag.starts_with("0x")
             && block_tag.len() > 2
             && block_tag[2..]
@@ -3278,7 +4013,7 @@ where
                 .all(|character| character.is_ascii_hexdigit()))
     {
         return Err(ChainBaseError::InvalidRpcResponse(
-            "block identity tag must be safe or a hex quantity".to_string(),
+            "block identity tag must be safe, finalized or a hex quantity".to_string(),
         ));
     }
     let block = rpc_result(
@@ -3826,6 +4561,8 @@ pub struct AutonomousBountyEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AutonomousBountyFeedItem {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_details: Option<Value>,
     pub bounty_id: String,
     pub bounty_contract: String,
     pub creator: String,
@@ -3898,6 +4635,13 @@ pub fn validate_autonomous_cancel_authority(
 pub fn standing_meta_v2_parent_context(
     item: &AutonomousBountyFeedItem,
 ) -> Result<StandingMetaV2ParentContext, ChainBaseError> {
+    standing_meta_parent_context_with_bindings(item, REVIEWED_ROUTED_CHILD_PROFILES)
+}
+
+fn standing_meta_parent_context_with_bindings(
+    item: &AutonomousBountyFeedItem,
+    bindings: &[(&str, &str)],
+) -> Result<StandingMetaV2ParentContext, ChainBaseError> {
     let terms = item.terms.as_ref().ok_or_else(|| {
         ChainBaseError::InvalidVerificationConfiguration(
             "standing-meta parent terms are unavailable".to_string(),
@@ -3908,6 +4652,17 @@ pub fn standing_meta_v2_parent_context(
             "standing-meta parent benchmark is unavailable".to_string(),
         )
     })?;
+    let reviewed_child_profile_id = if item.terms_valid
+        && benchmark.get("engine").and_then(Value::as_str) == Some("standing_meta_v3_routed_parent")
+    {
+        Some(
+            routed_child_profile_with_bindings(&terms.document.benchmark, bindings)
+                .map_err(|_| ChainBaseError::RoutedChildProfileUnavailable)?
+                .to_string(),
+        )
+    } else {
+        None
+    };
     let common_parent = item.status == "claimable"
         && item.terms_valid
         && item.verification_ready
@@ -4000,6 +4755,7 @@ pub fn standing_meta_v2_parent_context(
             )
         })?;
     Ok(StandingMetaV2ParentContext {
+        reviewed_child_profile_id,
         protocol_version: if exact_v3 {
             STANDING_META_V3_ROUTED_PROTOCOL_VERSION
         } else {
@@ -4137,7 +4893,7 @@ pub fn autonomous_bounty_is_earning_ready(item: &AutonomousBountyFeedItem) -> bo
         // A gated v2 bounty rejects claims from wallets without a registry attestation.
         && item.claim_eligibility.is_none()
         && !item.terms.as_ref().is_some_and(|terms| {
-            terms.document.benchmark["engine"] == creator_review::ENGINE
+            creator_review::is_engine(&terms.document.benchmark["engine"])
                 && terms.document.benchmark["delivery_deadline"]
                     .as_u64()
                     .is_none_or(|deadline| deadline <= Utc::now().timestamp().max(0) as u64)
@@ -4456,6 +5212,42 @@ fn valid_regression_benchmark(benchmark: &Value) -> bool {
         .is_ok_and(|policy| policy.validate().is_ok())
 }
 
+pub const ROUTED_CHILD_PROFILE_UNAVAILABLE: &str = "verification_child_profile_unapproved: Verification unavailable. This routed lane has no independently reviewed approved child profile.";
+
+// Service health and a generic regression quorum do not establish a lane's task
+// semantics. Populate only after separately reviewing the lane/profile binding;
+// no current direct-task approval authorizes a routed lane implicitly.
+const REVIEWED_ROUTED_CHILD_PROFILES: &[(&str, &str)] = &[];
+
+pub fn reviewed_routed_child_profile_id(benchmark: &Value) -> Result<&'static str, &'static str> {
+    routed_child_profile_with_bindings(benchmark, REVIEWED_ROUTED_CHILD_PROFILES)
+}
+
+fn routed_child_profile_with_bindings(
+    benchmark: &Value,
+    bindings: &[(&str, &str)],
+) -> Result<&'static str, &'static str> {
+    if benchmark["engine"] != "standing_meta_v3_routed_parent"
+        || benchmark["required_child_engine"] != STANDING_META_V2_REGRESSION_ENGINE
+    {
+        return Err(ROUTED_CHILD_PROFILE_UNAVAILABLE);
+    }
+    let lane = benchmark["lane"]
+        .as_str()
+        .ok_or(ROUTED_CHILD_PROFILE_UNAVAILABLE)?;
+    let (_, profile_id) = bindings
+        .iter()
+        .find(|(reviewed_lane, _)| *reviewed_lane == lane)
+        .ok_or(ROUTED_CHILD_PROFILE_UNAVAILABLE)?;
+    verifier_sdk::regression_profile_registry()
+        .map_err(|_| ROUTED_CHILD_PROFILE_UNAVAILABLE)?
+        .profiles
+        .iter()
+        .find(|profile| profile.id == *profile_id && profile.status == "approved")
+        .map(|profile| profile.id.as_str())
+        .ok_or(ROUTED_CHILD_PROFILE_UNAVAILABLE)
+}
+
 /// Readiness of a deterministic-module bounty. `autonomous_v2` is true for v2 clones, which the
 /// routed-v3 router refuses because it answers only clones of the autonomous-v1 factory.
 fn deterministic_module_readiness(
@@ -4478,10 +5270,18 @@ fn deterministic_module_readiness(
                 "the routed-v3 verifier accepts only autonomous-v1 bounties",
             )
         } else {
-            (
-                true,
-                "the routed-v3 verifier and profitable child dependency are supported",
-            )
+            match reviewed_routed_child_profile_id(
+                &terms
+                    .expect("supported parent has terms")
+                    .document
+                    .benchmark,
+            ) {
+                Ok(_) => (
+                    true,
+                    "the routed-v3 verifier and reviewed child dependency are supported",
+                ),
+                Err(reason) => (false, reason),
+            }
         }
     } else {
         (
@@ -4631,7 +5431,7 @@ pub fn validate_attestation_request_against_feed(
             )
         })?;
     if request.passed
-        && terms.document.benchmark["engine"] == creator_review::ENGINE
+        && creator_review::is_engine(&terms.document.benchmark["engine"])
         && (creator_review::validate(&terms.document).is_err()
             || !creator_review::submission_on_time(&terms.document, verification_expires_at))
     {
@@ -4761,10 +5561,15 @@ pub fn build_autonomous_submission_preparation(
         planner.plan_submission_authorization(network, &authorization_request)?
     };
     let network_descriptor = base_network_descriptor(network)?;
+    let network_key = if network_descriptor.chain_id == 8453 {
+        "base-mainnet"
+    } else {
+        "base-sepolia"
+    };
     let unsigned_relay_envelope = json!({
         "schema": "agent-bounties/autonomous-gas-relay-v1",
         "action": "submit",
-        "network": network_descriptor.name,
+        "network": network_key,
         "bounty_contract": bounty_contract,
         "solver": solver,
         "round": round,
@@ -4774,7 +5579,7 @@ pub fn build_autonomous_submission_preparation(
         "signature": Value::Null,
     });
     let evidence_publication = json!({
-        "network": network_descriptor.name,
+        "network": network_key,
         "bounty_contract": bounty_contract,
         "bounty_id": item.bounty_id,
         "round": round,
@@ -4805,11 +5610,16 @@ pub fn build_autonomous_submission_preparation(
         claim_expires_at,
         authorization_deadline,
         artifact_reference,
+        checked_artifact: None,
+        parent_eligibility: None,
         submission_hash,
         evidence_hash,
         policy_hash: terms.policy_hash.clone(),
         signing_payload,
         unsigned_relay_envelope,
+        hosted_relay_request: json!({"method":"POST", "path":"/v1/base/autonomous-bounties/submission-relay",
+            "body":{"network":network_key,"submission":authorization_request,"signature":Value::Null},
+            "insert_wallet_signature_at":"body.signature", "customer_gas_wei":"0"}),
         evidence_publication,
         relay_issue_url,
         evidence_boundary: "This preparation validates one indexed active claim and computes deterministic public commitments. It does not sign, broadcast, submit, publish evidence, verify, settle, or prove payment. Add the solver's EIP-712 signature to the relay envelope, wait for confirmed canonical SubmissionAdded, then publish the returned evidence preimages. Only BountySettled proves payout.".to_string(),
@@ -5465,9 +6275,12 @@ pub fn build_autonomous_bounty_feed(
             continue;
         }
         if created.len() != 1 {
-            return Err(ChainBaseError::InvalidLogData(
-                "duplicate CanonicalBountyCreated".to_string(),
-            ));
+            // Ambiguous creation cannot authorize claims or prove payment.
+            // Quarantine this bounty while keeping unrelated canonical rows available.
+            eprintln!(
+                "autonomous bounty {bounty_id} quarantined: duplicate CanonicalBountyCreated"
+            );
+            continue;
         }
         let created = created[0];
         let configuration_event = |kind: AutonomousBountyEventKind, name: &str| {
@@ -5688,12 +6501,18 @@ pub fn build_autonomous_bounty_feed(
             })
             .unwrap_or(0);
         let gross_cash_margin = i128::from(solver_reward) - i128::from(required_external_spend);
-        let (verification_ready, verification_readiness_reason) = if !terms_valid {
+        let legacy_mainnet = created
+            .contract_address
+            .eq_ignore_ascii_case("0x082c52131aaf0c56e76b075f895eab6fcab6d2f9")
+            && platform_fee.is_none();
+        let (verification_ready, verification_readiness_reason) = if legacy_mainnet {
+            (false, "autonomous-v1 is recovery-only: immutable module-rejection and authorization weaknesses; use v2 for new work")
+        } else if !terms_valid {
             (false, "content-addressed terms are invalid or unavailable")
         } else if verification_mode == "signed_quorum"
             && terms_record
                 .as_ref()
-                .is_some_and(|terms| terms.document.benchmark["engine"] == creator_review::ENGINE)
+                .is_some_and(|terms| creator_review::is_engine(&terms.document.benchmark["engine"]))
         {
             if terms_record
                 .as_ref()
@@ -5706,7 +6525,11 @@ pub fn build_autonomous_bounty_feed(
                             .is_none_or(|cutoff| cutoff <= Utc::now().timestamp().max(0) as u64)
                     })
                 {
-                    (false, "the creator-review delivery deadline passed; cancel and recover unclaimed funds")
+                    (false, "the human-review delivery deadline passed; cancel and recover unclaimed funds")
+                } else if terms_record.as_ref().is_some_and(|terms| {
+                    terms.document.benchmark["engine"] == creator_review::CUSTOMER_REVIEW_ENGINE
+                }) {
+                    (true, "customer review is supported; the pinned platform key signs only the paying customer's recorded verdict")
                 } else {
                     (true, "creator-signed human review is supported; completion requires the creator's verdict")
                 }
@@ -5732,6 +6555,7 @@ pub fn build_autonomous_bounty_feed(
             )
         };
         let item = AutonomousBountyFeedItem {
+            verification_details: None,
             bounty_id,
             bounty_contract,
             creator,
@@ -5808,6 +6632,15 @@ pub fn sha256_utf8(value: &str) -> String {
 pub fn sha256_canonical_json(value: &Value) -> Result<String, ChainBaseError> {
     let bytes = canonical_json_bytes(value)?;
     Ok(format!("0x{}", hex::encode(Sha256::digest(bytes))))
+}
+
+pub fn reviewed_regression_registry_digest() -> String {
+    verifier_sdk::regression_profile_registry_digest()
+}
+pub fn reviewed_regression_profile_id(benchmark: &Value) -> Result<String, ChainBaseError> {
+    verifier_sdk::approved_regression_profile(benchmark)
+        .map(|profile| profile.id.clone())
+        .map_err(|error| ChainBaseError::InvalidVerificationConfiguration(error.to_string()))
 }
 
 pub fn validate_regression_profile(benchmark: &Value) -> Result<(), ChainBaseError> {
@@ -5901,13 +6734,13 @@ pub fn build_autonomous_bounty_terms_record(
     }
     validate_reconciled_regression_benchmark(&document)?;
     validate_contract_terms_document(&normalized_creator, &document.contract_terms, created_at)?;
-    if document.benchmark["engine"] == creator_review::ENGINE
-        || document.verification_policy["engine"] == creator_review::ENGINE
+    if creator_review::is_engine(&document.benchmark["engine"])
+        || creator_review::is_engine(&document.verification_policy["engine"])
     {
         creator_review::validate(&document)?;
     }
     validate_known_deterministic_module_semantics(&document)?;
-    validate_claim_metadata(&mut document)?;
+    normalize_autonomous_terms_claim_metadata(&mut document)?;
     let document_value = serde_json::to_value(&document)
         .map_err(|error| ChainBaseError::InvalidCanonicalJson(error.to_string()))?;
     if serde_json::to_vec(&document_value)
@@ -6037,7 +6870,9 @@ fn active_terms_semantic_error(
     })
 }
 
-fn validate_claim_metadata(
+/// Normalize the typed claim policies exactly as publication does. This does not
+/// validate funding deadlines, authorize a publisher, or admit a new bounty.
+pub fn normalize_autonomous_terms_claim_metadata(
     document: &mut AutonomousBountyTermsDocument,
 ) -> Result<(), ChainBaseError> {
     if let Some(policy) = document.agent_eligibility.as_mut() {
@@ -6624,7 +7459,7 @@ pub(crate) fn eip3009_typed_data(
 
 /// Circle USDC `ReceiveWithAuthorization`: only `to` may execute it, so a published signature
 /// cannot be submitted to the token directly. Autonomous-v2 contracts accept only this type.
-pub(crate) fn eip3009_receive_typed_data(
+pub fn eip3009_receive_typed_data(
     network: &BaseNetworkDescriptor,
     from: &str,
     to: &str,
@@ -6699,6 +7534,148 @@ fn eip3009_authorization_typed_data(
             nonce: nonce.to_ascii_lowercase(),
         },
     }
+}
+
+pub fn creation_authorization_digest(
+    typed: &Eip3009AuthorizationTypedData,
+) -> Result<B256, ChainBaseError> {
+    let domain = keccak_words(&[
+        keccak_word(
+            b"EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)",
+        ),
+        keccak_word(typed.domain.name.as_bytes()),
+        keccak_word(typed.domain.version.as_bytes()),
+        encode_uint256(typed.domain.chain_id.into())?,
+        encode_address(&typed.domain.verifying_contract)?,
+    ]);
+    let number = |s: &str| {
+        s.parse::<u128>()
+            .map_err(|_| ChainBaseError::InvalidRelayIntent("invalid authorization number".into()))
+    };
+    let message = &typed.message;
+    let primary_type = match typed.primary_type.as_str() {
+        "TransferWithAuthorization" => b"TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)".as_slice(),
+        "ReceiveWithAuthorization" => b"ReceiveWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)".as_slice(),
+        _ => return Err(ChainBaseError::InvalidRelayIntent("unsupported authorization type".into())),
+    };
+    let body = keccak_words(&[
+        keccak_word(primary_type),
+        encode_address(&message.from)?,
+        encode_address(&message.to)?,
+        encode_uint256(number(&message.value)?)?,
+        encode_uint256(number(&message.valid_after)?)?,
+        encode_uint256(number(&message.valid_before)?)?,
+        parse_bytes32(&message.nonce)?,
+    ]);
+    let mut bytes = vec![0x19, 0x01];
+    bytes.extend_from_slice(&domain);
+    bytes.extend_from_slice(&body);
+    Ok(B256::from(keccak_word(&bytes)))
+}
+
+pub fn verify_creation_authorization(
+    typed: &Eip3009AuthorizationTypedData,
+    signature: &AutonomousBountyAuthorizationSignature,
+) -> Result<(), ChainBaseError> {
+    let digest = creation_authorization_digest(typed)?;
+
+    let signature = alloy::primitives::Signature::from_scalars_and_parity(
+        B256::from(parse_bytes32(&signature.r)?),
+        B256::from(parse_bytes32(&signature.s)?),
+        normalized_signature_v(signature.v)? == 28,
+    );
+    let signer = signature
+        .recover_address_from_prehash(&digest)
+        .map_err(|_| ChainBaseError::InvalidRelayIntent("invalid creation signature".into()))?;
+    if signer != parse_alloy_address(&typed.message.from)? {
+        return Err(ChainBaseError::InvalidRelayIntent(
+            "creation signature does not match creator".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// The existing factory has a fixed v/r/s ABI. Compatible contract wallets can
+/// validate those exact 65 bytes through ERC-1271; wider signatures need the
+/// separately versioned bytes-signature protocol. Never truncate or reinterpret.
+pub async fn verify_creation_contract_authorization<T: JsonRpcTransport + ?Sized>(
+    transport: &T,
+    rpc_url: &str,
+    typed: &Eip3009AuthorizationTypedData,
+    signature: &AutonomousBountyAuthorizationSignature,
+    block: &BaseBlockIdentity,
+) -> Result<(), ChainBaseError> {
+    if ![27, 28].contains(&signature.v) {
+        return Err(ChainBaseError::InvalidRelayIntent(
+            "contract authorization must preserve an exact 65-byte r/s/v signature".into(),
+        ));
+    }
+    let network = match typed.domain.chain_id {
+        8453 => "base-mainnet",
+        84532 => "base-sepolia",
+        _ => {
+            return Err(ChainBaseError::InvalidRelayIntent(
+                "unsupported authorization chain".into(),
+            ))
+        }
+    };
+    let mut raw = parse_bytes32(&signature.r)?.to_vec();
+    raw.extend_from_slice(&parse_bytes32(&signature.s)?);
+    raw.push(signature.v);
+    verify_contract_wallet_signature(
+        transport,
+        rpc_url,
+        network,
+        parse_alloy_address(&typed.message.from)?,
+        creation_authorization_digest(typed)?,
+        &Bytes::from(raw),
+        block,
+    )
+    .await
+}
+
+/// Verify exact contract-wallet bytes at one fresh canonical block. This grants
+/// no transaction authority: callers must bind the digest to their fixed action.
+pub async fn verify_contract_wallet_signature<T: JsonRpcTransport + ?Sized>(
+    transport: &T,
+    rpc_url: &str,
+    network: &str,
+    signer: Address,
+    digest: B256,
+    signature: &Bytes,
+    block: &BaseBlockIdentity,
+) -> Result<(), ChainBaseError> {
+    if signature.is_empty() || signature.len() > 4096 {
+        return Err(ChainBaseError::InvalidRelayIntent(
+            "invalid signature length".into(),
+        ));
+    }
+    let expected = base_network_descriptor(network)?;
+    if creator_open_service::rpc(transport, rpc_url, "eth_chainId", json!([])).await?
+        != json!(format!("0x{:x}", expected.chain_id))
+    {
+        return Err(ChainBaseError::InvalidRelayIntent(
+            "authorization RPC chain mismatch".into(),
+        ));
+    }
+    let now = chrono::Utc::now().timestamp() as u64;
+    if block.timestamp > now.saturating_add(30) || now.saturating_sub(block.timestamp) > 180 {
+        return Err(ChainBaseError::InvalidRelayIntent(
+            "authorization state is stale".into(),
+        ));
+    }
+    if creator_open_service::code(transport, rpc_url, signer, block)
+        .await?
+        .is_empty()
+    {
+        return Err(ChainBaseError::InvalidRelayIntent(
+            "contract signer has no deployed code".into(),
+        ));
+    }
+    creator_open_service::verify_wallet_signature(
+        transport, rpc_url, signer, digest, signature, block,
+    )
+    .await
 }
 
 fn normalized_signature_v(v: u8) -> Result<u8, ChainBaseError> {
@@ -7058,7 +8035,7 @@ pub(crate) fn validate_public_earning_policy(
             }
         }
         AutonomousVerificationMode::SignedQuorum => {
-            if terms.document.benchmark["engine"] == creator_review::ENGINE {
+            if creator_review::is_engine(&terms.document.benchmark["engine"]) {
                 creator_review::validate(&terms.document)?;
                 return Ok(());
             }
@@ -7106,14 +8083,32 @@ pub(crate) fn validate_public_earning_policy(
 pub fn autonomous_bounty_create_from_terms(
     terms: &AutonomousBountyTermsRecord,
 ) -> Result<AutonomousBountyCreate, ChainBaseError> {
-    let (create, network) = create_fields_from_terms(terms)?;
+    let (create, network) = create_from_terms_unchecked(terms)?;
     validate_autonomous_creation_against_terms(&network, &create, terms)?;
     Ok(create)
 }
 
-/// The creation fields committed by published terms, and the committed network, without the
-/// protocol-specific check that the v1 and v2 callers apply.
-pub(crate) fn create_fields_from_terms(
+/// The exact autonomous-v2 creation committed by published v2 terms, including any claim gate.
+pub fn autonomous_v2_create_from_terms(
+    terms: &AutonomousBountyTermsRecord,
+    factory_fee: &AutonomousV2FactoryFee,
+) -> Result<AutonomousBountyV2Create, ChainBaseError> {
+    let (base, network) = create_from_terms_unchecked(terms)?;
+    let gate = |field: &str| {
+        terms.document.contract_terms[field]
+            .as_str()
+            .map(str::to_string)
+    };
+    let create = AutonomousBountyV2Create {
+        base,
+        claim_eligibility_registry: gate("claim_eligibility_registry"),
+        claim_eligibility_source: gate("claim_eligibility_source"),
+    };
+    validate_autonomous_v2_creation_against_terms(&network, &create, terms, factory_fee)?;
+    Ok(create)
+}
+
+fn create_from_terms_unchecked(
     terms: &AutonomousBountyTermsRecord,
 ) -> Result<(AutonomousBountyCreate, String), ChainBaseError> {
     validate_reconciled_regression_benchmark(&terms.document)?;
@@ -7600,6 +8595,261 @@ fn parse_hex_bytes(value: &str) -> Result<Vec<u8>, ChainBaseError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn creation_signature_matches_independent_eip712_encoding_and_binds_every_field() {
+        use alloy::sol_types::SolStruct;
+        alloy::sol! {
+            struct TransferWithAuthorization {
+                address from; address to; uint256 value; uint256 validAfter;
+                uint256 validBefore; bytes32 nonce;
+            }
+        }
+        // Public development key; never funded or used by the application.
+        let signer: PrivateKeySigner =
+            "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+                .parse()
+                .unwrap();
+        for network in ["base-mainnet", "base-sepolia"] {
+            let descriptor = base_network_descriptor(network).unwrap();
+            let typed = eip3009_typed_data(
+                &descriptor,
+                &format!("{:#x}", signer.address()),
+                "0x1111111111111111111111111111111111111111",
+                21_300_000,
+                0,
+                2_000_000_000,
+                &format!("0x{}", "44".repeat(32)),
+            );
+            let domain = alloy::sol_types::Eip712Domain {
+                name: Some(typed.domain.name.clone().into()),
+                version: Some("2".into()),
+                chain_id: Some(U256::from(descriptor.chain_id)),
+                verifying_contract: Some(typed.domain.verifying_contract.parse().unwrap()),
+                salt: None,
+            };
+            let message = TransferWithAuthorization {
+                from: signer.address(),
+                to: typed.message.to.parse().unwrap(),
+                value: U256::from(21_300_000),
+                validAfter: U256::ZERO,
+                validBefore: U256::from(2_000_000_000u64),
+                nonce: B256::repeat_byte(0x44),
+            };
+            let signed = signer
+                .sign_hash_sync(&message.eip712_signing_hash(&domain))
+                .unwrap()
+                .as_bytes();
+            let signature = AutonomousBountyAuthorizationSignature {
+                v: signed[64],
+                r: format!("0x{}", hex::encode(&signed[..32])),
+                s: format!("0x{}", hex::encode(&signed[32..64])),
+            };
+            assert!(verify_creation_authorization(&typed, &signature).is_ok());
+            for field in [
+                "from",
+                "to",
+                "value",
+                "valid_after",
+                "valid_before",
+                "nonce",
+                "chain",
+                "token",
+                "version",
+                "name",
+            ] {
+                let mut changed = typed.clone();
+                match field {
+                    "from" => {
+                        changed.message.from = "0x2222222222222222222222222222222222222222".into()
+                    }
+                    "to" => {
+                        changed.message.to = "0x2222222222222222222222222222222222222222".into()
+                    }
+                    "value" => changed.message.value = "21300001".into(),
+                    "valid_after" => changed.message.valid_after = "1".into(),
+                    "valid_before" => changed.message.valid_before = "2000000001".into(),
+                    "nonce" => changed.message.nonce = format!("0x{}", "55".repeat(32)),
+                    "chain" => changed.domain.chain_id += 1,
+                    "token" => {
+                        changed.domain.verifying_contract =
+                            "0x2222222222222222222222222222222222222222".into()
+                    }
+                    "version" => changed.domain.version = "3".into(),
+                    "name" => changed.domain.name = "Different token".into(),
+                    _ => unreachable!(),
+                }
+                assert!(
+                    verify_creation_authorization(&changed, &signature).is_err(),
+                    "{network}: {field}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn authorization_digest_binds_receive_type_for_v2_and_preserves_transfer_for_v1() {
+        use alloy::primitives::{Address, U256};
+        use alloy::signers::{local::PrivateKeySigner, SignerSync};
+        use alloy::sol_types::SolStruct;
+        alloy::sol! {
+            struct ReceiveWithAuthorization {
+                address from; address to; uint256 value;
+                uint256 validAfter; uint256 validBefore; bytes32 nonce;
+            }
+        }
+        let signer: PrivateKeySigner = format!("{:064x}", 123).parse().unwrap();
+        for network in ["base-mainnet", "base-sepolia"] {
+            let descriptor = base_network_descriptor(network).unwrap();
+            let typed = eip3009_receive_typed_data(
+                &descriptor,
+                &format!("{:#x}", signer.address()),
+                "0x2222222222222222222222222222222222222222",
+                100_000,
+                0,
+                2_000_000_000,
+                &format!("0x{}", "44".repeat(32)),
+            );
+            let domain = alloy::sol_types::eip712_domain! {
+                name: typed.domain.name.clone(), version: "2",
+                chain_id: descriptor.chain_id,
+                verifying_contract: descriptor.native_usdc_token_address.parse::<Address>().unwrap(),
+            };
+            let message = ReceiveWithAuthorization {
+                from: signer.address(),
+                to: typed.message.to.parse().unwrap(),
+                value: U256::from(100_000),
+                validAfter: U256::ZERO,
+                validBefore: U256::from(2_000_000_000u64),
+                nonce: B256::repeat_byte(0x44),
+            };
+            let digest = message.eip712_signing_hash(&domain);
+            assert_eq!(creation_authorization_digest(&typed).unwrap(), digest);
+            let bytes = signer.sign_hash_sync(&digest).unwrap().as_bytes();
+            let signature = AutonomousBountyAuthorizationSignature {
+                v: bytes[64],
+                r: format!("0x{}", hex::encode(&bytes[..32])),
+                s: format!("0x{}", hex::encode(&bytes[32..64])),
+            };
+            verify_creation_authorization(&typed, &signature).unwrap();
+            let mut wrong_type = typed;
+            wrong_type.primary_type = "TransferWithAuthorization".into();
+            assert!(verify_creation_authorization(&wrong_type, &signature).is_err());
+            wrong_type.primary_type = "UnknownAuthorization".into();
+            assert!(creation_authorization_digest(&wrong_type).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn creation_contract_signature_is_exact_bounded_and_canonical() {
+        let typed = eip3009_typed_data(
+            &base_network_descriptor("base-mainnet").unwrap(),
+            "0x1111111111111111111111111111111111111111",
+            "0x2222222222222222222222222222222222222222",
+            21_300_000,
+            0,
+            2_000_000_000,
+            &format!("0x{}", "44".repeat(32)),
+        );
+        let signature = AutonomousBountyAuthorizationSignature {
+            r: format!("0x{}", "11".repeat(32)),
+            s: format!("0x{}", "22".repeat(32)),
+            v: 28,
+        };
+        let block = BaseBlockIdentity {
+            number: 100,
+            hash: format!("0x{}", "33".repeat(32)),
+            timestamp: chrono::Utc::now().timestamp() as u64,
+        };
+        for failure in [
+            "none",
+            "wrong_chain",
+            "stale",
+            "future",
+            "no_code",
+            "wrong_magic",
+            "revert",
+            "noncanonical",
+            "changed_v",
+        ] {
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let reply = |value: Value| json!({"jsonrpc":"2.0","id":1,"result":value});
+            let code = if failure == "no_code" { "0x" } else { "0x6000" };
+            let mut responses = VecDeque::from([
+                reply(json!(if failure == "wrong_chain" {
+                    "0x1"
+                } else {
+                    "0x2105"
+                })),
+                reply(json!(code)),
+                reply(json!(code)),
+                reply(json!(format!(
+                    "0x{}{}",
+                    if failure == "wrong_magic" {
+                        "ffffffff"
+                    } else {
+                        "1626ba7e"
+                    },
+                    "00".repeat(28)
+                ))),
+            ]);
+            if failure == "revert" {
+                responses[3] = json!({"jsonrpc":"2.0","id":1,"error":{"code":3,"message":"execution reverted"}});
+            }
+            if failure == "noncanonical" {
+                responses[1] = json!({"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"block is not canonical"}});
+            }
+            let transport = SequenceTransport {
+                seen_requests: seen.clone(),
+                responses: Mutex::new(responses),
+            };
+            let mut check_block = block.clone();
+            if failure == "stale" {
+                check_block.timestamp -= 181;
+            }
+            if failure == "future" {
+                check_block.timestamp += 60;
+            }
+            let mut check_signature = signature.clone();
+            if failure == "changed_v" {
+                check_signature.v = 1;
+            }
+            let result = verify_creation_contract_authorization(
+                &transport,
+                "http://127.0.0.1",
+                &typed,
+                &check_signature,
+                &check_block,
+            )
+            .await;
+            assert_eq!(result.is_ok(), failure == "none", "{failure}: {result:?}");
+            let seen = seen.lock().unwrap();
+            if failure == "none" {
+                assert_eq!(seen.len(), 4);
+                for call in &seen[1..] {
+                    assert_eq!(
+                        call["params"][1],
+                        json!({"blockHash":block.hash,"requireCanonical":true})
+                    );
+                }
+                assert_eq!(seen[3]["params"][0]["gas"], "0x30d40");
+                let encoded =
+                    parse_hex_bytes(seen[3]["params"][0]["data"].as_str().unwrap()).unwrap();
+                assert_eq!(&encoded[..4], &selector("isValidSignature(bytes32,bytes)"));
+                assert_eq!(
+                    &encoded[4..36],
+                    creation_authorization_digest(&typed).unwrap().as_slice()
+                );
+                assert_eq!(encoded[99], 65);
+                assert_eq!(&encoded[100..132], &[0x11; 32]);
+                assert_eq!(&encoded[132..164], &[0x22; 32]);
+                assert_eq!(encoded[164], 28);
+            } else {
+                assert!(seen.len() <= 4);
+            }
+        }
+    }
+
     use domain::Money;
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
@@ -7794,6 +9044,70 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires AGENT_BOUNTIES_TEST_RPC_URL backed by an unlocked Anvil chain"]
+    async fn prepared_relay_does_not_broadcast_and_reuses_exact_hash() {
+        let rpc_url = std::env::var("AGENT_BOUNTIES_TEST_RPC_URL").unwrap();
+        let relayer = BaseTransactionRelayer::from_private_key(
+            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+        )
+        .unwrap();
+        let intent = EvmTransactionIntent {
+            from: Some(relayer.address()),
+            to: relayer.address(),
+            value_wei: 0,
+            data: "0x12345678".into(),
+            function: "fixture()".into(),
+        };
+        let signed = relayer
+            .prepare_signed_transaction(&rpc_url, 31337, &intent, 100_000, 100_000_000_000)
+            .await
+            .unwrap();
+        assert!(
+            fetch_transaction_receipt(&rpc_url, &signed.transaction.tx_hash, 1)
+                .await
+                .unwrap()
+                .result
+                .is_none(),
+            "Preparation must never send a transaction"
+        );
+        let broadcast = broadcast_signed_transaction(&rpc_url, &signed.signed_transaction, 2)
+            .await
+            .unwrap();
+        assert_eq!(broadcast.result, signed.transaction.tx_hash);
+        let mut receipt = None;
+        for _ in 0..20 {
+            receipt = fetch_transaction_receipt(&rpc_url, &signed.transaction.tx_hash, 3)
+                .await
+                .unwrap()
+                .result;
+            if receipt.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        let receipt = receipt.expect("local chain must mine the single submitted transaction");
+        assert_eq!(receipt.succeeded().unwrap(), Some(true));
+        let cap_error = relayer
+            .prepare_signed_transaction(&rpc_url, 31337, &intent, 1, 100_000_000_000)
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(
+            cap_error,
+            ChainBaseError::RelayerGasLimitExceeded { .. }
+        ));
+        let chain_error = relayer
+            .prepare_signed_transaction(&rpc_url, 8453, &intent, 100_000, 100_000_000_000)
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(
+            chain_error,
+            ChainBaseError::RelayerChainMismatch { .. }
+        ));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_RPC_URL backed by an unlocked Anvil chain"]
     async fn hosted_relayer_rehearsal_broadcasts_bounded_zero_value_transaction() {
         let rpc_url = std::env::var("AGENT_BOUNTIES_TEST_RPC_URL").unwrap();
         let private_key = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
@@ -7939,6 +9253,7 @@ mod tests {
             discovery_source: None,
         };
         let parent = StandingMetaV2ParentContext {
+            reviewed_child_profile_id: None,
             protocol_version: STANDING_META_V2_PROTOCOL_VERSION.to_string(),
             bounty_contract: request.parent_bounty_contract.clone(),
             bounty_id: "0x12ad2fa99de272728311a3eb07c3c741048382260cb91ba1e8f001ed3b5759d0"
@@ -7998,6 +9313,8 @@ mod tests {
 
         let mut routed_v3_parent = parent.clone();
         routed_v3_parent.protocol_version = STANDING_META_V3_ROUTED_PROTOCOL_VERSION.to_string();
+        // Simulate a separately reviewed future binding; the production table stays empty.
+        routed_v3_parent.reviewed_child_profile_id = Some("a2a-agent-card-v1".to_string());
         routed_v3_parent.solver_reward = Money::new(2_000_000, "usdc").unwrap();
         routed_v3_parent.child_target = Money::new(1_000_000, "usdc").unwrap();
         let routed_v3_plan = planner
@@ -8070,6 +9387,7 @@ mod tests {
             discovery_source: None,
         };
         let parent = StandingMetaV2ParentContext {
+            reviewed_child_profile_id: None,
             protocol_version: STANDING_META_V2_PROTOCOL_VERSION.to_string(),
             bounty_contract: request.parent_bounty_contract.clone(),
             bounty_id: format!("0x{}", "a".repeat(64)),
@@ -8124,6 +9442,176 @@ mod tests {
             .contains("does not match"));
     }
 
+    fn routed_child_preparation_fixture() -> (
+        AutonomousBountyTxPlanner,
+        StandingMetaV2ChildPreparationRequest,
+        StandingMetaV2ParentContext,
+        DateTime<Utc>,
+    ) {
+        let profile = &verifier_sdk::regression_profile_registry()
+            .unwrap()
+            .profiles[0];
+        let request: StandingMetaV2ChildPreparationRequest = serde_json::from_value(json!({
+            "parent_bounty_contract": "0x3333333333333333333333333333333333333333",
+            "parent_solver": "0x1111111111111111111111111111111111111111",
+            "intended_child_solver": "0x2222222222222222222222222222222222222222",
+            "title": "Validate the exact published Agent Card fixture",
+            "goal": "Pass the pinned Agent Card field and smoke-script checks.",
+            "acceptance_criteria": ["The exact published command passes its stated limited checks."],
+            "benchmark_source": profile.sources[0],
+            "runner_manifest": profile.runner_manifest,
+        })).unwrap();
+        let parent = StandingMetaV2ParentContext {
+            reviewed_child_profile_id: Some(profile.id.clone()),
+            protocol_version: STANDING_META_V3_ROUTED_PROTOCOL_VERSION.to_string(),
+            bounty_contract: request.parent_bounty_contract.clone(),
+            bounty_id: format!("0x{}", "a".repeat(64)),
+            creator: "0x4444444444444444444444444444444444444444".to_string(),
+            round: 3,
+            solver_reward: Money::new(2_000_000, "usdc").unwrap(),
+            child_target: Money::new(1_000_000, "usdc").unwrap(),
+            funding_deadline: 1_791_676_800,
+        };
+        let now = DateTime::parse_from_rfc3339("2026-10-28T21:22:26Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let planner = AutonomousBountyTxPlanner::new(
+            BASE_MAINNET_AUTONOMOUS_BOUNTY_FACTORY,
+            BASE_MAINNET_AUTONOMOUS_BOUNTY_IMPLEMENTATION,
+        )
+        .unwrap();
+        (planner, request, parent, now)
+    }
+
+    #[test]
+    fn routed_child_preparation_binds_selected_profile_before_terms_creation() {
+        let (planner, mut request, parent, now) = routed_child_preparation_fixture();
+        request.funding_deadline = Some(now.timestamp() as u64 + 3600);
+        let exact = planner
+            .plan_standing_meta_v2_child(&request, &parent, now)
+            .unwrap();
+        assert_eq!(
+            exact.terms.document.benchmark["source"],
+            serde_json::to_value(&request.benchmark_source).unwrap()
+        );
+        assert!(!exact.hosted_terms_published);
+        let mut equivalent = request.clone();
+        equivalent.benchmark_source.repository =
+            equivalent.benchmark_source.repository.to_uppercase();
+        equivalent.benchmark_source.commit = equivalent.benchmark_source.commit.to_uppercase();
+        assert!(planner
+            .plan_standing_meta_v2_child(&equivalent, &parent, now)
+            .is_ok());
+        let registry = verifier_sdk::regression_profile_registry().unwrap();
+        // Another approved profile is still the wrong profile for this parent.
+        let mut substituted = request.clone();
+        substituted.benchmark_source =
+            serde_json::from_value(registry.profiles[1].sources[0].clone()).unwrap();
+        substituted.runner_manifest =
+            serde_json::from_value(registry.profiles[1].runner_manifest.clone()).unwrap();
+        assert_eq!(
+            planner
+                .plan_standing_meta_v2_child(&substituted, &parent, now)
+                .unwrap_err(),
+            ChainBaseError::RoutedChildProfileMismatch
+        );
+        substituted = request.clone();
+        substituted.benchmark_source.commit = "b".repeat(40);
+        assert_eq!(
+            planner
+                .plan_standing_meta_v2_child(&substituted, &parent, now)
+                .unwrap_err(),
+            ChainBaseError::RoutedChildProfileMismatch
+        );
+        substituted = request.clone();
+        substituted.runner_manifest.command = vec!["true".to_string()];
+        assert_eq!(
+            planner
+                .plan_standing_meta_v2_child(&substituted, &parent, now)
+                .unwrap_err(),
+            ChainBaseError::RoutedChildProfileMismatch
+        );
+        substituted = request.clone();
+        substituted.runner_manifest.image =
+            format!("docker.io/library/python@sha256:{}", "a".repeat(64));
+        assert_eq!(
+            planner
+                .plan_standing_meta_v2_child(&substituted, &parent, now)
+                .unwrap_err(),
+            ChainBaseError::RoutedChildProfileMismatch
+        );
+        substituted = request.clone();
+        substituted.runner_manifest.timeout_seconds += 1;
+        assert_eq!(
+            planner
+                .plan_standing_meta_v2_child(&substituted, &parent, now)
+                .unwrap_err(),
+            ChainBaseError::RoutedChildProfileMismatch
+        );
+        for selection in [
+            None,
+            Some("missing".to_string()),
+            Some("openhands-integration-v1".to_string()),
+        ] {
+            let mut unavailable = parent.clone();
+            unavailable.reviewed_child_profile_id = selection;
+            assert_eq!(
+                planner
+                    .plan_standing_meta_v2_child(&request, &unavailable, now)
+                    .unwrap_err(),
+                ChainBaseError::RoutedChildProfileUnavailable
+            );
+        }
+        let mut caller_override = serde_json::to_value(&request).unwrap();
+        caller_override["reviewed_child_profile_id"] = json!(registry.profiles[1].id);
+        assert!(
+            serde_json::from_value::<StandingMetaV2ChildPreparationRequest>(caller_override)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn routed_child_preparation_requires_new_deadline_without_extending_parent() {
+        let (planner, mut request, parent, now) = routed_child_preparation_fixture();
+        let unchanged_parent = serde_json::to_value(&parent).unwrap();
+        assert_eq!(
+            planner
+                .plan_standing_meta_v2_child(&request, &parent, now)
+                .unwrap_err(),
+            ChainBaseError::ChildFundingDeadlineRequired
+        );
+        for deadline in [parent.funding_deadline, now.timestamp() as u64] {
+            request.funding_deadline = Some(deadline);
+            assert_eq!(
+                planner
+                    .plan_standing_meta_v2_child(&request, &parent, now)
+                    .unwrap_err(),
+                ChainBaseError::ChildFundingDeadlineExpired
+            );
+        }
+        request.funding_deadline = Some(now.timestamp() as u64 + 1);
+        let plan = planner
+            .plan_standing_meta_v2_child(&request, &parent, now)
+            .unwrap();
+        assert_eq!(
+            plan.terms.document.contract_terms["funding_deadline"],
+            request.funding_deadline.unwrap()
+        );
+        assert_eq!(serde_json::to_value(&parent).unwrap(), unchanged_parent);
+        let earlier = DateTime::parse_from_rfc3339("2026-07-17T06:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        request.funding_deadline = None;
+        let prior_default = planner
+            .plan_standing_meta_v2_child(&request, &parent, earlier)
+            .unwrap();
+        assert_eq!(
+            prior_default.terms.document.contract_terms["funding_deadline"],
+            parent.funding_deadline
+        );
+        assert_eq!(serde_json::to_value(&parent).unwrap(), unchanged_parent);
+    }
+
     #[test]
     fn standing_meta_v2_benchmark_source_rejects_unknown_fields() {
         assert!(
@@ -8152,6 +9640,7 @@ mod tests {
         )
         .unwrap();
         let mut item = AutonomousBountyFeedItem {
+            verification_details: None,
             bounty_id: "0x12ad2fa99de272728311a3eb07c3c741048382260cb91ba1e8f001ed3b5759d0"
                 .to_string(),
             bounty_contract: "0x43d42cb227d76588ab16693f14efd6cff851fa7a".to_string(),
@@ -8216,49 +9705,28 @@ mod tests {
             2_000_000,
             routed_v3.terms.as_ref(),
         ));
-        assert_eq!(
-            deterministic_module_readiness(
-                routed_v3.verifier_module.as_deref(),
-                2_000_000,
-                routed_v3.terms.as_ref(),
-                false,
-            ),
-            (
-                true,
-                "the routed-v3 verifier and profitable child dependency are supported"
-            )
-        );
-        // The router reverts NonCanonicalCaller for v2 clones, so v2 must never list as ready.
-        assert_eq!(
-            deterministic_module_readiness(
-                routed_v3.verifier_module.as_deref(),
-                2_000_000,
-                routed_v3.terms.as_ref(),
-                true,
-            ),
-            (
-                false,
-                "the routed-v3 verifier accepts only autonomous-v1 bounties"
-            )
-        );
-        for autonomous_v2 in [false, true] {
-            assert!(
-                deterministic_module_readiness(
-                    Some(BASE_MAINNET_LEADING_ZERO_WORK_VERIFIER),
-                    1,
-                    None,
-                    autonomous_v2,
-                )
-                .0
-            );
+        for lane in ["mcp", "mcp_interoperability", "unknown"] {
+            routed_v3.terms.as_mut().unwrap().document.benchmark["lane"] = json!(lane);
+            assert!(matches!(
+                standing_meta_v2_parent_context(&routed_v3),
+                Err(ChainBaseError::RoutedChildProfileUnavailable)
+            ));
         }
-        let routed_context = standing_meta_v2_parent_context(&routed_v3).unwrap();
+
+        // A reviewed future binding must survive context construction unchanged.
+        // This injection is local to the test; production bindings remain empty.
+        routed_v3.terms.as_mut().unwrap().document.benchmark["lane"] = json!("test-only");
+        let bound_context = standing_meta_parent_context_with_bindings(
+            &routed_v3,
+            &[("test-only", "a2a-agent-card-v1")],
+        )
+        .unwrap();
         assert_eq!(
-            routed_context.protocol_version,
-            STANDING_META_V3_ROUTED_PROTOCOL_VERSION
+            bound_context.reviewed_child_profile_id.as_deref(),
+            Some("a2a-agent-card-v1")
         );
-        assert_eq!(routed_context.solver_reward.amount, 2_000_000);
-        assert_eq!(routed_context.child_target.amount, 1_000_000);
+        assert_eq!(context.reviewed_child_profile_id, None);
+        assert!(standing_meta_v2_parent_context(&routed_v3).is_err());
 
         item.verification_ready = false;
         assert!(standing_meta_v2_parent_context(&item)
@@ -8271,6 +9739,105 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("not an exact"));
+    }
+
+    #[test]
+    fn routed_child_profile_requires_explicit_binding_and_approved_registry_entry() {
+        let mut benchmark = json!({"engine":"standing_meta_v3_routed_parent",
+            "required_child_engine":"sandboxed_regression_v1","lane":"mcp"});
+        for lane in [
+            "mcp",
+            "mcp_interoperability",
+            "api_reliability",
+            "bounty_distribution",
+            "wallet_ux",
+            "cli",
+            "unknown",
+        ] {
+            benchmark["lane"] = json!(lane);
+            assert_eq!(
+                reviewed_routed_child_profile_id(&benchmark),
+                Err(ROUTED_CHILD_PROFILE_UNAVAILABLE)
+            );
+        }
+        benchmark["lane"] = json!("test-only-lane");
+        assert_eq!(
+            routed_child_profile_with_bindings(
+                &benchmark,
+                &[("test-only-lane", "rpc-failover-v1")]
+            ),
+            Ok("rpc-failover-v1")
+        );
+        for profile in ["mcp-discovery-v1", "openhands-integration-v1", "missing"] {
+            assert!(
+                routed_child_profile_with_bindings(&benchmark, &[("test-only-lane", profile)])
+                    .is_err()
+            );
+        }
+        benchmark["lane"] = json!("mcp");
+        benchmark["profile_id"] = json!("a2a-agent-card-v1");
+        assert!(reviewed_routed_child_profile_id(&benchmark).is_err());
+        benchmark.as_object_mut().unwrap().remove("lane");
+        assert!(reviewed_routed_child_profile_id(&benchmark).is_err());
+    }
+
+    #[test]
+    fn duplicate_creation_quarantines_only_the_affected_bounty() {
+        let captured: Vec<AutonomousBountyFeedItem> =
+            serde_json::from_str(include_str!("../fixtures/routed-mcp-readiness-v1.json")).unwrap();
+        assert!(captured.len() >= 2);
+        let terms = captured
+            .iter()
+            .filter_map(|item| item.terms.clone())
+            .collect::<Vec<_>>();
+        let mut events = captured
+            .iter()
+            .flat_map(|item| item.events.clone())
+            .collect::<Vec<_>>();
+        let mut duplicate = captured[0]
+            .events
+            .iter()
+            .find(|event| event.kind == AutonomousBountyEventKind::CanonicalBountyCreated)
+            .unwrap()
+            .clone();
+        duplicate.log_key = "distinct-orphaned-creation-log".into();
+        events.push(duplicate);
+        let feed = build_autonomous_bounty_feed(events, terms, false).unwrap();
+        assert!(!feed
+            .iter()
+            .any(|item| item.bounty_id == captured[0].bounty_id));
+        assert!(feed
+            .iter()
+            .any(|item| item.bounty_id == captured[1].bounty_id));
+    }
+
+    #[test]
+    fn captured_mcp_parents_are_visible_but_not_earning_ready_without_child_profile() {
+        let captured: Vec<AutonomousBountyFeedItem> =
+            serde_json::from_str(include_str!("../fixtures/routed-mcp-readiness-v1.json")).unwrap();
+        for original in captured {
+            let terms = original.terms.clone().unwrap();
+            let projected =
+                build_autonomous_bounty_feed(original.events.clone(), [terms.clone()], false)
+                    .unwrap();
+            assert_eq!(projected.len(), 1);
+            let current = &projected[0];
+            assert!(current.terms_valid);
+            assert_eq!(current.status, "claimable");
+            assert!(!current.verification_ready);
+            assert!(current
+                .verification_readiness_reason
+                .contains("recovery-only"));
+            assert_eq!(current.terms_hash, original.terms_hash);
+            assert_eq!(current.funded_amount, original.funded_amount);
+            assert_eq!(
+                serde_json::to_value(&current.terms).unwrap(),
+                serde_json::to_value(&original.terms).unwrap()
+            );
+            assert!(build_autonomous_bounty_feed(original.events, [terms], true)
+                .unwrap()
+                .is_empty());
+        }
     }
 
     #[test]
@@ -8402,6 +9969,44 @@ mod tests {
             authorized.predicted_bounty_contract,
             plan.predicted_bounty_contract
         );
+
+        // Transport expiry does not alter the immutable terms or CREATE2 address.
+        let expiry = 1_999_999_000;
+        let short = planner
+            .plan_creation_with_expiry("base-mainnet", &create, expiry)
+            .unwrap();
+        assert_eq!(short.bounty_id, plan.bounty_id);
+        assert_eq!(
+            short.predicted_bounty_contract,
+            plan.predicted_bounty_contract
+        );
+        assert_eq!(
+            short.eip3009_authorization.unwrap().message.valid_before,
+            expiry.to_string()
+        );
+        let signed = planner
+            .plan_authorized_creation_with_expiry(
+                "base-mainnet",
+                &create,
+                &AutonomousBountyAuthorizationSignature {
+                    v: 27,
+                    r: format!("0x{}", "11".repeat(32)),
+                    s: format!("0x{}", "22".repeat(32)),
+                },
+                None,
+                expiry,
+            )
+            .unwrap();
+        let word =
+            |index: usize| &signed.relay_transaction.data[10 + index * 64..10 + (index + 1) * 64];
+        assert_eq!(word(19), format!("{expiry:064x}"));
+        assert_eq!(word(8), format!("{:064x}", create.funding_deadline));
+        assert!(planner
+            .plan_creation_with_expiry("base-mainnet", &create, 0)
+            .is_err());
+        assert!(planner
+            .plan_creation_with_expiry("base-mainnet", &create, create.funding_deadline + 1)
+            .is_err());
 
         let mut zero_verifier_reward = create;
         zero_verifier_reward.verifier_reward = Money::zero("usdc");
@@ -9081,13 +10686,6 @@ mod tests {
                 .is_err(),
             "v1 creation must refuse v2 terms"
         );
-        let derived_v2 = autonomous_v2_create_from_terms(&v2_record, &factory_fee).unwrap();
-        assert_eq!(
-            serde_json::to_value(&derived_v2).unwrap(),
-            serde_json::to_value(&v2_create).unwrap()
-        );
-        assert!(autonomous_bounty_create_from_terms(&v2_record).is_err());
-        assert!(autonomous_v2_create_from_terms(&record, &factory_fee).is_err());
         let v1_hashes = AutonomousBountyV2Create {
             base: create.clone(),
             ..v2_create.clone()
@@ -9725,6 +11323,7 @@ mod tests {
         ));
 
         let item = |bounty_contract: &str| AutonomousBountyFeedItem {
+            verification_details: None,
             bounty_id: format!("0x{}", "ab".repeat(32)),
             bounty_contract: bounty_contract.to_string(),
             creator: "0x4444444444444444444444444444444444444444".to_string(),
@@ -9817,6 +11416,7 @@ mod tests {
         let bounty_contract = "0x2222222222222222222222222222222222222222";
         let solver = "0x3333333333333333333333333333333333333333";
         AutonomousBountyFeedItem {
+            verification_details: None,
             bounty_id: bounty_id.clone(),
             bounty_contract: bounty_contract.to_string(),
             creator: "0x4444444444444444444444444444444444444444".to_string(),
@@ -10039,6 +11639,7 @@ mod tests {
         let evidence_hash = format!("0x{}", "dd".repeat(32));
         let policy_hash = format!("0x{}", "bb".repeat(32));
         let mut item = AutonomousBountyFeedItem {
+            verification_details: None,
             bounty_id: bounty_id.clone(),
             bounty_contract: bounty_contract.to_string(),
             creator: "0x3333333333333333333333333333333333333333".to_string(),
@@ -10203,6 +11804,7 @@ mod tests {
         let bounty_contract = "0x2222222222222222222222222222222222222222";
         let solver = "0x3333333333333333333333333333333333333333";
         let item = AutonomousBountyFeedItem {
+            verification_details: None,
             bounty_id: bounty_id.clone(),
             bounty_contract: bounty_contract.to_string(),
             creator: "0x4444444444444444444444444444444444444444".to_string(),
@@ -10896,6 +12498,29 @@ mod tests {
         ) -> Result<Value, ChainBaseError> {
             *self.seen_request.lock().unwrap() = Some(request.clone());
             Ok(self.response.clone())
+        }
+    }
+}
+
+#[cfg(test)]
+mod rpc_retry_after_tests {
+    use super::*;
+    #[test]
+    fn delay_seconds_and_http_dates_never_shorten_a_valid_provider_hold() {
+        let now = DateTime::parse_from_rfc3339("2026-10-17T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(rpc_retry_after_seconds(" 7200 ", now), Some(7200));
+        assert_eq!(
+            rpc_retry_after_seconds("Sat, 17 Oct 2026 01:00:00 GMT", now),
+            Some(3601)
+        );
+        assert_eq!(
+            rpc_retry_after_seconds("99999999999999999999999999", now),
+            Some(u64::MAX)
+        );
+        for invalid in ["-1", "1.5", "NaN", "", "date", "+3"] {
+            assert_eq!(rpc_retry_after_seconds(invalid, now), None);
         }
     }
 }

@@ -8,8 +8,8 @@ use axum::{
 };
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use db::{
-    DbError, PostgresStore, PostingDraftError, SiteAuthWallet, SitePostingDraft,
-    SitePostingDraftSummary,
+    DbError, PostgresStore, PostingDraftError, ReviewNotificationPreferences, SiteAuthWallet,
+    SitePostingDraft, SitePostingDraftSummary,
 };
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
@@ -51,6 +51,7 @@ struct SiteAuthInner {
     wallet_challenges: Mutex<HashMap<String, WalletChallenge>>,
     posting_drafts_enabled: bool,
     posting_drafts_canary_account_id: Option<String>,
+    review_email_delivery_configured: bool,
 }
 
 #[derive(Clone)]
@@ -72,6 +73,19 @@ struct SessionUser {
     avatar: String,
     iat: i64,
     exp: i64,
+}
+
+// Contact verification is evidence from this OAuth exchange, never a claim read
+// from an existing session cookie or a caller-provided profile/email field.
+struct OAuthProfile {
+    user: SessionUser,
+    verified_email: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewNotificationRequest {
+    enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -130,6 +144,39 @@ struct TimedAccountActivity {
 }
 
 impl SiteAuthService {
+    pub(crate) fn github_origin_identity(&self, headers: &HeaderMap) -> Result<String, StatusCode> {
+        let user = self.current_user(headers).ok_or(StatusCode::UNAUTHORIZED)?;
+        if user.provider != "github" || user.sub.parse::<u64>().ok().is_none_or(|id| id == 0) {
+            return Err(StatusCode::FORBIDDEN);
+        }
+        Ok(user.sub)
+    }
+    pub(crate) fn posting_owner(
+        &self,
+        headers: &HeaderMap,
+        mutation: bool,
+    ) -> Result<String, StatusCode> {
+        if mutation && !self.origin_is_allowed(headers) {
+            return Err(StatusCode::FORBIDDEN);
+        }
+        let owner = self
+            .current_user(headers)
+            .and_then(|user| self.account_id(&user))
+            .ok_or(StatusCode::UNAUTHORIZED)?;
+        if !self.posting_drafts_enabled_for(&owner) {
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
+        Ok(owner)
+    }
+
+    pub(crate) fn funding_cors(&self) -> CorsLayer {
+        CorsLayer::new()
+            .allow_origin(self.inner.allowed_origins.clone())
+            .allow_methods([Method::GET, Method::POST])
+            .allow_headers([header::ACCEPT, header::CONTENT_TYPE])
+            .allow_credentials(true)
+    }
+
     pub fn from_env(store: Option<PostgresStore>) -> anyhow::Result<Self> {
         let session_secret = env::var("AUTH_SESSION_SECRET")
             .ok()
@@ -178,7 +225,16 @@ impl SiteAuthService {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(15))
             .user_agent("Agentizable-SiteAuth/1.0")
+            .redirect(reqwest::redirect::Policy::none())
             .build()?;
+        let review_email_delivery_configured = store.is_some()
+            && matches!(worker::ReviewEmailConfig::from_env(), Ok(Some(_)))
+            && env::var("BASE_MAINNET_BOUNTY_FACTORY")
+                .ok()
+                .is_some_and(|value| {
+                    alloy::primitives::Address::from_str(value.trim())
+                        .is_ok_and(|address| !address.is_zero())
+                });
         Ok(Self {
             inner: Arc::new(SiteAuthInner {
                 session_secret: session_secret.map(String::into_bytes),
@@ -190,6 +246,7 @@ impl SiteAuthService {
                 store,
                 client,
                 wallet_challenges: Mutex::new(HashMap::new()),
+                review_email_delivery_configured,
                 posting_drafts_enabled: matches!(
                     env::var("SITE_POSTING_DRAFTS_ENABLED").as_deref(),
                     Ok("true" | "1")
@@ -236,6 +293,36 @@ impl SiteAuthService {
         ))
     }
 
+    /// Only a verified website cookie yields an account principal. Wallet sessions never enter this path.
+    pub fn authenticated_account_id(
+        &self,
+        headers: &HeaderMap,
+        require_origin: bool,
+    ) -> Option<String> {
+        if require_origin && !self.origin_is_allowed(headers) {
+            return None;
+        }
+        self.account_id(&self.current_user(headers)?)
+    }
+
+    /// Public anonymous browser clients remain readable; only configured site origins may send credentials.
+    pub fn credentialed_cors_layer(&self) -> CorsLayer {
+        use tower_http::cors::{AllowCredentials, AllowHeaders, AllowMethods, AllowOrigin};
+        let allowed = self.inner.allowed_origins.clone();
+        CorsLayer::new()
+            .allow_origin(AllowOrigin::mirror_request())
+            .allow_methods(AllowMethods::mirror_request())
+            .allow_headers(AllowHeaders::mirror_request())
+            // Browser fetch hides these wire headers unless explicitly exposed.
+            .expose_headers([
+                axum::http::HeaderName::from_static(payments_x402::PAYMENT_REQUIRED_HEADER),
+                axum::http::HeaderName::from_static(payments_x402::PAYMENT_RESPONSE_HEADER),
+            ])
+            .allow_credentials(AllowCredentials::predicate(move |origin, _| {
+                allowed.contains(origin)
+            }))
+    }
+
     fn current_user(&self, headers: &HeaderMap) -> Option<SessionUser> {
         let token = cookie_value(headers, SESSION_COOKIE)?;
         verify_session(&token, self.inner.session_secret.as_deref()?, Utc::now())
@@ -261,11 +348,23 @@ pub fn router(service: SiteAuthService) -> Router {
     Router::new()
         .route("/v1/site-auth/healthz", get(healthz))
         .route("/v1/site-auth/session", get(session))
+        .route(
+            "/v1/site-auth/push-notifications",
+            get(push_notifications).post(update_push_notifications),
+        )
         .route("/v1/site-auth/account", get(account))
         .route("/v1/site-auth/posting-drafts", get(list_posting_drafts))
         .route(
+            "/v1/site-auth/review-notifications",
+            get(review_notifications).post(update_review_notifications),
+        )
+        .route(
             "/v1/site-auth/posting-drafts/:operation_id",
             get(get_posting_draft).post(save_posting_draft),
+        )
+        .route(
+            "/v1/site-auth/posting-drafts/:operation_id/renew",
+            post(renew_posting_draft),
         )
         .route("/v1/site-auth/login/:provider", get(begin_oauth))
         .route("/v1/site-auth/callback/:provider", get(finish_oauth))
@@ -289,6 +388,105 @@ struct SavePostingDraftRequest {
 
 fn empty_object() -> Value {
     json!({})
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RenewPostingDraftRequest {
+    expected_revision: i64,
+    saved_request: Value,
+}
+
+async fn renew_posting_draft(
+    Extension(service): Extension<SiteAuthService>,
+    headers: HeaderMap,
+    Path(operation_id): Path<Uuid>,
+    Json(request): Json<RenewPostingDraftRequest>,
+) -> Response {
+    if !service.origin_is_allowed(&headers) {
+        return error_json(StatusCode::FORBIDDEN, "origin_not_allowed");
+    }
+    let Some(account) = service
+        .current_user(&headers)
+        .and_then(|user| service.account_id(&user))
+    else {
+        return error_json(StatusCode::UNAUTHORIZED, "authentication_required");
+    };
+    if !service.posting_drafts_enabled_for(&account) {
+        return error_json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "posting_drafts_not_enabled",
+        );
+    }
+    let Some(store) = service.inner.store.as_ref() else {
+        return error_json(StatusCode::SERVICE_UNAVAILABLE, "draft_storage_unavailable");
+    };
+    let result: Result<SitePostingDraft, (StatusCode, &str)> = async {
+        // A lost successful reply returns the same replacement, never another.
+        if let Some(id) = store
+            .posting_replacement(&account, operation_id)
+            .await
+            .map_err(|_| (StatusCode::SERVICE_UNAVAILABLE, "draft_storage_unavailable"))?
+        {
+            return store
+                .get_site_posting_draft(&account, id)
+                .await
+                .map_err(|_| (StatusCode::SERVICE_UNAVAILABLE, "draft_storage_unavailable"))?
+                .ok_or((StatusCode::CONFLICT, "replacement_unavailable"));
+        }
+        let old = store
+            .get_site_posting_draft(&account, operation_id)
+            .await
+            .map_err(|_| (StatusCode::SERVICE_UNAVAILABLE, "draft_storage_unavailable"))?
+            .ok_or((StatusCode::NOT_FOUND, "draft_not_found"))?;
+        let saved = &request.saved_request;
+        let digest = db::site_posting_draft_hash(saved)
+            .map_err(|_| (StatusCode::BAD_REQUEST, "invalid_saved_authorization"))?;
+        let hash = format!("0x{digest}");
+        if old.revision != request.expected_revision
+            || saved["owner"] != account
+            || saved["operation_id"] != operation_id.to_string()
+            || saved["draft_hash"] != old.draft_hash
+            || old.recovery_state["continuation_hash"] != hash
+            || saved["bounty_contract"] != old.recovery_state["bounty_contract"]
+            || saved["bounty_id"] != old.recovery_state["bounty_id"]
+        {
+            return Err((StatusCode::CONFLICT, "saved_authorization_changed"));
+        }
+        let (_, rpc) = chain_base::BaseRpcUrlConfig::from_env()
+            .resolve("base-mainnet")
+            .map_err(|_| (StatusCode::SERVICE_UNAVAILABLE, "recovery_rpc_unavailable"))?;
+        let proof = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            crate::creation_recovery::prove_inert(saved, &rpc, "base-mainnet"),
+        )
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "finalized_recovery_unavailable",
+            )
+        })?
+        .map_err(|status| {
+            (
+                status,
+                if status == StatusCode::CONFLICT {
+                    "authorization_or_bounty_still_active"
+                } else {
+                    "finalized_recovery_unavailable"
+                },
+            )
+        })?;
+        store
+            .retire_site_posting_authorization(&account, operation_id, old.revision, &hash, &proof)
+            .await
+            .map_err(|_| (StatusCode::CONFLICT, "recovery_revision_conflict"))
+    }
+    .await;
+    match result {
+        Ok(draft) => posting_draft_response(&service, draft),
+        Err((status, code)) => error_json(status, code),
+    }
 }
 
 // Drafts are private coordination records. They neither sign transactions nor
@@ -317,7 +515,24 @@ async fn get_posting_draft(
         .get_site_posting_draft(&account_id, operation_id)
         .await
     {
-        Ok(Some(draft)) => posting_draft_response(&service, draft),
+        Ok(Some(draft)) => match store.posting_replacement(&account_id, operation_id).await {
+            Ok(Some(next)) => match store.get_site_posting_draft(&account_id, next).await {
+                Ok(Some(replacement)) => {
+                    let mut payload = serde_json::to_value(&replacement).expect("draft serializes");
+                    payload["retired_operation_id"] = json!(operation_id);
+                    payload["retired_continuation_hash"] =
+                        draft.recovery_state["continuation_hash"].clone();
+                    payload["continuation_url"] = json!(format!(
+                        "{}/post.html?operation_id={next}",
+                        service.inner.web_origin
+                    ));
+                    no_store_json(StatusCode::OK, payload)
+                }
+                _ => error_json(StatusCode::SERVICE_UNAVAILABLE, "replacement_unavailable"),
+            },
+            Ok(None) => posting_draft_response(&service, draft),
+            Err(error) => posting_draft_error(error),
+        },
         Ok(None) => error_json(StatusCode::NOT_FOUND, "draft_not_found"),
         Err(error) => posting_draft_error(error),
     }
@@ -566,6 +781,7 @@ fn valid_posting_recovery(value: &Value) -> bool {
                     "wallet_sendCalls",
                     "eth_sendTransaction",
                     "eth_signTypedData_v4",
+                    "hosted_creation_relay",
                 ]
                 .contains(&method)
             }))
@@ -770,9 +986,289 @@ fn draft_list_payload(
         "evidence_boundary":"Saved drafts and pending posting operations are private coordination records. They do not prove funding or payment. Resume the same operation to check canonical evidence before retrying."})
 }
 
+fn review_notification_payload(
+    preferences: ReviewNotificationPreferences,
+    delivery_configured: bool,
+    provider: &str,
+) -> Value {
+    let email_verified = preferences.verified_email.is_some();
+    let wallet_linked = preferences.verified_wallet_count > 0;
+    let status = if !preferences.enabled {
+        "disabled"
+    } else if !email_verified {
+        "email_required"
+    } else if !wallet_linked {
+        "wallet_required"
+    } else if !delivery_configured {
+        "delivery_unavailable"
+    } else {
+        "ready"
+    };
+    json!({
+        "enabled": preferences.enabled,
+        "email": preferences.verified_email,
+        "email_verified": email_verified,
+        "wallet_linked": wallet_linked,
+        "delivery_configured": delivery_configured,
+        "status": status,
+        "email_provider_supported": matches!(provider, "google" | "github"),
+    })
+}
+
+async fn review_notifications(
+    Extension(service): Extension<SiteAuthService>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(user) = service.current_user(&headers) else {
+        return error_json(StatusCode::UNAUTHORIZED, "authentication_required");
+    };
+    let (Some(account_id), Some(store)) = (service.account_id(&user), service.inner.store.as_ref())
+    else {
+        return error_json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "notification_settings_unavailable",
+        );
+    };
+    match store.review_notification_preferences(&account_id).await {
+        Ok(preferences) => no_store_json(
+            StatusCode::OK,
+            review_notification_payload(
+                preferences,
+                service.inner.review_email_delivery_configured,
+                &user.provider,
+            ),
+        ),
+        Err(_) => error_json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "notification_settings_unavailable",
+        ),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PushSubscriptionKeys {
+    p256dh: String,
+    auth: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PushSubscription {
+    endpoint: String,
+    keys: PushSubscriptionKeys,
+    #[serde(rename = "expirationTime")]
+    _expiration_time: Option<serde_json::Value>,
+}
+#[derive(Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+enum PushPreference {
+    Subscribe {
+        consent: bool,
+        subscription: PushSubscription,
+    },
+    Unsubscribe {
+        id: uuid::Uuid,
+    },
+    Test {
+        id: uuid::Uuid,
+        request_id: uuid::Uuid,
+        consent: bool,
+    },
+}
+
+async fn push_notifications(
+    Extension(service): Extension<SiteAuthService>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(user) = service.current_user(&headers) else {
+        return error_json(StatusCode::UNAUTHORIZED, "authentication_required");
+    };
+    let (Some(account), Some(store)) = (service.account_id(&user), service.inner.store.as_ref())
+    else {
+        return error_json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "notification_settings_unavailable",
+        );
+    };
+    let public_key = worker::CreatorPushSender::from_env()
+        .ok()
+        .flatten()
+        .map(|sender| sender.public_key().to_owned());
+    match store.active_push_device_count(&account).await {
+        Ok(count) => no_store_json(
+            StatusCode::OK,
+            json!({"configured":public_key.is_some(),"public_key":public_key,"active_devices":count,"maximum_devices":5,"consent_required":true}),
+        ),
+        Err(_) => error_json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "notification_settings_unavailable",
+        ),
+    }
+}
+async fn update_push_notifications(
+    Extension(service): Extension<SiteAuthService>,
+    headers: HeaderMap,
+    request: Result<Json<PushPreference>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let Some((user, _)) = wallet_request_context(&service, &headers) else {
+        return wallet_context_error(&service, &headers);
+    };
+    let Ok(Json(request)) = request else {
+        return error_json(StatusCode::BAD_REQUEST, "invalid_push_preference");
+    };
+    let (Some(account), Some(store)) = (service.account_id(&user), service.inner.store.as_ref())
+    else {
+        return error_json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "notification_settings_unavailable",
+        );
+    };
+    match request {
+        PushPreference::Subscribe {
+            consent,
+            subscription,
+        } => {
+            if !consent
+                || !db::valid_push_subscription(
+                    &subscription.endpoint,
+                    &subscription.keys.p256dh,
+                    &subscription.keys.auth,
+                )
+            {
+                return error_json(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_push_subscription_or_consent",
+                );
+            }
+            if worker::CreatorPushSender::from_env()
+                .ok()
+                .flatten()
+                .is_none()
+            {
+                return error_json(StatusCode::SERVICE_UNAVAILABLE, "push_delivery_unavailable");
+            }
+            match store
+                .save_push_subscription(
+                    &account,
+                    &subscription.endpoint,
+                    &subscription.keys.p256dh,
+                    &subscription.keys.auth,
+                )
+                .await
+            {
+                Ok(id) => no_store_json(StatusCode::OK, json!({"subscribed":true,"id":id})),
+                Err(db::DbError::InvalidPushNotification(_)) => {
+                    error_json(StatusCode::CONFLICT, "push_device_conflict_or_limit")
+                }
+                Err(_) => error_json(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "notification_settings_unavailable",
+                ),
+            }
+        }
+        PushPreference::Unsubscribe { id } => {
+            match store.remove_push_subscription(&account, id).await {
+                Ok(()) => no_store_json(StatusCode::OK, json!({"subscribed":false})),
+                Err(_) => error_json(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "notification_settings_unavailable",
+                ),
+            }
+        }
+        PushPreference::Test {
+            id,
+            request_id,
+            consent,
+        } => {
+            if !consent || request_id.is_nil() {
+                return error_json(
+                    StatusCode::BAD_REQUEST,
+                    "explicit_push_test_consent_required",
+                );
+            }
+            let Ok(Some(sender)) = worker::CreatorPushSender::from_env() else {
+                return error_json(StatusCode::SERVICE_UNAVAILABLE, "push_delivery_unavailable");
+            };
+            let status = match store
+                .reserve_push_delivery_test(&account, id, request_id)
+                .await
+            {
+                Ok(db::PushTestAdmission::Send(delivery)) => {
+                    match sender.send_delivery_test(store, &delivery).await {
+                        Ok(status) => status.to_owned(),
+                        Err(_) => {
+                            return error_json(
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                "push_test_status_unknown",
+                            )
+                        }
+                    }
+                }
+                Ok(db::PushTestAdmission::Recorded(status)) => status,
+                Ok(db::PushTestAdmission::RateLimited) => {
+                    return error_json(StatusCode::TOO_MANY_REQUESTS, "push_test_rate_limited")
+                }
+                Ok(db::PushTestAdmission::Unavailable) => {
+                    return error_json(StatusCode::CONFLICT, "push_test_device_unavailable")
+                }
+                Err(_) => {
+                    return error_json(StatusCode::SERVICE_UNAVAILABLE, "push_test_status_unknown")
+                }
+            };
+            no_store_json(
+                StatusCode::OK,
+                json!({"request_id":request_id,"status":status,"boundary":"Provider acceptance is not device receipt; no bounty or payment action."}),
+            )
+        }
+    }
+}
+
+async fn update_review_notifications(
+    Extension(service): Extension<SiteAuthService>,
+    headers: HeaderMap,
+    request: Result<Json<ReviewNotificationRequest>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let Some((user, _)) = wallet_request_context(&service, &headers) else {
+        return wallet_context_error(&service, &headers);
+    };
+    let Ok(Json(request)) = request else {
+        return error_json(StatusCode::BAD_REQUEST, "invalid_notification_preference");
+    };
+    let (Some(account_id), Some(store)) = (service.account_id(&user), service.inner.store.as_ref())
+    else {
+        return error_json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "notification_settings_unavailable",
+        );
+    };
+    match store
+        .set_review_notifications_enabled(&account_id, request.enabled)
+        .await
+    {
+        Ok(preferences) => no_store_json(
+            StatusCode::OK,
+            review_notification_payload(
+                preferences,
+                service.inner.review_email_delivery_configured,
+                &user.provider,
+            ),
+        ),
+        Err(_) => error_json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "notification_settings_unavailable",
+        ),
+    }
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OAuthBeginQuery {
+    return_to: Option<String>,
+}
 async fn begin_oauth(
     Extension(service): Extension<SiteAuthService>,
     Path(provider): Path<String>,
+    Query(query): Query<OAuthBeginQuery>,
 ) -> Response {
     let provider = provider.to_ascii_lowercase();
     let Some(config) = service.inner.providers.get(&provider) else {
@@ -794,7 +1290,18 @@ async fn begin_oauth(
         );
     }
     let now = Utc::now().timestamp();
-    let state_payload = format!("{provider}|{now}|{}", Uuid::new_v4());
+    let return_to = match query.return_to {
+        Some(value) => match oauth_return_path(&value) {
+            Some(path) => Some(path),
+            None => return error_json(StatusCode::BAD_REQUEST, "invalid_return_path"),
+        },
+        None => None,
+    };
+    let state_payload = format!(
+        "{provider}|{now}|{}{}",
+        Uuid::new_v4(),
+        return_to.map(|p| format!("|{p}")).unwrap_or_default()
+    );
     let Some(secret) = service.inner.session_secret.as_deref() else {
         return auth_redirect(
             &service,
@@ -842,15 +1349,14 @@ async fn finish_oauth(
     let state = query.state.unwrap_or_default();
     let code = query.code.unwrap_or_default();
     let state_cookie = cookie_value(&headers, OAUTH_STATE_COOKIE).unwrap_or_default();
-    let valid_state = service
+    let state_return = service
         .inner
         .session_secret
         .as_deref()
         .and_then(|secret| verify_signed_bytes(&state, secret))
         .and_then(|payload| String::from_utf8(payload).ok())
-        .and_then(|payload| parse_oauth_state(&payload, &provider, Utc::now()))
-        .is_some();
-    if state.is_empty() || state != state_cookie || code.is_empty() || !valid_state {
+        .and_then(|payload| parse_oauth_state_return(&payload, &provider, Utc::now()));
+    if state.is_empty() || state != state_cookie || code.is_empty() || state_return.is_none() {
         return auth_redirect(
             &service,
             "error",
@@ -868,7 +1374,7 @@ async fn finish_oauth(
             Some(clear_state_cookie()),
         );
     };
-    let profile = match exchange_code(&service, &provider, config, &code).await {
+    let oauth_profile = match exchange_code(&service, &provider, config, &code).await {
         Ok(profile) => profile,
         Err(_) => {
             return auth_redirect(
@@ -880,6 +1386,7 @@ async fn finish_oauth(
             )
         }
     };
+    let profile = oauth_profile.user;
     let Some(account_id) = service.account_id(&profile) else {
         return auth_redirect(
             &service,
@@ -918,6 +1425,23 @@ async fn finish_oauth(
             Some(clear_state_cookie()),
         );
     }
+    if store
+        .set_verified_review_email(
+            &account_id,
+            &profile.provider,
+            oauth_profile.verified_email.as_deref(),
+        )
+        .await
+        .is_err()
+    {
+        return auth_redirect(
+            &service,
+            "error",
+            None,
+            Some("account_service_unavailable"),
+            Some(clear_state_cookie()),
+        );
+    }
     let Some(secret) = service.inner.session_secret.as_deref() else {
         return auth_redirect(
             &service,
@@ -929,10 +1453,16 @@ async fn finish_oauth(
     };
     let token = sign_session(profile, secret, Utc::now());
     let session_cookie = format!(
-        "{SESSION_COOKIE}={token}; Path=/v1/site-auth; HttpOnly; Secure; SameSite=Lax; Max-Age={SESSION_MAX_AGE_SECONDS}"
+        "{SESSION_COOKIE}={token}; Path=/v1; HttpOnly; Secure; SameSite=Lax; Max-Age={SESSION_MAX_AGE_SECONDS}"
     );
-    let location = auth_result_url(&service.inner.web_origin, "success", Some(&provider), None);
+    let location = state_return
+        .flatten()
+        .map(|path| format!("{}{}", service.inner.web_origin, path))
+        .unwrap_or_else(|| {
+            auth_result_url(&service.inner.web_origin, "success", Some(&provider), None)
+        });
     let mut response = redirect_response(&location, Some(&session_cookie));
+    response.headers_mut().append(header::SET_COOKIE, HeaderValue::from_static("agent_bounties_session=; Path=/v1/site-auth; HttpOnly; Secure; SameSite=Lax; Max-Age=0"));
     response.headers_mut().append(
         header::SET_COOKIE,
         HeaderValue::from_str(&clear_state_cookie()).expect("valid cookie"),
@@ -948,9 +1478,10 @@ async fn logout(Extension(service): Extension<SiteAuthService>, headers: HeaderM
     response.headers_mut().insert(
         header::SET_COOKIE,
         HeaderValue::from_static(
-            "agent_bounties_session=; Path=/v1/site-auth; HttpOnly; Secure; SameSite=Lax; Max-Age=0",
+            "agent_bounties_session=; Path=/v1; HttpOnly; Secure; SameSite=Lax; Max-Age=0",
         ),
     );
+    response.headers_mut().append(header::SET_COOKIE, HeaderValue::from_static("agent_bounties_session=; Path=/v1/site-auth; HttpOnly; Secure; SameSite=Lax; Max-Age=0"));
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -1293,7 +1824,7 @@ async fn exchange_code(
     provider: &str,
     config: &OAuthProvider,
     code: &str,
-) -> anyhow::Result<SessionUser> {
+) -> anyhow::Result<OAuthProfile> {
     let token: Value = service
         .inner
         .client
@@ -1334,7 +1865,65 @@ async fn provider_profile(
     provider: &str,
     access_token: &str,
     profile: Value,
-) -> anyhow::Result<SessionUser> {
+) -> anyhow::Result<OAuthProfile> {
+    // The public GitHub profile email does not carry verification evidence.
+    // Always query the authenticated email list, even when that field exists.
+    let github_emails = if provider == "github" {
+        Some(
+            service
+                .inner
+                .client
+                .get("https://api.github.com/user/emails?per_page=100")
+                .bearer_auth(access_token)
+                .header(header::ACCEPT, "application/vnd.github+json")
+                .send()
+                .await?
+                .error_for_status()?
+                .json::<Value>()
+                .await?,
+        )
+    } else {
+        None
+    };
+    profile_from_provider_evidence(provider, profile, github_emails.as_ref())
+}
+
+fn verified_contact_email(value: &str) -> Option<String> {
+    let value = value.trim();
+    let (local, domain) = value.split_once('@')?;
+    (!local.is_empty()
+        && !domain.is_empty()
+        && !domain.contains('@')
+        && value.len() <= 320
+        && value.is_ascii()
+        && !value
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || "<>\",;\\".contains(c)))
+    .then(|| value.to_string())
+}
+
+fn verified_github_email(emails: &Value) -> Option<String> {
+    let entries = emails.as_array()?;
+    [true, false].into_iter().find_map(|primary| {
+        entries.iter().find_map(|entry| {
+            (entry.get("verified").and_then(Value::as_bool) == Some(true)
+                && (!primary || entry.get("primary").and_then(Value::as_bool) == Some(true)))
+            .then(|| {
+                entry
+                    .get("email")
+                    .and_then(Value::as_str)
+                    .and_then(verified_contact_email)
+            })
+            .flatten()
+        })
+    })
+}
+
+fn profile_from_provider_evidence(
+    provider: &str,
+    profile: Value,
+    github_emails: Option<&Value>,
+) -> anyhow::Result<OAuthProfile> {
     let (sub, name, email, avatar) = match provider {
         "google" => {
             let sub = required_string(&profile, "sub")?;
@@ -1365,35 +1954,9 @@ async fn provider_profile(
                 })
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| anyhow::anyhow!("GitHub id missing"))?;
-            let mut email = value_string(&profile, "email");
-            if email.is_empty() {
-                let emails: Value = service
-                    .inner
-                    .client
-                    .get("https://api.github.com/user/emails")
-                    .bearer_auth(access_token)
-                    .header(header::ACCEPT, "application/json")
-                    .send()
-                    .await?
-                    .error_for_status()?
-                    .json()
-                    .await?;
-                if let Some(entries) = emails.as_array() {
-                    email = entries
-                        .iter()
-                        .find(|entry| {
-                            entry.get("verified").and_then(Value::as_bool) == Some(true)
-                                && entry.get("primary").and_then(Value::as_bool) == Some(true)
-                        })
-                        .or_else(|| {
-                            entries.iter().find(|entry| {
-                                entry.get("verified").and_then(Value::as_bool) == Some(true)
-                            })
-                        })
-                        .map(|entry| value_string(entry, "email"))
-                        .unwrap_or_default();
-                }
-            }
+            let email = github_emails
+                .and_then(verified_github_email)
+                .unwrap_or_default();
             (
                 sub,
                 first_non_empty(
@@ -1442,14 +2005,20 @@ async fn provider_profile(
         _ => anyhow::bail!("unsupported provider"),
     };
     let now = Utc::now().timestamp();
-    Ok(SessionUser {
-        provider: provider.to_string(),
-        sub: truncate(&sub, 512),
-        name: truncate(&name, 160),
-        email: truncate(&email, 320),
-        avatar: truncate(&avatar, 2048),
-        iat: now,
-        exp: now + SESSION_MAX_AGE_SECONDS,
+    let verified_email = matches!(provider, "google" | "github")
+        .then(|| verified_contact_email(&email))
+        .flatten();
+    Ok(OAuthProfile {
+        verified_email,
+        user: SessionUser {
+            provider: provider.to_string(),
+            sub: truncate(&sub, 512),
+            name: truncate(&name, 160),
+            email: truncate(&email, 320),
+            avatar: truncate(&avatar, 2048),
+            iat: now,
+            exp: now + SESSION_MAX_AGE_SECONDS,
+        },
     })
 }
 
@@ -1781,20 +2350,61 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
             == 0
 }
 
-fn parse_oauth_state(payload: &str, provider: &str, now: DateTime<Utc>) -> Option<()> {
+fn oauth_return_path(value: &str) -> Option<String> {
+    if !value.starts_with('/') || value.starts_with("//") || value.contains(['\\', '|', '#']) {
+        return None;
+    }
+    let url = Url::parse(&format!("https://agentizable.ai{value}")).ok()?;
+    if url.origin().ascii_serialization() != "https://agentizable.ai" {
+        return None;
+    }
+    let params = url.query_pairs().collect::<Vec<_>>();
+    match (url.path(), params.as_slice()) {
+        ("/install/github/", []) => Some("/install/github/".into()),
+        ("/creator-open.html", [(key, id)]) if key == "github_origin" => Some(format!(
+            "/creator-open.html?github_origin={}",
+            Uuid::parse_str(id).ok()?
+        )),
+        ("/post.html", [(key, id)]) if key == "operation_id" => Some(format!(
+            "/post.html?operation_id={}",
+            Uuid::parse_str(id).ok()?
+        )),
+        ("/account.html", [(key, id)]) if key == "managed_quote" || key == "managed_order" => {
+            let id = Uuid::parse_str(id).ok()?;
+            if id.is_nil() {
+                return None;
+            }
+            Some(format!("/account.html?{key}={id}"))
+        }
+        _ => None,
+    }
+}
+fn parse_oauth_state_return(
+    payload: &str,
+    provider: &str,
+    now: DateTime<Utc>,
+) -> Option<Option<String>> {
     let mut parts = payload.split('|');
     let state_provider = parts.next()?;
     let issued_at = parts.next()?.parse::<i64>().ok()?;
     let nonce = parts.next()?;
+    let return_to = match parts.next() {
+        Some(path) => Some(oauth_return_path(path)?),
+        None => None,
+    };
     if parts.next().is_some()
         || state_provider != provider
         || Uuid::parse_str(nonce).is_err()
         || issued_at > now.timestamp() + 30
-        || now.timestamp() - issued_at > OAUTH_STATE_MAX_AGE_SECONDS
+        || now.timestamp().saturating_sub(issued_at) > OAUTH_STATE_MAX_AGE_SECONDS
     {
         return None;
     }
-    Some(())
+    Some(return_to)
+}
+#[cfg(test)]
+fn parse_oauth_state(payload: &str, provider: &str, now: DateTime<Utc>) -> Option<()> {
+    parse_oauth_state_return(payload, provider, now).map(|_| ())
 }
 
 fn normalize_wallet_address(value: &str) -> Result<String, &'static str> {
@@ -2104,6 +2714,26 @@ fn usdc_from_base_units(value: u64) -> String {
     }
 }
 
+// Synthetic account cookies for route-level financial authorization tests only.
+#[cfg(test)]
+pub(crate) fn managed_payment_account_fixture(
+    store: Option<PostgresStore>,
+    subject: &str,
+) -> (SiteAuthService, String, HeaderMap) {
+    let service = tests::review_email_service(store);
+    let mut user = tests::test_user();
+    user.sub = subject.to_owned();
+    let account = service.account_id(&user).unwrap();
+    let token = sign_session(user, &[7; 32], Utc::now());
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::COOKIE,
+        format!("{SESSION_COOKIE}={token}").parse().unwrap(),
+    );
+    headers.insert(header::ORIGIN, "https://agentizable.ai".parse().unwrap());
+    (service, account, headers)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2137,6 +2767,428 @@ mod tests {
     use alloy::signers::{local::PrivateKeySigner, SignerSync};
     use chrono::TimeZone;
     use tower::ServiceExt;
+
+    pub(super) fn review_email_service(store: Option<PostgresStore>) -> SiteAuthService {
+        SiteAuthService {
+            inner: Arc::new(SiteAuthInner {
+                session_secret: Some(vec![7; 32]),
+                wallet_secret: Some(vec![8; 32]),
+                web_origin: "https://agentizable.ai".to_string(),
+                api_origin: "https://api.agentizable.ai".to_string(),
+                allowed_origins: vec![HeaderValue::from_static("https://agentizable.ai")],
+                providers: BTreeMap::new(),
+                store,
+                client: reqwest::Client::new(),
+                wallet_challenges: Mutex::new(HashMap::new()),
+                posting_drafts_enabled: false,
+                posting_drafts_canary_account_id: None,
+                review_email_delivery_configured: false,
+            }),
+        }
+    }
+
+    async fn review_email_request(
+        service: &SiteAuthService,
+        method: Method,
+        user: Option<&SessionUser>,
+        origin: Option<&str>,
+        body: Option<Value>,
+        query: &str,
+    ) -> (StatusCode, Value) {
+        let mut request = axum::http::Request::builder()
+            .method(method)
+            .uri(format!("/v1/site-auth/review-notifications{query}"));
+        if let Some(user) = user {
+            request = request.header(
+                header::COOKIE,
+                format!(
+                    "{SESSION_COOKIE}={}",
+                    sign_session(user.clone(), &[7; 32], Utc::now())
+                ),
+            );
+        }
+        if let Some(origin) = origin {
+            request = request.header(header::ORIGIN, origin);
+        }
+        let body = if let Some(body) = body {
+            request = request.header(header::CONTENT_TYPE, "application/json");
+            axum::body::Body::from(serde_json::to_vec(&body).unwrap())
+        } else {
+            axum::body::Body::empty()
+        };
+        let response = router(service.clone())
+            .oneshot(request.body(body).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+        let body = axum::body::to_bytes(response.into_body(), 8192)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&body).unwrap())
+    }
+
+    #[tokio::test]
+    async fn push_settings_require_self_session_origin_and_explicit_consent_shape() {
+        let service = review_email_service(None);
+        for (user, origin, expected) in [
+            (
+                None,
+                Some("https://agentizable.ai"),
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                Some(test_user()),
+                Some("https://evil.example"),
+                StatusCode::FORBIDDEN,
+            ),
+        ] {
+            let mut request = axum::http::Request::builder()
+                .method(Method::POST)
+                .uri("/v1/site-auth/push-notifications")
+                .header(header::CONTENT_TYPE, "application/json");
+            if let Some(user) = user {
+                request = request.header(
+                    header::COOKIE,
+                    format!(
+                        "{SESSION_COOKIE}={}",
+                        sign_session(user, &[7; 32], Utc::now())
+                    ),
+                );
+            }
+            if let Some(origin) = origin {
+                request = request.header(header::ORIGIN, origin);
+            }
+            let response = router(service.clone())
+                .oneshot(request.body(axum::body::Body::from("{}")).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+        }
+        assert!(serde_json::from_value::<PushPreference>(
+            json!({"action":"subscribe","subscription":{}})
+        )
+        .is_err());
+        assert!(serde_json::from_value::<PushPreference>(
+            json!({"action":"unsubscribe","id":Uuid::new_v4(),"account_id":"other"})
+        )
+        .is_err());
+        for invalid in [
+            json!({"action":"test","id":Uuid::new_v4(),"request_id":Uuid::new_v4()}),
+            json!({"action":"test","id":Uuid::new_v4(),"request_id":Uuid::new_v4(),"consent":true,"endpoint":"https://evil.example"}),
+            json!({"action":"test","id":Uuid::new_v4(),"request_id":Uuid::new_v4(),"consent":true,"account_id":"other"}),
+        ] {
+            assert!(serde_json::from_value::<PushPreference>(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn review_email_requires_current_provider_verification() {
+        let public_profile =
+            json!({"id": 12345, "login": "review-fixture", "email": "public-only@example.test"});
+        let without_evidence =
+            profile_from_provider_evidence("github", public_profile.clone(), None).unwrap();
+        assert!(without_evidence.verified_email.is_none());
+        assert!(without_evidence.user.email.is_empty());
+        let emails = json!([
+            {"email":"unverified@example.test", "primary":true, "verified":false},
+            {"email":"fallback@example.test", "primary":false, "verified":true},
+            {"email":"primary@example.test", "primary":true, "verified":true}
+        ]);
+        let github =
+            profile_from_provider_evidence("github", public_profile, Some(&emails)).unwrap();
+        assert_eq!(
+            github.verified_email.as_deref(),
+            Some("primary@example.test")
+        );
+        assert_eq!(
+            verified_github_email(&json!([
+                {"email":"unverified@example.test", "primary":true, "verified":false},
+                {"email":"fallback@example.test", "primary":false, "verified":true}
+            ]))
+            .as_deref(),
+            Some("fallback@example.test")
+        );
+        for evidence in [
+            json!({}),
+            json!([]),
+            json!([
+                {"email":"unverified@example.test", "primary":true, "verified":"true"}
+            ]),
+        ] {
+            assert!(verified_github_email(&evidence).is_none());
+        }
+        for verified in [json!(false), Value::Null, json!("true")] {
+            assert!(profile_from_provider_evidence(
+                "google",
+                json!({
+                    "sub":"test", "email":"google@example.test", "email_verified":verified
+                }),
+                None
+            )
+            .is_err());
+        }
+        let google = profile_from_provider_evidence(
+            "google",
+            json!({
+                "sub":"test", "email":"google@example.test", "email_verified":true
+            }),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            google.verified_email.as_deref(),
+            Some("google@example.test")
+        );
+        assert!(
+            profile_from_provider_evidence("google", json!({"sub":"test"}), None)
+                .unwrap()
+                .verified_email
+                .is_none()
+        );
+        for (provider, identity) in [("microsoft", "sub"), ("amazon", "user_id")] {
+            let profile = profile_from_provider_evidence(
+                provider,
+                json!({
+                    identity:"test", "email":"display-only@example.test", "email_verified":true
+                }),
+                None,
+            )
+            .unwrap();
+            assert_eq!(profile.user.email, "display-only@example.test");
+            assert!(profile.verified_email.is_none());
+        }
+    }
+
+    #[test]
+    fn review_email_recipient_is_bounded_and_preference_is_boolean_only() {
+        assert_eq!(
+            verified_contact_email("person+review@example.test").as_deref(),
+            Some("person+review@example.test")
+        );
+        for value in [
+            "not-email",
+            "@example.test",
+            "person@",
+            "two@@example.test",
+            "a@b.test\r\nBcc:other@example.test",
+            "Display <a@b.test>",
+            "a@b.test,c@d.test",
+        ] {
+            assert!(verified_contact_email(value).is_none());
+        }
+        assert!(verified_contact_email(&format!("{}@example.test", "a".repeat(320))).is_none());
+        assert!(
+            !serde_json::from_value::<ReviewNotificationRequest>(json!({"enabled":false}))
+                .unwrap()
+                .enabled
+        );
+        for request in [
+            json!({"enabled":"false"}),
+            json!({}),
+            json!({"enabled":true,"email":"other@example.test"}),
+            json!({"enabled":true,"account_id":"another-account"}),
+        ] {
+            assert!(serde_json::from_value::<ReviewNotificationRequest>(request).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn review_email_routes_require_self_session_and_origin_without_cookie_backfill() {
+        let service = review_email_service(None);
+        let user = test_user();
+        let origin = Some("https://agentizable.ai");
+        let (status, _) = review_email_request(
+            &service,
+            Method::GET,
+            None,
+            None,
+            None,
+            "?account_id=someone-else",
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        // A valid old cookie contains an email, but can never establish a verified contact.
+        let (status, body) =
+            review_email_request(&service, Method::GET, Some(&user), None, None, "").await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(!body.to_string().contains(&user.email));
+        for origin in [
+            None,
+            Some("https://attacker.example"),
+            Some("https://agentizable.ai.attacker.example"),
+        ] {
+            let (status, _) = review_email_request(
+                &service,
+                Method::POST,
+                Some(&user),
+                origin,
+                Some(json!({"enabled":false})),
+                "",
+            )
+            .await;
+            assert_eq!(status, StatusCode::FORBIDDEN);
+        }
+        let (status, _) = review_email_request(
+            &service,
+            Method::POST,
+            None,
+            origin,
+            Some(json!({"enabled":false})),
+            "",
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        for body in [
+            json!({"enabled":false,"email":"other@example.test"}),
+            json!({"enabled":true,"account_id":"other"}),
+            json!({"enabled":"true"}),
+            json!({"enabled":true,"provider":"github"}),
+        ] {
+            let (status, body) =
+                review_email_request(&service, Method::POST, Some(&user), origin, Some(body), "")
+                    .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(body, json!({"error":"invalid_notification_preference"}));
+        }
+        let (status, _) = review_email_request(
+            &service,
+            Method::POST,
+            Some(&user),
+            origin,
+            Some(json!({"enabled":false})),
+            "",
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn review_email_preferences_are_private_durable_and_runtime_honest() {
+        let Ok(database_url) = env::var("AGENT_BOUNTIES_TEST_DATABASE_URL") else {
+            eprintln!("skipping isolated PostgreSQL review email route test");
+            return;
+        };
+        let parsed = Url::parse(&database_url).unwrap();
+        assert_eq!(parsed.host_str(), Some("127.0.0.1"));
+        assert_eq!(parsed.port(), Some(55440));
+        assert_eq!(parsed.path(), "/verifier_email_test");
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+        let mut service = review_email_service(Some(store.clone()));
+        let first = SessionUser {
+            sub: Uuid::new_v4().to_string(),
+            ..test_user()
+        };
+        let second = SessionUser {
+            sub: Uuid::new_v4().to_string(),
+            email: "second@example.test".to_string(),
+            ..test_user()
+        };
+        let first_id = service.account_id(&first).unwrap();
+        let second_id = service.account_id(&second).unwrap();
+        for (id, user) in [(&first_id, &first), (&second_id, &second)] {
+            store
+                .upsert_site_auth_account(
+                    id,
+                    &user.provider,
+                    &user.sub,
+                    &user.name,
+                    &user.email,
+                    "",
+                )
+                .await
+                .unwrap();
+        }
+        let (_, old) =
+            review_email_request(&service, Method::GET, Some(&first), None, None, "").await;
+        assert_eq!(old["email"], Value::Null);
+        assert_eq!(old["email_verified"], false);
+        assert_eq!(old["status"], "email_required");
+        assert!(store
+            .review_notification_preferences(&first_id)
+            .await
+            .unwrap()
+            .verified_at
+            .is_none());
+        store
+            .set_verified_review_email(&first_id, "google", Some("verified-first@example.test"))
+            .await
+            .unwrap();
+        store
+            .set_verified_review_email(&second_id, "google", Some("verified-second@example.test"))
+            .await
+            .unwrap();
+        let signer = PrivateKeySigner::random();
+        store
+            .link_site_auth_wallet(
+                &first_id,
+                &format!("{:#x}", signer.address()),
+                BASE_CHAIN_ID,
+            )
+            .await
+            .unwrap();
+        let (_, own) = review_email_request(
+            &service,
+            Method::GET,
+            Some(&first),
+            None,
+            None,
+            &format!("?account_id={second_id}"),
+        )
+        .await;
+        assert_eq!(own["email"], "verified-first@example.test");
+        assert_eq!(own["enabled"], true);
+        assert_eq!(own["wallet_linked"], true);
+        assert_eq!(own["delivery_configured"], false);
+        assert_eq!(own["status"], "delivery_unavailable");
+        let (status, disabled) = review_email_request(
+            &service,
+            Method::POST,
+            Some(&first),
+            Some("https://agentizable.ai"),
+            Some(json!({"enabled":false})),
+            &format!("?account_id={second_id}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(disabled["status"], "disabled");
+        assert!(
+            store
+                .review_notification_preferences(&second_id)
+                .await
+                .unwrap()
+                .enabled
+        );
+        store
+            .set_verified_review_email(&first_id, "google", Some("refreshed-first@example.test"))
+            .await
+            .unwrap();
+        let (_, refreshed) =
+            review_email_request(&service, Method::GET, Some(&first), None, None, "").await;
+        assert_eq!(refreshed["email"], "refreshed-first@example.test");
+        assert_eq!(refreshed["enabled"], false);
+        Arc::get_mut(&mut service.inner)
+            .unwrap()
+            .review_email_delivery_configured = true;
+        let (_, enabled) = review_email_request(
+            &service,
+            Method::POST,
+            Some(&first),
+            Some("https://agentizable.ai"),
+            Some(json!({"enabled":true})),
+            "",
+        )
+        .await;
+        assert_eq!(enabled["status"], "ready");
+        let (_, other) =
+            review_email_request(&service, Method::GET, Some(&second), None, None, "").await;
+        assert_eq!(other["email"], "verified-second@example.test");
+        assert_eq!(other["status"], "wallet_required");
+    }
 
     #[test]
     fn saved_posting_payload_preserves_public_bindings_and_rejects_credentials() {
@@ -2245,6 +3297,160 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn api_account_cookie_requires_origin_on_writes_and_limits_credentialed_cors() {
+        use axum::{body::Body, http::Request};
+        use tower::ServiceExt;
+        let service = SiteAuthService {
+            inner: Arc::new(SiteAuthInner {
+                session_secret: Some(vec![7; 32]),
+                wallet_secret: Some(vec![8; 32]),
+                web_origin: "https://agentizable.ai".into(),
+                api_origin: "https://api.agentizable.ai".into(),
+                allowed_origins: vec![HeaderValue::from_static("https://agentizable.ai")],
+                providers: BTreeMap::new(),
+                store: None,
+                client: reqwest::Client::new(),
+                wallet_challenges: Mutex::new(HashMap::new()),
+                posting_drafts_enabled: false,
+                posting_drafts_canary_account_id: None,
+                review_email_delivery_configured: false,
+            }),
+        };
+        let token = sign_session(test_user(), &[7; 32], Utc::now());
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_str(&format!("{SESSION_COOKIE}={token}")).unwrap(),
+        );
+        assert!(service.authenticated_account_id(&headers, false).is_some());
+        assert!(service.authenticated_account_id(&headers, true).is_none());
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://attacker.example"),
+        );
+        assert!(service.authenticated_account_id(&headers, true).is_none());
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://agentizable.ai"),
+        );
+        assert!(service.authenticated_account_id(&headers, true).is_some());
+        for (origin, credentials) in [
+            ("https://agentizable.ai", true),
+            ("https://attacker.example", false),
+        ] {
+            let app = Router::new()
+                .route("/", get(|| async { "public" }))
+                .layer(service.credentialed_cors_layer());
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .uri("/")
+                        .header(header::ORIGIN, origin)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN],
+                origin
+            );
+            assert_eq!(
+                response
+                    .headers()
+                    .contains_key(header::ACCESS_CONTROL_ALLOW_CREDENTIALS),
+                credentials
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn browser_x402_headers_are_readable_without_exposing_other_headers() {
+        use axum::{body::Body, http::Request};
+        use payments_x402::{PAYMENT_REQUIRED_HEADER, PAYMENT_RESPONSE_HEADER};
+
+        let service = review_email_service(None);
+        for (status, wire_header) in [
+            (StatusCode::PAYMENT_REQUIRED, Some(PAYMENT_REQUIRED_HEADER)),
+            (StatusCode::OK, Some(PAYMENT_RESPONSE_HEADER)),
+            (StatusCode::ACCEPTED, None),
+        ] {
+            for (origin, credentials) in [
+                ("https://agentizable.ai", true),
+                ("https://external-client.example", false),
+            ] {
+                let app = Router::new()
+                    .route(
+                        "/x402",
+                        get(move || async move {
+                            let mut response = (status, "{}").into_response();
+                            if let Some(name) = wire_header {
+                                response.headers_mut().insert(
+                                    axum::http::HeaderName::from_static(name),
+                                    HeaderValue::from_static("fixture-wire-value"),
+                                );
+                            }
+                            response.headers_mut().insert(
+                                "extension-responses",
+                                HeaderValue::from_static("facilitator-only-fixture"),
+                            );
+                            response.headers_mut().insert(
+                                "x-private-debug",
+                                HeaderValue::from_static("not-for-browser-scripts"),
+                            );
+                            response
+                        }),
+                    )
+                    .layer(service.credentialed_cors_layer());
+                let response = app
+                    .oneshot(
+                        Request::builder()
+                            .uri("/x402")
+                            .header(header::ORIGIN, origin)
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), status);
+                assert_eq!(
+                    response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN],
+                    origin
+                );
+                assert_eq!(
+                    response
+                        .headers()
+                        .contains_key(header::ACCESS_CONTROL_ALLOW_CREDENTIALS),
+                    credentials
+                );
+                let exposed: BTreeSet<_> = response
+                    .headers()
+                    .get(header::ACCESS_CONTROL_EXPOSE_HEADERS)
+                    .expect("browser SDK cannot read x402 headers without explicit exposure")
+                    .to_str()
+                    .unwrap()
+                    .split(',')
+                    .map(|name| name.trim().to_ascii_lowercase())
+                    .collect();
+                assert_eq!(
+                    exposed,
+                    BTreeSet::from([
+                        PAYMENT_REQUIRED_HEADER.to_string(),
+                        PAYMENT_RESPONSE_HEADER.to_string()
+                    ])
+                );
+                if let Some(name) = wire_header {
+                    assert!(exposed.contains(name));
+                    assert_eq!(response.headers()[name], "fixture-wire-value");
+                } else {
+                    assert!(!response.headers().contains_key(PAYMENT_REQUIRED_HEADER));
+                    assert!(!response.headers().contains_key(PAYMENT_RESPONSE_HEADER));
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn posting_drafts_require_session_and_same_origin_before_storage() {
         let mut service = SiteAuthService {
             inner: Arc::new(SiteAuthInner {
@@ -2259,6 +3465,7 @@ mod tests {
                 wallet_challenges: Mutex::new(HashMap::new()),
                 posting_drafts_enabled: true,
                 posting_drafts_canary_account_id: None,
+                review_email_delivery_configured: false,
             }),
         };
         let canary = service.account_id(&test_user()).unwrap();
@@ -2363,21 +3570,7 @@ mod tests {
                 .await
                 .unwrap();
         store.migrate().await.unwrap();
-        let mut service = SiteAuthService {
-            inner: Arc::new(SiteAuthInner {
-                session_secret: Some(vec![7; 32]),
-                wallet_secret: Some(vec![8; 32]),
-                web_origin: "https://agentizable.ai".to_string(),
-                api_origin: "https://api.agentizable.ai".to_string(),
-                allowed_origins: vec![HeaderValue::from_static("https://agentizable.ai")],
-                providers: BTreeMap::new(),
-                store: Some(store.clone()),
-                client: reqwest::Client::new(),
-                wallet_challenges: Mutex::new(HashMap::new()),
-                posting_drafts_enabled: true,
-                posting_drafts_canary_account_id: None,
-            }),
-        };
+        let mut service = review_email_service(Some(store.clone()));
         Arc::get_mut(&mut service.inner)
             .unwrap()
             .posting_drafts_enabled = true;
@@ -2530,7 +3723,7 @@ mod tests {
         assert_eq!(removed["account_complete"], false);
     }
 
-    fn test_user() -> SessionUser {
+    pub(super) fn test_user() -> SessionUser {
         SessionUser {
             provider: "google".to_string(),
             sub: "provider-subject".to_string(),
@@ -2575,6 +3768,76 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn github_origin_identity_requires_a_current_numeric_github_session() {
+        let service = review_email_service(None);
+        let mut user = test_user();
+        let mut headers = HeaderMap::new();
+        assert_eq!(
+            service.github_origin_identity(&headers),
+            Err(StatusCode::UNAUTHORIZED)
+        );
+        for (provider, sub, expected) in [
+            ("google", "123", false),
+            ("github", "not-an-id", false),
+            ("github", "0", false),
+            ("github", "123", true),
+        ] {
+            user.provider = provider.into();
+            user.sub = sub.into();
+            let token = sign_session(user.clone(), &[7; 32], Utc::now());
+            headers.insert(
+                header::COOKIE,
+                HeaderValue::from_str(&format!("{SESSION_COOKIE}={token}")).unwrap(),
+            );
+            assert_eq!(service.github_origin_identity(&headers).is_ok(), expected);
+        }
+    }
+
+    #[test]
+    fn oauth_return_is_signed_first_party_and_scoped_to_one_draft() {
+        let now = Utc::now();
+        let id = Uuid::new_v4();
+        for path in [
+            "/install/github/".to_string(),
+            format!("/post.html?operation_id={id}"),
+            format!("/creator-open.html?github_origin={id}"),
+            format!("/account.html?managed_quote={id}"),
+            format!("/account.html?managed_order={id}"),
+        ] {
+            let payload = format!("github|{}|{}|{path}", now.timestamp(), Uuid::new_v4());
+            assert_eq!(
+                parse_oauth_state_return(&payload, "github", now),
+                Some(Some(path))
+            );
+            assert!(parse_oauth_state_return(&payload, "google", now).is_none());
+            assert!(parse_oauth_state_return(
+                &payload,
+                "github",
+                now + ChronoDuration::minutes(11)
+            )
+            .is_none());
+        }
+        for path in [
+            "https://evil.example/",
+            "//evil.example/",
+            "/\\evil.example/",
+            "/install/github/?next=https://evil.example",
+            "/install/github/#secret",
+            "/post.html?operation_id=not-a-uuid",
+            "/creator-open.html?github_origin=1&github_origin=2",
+            "/account.html?managed_order=not-a-uuid",
+            "/account.html?managed_quote=00000000-0000-0000-0000-000000000000",
+            "/account.html?managed_order=11111111-1111-4111-8111-111111111111&managed_order=11111111-1111-4111-8111-111111111111",
+            "/account.html?managed_order=11111111-1111-4111-8111-111111111111&managed_quote=11111111-1111-4111-8111-111111111111",
+            "/account.html?managed_order=11111111-1111-4111-8111-111111111111&checkout_session_id=cs_test_fake",
+            "/account.html?next=https://evil.example",
+            "/v1/site-auth/logout",
+        ] {
+            assert!(oauth_return_path(path).is_none(), "{path}");
+        }
     }
 
     #[tokio::test]

@@ -248,6 +248,8 @@ pub struct OpportunityItem {
     pub deadline_kind: Option<String>,
     pub verification_method: String,
     pub verification_ready: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_details: Option<Value>,
     pub evidence_requirements: Value,
     pub terms_hash: Option<String>,
     pub proof_urls: Vec<String>,
@@ -260,9 +262,54 @@ pub struct OpportunityItem {
     pub evidence_boundary: String,
 }
 
+/// Coverage of the requested read scope, never payment or verifier readiness.
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OpportunityCoverage {
+    Complete,
+    Partial,
+    #[default]
+    Unavailable,
+}
+
+impl OpportunityCoverage {
+    pub fn combine(values: impl IntoIterator<Item = Self>) -> Self {
+        let values: Vec<_> = values.into_iter().collect();
+        if values.is_empty() || values.iter().all(|v| *v == Self::Unavailable) {
+            Self::Unavailable
+        } else if values.iter().all(|v| *v == Self::Complete) {
+            Self::Complete
+        } else {
+            Self::Partial
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Complete => "complete",
+            Self::Partial => "partial",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct OpportunityProtocolStatus {
+    pub protocol: String,
+    pub coverage: OpportunityCoverage,
+    /// Public projected records read before view filtering; not a market total.
+    /// Unavailable sources have an unknown count, not zero.
+    pub item_count: Option<usize>,
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct OpportunitySourceStatus {
     pub source_type: String,
+    #[serde(default)]
+    pub coverage: OpportunityCoverage,
+    #[serde(default)]
+    pub protocol_statuses: Vec<OpportunityProtocolStatus>,
     pub available: bool,
     pub authoritative_urls: Vec<String>,
     pub item_count: usize,
@@ -276,9 +323,65 @@ pub struct OpportunityProjectionResponse {
     pub network: String,
     pub applied_view: Option<String>,
     pub degraded: bool,
+    #[serde(default)]
+    pub coverage: OpportunityCoverage,
+    /// "inventory_page" or "canonical_identity". Complete identity coverage
+    /// establishes nothing about the rest of that protocol's inventory.
+    #[serde(default)]
+    pub coverage_scope: String,
+    #[serde(default)]
+    pub has_more: bool,
+    #[serde(default)]
+    pub requested_opportunity_id: Option<String>,
     pub source_statuses: Vec<OpportunitySourceStatus>,
     pub items: Vec<OpportunityItem>,
     pub evidence_boundary: String,
+}
+
+/// Combine independently checked public projections without discarding a healthy
+/// protocol because a sibling is unavailable. Callers must retain their privacy
+/// projections and apply the ordinary view/readiness filter after this merge.
+pub fn merge_canonical_protocols(
+    results: Vec<(&str, Result<Vec<OpportunityItem>, &'static str>)>,
+    authoritative_urls: Vec<String>,
+) -> (Vec<OpportunityItem>, OpportunitySourceStatus) {
+    let mut items = Vec::new();
+    let mut protocols = Vec::new();
+    for (protocol, result) in results {
+        let (coverage, item_count, error) = match result {
+            Ok(mut entries) => {
+                let count = entries.len();
+                items.append(&mut entries);
+                (OpportunityCoverage::Complete, Some(count), None)
+            }
+            Err(error) => (
+                OpportunityCoverage::Unavailable,
+                None,
+                Some(error.to_string()),
+            ),
+        };
+        protocols.push(OpportunityProtocolStatus {
+            protocol: protocol.to_string(),
+            coverage,
+            item_count,
+            error,
+        });
+    }
+    let coverage = OpportunityCoverage::combine(protocols.iter().map(|p| p.coverage));
+    let errors: Vec<_> = protocols
+        .iter()
+        .filter_map(|p| p.error.as_deref())
+        .collect();
+    let status = OpportunitySourceStatus {
+        source_type: "canonical_base".to_string(),
+        available: coverage == OpportunityCoverage::Complete,
+        coverage,
+        item_count: items.len(),
+        authoritative_urls,
+        error: (!errors.is_empty()).then(|| errors.join("+")),
+        protocol_statuses: protocols,
+    };
+    (items, status)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -364,6 +467,7 @@ pub fn render_opportunity_feeds(
                 "cash_economics": item.cash_economics,
                 "verification_method": item.verification_method,
                 "verification_ready": item.verification_ready,
+                "verification_details": item.verification_details,
                 "terms_hash": item.terms_hash,
                 "image": item.image,
                 "next_action": item.next_action,
@@ -375,13 +479,25 @@ pub fn render_opportunity_feeds(
     let rss_url = format!("{feed_root}/feed.rss");
     let atom_url = format!("{feed_root}/feed.atom");
     let json_url = format!("{feed_root}/feed.json");
+    let coverage_note = format!("Coverage: {} for {}. Missing sources are unknown, not zero. This is a limited page, not a full market total.", projection.coverage.as_str(), projection.coverage_scope);
+    let protocol_note = projection
+        .source_statuses
+        .iter()
+        .flat_map(|s| &s.protocol_statuses)
+        .map(|p| format!("{}={}", p.protocol, p.coverage.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let coverage_note = escape_html(&format!(
+        "{coverage_note} More matching records: {}. {protocol_note}",
+        projection.has_more
+    ));
     let rss = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><rss version=\"2.0\"><channel><title>Agentizable opportunities</title><link>{}</link><description>Public funded and unfunded work discoverable by agents. Payment state is explicit.</description><lastBuildDate>{rss_date}</lastBuildDate><atom:link xmlns:atom=\"http://www.w3.org/2005/Atom\" href=\"{}\" rel=\"self\" type=\"application/rss+xml\"/>{rss_items}</channel></rss>",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><rss version=\"2.0\"><channel><title>Agentizable opportunities</title><link>{}</link><description>Public funded and unfunded work discoverable by agents. Payment state is explicit. {coverage_note}</description><lastBuildDate>{rss_date}</lastBuildDate><atom:link xmlns:atom=\"http://www.w3.org/2005/Atom\" href=\"{}\" rel=\"self\" type=\"application/rss+xml\"/>{rss_items}</channel></rss>",
         escape_html(public_base_url),
         escape_html(&rss_url),
     );
     let atom = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><feed xmlns=\"http://www.w3.org/2005/Atom\"><id>{}</id><title>Agentizable opportunities</title><updated>{atom_date}</updated><link href=\"{}\"/><link href=\"{}\" rel=\"self\" type=\"application/atom+xml\"/><subtitle>Public funded and unfunded work discoverable by agents. Payment state is explicit.</subtitle>{atom_entries}</feed>",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><feed xmlns=\"http://www.w3.org/2005/Atom\"><id>{}</id><title>Agentizable opportunities</title><updated>{atom_date}</updated><link href=\"{}\"/><link href=\"{}\" rel=\"self\" type=\"application/atom+xml\"/><subtitle>Public funded and unfunded work discoverable by agents. Payment state is explicit. {coverage_note}</subtitle>{atom_entries}</feed>",
         escape_html(&atom_url),
         escape_html(public_base_url),
         escape_html(&atom_url),
@@ -392,6 +508,14 @@ pub fn render_opportunity_feeds(
         "home_page_url": public_base_url,
         "feed_url": json_url,
         "description": "Public funded and unfunded work discoverable by agents. Payment state and commitment are explicit; only canonical settlement proves payment.",
+        "_bountyboard": {
+            "coverage": projection.coverage,
+            "coverage_scope": projection.coverage_scope,
+            "has_more": projection.has_more,
+            "requested_opportunity_id": projection.requested_opportunity_id,
+            "degraded": projection.degraded,
+            "source_statuses": projection.source_statuses,
+        },
         "items": json_items,
     }))
     .unwrap_or_else(|_| "{\"version\":\"https://jsonfeed.org/version/1.1\",\"items\":[]}".to_string());
@@ -606,6 +730,7 @@ pub fn unfunded_opportunity(
         deadline_kind: Some("publication_expires_at".to_string()),
         verification_method: "poster_review_or_unspecified".to_string(),
         verification_ready: false,
+        verification_details: None,
         evidence_requirements,
         terms_hash: None,
         proof_urls: Vec::new(),
@@ -747,6 +872,7 @@ pub fn legacy_opportunity(
                 | BountyStatus::Payable
                 | BountyStatus::Paid
         ),
+        verification_details: None,
         evidence_requirements,
         terms_hash: bounty.terms_hash.clone(),
         proof_urls,
@@ -909,6 +1035,7 @@ pub fn canonical_opportunity(
         deadline_kind,
         verification_method,
         verification_ready: state.verification_ready,
+        verification_details: item.verification_details.clone(),
         evidence_requirements,
         terms_hash: Some(item.terms_hash.clone()),
         proof_urls,
@@ -1164,9 +1291,7 @@ pub fn open_competition_v2_opportunities(
                     ("funding", "open", "seeking_funding", false, false)
                 }
                 OpenCompetitionV2ProjectedState::Active => {
-                    if projection.funded_amount != target
-                        || proof_deadline.is_none_or(|deadline| deadline <= now.timestamp() as u64)
-                    {
+                    if projection.funded_amount != target || proof_deadline.is_none() {
                         continue;
                     }
                     ("active", "claimable", "escrowed", true, profile.is_some())
@@ -1208,6 +1333,16 @@ pub fn open_competition_v2_opportunities(
         let participation_phase = is_forward_gmv
             .then(|| v2_scoring_phase(known, now))
             .flatten();
+        let proof_closed = source_status == "active"
+            && proof_deadline.is_some_and(|deadline| now.timestamp().max(0) as u64 > deadline);
+        let work_closed =
+            source_status == "active" && (participation_phase == Some("proof") || proof_closed);
+        let work_state = if work_closed {
+            "closed_to_new_work"
+        } else {
+            work_state
+        };
+        let verification_ready = verification_ready && !proof_closed;
         let public_url = format!(
             "{website}/competition.html?bountyContract={}&network={network}",
             projection.competition
@@ -1241,6 +1376,15 @@ pub fn open_competition_v2_opportunities(
             }),
             "scoring_formula": is_forward_gmv.then_some("sum(settlement_gmv * entrant_funding / total_funding)"),
             "participation_phase": participation_phase,
+            "new_work_open": source_status == "active" && !work_closed && participation_metadata_ready && verification_ready && participation_phase.is_none_or(|phase| phase == "scoring"),
+            "timeline": {
+                "work_scoring_cutoff": if is_forward_gmv { known.and_then(|item| item.epoch_ends_at.clone()) } else { None },
+                "proof_submission_deadline": proof_deadline,
+                "proof_window_open": source_status == "active" && !proof_closed,
+                "refund_available": false,
+                "refund_earliest_after": proof_deadline,
+                "refund_condition": "After the proof deadline, recheck the canonical state. A valid best-score leader must be finalized. Otherwise confirm expiry before contributors withdraw refunds. A hosted proof outage alone does not permit cancellation."
+            },
             "participation_metadata_ready": participation_metadata_ready,
             "qualifying_action": is_forward_gmv.then(|| json!({
                 "objective": "Post or fund useful marketplace demand that reaches canonical settlement inside the scoring window.",
@@ -1288,6 +1432,13 @@ pub fn open_competition_v2_opportunities(
                 })),
                 instructions: "Fund the exact contract, then wait for safe-block CompetitionActivatedV2.".to_string(),
             },
+            "active" if proof_closed => OpportunityNextAction {
+                action: "review_open_competition_v2_recovery".to_string(),
+                method: "GET".to_string(),
+                url: public_url.clone(),
+                body_template: None,
+                instructions: "Closed to new work and proofs. Check the canonical leader, state and pending transactions. Finalize an eligible best-score leader; otherwise use the existing expiry and contributor refund path. Expiry must be confirmed before refunds are available.".to_string(),
+            },
             "active" if is_forward_gmv && !participation_metadata_ready => OpportunityNextAction {
                 action: "await_open_competition_v2_participation_metadata".to_string(),
                 method: "GET".to_string(),
@@ -1300,7 +1451,11 @@ pub fn open_competition_v2_opportunities(
                 method: "GET".to_string(),
                 url: public_url.clone(),
                 body_template: None,
-                instructions: "Do not fund child demand or pay for a proof. The exact contract-bound snapshot, independent attester quorum and usable proof path have not been verified. HTTP success, registry membership and a token balance alone do not establish readiness. Existing canonical funding and history remain visible.".to_string(),
+                instructions: if work_closed {
+                    "Closed to new work: the scoring cutoff has passed. Do not fund new work or pay for an unavailable proof. Only work completed inside the original scoring window may support a historical proof. The later proof deadline does not extend the scoring window; the existing recovery timetable still applies."
+                } else {
+                    "Do not fund child demand or pay for a proof. The exact contract-bound snapshot, independent attester quorum and usable proof path have not been verified. Existing canonical funding and history remain visible."
+                }.to_string(),
             },
             "active" => OpportunityNextAction {
                 action: "quote_open_competition_v2_proof".to_string(),
@@ -1400,6 +1555,7 @@ pub fn open_competition_v2_opportunities(
                 projection.proof_system.as_deref().unwrap_or("unknown")
             ),
             verification_ready: verification_ready && participation_metadata_ready,
+            verification_details: None,
             evidence_requirements,
             terms_hash: None,
             proof_urls,
@@ -1656,6 +1812,7 @@ pub fn open_competition_opportunities(
             .to_string()),
             verification_method: format!("approved deterministic verifier: {}", profile.profile_id),
             verification_ready: true,
+            verification_details: None,
             evidence_requirements: json!({
                 "verifier_profile_id": profile.profile_id,
                 "verifier_module": profile.verifier_address,
@@ -1749,12 +1906,22 @@ fn json_u64(value: &Value, field: &str) -> Result<u64, String> {
         .map_err(|_| format!("open-competition event field {field} is out of range"))
 }
 
+#[cfg(test)]
 pub fn apply_query(
-    mut items: Vec<OpportunityItem>,
+    items: Vec<OpportunityItem>,
     query: &OpportunityQuery,
     view: Option<OpportunityView>,
     now: DateTime<Utc>,
 ) -> Vec<OpportunityItem> {
+    apply_query_page(items, query, view, now).0
+}
+
+pub fn apply_query_page(
+    mut items: Vec<OpportunityItem>,
+    query: &OpportunityQuery,
+    view: Option<OpportunityView>,
+    now: DateTime<Utc>,
+) -> (Vec<OpportunityItem>, bool) {
     items.retain(|item| {
         query
             .opportunity_id
@@ -1788,8 +1955,10 @@ pub fn apply_query(
     } else {
         items.sort_by(|left, right| opportunity_order(left, right, now));
     }
-    items.truncate(query.limit.unwrap_or(100).clamp(1, 300) as usize);
-    items
+    let limit = query.limit.unwrap_or(100).clamp(1, 300) as usize;
+    let has_more = items.len() > limit;
+    items.truncate(limit);
+    (items, has_more)
 }
 
 fn apply_view(item: &mut OpportunityItem, view: OpportunityView, now: DateTime<Utc>) -> bool {
@@ -2369,6 +2538,16 @@ mod tests {
             assert_eq!(item.next_action.url, item.public_url);
             assert!(item.next_action.body_template.is_none());
             assert!(item.next_action.instructions.contains("Do not fund"));
+            assert_eq!(item.work_state == "closed_to_new_work", phase == "proof");
+            assert_eq!(item.evidence_requirements["new_work_open"], false);
+            assert_eq!(
+                item.evidence_requirements["timeline"]["work_scoring_cutoff"],
+                "2026-08-25T00:00:00Z"
+            );
+            assert_eq!(
+                item.evidence_requirements["timeline"]["refund_available"],
+                false
+            );
             // A plausible URL is present but supplies no verified readiness evidence.
             assert!(item.evidence_requirements["snapshot_url"].is_string());
             assert!(apply_query(
@@ -2380,6 +2559,70 @@ mod tests {
                     .with_timezone(&Utc)
             )
             .is_empty());
+        }
+    }
+
+    #[test]
+    fn beta3_proof_deadline_is_inclusive_and_expiry_preserves_recovery_visibility() {
+        let (release, record) = beta3_release_and_record();
+        let deadline = record.projection.proof_deadline.unwrap();
+        let events = vec![beta3_event(
+            &record,
+            OpenCompetitionV2EventKind::CanonicalCompetitionCreated,
+            90,
+        )];
+        for timestamp in [deadline - 1, deadline, deadline + 1] {
+            let now = DateTime::<Utc>::from_timestamp(timestamp as i64, 0).unwrap();
+            let item = open_competition_v2_opportunities(
+                std::slice::from_ref(&record),
+                &events,
+                &release,
+                "base-mainnet",
+                "https://api.example",
+                "https://site.example",
+                OpenCompetitionV2HostedCosts {
+                    proof_fee: 100_000,
+                    relay_fee: 10_000,
+                },
+                now,
+            )
+            .unwrap()
+            .remove(0);
+            let open = timestamp <= deadline;
+            assert_eq!(item.verification_ready, open);
+            assert_eq!(item.evidence_requirements["new_work_open"], open);
+            assert_eq!(
+                item.evidence_requirements["timeline"]["proof_window_open"],
+                open
+            );
+            assert_eq!(
+                item.evidence_requirements["timeline"]["refund_available"],
+                false
+            );
+            assert_eq!(item.work_state == "closed_to_new_work", !open);
+            assert_eq!(item.next_action.method, if open { "POST" } else { "GET" });
+            assert_eq!(item.payment_state, "escrowed");
+            assert!(item.payment_committed);
+            assert_eq!(
+                apply_query(
+                    vec![item.clone()],
+                    &OpportunityQuery::default(),
+                    Some(OpportunityView::ReadyToEarn),
+                    now
+                )
+                .len(),
+                usize::from(open)
+            );
+            assert_eq!(
+                apply_query(
+                    vec![item],
+                    &OpportunityQuery::default(),
+                    Some(OpportunityView::Recent),
+                    now
+                )
+                .len(),
+                1
+            );
         }
     }
 
@@ -2542,9 +2785,15 @@ mod tests {
             network: "base-mainnet".to_string(),
             applied_view: Some("ready_to_earn".to_string()),
             degraded: false,
+            coverage: OpportunityCoverage::Complete,
+            coverage_scope: "inventory_page".to_string(),
+            has_more: false,
+            requested_opportunity_id: None,
             source_statuses: vec![OpportunitySourceStatus {
                 source_type: "canonical_base".to_string(),
                 available: true,
+                coverage: OpportunityCoverage::Complete,
+                protocol_statuses: Vec::new(),
                 authoritative_urls: vec!["https://api.example/v1/opportunities".to_string()],
                 item_count: ready.len(),
                 error: None,
@@ -2616,6 +2865,7 @@ mod tests {
             created_at,
         };
         AutonomousBountyFeedItem {
+            verification_details: None,
             bounty_id: event.bounty_id.clone(),
             bounty_contract: event.contract_address.clone(),
             creator: terms.creator_wallet.clone(),
@@ -3189,6 +3439,10 @@ mod tests {
             network: "base-mainnet".to_string(),
             applied_view: None,
             degraded: false,
+            coverage: OpportunityCoverage::Complete,
+            coverage_scope: "inventory_page".to_string(),
+            has_more: false,
+            requested_opportunity_id: None,
             source_statuses: Vec::new(),
             items: vec![item],
             evidence_boundary: "Projection only".to_string(),
@@ -3226,6 +3480,10 @@ mod tests {
             network: "base-mainnet".to_string(),
             applied_view: None,
             degraded: false,
+            coverage: OpportunityCoverage::Complete,
+            coverage_scope: "inventory_page".to_string(),
+            has_more: false,
+            requested_opportunity_id: None,
             source_statuses: Vec::new(),
             items: vec![item],
             evidence_boundary: "Projection only".to_string(),
@@ -3240,5 +3498,135 @@ mod tests {
         assert_eq!(economics["gross_cash_margin"]["amount"], "900000");
         assert!(feeds.rss.contains("Gross cash margin (not net profit)"));
         assert!(!feeds.rss.to_ascii_lowercase().contains("guaranteed profit"));
+    }
+    #[test]
+    fn partial_protocol_coverage_keeps_healthy_work_and_the_ready_filter() {
+        let ready = canonical_opportunity(
+            &canonical("claimable", "1000000", true),
+            "base-mainnet",
+            "https://api.example",
+        )
+        .unwrap();
+        let blocked = canonical_opportunity(
+            &canonical("claimable", "1000000", false),
+            "base-mainnet",
+            "https://api.example",
+        )
+        .unwrap();
+        let (items, status) = merge_canonical_protocols(
+            vec![
+                ("autonomous-v1", Ok(vec![ready.clone(), blocked])),
+                ("open-competition-v1", Ok(Vec::new())),
+                (
+                    "open-competition-v2-beta3",
+                    Err("open_competition_v2_read_model_unavailable"),
+                ),
+            ],
+            vec![],
+        );
+        assert_eq!(status.coverage, OpportunityCoverage::Partial);
+        assert!(!status.available);
+        assert_eq!(status.item_count, 2);
+        assert_eq!(status.protocol_statuses[0].item_count, Some(2));
+        assert_eq!(status.protocol_statuses[1].item_count, Some(0));
+        assert_eq!(status.protocol_statuses[2].item_count, None);
+        let items = apply_query(
+            items,
+            &OpportunityQuery::default(),
+            Some(OpportunityView::ReadyToEarn),
+            Utc::now(),
+        );
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].opportunity_id, ready.opportunity_id);
+        assert!(items[0].verification_ready);
+        let projection = OpportunityProjectionResponse {
+            schema_version: OPPORTUNITY_PROJECTION_SCHEMA.to_string(),
+            generated_at: Utc::now().to_rfc3339(),
+            network: "base-mainnet".to_string(),
+            applied_view: Some("ready_to_earn".to_string()),
+            degraded: true,
+            coverage: status.coverage,
+            coverage_scope: "inventory_page".to_string(),
+            has_more: false,
+            requested_opportunity_id: None,
+            source_statuses: vec![status],
+            items,
+            evidence_boundary: "Only confirmed settlement proves payment".to_string(),
+        };
+        let feeds = render_opportunity_feeds(&projection, "https://api.example");
+        let json: Value = serde_json::from_str(&feeds.json).unwrap();
+        assert_eq!(json["items"].as_array().unwrap().len(), 1);
+        assert_eq!(json["_bountyboard"]["coverage"], "partial");
+        assert!(
+            json["_bountyboard"]["source_statuses"][0]["protocol_statuses"][2]["item_count"]
+                .is_null()
+        );
+        for xml in [feeds.atom, feeds.rss] {
+            assert!(xml.contains("Coverage: partial"));
+            assert!(xml.contains("open-competition-v2-beta3=unavailable"));
+            assert!(xml.contains("Implement an API test"));
+        }
+    }
+
+    #[test]
+    fn unavailable_protocols_are_unknown_not_a_complete_empty_market() {
+        let (items, status) = merge_canonical_protocols(
+            vec![
+                ("autonomous-v1", Err("canonical_read_model_unavailable")),
+                (
+                    "open-competition-v1",
+                    Err("open_competition_read_model_unavailable"),
+                ),
+                (
+                    "open-competition-v2-beta3",
+                    Err("open_competition_v2_read_model_unavailable"),
+                ),
+            ],
+            vec![],
+        );
+        assert!(items.is_empty());
+        assert_eq!(status.coverage, OpportunityCoverage::Unavailable);
+        assert!(!status.available);
+        assert!(status
+            .protocol_statuses
+            .iter()
+            .all(|p| p.item_count.is_none()));
+        assert_eq!(
+            OpportunityCoverage::combine([]),
+            OpportunityCoverage::Unavailable
+        );
+        let (_, healthy_empty) =
+            merge_canonical_protocols(vec![("autonomous-v1", Ok(vec![]))], vec![]);
+        assert_eq!(healthy_empty.coverage, OpportunityCoverage::Complete);
+        assert_eq!(healthy_empty.protocol_statuses[0].item_count, Some(0));
+    }
+    #[test]
+    fn opportunity_page_truncation_is_explicit_and_does_not_change_filters() {
+        let item = canonical_opportunity(
+            &canonical("claimable", "1000000", true),
+            "base-mainnet",
+            "https://api.example",
+        )
+        .unwrap();
+        let query = OpportunityQuery {
+            limit: Some(300),
+            ..Default::default()
+        };
+        let (page, has_more) = apply_query_page(
+            vec![item.clone(); 301],
+            &query,
+            Some(OpportunityView::ReadyToEarn),
+            Utc::now(),
+        );
+        assert_eq!(page.len(), 300);
+        assert!(has_more);
+        let (page, has_more) = apply_query_page(
+            vec![item; 300],
+            &query,
+            Some(OpportunityView::ReadyToEarn),
+            Utc::now(),
+        );
+        assert_eq!(page.len(), 300);
+        assert!(!has_more);
     }
 }

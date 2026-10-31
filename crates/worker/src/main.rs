@@ -8,13 +8,13 @@ use std::{
 };
 use tokio::time::sleep;
 use worker::{
-    dispatch_discovery_webhooks_once, indexer_error_is_retryable,
-    poll_autonomous_indexer_once_with_heartbeat, poll_open_competition_indexer_once_with_heartbeat,
-    poll_open_competition_v2_broker_once, poll_open_competition_v2_indexer_once_with_heartbeat,
-    poll_open_competition_v2_keeper_once, poll_open_competition_v2_shadow_with_cache,
-    redact_operational_error, run_regression_sandbox_request, snapshot_directory,
-    stage_regression_input, validate_regression_candidate, AutonomousIndexerConfig,
-    DiscoveryWebhookConfig, IndexerRecoveryDecision, IndexerRecoveryPolicy,
+    dispatch_discovery_webhooks_once, poll_autonomous_indexer_once_with_heartbeat,
+    poll_open_competition_indexer_once_with_heartbeat, poll_open_competition_v2_broker_once,
+    poll_open_competition_v2_indexer_once_with_heartbeat, poll_open_competition_v2_keeper_once,
+    poll_open_competition_v2_shadow_with_cache, redact_operational_error,
+    run_regression_sandbox_request, snapshot_directory, stage_regression_input,
+    validate_regression_candidate, AutonomousIndexerConfig, DiscoveryWebhookConfig,
+    IndexerRecoveryDecision, IndexerRecoveryPolicy, IndexerRecoveryState,
     OpenCompetitionIndexerConfig, OpenCompetitionV2BrokerChainConfig,
     OpenCompetitionV2BrokerConfig, OpenCompetitionV2IndexerConfig, OpenCompetitionV2KeeperConfig,
     OpenCompetitionV2ShadowCache, OpenCompetitionV2ShadowConfig,
@@ -159,6 +159,17 @@ async fn main() -> anyhow::Result<()> {
         println!("ok");
         return Ok(());
     }
+    if arguments
+        .first()
+        .is_some_and(|s| s == "--broad-verification")
+    {
+        let database = env::var("DATABASE_URL").context("DATABASE_URL is required")?;
+        let store = PostgresStore::connect(&database).await?;
+        let objects = worker::artifact_store::ArtifactStore::from_env()?;
+        let docker = env::var("BROAD_CHECKS_DOCKER_BINARY").ok();
+        worker::broad_checks::run(store, objects, docker).await;
+        return Ok(());
+    }
     let once =
         env_flag("BASE_INDEXER_ONCE") || arguments.iter().any(|argument| argument == "--once");
     let database_url = env::var("DATABASE_URL")
@@ -170,6 +181,66 @@ async fn main() -> anyhow::Result<()> {
         .trim()
         .to_ascii_lowercase();
 
+    if protocol == "creator-open-v1" {
+        let release: chain_base::creator_open_service::Release = serde_json::from_str(
+            &env::var("CREATOR_OPEN_RELEASE_JSON")
+                .context("CREATOR_OPEN_RELEASE_JSON is required")?,
+        )?;
+        release.validate()?;
+        let rpc = env::var(if release.network == "base-mainnet" {
+            "BASE_MAINNET_RPC_URL"
+        } else {
+            "BASE_SEPOLIA_RPC_URL"
+        })
+        .context("Creator-open RPC URL is required")?;
+        let notifications = worker::CreatorOpenNotificationRuntime::from_env(&release.network)?;
+        let recovery_policy = IndexerRecoveryPolicy::from_env()?;
+        let mut recovery_state = IndexerRecoveryState::default();
+        loop {
+            let mut poll_delay = 15;
+            let indexed = match worker::poll_creator_open_indexer(&store, &release, &rpc).await {
+                Ok(count) => {
+                    recovery_state.on_success();
+                    println!("creator_open_index_updated={count}");
+                    true
+                }
+                Err(error) => {
+                    let decision = recovery_state.on_error(&recovery_policy, &error);
+                    eprintln!(
+                        "{}",
+                        serde_json::json!({"schema": "agent-bounties/creator-open-indexer-recovery-v1", "decision": decision})
+                    );
+                    if once {
+                        anyhow::bail!("creator-open index poll failed");
+                    }
+                    match decision {
+                        IndexerRecoveryDecision::RetryFromPersistedCursor {
+                            backoff_seconds,
+                            ..
+                        } => poll_delay = backoff_seconds.max(15),
+                        IndexerRecoveryDecision::ExitForSupervisorRestart { .. } => {
+                            anyhow::bail!("creator-open indexer exhausted its recovery budget")
+                        }
+                        IndexerRecoveryDecision::HaltForOperatorInvestigation { .. } => loop {
+                            if wait_or_shutdown(86_400).await? {
+                                return Ok(());
+                            }
+                        },
+                    }
+                    false
+                }
+            };
+            if let Some(notifications) = notifications.as_ref().filter(|_| indexed) {
+                if notifications.poll(&store, &rpc).await.is_err() {
+                    eprintln!("Creator-open notification poll unavailable; durable delivery remains pending");
+                }
+            }
+            if once || wait_or_shutdown(poll_delay).await? {
+                break;
+            }
+        }
+        return Ok(());
+    }
     if protocol == "open-competition-v1" {
         return run_open_competition_indexer(&store, once).await;
     }
@@ -185,20 +256,23 @@ async fn main() -> anyhow::Result<()> {
     if protocol == "open-competition-v2-shadow" {
         return run_open_competition_v2_shadow(&store, once).await;
     }
+    if protocol == "managed-bounty-funding" {
+        return run_managed_bounty_funding(&store, once).await;
+    }
     if protocol != "autonomous-v1" && protocol != "autonomous-v2" {
         anyhow::bail!(
-            "BASE_INDEXER_PROTOCOL must be autonomous-v1, autonomous-v2, open-competition-v1, open-competition-v2-beta3, open-competition-v2-broker, open-competition-v2-keeper, or open-competition-v2-shadow"
+            "BASE_INDEXER_PROTOCOL must be autonomous-v1, autonomous-v2, open-competition-v1, open-competition-v2-beta3, open-competition-v2-broker, open-competition-v2-keeper, open-competition-v2-shadow, or managed-bounty-funding"
         );
     }
     let config = AutonomousIndexerConfig::from_env_for_protocol(&protocol)?;
     let discovery_webhooks = DiscoveryWebhookConfig::from_env()?;
     let recovery_policy = IndexerRecoveryPolicy::from_env()?;
-    let mut consecutive_failures = 0u32;
+    let mut recovery_state = IndexerRecoveryState::default();
 
     loop {
         match poll_autonomous_indexer_once_with_heartbeat(&store, &config).await {
             Ok(report) => {
-                consecutive_failures = 0;
+                recovery_state.on_success();
                 println!("{}", serde_json::to_string(&report)?);
                 if let Some(discovery_webhooks) = &discovery_webhooks {
                     let delivery_report =
@@ -213,9 +287,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             Err(error) => {
-                consecutive_failures = consecutive_failures.saturating_add(1);
-                let decision = recovery_policy
-                    .decision(consecutive_failures, indexer_error_is_retryable(&error));
+                let decision = recovery_state.on_error(&recovery_policy, &error);
                 eprintln!(
                     "{}",
                     serde_json::to_string(&serde_json::json!({
@@ -283,7 +355,8 @@ async fn run_open_competition_v2_shadow(store: &PostgresStore, once: bool) -> an
 
 async fn run_open_competition_v2_keeper(store: &PostgresStore, once: bool) -> anyhow::Result<()> {
     let config = OpenCompetitionV2KeeperConfig::from_env()?;
-    let chain = OpenCompetitionV2BrokerChainConfig::from_env()?;
+    let mut chain = OpenCompetitionV2BrokerChainConfig::from_env()?;
+    chain.relayer = chain.relayer.with_gas_budget(store.gas_sponsor_budget());
     let poll_seconds = env_u64("OPEN_COMPETITION_V2_KEEPER_POLL_SECONDS", 5)?.clamp(1, 60);
     keeper_recovery::run(
         once,
@@ -296,9 +369,31 @@ async fn run_open_competition_v2_keeper(store: &PostgresStore, once: bool) -> an
     .await
 }
 
+async fn run_managed_bounty_funding(store: &PostgresStore, once: bool) -> anyhow::Result<()> {
+    let config = worker::managed_funding::ManagedFundingConfig::from_env(store)?;
+    loop {
+        match worker::managed_funding::poll_managed_funding_once(store, &config).await {
+            Ok(report) => println!("{}", serde_json::to_string(&report)?),
+            Err(error) => eprintln!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({
+                    "schema": "agent-bounties/managed-funding-recovery-v1",
+                    "error": redact_operational_error(&error.to_string()),
+                    "decision": "retry_from_persisted_operation",
+                    "evidence_boundary": "A retry resends only saved bytes and cannot create funding evidence. Only confirmed canonical events mark an order funded."
+                }))?
+            ),
+        }
+        if once || wait_or_shutdown(config.settings.poll_seconds).await? {
+            return Ok(());
+        }
+    }
+}
+
 async fn run_open_competition_v2_broker(store: &PostgresStore, once: bool) -> anyhow::Result<()> {
     let config = OpenCompetitionV2BrokerConfig::from_env()?;
-    let chain = OpenCompetitionV2BrokerChainConfig::from_env()?;
+    let mut chain = OpenCompetitionV2BrokerChainConfig::from_env()?;
+    chain.relayer = chain.relayer.with_gas_budget(store.gas_sponsor_budget());
     let poll_seconds = env_u64("OPEN_COMPETITION_V2_BROKER_POLL_SECONDS", 5)?.clamp(1, 60);
     loop {
         match poll_open_competition_v2_broker_once(store, &config, &chain).await {
@@ -322,20 +417,18 @@ async fn run_open_competition_v2_broker(store: &PostgresStore, once: bool) -> an
 async fn run_open_competition_v2_indexer(store: &PostgresStore, once: bool) -> anyhow::Result<()> {
     let config = OpenCompetitionV2IndexerConfig::from_env()?;
     let recovery_policy = IndexerRecoveryPolicy::from_env()?;
-    let mut consecutive_failures = 0_u32;
+    let mut recovery_state = IndexerRecoveryState::default();
     loop {
         match poll_open_competition_v2_indexer_once_with_heartbeat(store, &config).await {
             Ok(report) => {
-                consecutive_failures = 0;
+                recovery_state.on_success();
                 println!("{}", serde_json::to_string(&report)?);
                 if once || wait_or_shutdown(config.poll_seconds).await? {
                     return Ok(());
                 }
             }
             Err(error) => {
-                consecutive_failures = consecutive_failures.saturating_add(1);
-                let decision = recovery_policy
-                    .decision(consecutive_failures, indexer_error_is_retryable(&error));
+                let decision = recovery_state.on_error(&recovery_policy, &error);
                 eprintln!(
                     "{}",
                     serde_json::to_string(&serde_json::json!({
@@ -377,11 +470,11 @@ async fn run_open_competition_v2_indexer(store: &PostgresStore, once: bool) -> a
 async fn run_open_competition_indexer(store: &PostgresStore, once: bool) -> anyhow::Result<()> {
     let config = OpenCompetitionIndexerConfig::from_env()?;
     let recovery_policy = IndexerRecoveryPolicy::from_env()?;
-    let mut consecutive_failures = 0_u32;
+    let mut recovery_state = IndexerRecoveryState::default();
     loop {
         match poll_open_competition_indexer_once_with_heartbeat(store, &config).await {
             Ok(report) => {
-                consecutive_failures = 0;
+                recovery_state.on_success();
                 println!("{}", serde_json::to_string(&report)?);
                 if once {
                     return Ok(());
@@ -391,9 +484,7 @@ async fn run_open_competition_indexer(store: &PostgresStore, once: bool) -> anyh
                 }
             }
             Err(error) => {
-                consecutive_failures = consecutive_failures.saturating_add(1);
-                let decision = recovery_policy
-                    .decision(consecutive_failures, indexer_error_is_retryable(&error));
+                let decision = recovery_state.on_error(&recovery_policy, &error);
                 eprintln!(
                     "{}",
                     serde_json::to_string(&serde_json::json!({
@@ -434,12 +525,20 @@ async fn run_open_competition_indexer(store: &PostgresStore, once: bool) -> anyh
     }
 }
 
-async fn wait_or_shutdown(seconds: u64) -> anyhow::Result<bool> {
-    tokio::select! {
-        _ = sleep(Duration::from_secs(seconds)) => Ok(false),
-        signal = tokio::signal::ctrl_c() => {
-            signal.context("failed to listen for shutdown signal")?;
-            Ok(true)
+async fn wait_or_shutdown(mut seconds: u64) -> anyhow::Result<bool> {
+    // Long valid Retry-After values must neither overflow Instant nor be shortened.
+    loop {
+        let chunk = seconds.min(86_400);
+        tokio::select! {
+            _ = sleep(Duration::from_secs(chunk)) => {},
+            signal = tokio::signal::ctrl_c() => {
+                signal.context("failed to listen for shutdown signal")?;
+                return Ok(true);
+            }
+        }
+        seconds -= chunk;
+        if seconds == 0 {
+            return Ok(false);
         }
     }
 }
