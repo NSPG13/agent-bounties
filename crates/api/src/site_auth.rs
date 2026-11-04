@@ -26,6 +26,8 @@ use url::Url;
 use uuid::Uuid;
 
 const SESSION_COOKIE: &str = "agent_bounties_session";
+const WORKSPACE_TOKEN_SECONDS: i64 = 600;
+const RETURN_COOKIE: &str = "agent_bounties_return";
 const OAUTH_STATE_COOKIE: &str = "agent_bounties_oauth_state";
 const SESSION_MAX_AGE_SECONDS: i64 = 8 * 60 * 60;
 const OAUTH_STATE_MAX_AGE_SECONDS: i64 = 10 * 60;
@@ -42,6 +44,8 @@ pub struct SiteAuthService {
 struct SiteAuthInner {
     session_secret: Option<Vec<u8>>,
     wallet_secret: Option<Vec<u8>>,
+    /// Shared with the Workspace service, which uses it to check the proof of who signed in.
+    workspace_secret: Option<Vec<u8>>,
     web_origin: String,
     api_origin: String,
     allowed_origins: Vec<HeaderValue>,
@@ -148,6 +152,13 @@ impl SiteAuthService {
             anyhow::bail!("AUTH_WALLET_LINK_SECRET must be at least 32 characters");
         }
 
+        let workspace_secret = env::var("WORKSPACE_TOKEN_SECRET")
+            .ok()
+            .filter(|value| !value.trim().is_empty());
+        if workspace_secret.as_ref().is_some_and(|value| value.len() < 32) {
+            anyhow::bail!("WORKSPACE_TOKEN_SECRET must be at least 32 characters");
+        }
+
         let web_origin = env::var("WEBSITE_BASE_URL")
             .unwrap_or_else(|_| "https://agentizable.ai".to_string())
             .trim_end_matches('/')
@@ -183,6 +194,7 @@ impl SiteAuthService {
             inner: Arc::new(SiteAuthInner {
                 session_secret: session_secret.map(String::into_bytes),
                 wallet_secret: wallet_secret.map(String::into_bytes),
+                workspace_secret: workspace_secret.map(String::into_bytes),
                 web_origin,
                 api_origin,
                 allowed_origins,
@@ -270,6 +282,7 @@ pub fn router(service: SiteAuthService) -> Router {
         .route("/v1/site-auth/login/:provider", get(begin_oauth))
         .route("/v1/site-auth/callback/:provider", get(finish_oauth))
         .route("/v1/site-auth/logout", post(logout))
+        .route("/v1/site-auth/workspace-token", post(workspace_token))
         .route("/v1/site-auth/wallet/challenge", post(begin_wallet_link))
         .route("/v1/site-auth/wallet/verify", post(finish_wallet_link))
         .route("/v1/site-auth/wallet/unlink", post(unlink_wallet))
@@ -770,9 +783,15 @@ fn draft_list_payload(
         "evidence_boundary":"Saved drafts and pending posting operations are private coordination records. They do not prove funding or payment. Resume the same operation to check canonical evidence before retrying."})
 }
 
+#[derive(Debug, Deserialize)]
+struct LoginQuery {
+    return_to: Option<String>,
+}
+
 async fn begin_oauth(
     Extension(service): Extension<SiteAuthService>,
     Path(provider): Path<String>,
+    Query(login): Query<LoginQuery>,
 ) -> Response {
     let provider = provider.to_ascii_lowercase();
     let Some(config) = service.inner.providers.get(&provider) else {
@@ -820,7 +839,18 @@ async fn begin_oauth(
     let state_cookie = format!(
         "{OAUTH_STATE_COOKIE}={state}; Path=/v1/site-auth/callback; HttpOnly; Secure; SameSite=Lax; Max-Age={OAUTH_STATE_MAX_AGE_SECONDS}"
     );
-    redirect_response(&authorization, Some(&state_cookie))
+    let mut response = redirect_response(&authorization, Some(&state_cookie));
+    // The Workspace asks to be the place people land after signing in; nothing else is accepted.
+    if login.return_to.as_deref() == Some("workspace") {
+        response.headers_mut().append(
+            header::SET_COOKIE,
+            HeaderValue::from_str(&format!(
+                "{RETURN_COOKIE}=workspace; Path=/v1/site-auth/callback; HttpOnly; Secure; SameSite=Lax; Max-Age={OAUTH_STATE_MAX_AGE_SECONDS}"
+            ))
+            .expect("valid cookie"),
+        );
+    }
+    response
 }
 
 async fn finish_oauth(
@@ -931,13 +961,78 @@ async fn finish_oauth(
     let session_cookie = format!(
         "{SESSION_COOKIE}={token}; Path=/v1/site-auth; HttpOnly; Secure; SameSite=Lax; Max-Age={SESSION_MAX_AGE_SECONDS}"
     );
-    let location = auth_result_url(&service.inner.web_origin, "success", Some(&provider), None);
+    let mut location = auth_result_url(&service.inner.web_origin, "success", Some(&provider), None);
+    if cookie_value(&headers, RETURN_COOKIE).as_deref() == Some("workspace") {
+        location = format!("{}/workspace/", service.inner.web_origin);
+    }
     let mut response = redirect_response(&location, Some(&session_cookie));
+    response.headers_mut().append(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&format!("{RETURN_COOKIE}=; Path=/v1/site-auth/callback; HttpOnly; Secure; SameSite=Lax; Max-Age=0"))
+            .expect("valid cookie"),
+    );
     response.headers_mut().append(
         header::SET_COOKIE,
         HeaderValue::from_str(&clear_state_cookie()).expect("valid cookie"),
     );
     response
+}
+
+/// Proof for the Workspace (agentizable.ai/workspace) of who is signed in here: the account, the
+/// email only when the provider verified it, and the wallets linked with a signed ownership proof.
+/// It lives ten minutes, is signed with a secret shared only with the Workspace service, and the
+/// browser asks for a fresh one when it needs it. It grants nothing on the marketplace.
+async fn workspace_token(
+    Extension(service): Extension<SiteAuthService>,
+    headers: HeaderMap,
+) -> Response {
+    let Some((user, _origin)) = wallet_request_context(&service, &headers) else {
+        return wallet_context_error(&service, &headers);
+    };
+    let (Some(secret), Some(account_id), Some(store)) = (
+        service.inner.workspace_secret.as_deref(),
+        service.account_id(&user),
+        service.inner.store.as_ref(),
+    ) else {
+        return error_json(StatusCode::SERVICE_UNAVAILABLE, "workspace_unavailable");
+    };
+    let Ok(wallets) = store.list_site_auth_wallets(&account_id).await else {
+        return error_json(StatusCode::SERVICE_UNAVAILABLE, "workspace_unavailable");
+    };
+    let addresses = wallets.into_iter().map(|wallet| wallet.address).collect::<Vec<_>>();
+    let now = Utc::now();
+    no_store_json(
+        StatusCode::OK,
+        json!({
+            "token": workspace_proof(&user, &account_id, &addresses, secret, now),
+            "expires_in": WORKSPACE_TOKEN_SECONDS,
+            "name": user.name,
+        }),
+    )
+}
+
+fn workspace_proof(
+    user: &SessionUser,
+    account_id: &str,
+    wallets: &[String],
+    secret: &[u8],
+    now: DateTime<Utc>,
+) -> String {
+    // Only Google and GitHub confirm the address with the person; the others only report one.
+    let verified = !user.email.is_empty() && matches!(user.provider.as_str(), "google" | "github");
+    let payload = json!({
+        "sub": account_id,
+        "provider": user.provider,
+        "email": user.email,
+        "email_verified": verified,
+        "wallets": wallets,
+        "iat": now.timestamp(),
+        "exp": now.timestamp() + WORKSPACE_TOKEN_SECONDS,
+    });
+    format!(
+        "abws_{}",
+        sign_bytes(payload.to_string().as_bytes(), secret)
+    )
 }
 
 async fn logout(Extension(service): Extension<SiteAuthService>, headers: HeaderMap) -> Response {
@@ -2249,6 +2344,7 @@ mod tests {
         let mut service = SiteAuthService {
             inner: Arc::new(SiteAuthInner {
                 session_secret: Some(vec![7; 32]),
+                workspace_secret: None,
                 wallet_secret: Some(vec![8; 32]),
                 web_origin: "https://agentizable.ai".to_string(),
                 api_origin: "https://api.agentizable.ai".to_string(),
@@ -2366,6 +2462,7 @@ mod tests {
         let mut service = SiteAuthService {
             inner: Arc::new(SiteAuthInner {
                 session_secret: Some(vec![7; 32]),
+                workspace_secret: None,
                 wallet_secret: Some(vec![8; 32]),
                 web_origin: "https://agentizable.ai".to_string(),
                 api_origin: "https://api.agentizable.ai".to_string(),
@@ -2540,6 +2637,28 @@ mod tests {
             iat: 0,
             exp: 0,
         }
+    }
+
+    #[test]
+    fn workspace_proof_names_the_account_and_trusts_only_provider_verified_emails() {
+        let secret = b"workspace-secret-at-least-32-characters";
+        let now = Utc::now();
+        let mut user = test_user();
+        user.provider = "google".into();
+        user.email = "person@example.test".into();
+        let proof = workspace_proof(&user, "account-1", &["0xabc".into()], secret, now);
+        let payload = verify_signed_bytes(proof.strip_prefix("abws_").unwrap(), secret).expect("signed");
+        let value: Value = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(value["sub"], "account-1");
+        assert_eq!(value["email"], "person@example.test");
+        assert_eq!(value["email_verified"], true);
+        assert_eq!(value["wallets"], json!(["0xabc"]));
+        assert_eq!(value["exp"].as_i64().unwrap() - value["iat"].as_i64().unwrap(), WORKSPACE_TOKEN_SECONDS);
+        assert!(verify_signed_bytes(proof.strip_prefix("abws_").unwrap(), b"another-secret-also-32-characters!!").is_none());
+        user.provider = "microsoft".into();
+        let proof = workspace_proof(&user, "account-1", &[], secret, now);
+        let value: Value = serde_json::from_slice(&verify_signed_bytes(proof.strip_prefix("abws_").unwrap(), secret).unwrap()).unwrap();
+        assert_eq!(value["email_verified"], false);
     }
 
     #[test]
