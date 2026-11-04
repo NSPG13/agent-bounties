@@ -24,6 +24,11 @@ envVarGroups:
         sync: false
       - key: AUTH_WALLET_LINK_SECRET
         sync: false
+      # Shared only with the Workspace service; must differ from both secrets above.
+      - key: WORKSPACE_TOKEN_SECRET
+        sync: false
+      - key: WORKSPACE_URL
+        value: https://iffxwjh8gh.execute-api.us-east-2.amazonaws.com/
       - key: SITE_AUTH_ALLOWED_ORIGINS
         value: https://agentizable.ai,https://agentbounties.app
       - key: GOOGLE_OAUTH_CLIENT_ID

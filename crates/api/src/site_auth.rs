@@ -27,6 +27,9 @@ use uuid::Uuid;
 
 const SESSION_COOKIE: &str = "agent_bounties_session";
 const WORKSPACE_TOKEN_SECONDS: i64 = 600;
+const WORKSPACE_TOKEN_AUDIENCE: &str = "agentizable-workspace";
+const WORKSPACE_TOKEN_FRAGMENT: &str = "ab_workspace_token";
+const WORKSPACE_OPEN_PATH: &str = "/v1/site-auth/workspace/open";
 const RETURN_COOKIE: &str = "agent_bounties_return";
 const OAUTH_STATE_COOKIE: &str = "agent_bounties_oauth_state";
 const SESSION_MAX_AGE_SECONDS: i64 = 8 * 60 * 60;
@@ -46,6 +49,8 @@ struct SiteAuthInner {
     wallet_secret: Option<Vec<u8>>,
     /// Shared with the Workspace service, which uses it to check the proof of who signed in.
     workspace_secret: Option<Vec<u8>>,
+    /// Where `/v1/site-auth/workspace/open` sends people; fixed by configuration, never by a request.
+    workspace_url: Option<String>,
     web_origin: String,
     api_origin: String,
     allowed_origins: Vec<HeaderValue>,
@@ -155,9 +160,17 @@ impl SiteAuthService {
         let workspace_secret = env::var("WORKSPACE_TOKEN_SECRET")
             .ok()
             .filter(|value| !value.trim().is_empty());
-        if workspace_secret.as_ref().is_some_and(|value| value.len() < 32) {
-            anyhow::bail!("WORKSPACE_TOKEN_SECRET must be at least 32 characters");
-        }
+        check_workspace_secret(
+            workspace_secret.as_deref(),
+            session_secret.as_deref(),
+            wallet_secret.as_deref(),
+        )?;
+        let workspace_url = env::var("WORKSPACE_URL")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .map(|value| parse_workspace_url(&value))
+            .transpose()?;
 
         let web_origin = env::var("WEBSITE_BASE_URL")
             .unwrap_or_else(|_| "https://agentizable.ai".to_string())
@@ -195,6 +208,7 @@ impl SiteAuthService {
                 session_secret: session_secret.map(String::into_bytes),
                 wallet_secret: wallet_secret.map(String::into_bytes),
                 workspace_secret: workspace_secret.map(String::into_bytes),
+                workspace_url,
                 web_origin,
                 api_origin,
                 allowed_origins,
@@ -283,6 +297,7 @@ pub fn router(service: SiteAuthService) -> Router {
         .route("/v1/site-auth/callback/:provider", get(finish_oauth))
         .route("/v1/site-auth/logout", post(logout))
         .route("/v1/site-auth/workspace-token", post(workspace_token))
+        .route(WORKSPACE_OPEN_PATH, get(open_workspace))
         .route("/v1/site-auth/wallet/challenge", post(begin_wallet_link))
         .route("/v1/site-auth/wallet/verify", post(finish_wallet_link))
         .route("/v1/site-auth/wallet/unlink", post(unlink_wallet))
@@ -841,15 +856,12 @@ async fn begin_oauth(
     );
     let mut response = redirect_response(&authorization, Some(&state_cookie));
     // The Workspace asks to be the place people land after signing in; nothing else is accepted.
-    if login.return_to.as_deref() == Some("workspace") {
-        response.headers_mut().append(
-            header::SET_COOKIE,
-            HeaderValue::from_str(&format!(
-                "{RETURN_COOKIE}=workspace; Path=/v1/site-auth/callback; HttpOnly; Secure; SameSite=Lax; Max-Age={OAUTH_STATE_MAX_AGE_SECONDS}"
-            ))
+    // Every login sets or clears the choice, so an abandoned attempt cannot steer a later one.
+    response.headers_mut().append(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&login_return_cookie(login.return_to.as_deref()))
             .expect("valid cookie"),
-        );
-    }
+    );
     response
 }
 
@@ -961,15 +973,15 @@ async fn finish_oauth(
     let session_cookie = format!(
         "{SESSION_COOKIE}={token}; Path=/v1/site-auth; HttpOnly; Secure; SameSite=Lax; Max-Age={SESSION_MAX_AGE_SECONDS}"
     );
-    let mut location = auth_result_url(&service.inner.web_origin, "success", Some(&provider), None);
-    if cookie_value(&headers, RETURN_COOKIE).as_deref() == Some("workspace") {
-        location = format!("{}/workspace/", service.inner.web_origin);
-    }
+    let location = post_login_location(
+        &service,
+        &provider,
+        cookie_value(&headers, RETURN_COOKIE).as_deref() == Some("workspace"),
+    );
     let mut response = redirect_response(&location, Some(&session_cookie));
     response.headers_mut().append(
         header::SET_COOKIE,
-        HeaderValue::from_str(&format!("{RETURN_COOKIE}=; Path=/v1/site-auth/callback; HttpOnly; Secure; SameSite=Lax; Max-Age=0"))
-            .expect("valid cookie"),
+        HeaderValue::from_str(&return_cookie(false)).expect("valid cookie"),
     );
     response.headers_mut().append(
         header::SET_COOKIE,
@@ -978,10 +990,11 @@ async fn finish_oauth(
     response
 }
 
-/// Proof for the Workspace (agentizable.ai/workspace) of who is signed in here: the account, the
-/// email only when the provider verified it, and the wallets linked with a signed ownership proof.
-/// It lives ten minutes, is signed with a secret shared only with the Workspace service, and the
-/// browser asks for a fresh one when it needs it. It grants nothing on the marketplace.
+/// Proof for the Workspace of who is signed in here: the account, the email only when the
+/// provider verified it, and the wallets linked with a signed ownership proof. It lives ten
+/// minutes, is signed with a secret shared only with the Workspace service, and grants nothing on
+/// the marketplace. This endpoint answers only allowed origins, so it serves a Workspace hosted on
+/// one of them; a Workspace on another origin uses `open_workspace` instead.
 async fn workspace_token(
     Extension(service): Extension<SiteAuthService>,
     headers: HeaderMap,
@@ -989,38 +1002,93 @@ async fn workspace_token(
     let Some((user, _origin)) = wallet_request_context(&service, &headers) else {
         return wallet_context_error(&service, &headers);
     };
-    let (Some(secret), Some(account_id), Some(store)) = (
-        service.inner.workspace_secret.as_deref(),
-        service.account_id(&user),
-        service.inner.store.as_ref(),
-    ) else {
+    let Some(token) = issue_workspace_proof(&service, &user).await else {
         return error_json(StatusCode::SERVICE_UNAVAILABLE, "workspace_unavailable");
     };
-    let Ok(wallets) = store.list_site_auth_wallets(&account_id).await else {
-        return error_json(StatusCode::SERVICE_UNAVAILABLE, "workspace_unavailable");
-    };
-    let addresses = wallets.into_iter().map(|wallet| wallet.address).collect::<Vec<_>>();
-    let now = Utc::now();
     no_store_json(
         StatusCode::OK,
         json!({
-            "token": workspace_proof(&user, &account_id, &addresses, secret, now),
+            "token": token,
             "expires_in": WORKSPACE_TOKEN_SECONDS,
             "name": user.name,
         }),
     )
 }
 
+/// Opens the Workspace with the same proof, without widening CORS. People arrive by top-level
+/// navigation, so the Lax session cookie is sent, and leave for the configured `WORKSPACE_URL`
+/// with the proof in the fragment (`#ab_workspace_token=`), which browsers keep out of requests
+/// and Referer headers. The Workspace removes it from the address bar, verifies it on its server
+/// and rejects a reused `jti`. Without a session, or when no proof can be issued, the Workspace
+/// opens without one and keeps its own sign-in.
+async fn open_workspace(
+    Extension(service): Extension<SiteAuthService>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(workspace_url) = service.inner.workspace_url.as_deref() else {
+        return error_json(StatusCode::SERVICE_UNAVAILABLE, "workspace_unavailable");
+    };
+    let proof = match service.current_user(&headers) {
+        Some(user) => issue_workspace_proof(&service, &user).await,
+        None => None,
+    };
+    let mut response = redirect_response(
+        &workspace_handoff_location(workspace_url, proof.as_deref()),
+        None,
+    );
+    *response.status_mut() = StatusCode::SEE_OTHER;
+    response.headers_mut().insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    response
+}
+
+fn workspace_handoff_location(workspace_url: &str, proof: Option<&str>) -> String {
+    match proof {
+        Some(proof) => format!("{workspace_url}#{WORKSPACE_TOKEN_FRAGMENT}={proof}"),
+        None => workspace_url.to_string(),
+    }
+}
+
+async fn issue_workspace_proof(service: &SiteAuthService, user: &SessionUser) -> Option<String> {
+    let secret = service.inner.workspace_secret.as_deref()?;
+    let account_id = service.account_id(user)?;
+    let wallets = service
+        .inner
+        .store
+        .as_ref()?
+        .list_site_auth_wallets(&account_id)
+        .await
+        .ok()?;
+    let addresses = wallets
+        .into_iter()
+        .map(|wallet| wallet.address)
+        .collect::<Vec<_>>();
+    Some(workspace_proof(
+        user,
+        &account_id,
+        &addresses,
+        &service.inner.api_origin,
+        secret,
+        Utc::now(),
+    ))
+}
+
 fn workspace_proof(
     user: &SessionUser,
     account_id: &str,
     wallets: &[String],
+    issuer: &str,
     secret: &[u8],
     now: DateTime<Utc>,
 ) -> String {
     // Only Google and GitHub confirm the address with the person; the others only report one.
     let verified = !user.email.is_empty() && matches!(user.provider.as_str(), "google" | "github");
     let payload = json!({
+        "iss": issuer,
+        "aud": WORKSPACE_TOKEN_AUDIENCE,
+        "jti": Uuid::new_v4().to_string(),
         "sub": account_id,
         "provider": user.provider,
         "email": user.email,
@@ -2022,6 +2090,59 @@ fn clear_state_cookie() -> String {
     "agent_bounties_oauth_state=; Path=/v1/site-auth/callback; HttpOnly; Secure; SameSite=Lax; Max-Age=0".to_string()
 }
 
+fn return_cookie(workspace: bool) -> String {
+    let (value, max_age) = if workspace {
+        ("workspace", OAUTH_STATE_MAX_AGE_SECONDS)
+    } else {
+        ("", 0)
+    };
+    format!(
+        "{RETURN_COOKIE}={value}; Path=/v1/site-auth/callback; HttpOnly; Secure; SameSite=Lax; Max-Age={max_age}"
+    )
+}
+
+fn login_return_cookie(return_to: Option<&str>) -> String {
+    return_cookie(return_to == Some("workspace"))
+}
+
+fn post_login_location(service: &SiteAuthService, provider: &str, workspace: bool) -> String {
+    if workspace {
+        format!("{}{WORKSPACE_OPEN_PATH}", service.inner.api_origin)
+    } else {
+        auth_result_url(&service.inner.web_origin, "success", Some(provider), None)
+    }
+}
+
+/// The Workspace service holds its secret, so it must not be able to sign site sessions or
+/// derive account ids with it.
+fn check_workspace_secret(
+    workspace: Option<&str>,
+    session: Option<&str>,
+    wallet: Option<&str>,
+) -> anyhow::Result<()> {
+    let Some(workspace) = workspace else {
+        return Ok(());
+    };
+    if workspace.len() < 32 {
+        anyhow::bail!("WORKSPACE_TOKEN_SECRET must be at least 32 characters");
+    }
+    if Some(workspace) == session || Some(workspace) == wallet {
+        anyhow::bail!(
+            "WORKSPACE_TOKEN_SECRET must differ from AUTH_SESSION_SECRET and AUTH_WALLET_LINK_SECRET"
+        );
+    }
+    Ok(())
+}
+
+fn parse_workspace_url(value: &str) -> anyhow::Result<String> {
+    validate_origin_url(value, "WORKSPACE_URL")?;
+    let url = Url::parse(value)?;
+    if url.fragment().is_some() || !url.username().is_empty() || url.password().is_some() {
+        anyhow::bail!("WORKSPACE_URL must not carry a fragment or credentials");
+    }
+    Ok(url.into())
+}
+
 fn no_store_json(status: StatusCode, payload: Value) -> Response {
     let mut response = (status, Json(payload)).into_response();
     response
@@ -2345,6 +2466,7 @@ mod tests {
             inner: Arc::new(SiteAuthInner {
                 session_secret: Some(vec![7; 32]),
                 workspace_secret: None,
+                workspace_url: None,
                 wallet_secret: Some(vec![8; 32]),
                 web_origin: "https://agentizable.ai".to_string(),
                 api_origin: "https://api.agentizable.ai".to_string(),
@@ -2463,6 +2585,7 @@ mod tests {
             inner: Arc::new(SiteAuthInner {
                 session_secret: Some(vec![7; 32]),
                 workspace_secret: None,
+                workspace_url: None,
                 wallet_secret: Some(vec![8; 32]),
                 web_origin: "https://agentizable.ai".to_string(),
                 api_origin: "https://api.agentizable.ai".to_string(),
@@ -2646,19 +2769,181 @@ mod tests {
         let mut user = test_user();
         user.provider = "google".into();
         user.email = "person@example.test".into();
-        let proof = workspace_proof(&user, "account-1", &["0xabc".into()], secret, now);
-        let payload = verify_signed_bytes(proof.strip_prefix("abws_").unwrap(), secret).expect("signed");
+        let issuer = "https://api.agentizable.ai";
+        let proof = workspace_proof(&user, "account-1", &["0xabc".into()], issuer, secret, now);
+        let payload =
+            verify_signed_bytes(proof.strip_prefix("abws_").unwrap(), secret).expect("signed");
         let value: Value = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(value["iss"], issuer);
+        assert_eq!(value["aud"], WORKSPACE_TOKEN_AUDIENCE);
         assert_eq!(value["sub"], "account-1");
         assert_eq!(value["email"], "person@example.test");
         assert_eq!(value["email_verified"], true);
         assert_eq!(value["wallets"], json!(["0xabc"]));
-        assert_eq!(value["exp"].as_i64().unwrap() - value["iat"].as_i64().unwrap(), WORKSPACE_TOKEN_SECONDS);
-        assert!(verify_signed_bytes(proof.strip_prefix("abws_").unwrap(), b"another-secret-also-32-characters!!").is_none());
+        assert_eq!(
+            value["exp"].as_i64().unwrap() - value["iat"].as_i64().unwrap(),
+            WORKSPACE_TOKEN_SECONDS
+        );
+        assert!(verify_signed_bytes(
+            proof.strip_prefix("abws_").unwrap(),
+            b"another-secret-also-32-characters!!"
+        )
+        .is_none());
         user.provider = "microsoft".into();
-        let proof = workspace_proof(&user, "account-1", &[], secret, now);
-        let value: Value = serde_json::from_slice(&verify_signed_bytes(proof.strip_prefix("abws_").unwrap(), secret).unwrap()).unwrap();
-        assert_eq!(value["email_verified"], false);
+        let proof = workspace_proof(&user, "account-1", &[], issuer, secret, now);
+        let second: Value = serde_json::from_slice(
+            &verify_signed_bytes(proof.strip_prefix("abws_").unwrap(), secret).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(second["email_verified"], false);
+        // Each proof names itself, so the Workspace can refuse a replayed one.
+        assert!(!value["jti"].as_str().unwrap().is_empty());
+        assert_ne!(value["jti"], second["jti"]);
+    }
+
+    fn workspace_test_service(workspace_url: Option<&str>) -> SiteAuthService {
+        SiteAuthService {
+            inner: Arc::new(SiteAuthInner {
+                session_secret: Some(vec![7; 32]),
+                workspace_secret: Some(vec![9; 32]),
+                workspace_url: workspace_url.map(str::to_string),
+                wallet_secret: Some(vec![8; 32]),
+                web_origin: "https://agentizable.ai".to_string(),
+                api_origin: "https://api.agentizable.ai".to_string(),
+                allowed_origins: vec![HeaderValue::from_static("https://agentizable.ai")],
+                providers: BTreeMap::new(),
+                store: None,
+                client: reqwest::Client::new(),
+                wallet_challenges: Mutex::new(HashMap::new()),
+                posting_drafts_enabled: false,
+                posting_drafts_canary_account_id: None,
+            }),
+        }
+    }
+
+    fn workspace_headers(signed_in: bool, origin: Option<&'static str>) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        if signed_in {
+            let token = sign_session(test_user(), &[7; 32], Utc::now());
+            headers.insert(
+                header::COOKIE,
+                HeaderValue::from_str(&format!("{SESSION_COOKIE}={token}")).unwrap(),
+            );
+        }
+        if let Some(origin) = origin {
+            headers.insert(header::ORIGIN, HeaderValue::from_static(origin));
+        }
+        headers
+    }
+
+    #[tokio::test]
+    async fn workspace_token_requires_an_allowed_origin_a_session_and_an_issuable_proof() {
+        let service = workspace_test_service(None);
+        let status = |headers| {
+            let service = service.clone();
+            async move { workspace_token(Extension(service), headers).await.status() }
+        };
+        assert_eq!(
+            status(workspace_headers(true, Some("https://evil.example"))).await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            status(workspace_headers(true, None)).await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            status(workspace_headers(false, Some("https://agentizable.ai"))).await,
+            StatusCode::UNAUTHORIZED
+        );
+        // Signed in from an allowed origin, but no store to read verified wallets from.
+        assert_eq!(
+            status(workspace_headers(true, Some("https://agentizable.ai"))).await,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+
+    #[tokio::test]
+    async fn workspace_open_goes_only_to_the_configured_workspace() {
+        assert_eq!(
+            open_workspace(
+                Extension(workspace_test_service(None)),
+                workspace_headers(true, None)
+            )
+            .await
+            .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        let service = workspace_test_service(Some("https://workspace.example/"));
+        for signed_in in [false, true] {
+            let response = open_workspace(
+                Extension(service.clone()),
+                workspace_headers(signed_in, None),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::SEE_OTHER);
+            // Without a store no proof can be issued, so the Workspace keeps its own sign-in.
+            assert_eq!(
+                response.headers()[header::LOCATION],
+                "https://workspace.example/"
+            );
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            assert_eq!(response.headers()[header::REFERRER_POLICY], "no-referrer");
+        }
+        assert_eq!(
+            workspace_handoff_location("https://workspace.example/", Some("abws_ab.cd")),
+            "https://workspace.example/#ab_workspace_token=abws_ab.cd"
+        );
+    }
+
+    #[test]
+    fn login_return_choice_is_an_allowlist_and_is_reset_on_every_login() {
+        assert!(login_return_cookie(Some("workspace"))
+            .starts_with("agent_bounties_return=workspace; Path=/v1/site-auth/callback;"));
+        for other in [
+            None,
+            Some("https://evil.example"),
+            Some("Workspace"),
+            Some(""),
+        ] {
+            let cookie = login_return_cookie(other);
+            assert!(
+                cookie.starts_with("agent_bounties_return=;") && cookie.ends_with("Max-Age=0"),
+                "{other:?}: {cookie}"
+            );
+        }
+        let service = workspace_test_service(None);
+        assert_eq!(
+            post_login_location(&service, "github", true),
+            "https://api.agentizable.ai/v1/site-auth/workspace/open"
+        );
+        assert!(
+            post_login_location(&service, "github", false).starts_with("https://agentizable.ai/")
+        );
+    }
+
+    #[test]
+    fn workspace_secret_and_url_are_checked_at_startup() {
+        let (session, wallet, workspace) = ("s".repeat(32), "w".repeat(32), "k".repeat(32));
+        let check =
+            |value: Option<&str>| check_workspace_secret(value, Some(&session), Some(&wallet));
+        assert!(check(None).is_ok());
+        assert!(check(Some(&workspace)).is_ok());
+        assert!(check(Some("too-short")).is_err());
+        assert!(check(Some(&session)).is_err());
+        assert!(check(Some(&wallet)).is_err());
+        assert_eq!(
+            parse_workspace_url("https://workspace.example").unwrap(),
+            "https://workspace.example/"
+        );
+        for bad in [
+            "http://workspace.example/",
+            "https://workspace.example/#x",
+            "https://user:pw@workspace.example/",
+            "javascript:alert(1)",
+            "not a url",
+        ] {
+            assert!(parse_workspace_url(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]
