@@ -153,7 +153,6 @@ mod tests {
     fn assert_operator_hold(error: anyhow::Error) {
         // The running child remains alive in main's existing halt branch, so
         // wait-n does not restart its healthy sibling readers or reset budgets.
-        let error = stopped(&error.to_string());
         assert!(!indexer_error_is_retryable(&error));
         let mut state = IndexerRecoveryState::default();
         for _ in 0..10 {
@@ -350,7 +349,9 @@ mod tests {
                 .await
                 .unwrap_err();
             assert_eq!(reads.calls, 1);
-            assert_operator_hold(error);
+            // verify_previous wraps any failed bootstrap before returning
+            // to the live polling loop (also exercised by the PG negatives).
+            assert_operator_hold(stopped(&error.to_string()));
         }
     }
 
