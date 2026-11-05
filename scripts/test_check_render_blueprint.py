@@ -77,6 +77,37 @@ class DockerCompileTimeAssetTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "fixtures/.*pull_request"):
                 blueprint.require_docker_compile_time_assets(root)
 
+    def test_negated_and_malformed_filters_cannot_disable_runtime_coverage(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.create_repository(root, copy_fixtures=True)
+            workflow = root / ".github/workflows/containers.yml"
+            for event in ("push", "pull_request"):
+                other = "pull_request" if event == "push" else "push"
+                prefix = f"on:\n  {other}:\n    branches: [main]\n  {event}:\n"
+                workflow.write_text(prefix + '    branches: [main]\n    paths: ["**"]\n')
+                blueprint.require_docker_compile_time_assets(root)
+                for filters in (
+                    'branches: [main, "!main"]',
+                    'branches: ["!other", main]',
+                    'paths: ["**", "!crates/**", "!fixtures/**"]',
+                    'paths: ["crates/**", "fixtures/**", "!fixtures/**"]',
+                    'branches: [other]',
+                    'branches: main',
+                    'branches: []',
+                    'paths: "**"',
+                    'paths: []',
+                    'paths: null',
+                ):
+                    with self.subTest(event=event, filters=filters):
+                        workflow.write_text(prefix + "    " + filters + "\n")
+                        with self.assertRaises(SystemExit):
+                            blueprint.require_docker_compile_time_assets(root)
+            for filters in ('tags: ["v*"]', 'tags-ignore: ["v*"]'):
+                workflow.write_text("on:\n  pull_request:\n  push:\n    " + filters + "\n")
+                with self.subTest(filters=filters), self.assertRaises(SystemExit):
+                    blueprint.require_docker_compile_time_assets(root)
+
 
 if __name__ == "__main__":
     unittest.main()

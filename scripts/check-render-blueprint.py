@@ -195,8 +195,26 @@ def require_docker_compile_time_assets(repo_root: Path) -> None:
         rules = triggers[event] or {}
         if not isinstance(rules, dict) or "paths-ignore" in rules or "branches-ignore" in rules:
             fail(f"containers workflow must not exclude runtime builds on {event}")
-        if event == "push" and not set(rules.get("branches", ["main"])) & {"main", "*", "**"}:
-            fail("containers workflow must build main pushes")
+        for field in ("branches", "paths"):
+            if field not in rules:
+                continue
+            patterns = rules[field]
+            if (
+                not isinstance(patterns, list)
+                or not patterns
+                or any(not isinstance(pattern, str) or not pattern for pattern in patterns)
+            ):
+                fail(f"containers workflow {event} {field} must be a nonempty list of patterns")
+            # GitHub applies patterns in order: a later !pattern can undo an
+            # earlier main or ** match. This strict guard permits no exclusions.
+            if any(pattern.startswith("!") for pattern in patterns):
+                fail(f"containers workflow must not use negated {field} patterns on {event}")
+        if not set(rules.get("branches", ["main"])) & {"main", "*", "**"}:
+            fail(f"containers workflow must build main on {event}")
+        if event == "push" and "branches" not in rules and any(
+            field in rules for field in ("tags", "tags-ignore")
+        ):
+            fail("containers workflow must build branch pushes, not only tags")
         # No paths filter runs for every change and is stronger than an allowlist.
         paths = rules.get("paths")
         for root in sorted(copied_roots):
