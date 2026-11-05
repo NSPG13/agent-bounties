@@ -60,3 +60,30 @@ certified checkpoint remains a terminal integrity failure.
 `Public source provenance` runs hourly. Its public HTTP check needs no credentials and fails when API/MCP revisions differ, are absent, or are not reachable from public main. A separate main-only production-environment job uses the Render credential only for GET requests, verifying the source binding and publicly reachable live revision of every listed service, including workers. Neither observer deploys or repairs production. GitHub administrators and Render operators can bypass controls outside this path; their access remains an administrative trust boundary, and the observer detects resulting public revision drift.
 
 An emergency rollback must restore a reviewed prior tree through a public-main revert, pass the same gates, and account for forward-only database migrations. A green deploy does not prove payment, verifier readiness, inventory replenishment or refund completion.
+
+### Expiring bootstrap incident admission
+
+The manual public release workflow has one narrowly reviewed incident input,
+`bootstrap_repair_case=legacy-bootstrap-429-20261105`, expiring at
+`2026-11-06T03:00:00Z`. It requires an exact approved protected-main revision,
+`migrate_source=true` and `bootstrap_autonomous_readers=true`. These inputs do
+not authorize a full release. In this case the controller makes no source-setting
+changes and may deploy only the already-public autonomous reader.
+
+The controller binds the original live deployment, source, instance and saved
+legacy cursor. It checks all nine service identities and the paused Blueprint.
+One authenticated, unfiltered, complete error-log page must cover that original
+deployment's full lifetime. Only the exact hashed ten-record startup prefix and
+recognized rate-limit retries qualify; a retry must still be at most 180 seconds
+old immediately before deployment. Missing, truncated, changed or unknown evidence
+blocks the action. Other readers must remain healthy, and canonical readiness is
+bracketed by matching API health revisions. The controller repeats the deployment,
+identity and health checks before its single deploy request. Raw error records
+stay in memory; release artifacts contain only case identifiers, counts and hashes.
+
+A later or ambiguous deploy attempt requires reconciliation; do not repeat this
+operation to work around a failed check. The original failed observation window
+remains failed. A new reader deployment still requires independent historical
+checkpoint acceptance before the normal full release, which continues to require
+all readers healthy. This temporary admission does not change chain data, cursors,
+funded terms, verifier authority, credentials, or general restart policy.

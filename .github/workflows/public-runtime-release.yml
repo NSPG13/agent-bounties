@@ -24,6 +24,10 @@ on:
         description: 'Exact independently accepted reader deployment ID to reuse during full promotion'
         required: false
         type: string
+      bootstrap_repair_case:
+        description: 'Exact reviewed expiring bootstrap incident; manual migration plus reader-only stage required'
+        required: false
+        type: string
 permissions:
   contents: read
   actions: read
@@ -49,6 +53,7 @@ jobs:
       - name: Verify public-source release contracts
         run: |
           python3 scripts/test_deploy_public_runtime.py -v
+          python3 scripts/test_bootstrap_repair_admission.py -v
           python3 scripts/test_public_runtime_parity.py -v
           python3 scripts/check_public_runtime_parity.py --published
       - name: Deploy exact public revision
@@ -61,6 +66,7 @@ jobs:
           APPROVED_REVISION: ${{ inputs.approved_revision }}
           RELEASE_EVENT: ${{ github.event_name }}
           ACCEPTED_AUTONOMOUS_DEPLOY_ID: ${{ inputs.accepted_autonomous_deploy_id }}
+          BOOTSTRAP_REPAIR_CASE: ${{ inputs.bootstrap_repair_case }}
         run: |
           set -euo pipefail
           migration_args=()
@@ -80,6 +86,9 @@ jobs:
           fi
           if [[ -n "${ACCEPTED_AUTONOMOUS_DEPLOY_ID}" ]]; then
             migration_args+=(--accepted-autonomous-deploy-id "$ACCEPTED_AUTONOMOUS_DEPLOY_ID")
+          fi
+          if [[ -n "${BOOTSTRAP_REPAIR_CASE}" ]]; then
+            migration_args+=(--bootstrap-repair-case "$BOOTSTRAP_REPAIR_CASE")
           fi
           python3 scripts/deploy_public_runtime.py --revision "$TARGET_REVISION" \
             --evidence-dir target/operations/public-runtime-release "${migration_args[@]}"
