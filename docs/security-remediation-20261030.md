@@ -80,3 +80,9 @@ snapshot first reloads the durable broadcast result; new v1 exposure stays denie
 API schema derivation is an optional metric-core feature, excluded from proving
 programs. Their pinned SP1 dependencies, lockfiles and verifier identities remain
 subject to the existing independent build and comparison gates.
+
+The historical watchdog rehearsal preserves two distinct records: the exact
+`1998b4e` source archive and the benchmark files already published by PR #1573 at
+`f31e22cf82c0d2af9318ecec2a7c2802ca895828`. The wrapper checks each against its own
+recorded bytes. Neither benchmark is rewritten or treated as approval of the
+current signing worker.

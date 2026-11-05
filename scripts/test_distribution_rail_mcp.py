@@ -64,7 +64,8 @@ class DistributionRailProbeTests(unittest.TestCase):
     def test_fixture_matches_existing_public_server_wire_identity(self):
         source = (ROOT / "crates/mcp-server/src/chatgpt_app.rs").read_text()
         function = source.split("fn attach_attribution_metadata(", 1)[1].split("\nfn ", 1)[0]
-        self.assertIn('"' + KEY + '".to_string()', function)
+        self.assertIn('metadata.insert("' + KEY + '"', function)
+        self.assertIn('metadata.insert("agentizable.ai/acquisition"', function)
 
     def test_missing_or_brand_renamed_namespace_still_fails(self):
         for metadata in ({}, {"agentizable.ai/acquisition": responses()[1][2]["result"]["_meta"][KEY]}):

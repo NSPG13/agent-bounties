@@ -1,4 +1,4 @@
-# Invoiced Business Path (Seller of Record)
+# Archived invoice adapter design
 
 **Historical design:** this legacy HTTP path is not enabled in the hosted runtime.
 The retained projection and Stripe refund-evidence libraries are tested independently.
@@ -17,8 +17,8 @@ path:
 The design and its rejected alternatives are in
 [ADR 0006](adr/0006-protocol-v2-platform-fee-and-non-custodial-fiat.md).
 
-This page describes the deterministic core and the hosted operator
-endpoints. The core covers quote math, Stripe request plans, webhook evidence,
+This page preserves the deterministic core and the proposed operator
+workflow; it does not describe an enabled hosted adapter. The core covers quote math, Stripe request plans, webhook evidence,
 the order state machine, contractor eligibility, registry attestations and
 1099 totals. Everything can run in Stripe test mode. Live activation waits
 for:
@@ -125,13 +125,14 @@ the completion bonus; the returned claim bond is the solver's own money.
 
 Every plan uses a deterministic idempotency key per order, and IDs are
 validated before they are placed in a URL path:
-- `POST /v1/customers`
-- `POST /v1/invoices`: `send_invoice`, bank transfer only, a seller-of-record
-  footer, and metadata `{order_id, purpose: invoiced_outcome, terms_sha256}`
-- `POST /v1/invoiceitems`, one per quote line
-- `POST /v1/invoices/{id}/finalize`, `/send` and `/void`
-- `POST /v1/credit_notes`: the full amount, refunded once, either through
-  Stripe (`refund_amount`) or recorded outside it (`out_of_band_amount`)
+- Stripe customer creation.
+- Draft invoice creation with `send_invoice`, bank transfer only, a
+  seller-of-record footer, and metadata `{order_id, purpose: invoiced_outcome,
+  terms_sha256}`.
+- Invoice items, one per quote line, followed by invoice finalization, sending
+  or voiding.
+- A full-amount credit note, refunded once through Stripe (`refund_amount`) or
+  recorded outside it (`out_of_band_amount`).
 
 An interrupted run is resumed by reading the stored invoice back before
 anything is added to it.
@@ -153,29 +154,19 @@ None of these changes an order's money state:
 - a signature;
 - a transaction hash.
 
-## Hosted endpoints
+## Retained adapter source
 
-Every route below is operator-only and requires `OPERATOR_API_TOKEN`. An
-unset token fails closed here, unlike other operator routes in local
-development. Order state is replayed from the append-only
-`invoice_order_events` log (migration `0038_invoice_orders.sql`). A new event
-is stored only when that replay accepts it.
+The unmounted router remains in `crates/api/src/invoicing.rs` for historical
+review. It proposed operator-only order creation, invoice issuance and voiding,
+funding plans, reconciliation, cancellation, refunds, contractor attestations and
+annual payment summaries. None of those legacy routes is part of the current
+API contract. An unset operator token must fail closed throughout the service.
 
-| Route | Purpose |
-| --- | --- |
-| `POST /v1/invoicing/orders` | Quote and create an order |
-| `GET /v1/invoicing/orders`, `GET /v1/invoicing/orders/{id}` | Order states, events and `next_action` |
-| `POST /v1/invoicing/orders/{id}/invoice` | Create the customer, draft and items, finalize, record the invoice, then send. Each Stripe id is stored before the next step. A retry reads a stored invoice back instead of re-adding items, and an already recorded invoice is only resent. The finalized total must equal the quote |
-| `POST /v1/invoicing/orders/{id}/void` | Void an unpaid invoice. `invoice.voided` records it |
-| `POST /v1/invoicing/orders/{id}/funding-plan` | Publish the v2 terms and return the treasury's unsigned creation plan. The terms commit the quote economics, the treasury as creator, the contractor gate and the verifier quorum |
-| `POST /v1/invoicing/orders/{id}/reconcile` | Apply indexed canonical treasury `FundingAdded`, `BountySettled` and treasury `RefundWithdrawn` for the planned bounty |
-| `POST /v1/invoicing/orders/{id}/cancel` | Cancel a paid order after applying the latest indexed events. When funded and not yet refunded, it returns the treasury's `cancel()` and `withdrawRefund()` calls. Repeating it returns the current calls |
-| `POST /v1/invoicing/orders/{id}/refund` | Apply the latest indexed events, then issue the credit note once no escrow is at risk. `credit_note.created` marks the order refunded |
-| `PUT /v1/invoicing/contractors/{id}` | Record a contractor: wallet, agreement acceptance, and a tax-form reference only. A wallet change keeps the old wallet in `previous_wallets`, and a wallet never moves to another contractor |
-| `POST /v1/invoicing/contractors/{id}/attestation-plan` | Return the attester's EIP-712 payload for an eligible contractor |
-| `POST /v1/invoicing/contractors/{id}/registration-plan` | Plan the relayed `register` call for an attestation that the configured attester signed |
-| `GET /v1/invoicing/contractor-payments?year=` | Annual 1099-NEC totals and foreign-payee totals over every order. Settlements to a contractor's earlier wallets count. `unmatched_settlements` and `replay_errors` list what needs review, and `complete` is true only when both are empty |
-| `POST /v1/stripe/invoice-webhooks` | Signature-verified Stripe events, using a separate endpoint secret |
+Historical order replay uses `invoice_order_events` and migration
+`0038_invoice_orders.sql`. Those records are retained. The projection and Stripe
+refund-evidence libraries can be tested without enabling the old router.
+Current customer checkout and refund handling use the managed-order path; see
+[the card-payment release boundary](card-payment-website-release.md).
 
 **Webhook handling.** Each Stripe event applies at most once; a retry is
 reported as a duplicate. A transition the projection rejects is acknowledged
@@ -190,10 +181,11 @@ invoice: it gets a retryable 409, so Stripe redelivers it.
 - Registration proves the attester's approval, not the contractor's control of
   the wallet. Confirm the wallet with the contractor before attesting it.
 
-## Configuration
+## Archived configuration
 
-Invoicing stays off unless `INVOICING_ENABLED=true` and all of the following
-are set:
+The retained module used `INVOICING_ENABLED` and the following settings. These
+values do not mount an HTTP router in the current application. Restoring that
+adapter requires separate durable-storage and authorization qualification:
 - **Network and v2 factory:** `INVOICING_NETWORK` (default `base-sepolia`),
   which needs a configured v2 factory (`BASE_SEPOLIA_BOUNTY_V2_*`).
 - **Treasury:** `INVOICING_TREASURY_WALLET`, the creator that signs funding.

@@ -38,10 +38,10 @@ class DockerCompileTimeAssetTests(unittest.TestCase):
         workflow = root / ".github" / "workflows" / "containers.yml"
         workflow.parent.mkdir(parents=True)
         workflow.write_text(
-            'pull_request:\n  paths:\n    - "crates/**"\n'
-            + ('    - "fixtures/**"\n' if copy_fixtures else "")
-            + 'push:\n  paths:\n    - "crates/**"\n'
-            + ('    - "fixtures/**"\n' if copy_fixtures else ""),
+            'on:\n  pull_request:\n    paths:\n      - "crates/**"\n'
+            + ('      - "fixtures/**"\n' if copy_fixtures else "")
+            + '  push:\n    branches: [main]\n    paths:\n      - "crates/**"\n'
+            + ('      - "fixtures/**"\n' if copy_fixtures else ""),
             encoding="utf-8",
         )
 
@@ -60,6 +60,22 @@ class DockerCompileTimeAssetTests(unittest.TestCase):
             root = Path(directory)
             self.create_repository(root, copy_fixtures=True)
             blueprint.require_docker_compile_time_assets(root)
+
+    def test_unfiltered_main_pushes_cover_all_runtime_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.create_repository(root, copy_fixtures=True)
+            workflow = root / ".github/workflows/containers.yml"
+            original = workflow.read_text().split("  push:\n")[0]
+            workflow.write_text(original + "  push:\n    branches: [main]\n")
+            blueprint.require_docker_compile_time_assets(root)
+            for exclusions in ('paths-ignore: ["fixtures/**"]', 'branches: [other]'):
+                workflow.write_text(original + "  push:\n    " + exclusions + "\n")
+                with self.subTest(exclusions=exclusions), self.assertRaises(SystemExit):
+                    blueprint.require_docker_compile_time_assets(root)
+            workflow.write_text(original.replace('      - "fixtures/**"\n', '') + "  push:\n    branches: [main]\n")
+            with self.assertRaisesRegex(SystemExit, "fixtures/.*pull_request"):
+                blueprint.require_docker_compile_time_assets(root)
 
 
 if __name__ == "__main__":

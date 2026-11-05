@@ -313,7 +313,7 @@ def main() -> int:
         "scripts.test_regression_profiles", "scripts.test_regression_verifier_pipeline",
         "-v",
     )
-    py("scripts/test_rehearse_frozen_verifier.py")
+    py("-m", "unittest", "scripts.test_rehearse_frozen_verifier", "-v")
     py("scripts/rehearse_frozen_verifier.py")
     py("-m", "pip", "install", "-r", "scripts/requirements-wallet.txt")
     py("scripts/test_terms_publication_client.py", "-v")

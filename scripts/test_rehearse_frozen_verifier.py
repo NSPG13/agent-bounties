@@ -49,7 +49,8 @@ class FrozenReferenceTest(unittest.TestCase):
             runtime.parent.mkdir(parents=True)
             runtime.write_bytes(b"security repair")
             frozen = {str(benchmark.relative_to(root)): hashlib.sha256(benchmark.read_bytes()).hexdigest(), "scripts/runtime.py": "0" * 64}
-            with patch.object(rehearsal, "FROZEN_FILES", frozen):
+            published = {str(benchmark.relative_to(root)): frozen[str(benchmark.relative_to(root))]}
+            with patch.object(rehearsal, "FROZEN_FILES", frozen), patch.object(rehearsal, "PUBLISHED_BENCHMARK_FILES", published):
                 rehearsal.verify_frozen_files(root, benchmark_only=True)
                 with self.assertRaisesRegex(ValueError, "runtime.py"):
                     rehearsal.verify_frozen_files(root)

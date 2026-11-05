@@ -51,6 +51,7 @@ jobs:
     - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: "3.12"
+    - run: python -m pip install -r scripts/requirements-site.txt
     - run: python -m unittest scripts.test_verifier_release_provenance -v
     - run: python scripts/test_gas_sponsorship_budget.py -v
     - run: python scripts/test_regression_verifier_pipeline.py -v

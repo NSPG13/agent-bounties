@@ -140,10 +140,17 @@ def validate_public_agent_entrypoints(root: Path) -> None:
     validate_static_discovery_urls(discovery)
 
     protocol = json.loads((root / "site/protocol.json").read_text(encoding="utf-8"))
+    validate_protocol_retirement(protocol)
+
+
+def validate_protocol_retirement(protocol: dict) -> None:
     if protocol.get("protocol_version") != "agent-bounties/autonomous-v1":
         raise SystemExit("protocol status must identify agent-bounties/autonomous-v1")
-    if protocol.get("status") != "active" or protocol.get("chain_id") != 8453:
-        raise SystemExit("protocol status must identify the active Base mainnet deployment")
+    if protocol.get("status") != "recovery_only" or protocol.get("chain_id") != 8453:
+        raise SystemExit("legacy v1 must identify the recovery-only Base mainnet deployment")
+    for flag in ("new_creation_enabled", "new_funding_enabled", "new_claims_enabled"):
+        if protocol.get(flag) is not False:
+            raise SystemExit(f"legacy v1 must explicitly disable {flag}")
 
 
 def validate_agent_discovery_contract(root: Path) -> None:

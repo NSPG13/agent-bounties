@@ -53,6 +53,7 @@ jobs:
           python-version: "3.12"
       - uses: dtolnay/rust-toolchain@1.94.0
       - uses: Swatinem/rust-cache@v2
+      - run: python -m pip install -r scripts/requirements-site.txt
       - run: |
           python -m unittest scripts.test_verifier_release_provenance -v
           python scripts/test_regression_verifier_pipeline.py -v

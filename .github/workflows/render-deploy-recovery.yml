@@ -64,6 +64,7 @@ jobs:
 
     - name: Verify deterministic deploy controller
       run: |
+        python -m pip install -r scripts/requirements-site.txt
         python scripts/test_render_deploy_recovery.py -v
         python scripts/check-render-blueprint.py
         python -m py_compile \

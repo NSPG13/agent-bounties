@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import yaml
 from pathlib import Path
 
 from render_deploy_recovery import OPEN_COMPETITION_WORKER_ENVIRONMENT
@@ -187,14 +188,22 @@ def require_docker_compile_time_assets(repo_root: Path) -> None:
     workflow = (repo_root / ".github" / "workflows" / "containers.yml").read_text(
         encoding="utf-8"
     )
-    for root in sorted(copied_roots):
-        if root == "." or not (repo_root / root).is_dir():
-            continue
-        path_filter = f'- "{root}/**"'
-        if workflow.count(path_filter) != 2:
-            fail(
-                f"containers workflow must monitor {root}/** for pull_request and main push builds"
-            )
+    triggers = yaml.load(workflow, Loader=yaml.BaseLoader).get("on", {})
+    for event in ("pull_request", "push"):
+        if event not in triggers:
+            fail(f"containers workflow must run on {event}")
+        rules = triggers[event] or {}
+        if not isinstance(rules, dict) or "paths-ignore" in rules or "branches-ignore" in rules:
+            fail(f"containers workflow must not exclude runtime builds on {event}")
+        if event == "push" and not set(rules.get("branches", ["main"])) & {"main", "*", "**"}:
+            fail("containers workflow must build main pushes")
+        # No paths filter runs for every change and is stronger than an allowlist.
+        paths = rules.get("paths")
+        for root in sorted(copied_roots):
+            if root == "." or not (repo_root / root).is_dir():
+                continue
+            if paths is not None and f"{root}/**" not in paths and "**" not in paths:
+                fail(f"containers workflow must monitor {root}/** for {event} builds")
 
 
 def load_mainnet_deployment(repo_root: Path) -> dict[str, object]:

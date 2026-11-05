@@ -5,6 +5,7 @@ import re
 import subprocess
 import tempfile
 import unittest
+import yaml
 from unittest import mock
 
 
@@ -218,18 +219,16 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         self.assertLess(sepolia.index(auth_probe), sepolia.index(payment_rehearsal))
         # Select the action, not a particular release pin, and stop at the next
         # step so unrelated evidence cannot satisfy this upload's assertions.
-        uploads = [
-            step for step in re.split(r"(?m)^      - ", sepolia)[1:]
-            if step.startswith("uses: actions/upload-artifact@")
-        ]
+        steps = yaml.load(workflow, Loader=yaml.BaseLoader)["jobs"]["live-sepolia-rehearsal"]["steps"]
+        uploads = [step for step in steps if step.get("uses", "").startswith("actions/upload-artifact@")]
         self.assertEqual(len(uploads), 1)
         upload = uploads[0]
         self.assertRegex(
-            upload.splitlines()[0],
-            r"^uses: actions/upload-artifact@[0-9a-f]{40}(?:[ \t]+#.*)?$",
+            upload["uses"],
+            r"^actions/upload-artifact@[0-9a-f]{40}$",
         )
-        self.assertRegex(upload, r"(?m)^        if: always\(\)[ \t]*$")
-        self.assertRegex(upload, r"(?m)^            target/sepolia-prover-auth\.json[ \t]*$")
+        self.assertEqual(upload.get("if"), "always()")
+        self.assertIn("target/sepolia-prover-auth.json", upload["with"]["path"].splitlines())
 
     def test_rehearsal_evidence_selector_accepts_changed_full_commit_pins(self):
         workflow = (
@@ -254,11 +253,11 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         mutations = {
             "floating_pin": sepolia.replace(pin, "v7"),
             "missing_upload": sepolia.replace("uses: actions/upload-artifact@", "uses: example/other@"),
-            "duplicate_upload": sepolia + f"      - uses: actions/upload-artifact@{pin}\n",
-            "missing_always": sepolia.replace("        if: always()", "        if: success()"),
-            "missing_evidence": sepolia.replace("            target/sepolia-prover-auth.json\n", ""),
-            "evidence_in_other_step": sepolia.replace("            target/sepolia-prover-auth.json\n", "")
-                + "      - run: |\n          echo target/sepolia-prover-auth.json\n",
+            "duplicate_upload": sepolia + f"    - uses: actions/upload-artifact@{pin}\n",
+            "missing_always": re.sub(r"(?m)^( +)if: always\(\)", r"\1if: success()", sepolia),
+            "missing_evidence": re.sub(r"(?m)^ +target/sepolia-prover-auth\.json\n", "", sepolia),
+            "evidence_in_other_step": re.sub(r"(?m)^ +target/sepolia-prover-auth\.json\n", "", sepolia)
+                + "    - run: |\n        echo target/sepolia-prover-auth.json\n",
             "missing_auth": sepolia.replace("Authorization: Bearer ${OPEN_COMPETITION_V2_PROVER_API_KEY}", "Authorization: omitted"),
             "payment_before_auth": "      - run: python scripts/run_open_competition_v2_x402_rehearsal.py\n" + sepolia,
         }
@@ -867,9 +866,9 @@ class ProverBuildSelectionTests(unittest.TestCase):
         self.assertIn("fetch-depth: 2", jobs["prover-inputs"])
         self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", workflow)
         self.assertIn("group: open-competition-v2-beta3-${{ github.event_name }}-${{ github.ref }}", workflow)
-        triggers = workflow.split("  workflow_dispatch:", 1)[0]
+        triggers = yaml.load(workflow, Loader=yaml.BaseLoader)["on"]["pull_request"]["paths"]
         for path in (".cargo/**", "rust-toolchain*", "scripts/verify-open-competition-v2-metric-release.py"):
-            self.assertIn(f'      - "{path}"', triggers)
+            self.assertIn(path, triggers)
 
 
 if __name__ == "__main__":

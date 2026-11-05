@@ -111,7 +111,7 @@ jobs:
         PYTHONPATH: ${{ github.workspace }}/scripts
       run: |
         set -euo pipefail
-        python -m pip install -r scripts/requirements-wallet.txt
+        python -m pip install -r scripts/requirements-wallet.txt -r scripts/requirements-site.txt
         python scripts/verify_sp1_patched_graph.py
         python scripts/verify_open_competition_v2_gnark_image.py
         forge build --root contracts/base-escrow --force --ast

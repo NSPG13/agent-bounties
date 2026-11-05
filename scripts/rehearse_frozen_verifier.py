@@ -23,6 +23,14 @@ REFERENCE_COMMIT = "1998b4ebe57ddbc82ffb72653f0c4b498e74cb42"
 REFERENCE_FIXTURE = "scripts/fixtures/regression-verifier-1998b4e.tar.gz"
 REFERENCE_FIXTURE_SHA256 = "74162e0c58870d73907360150af37eb8ba6737e41de493e2403dc662793e77ea"
 BENCHMARK = "benchmarks/direct-flagship-v1/verifier-settlement-watchdog"
+# Public PR #1573 had already changed these two files before this audit.
+# Preserve that published tree too; it is distinct from the archived 1998b4e
+# benchmark rehearsal and does not approve today's application for signing.
+PUBLISHED_BENCHMARK_COMMIT = "f31e22cf82c0d2af9318ecec2a7c2802ca895828"
+PUBLISHED_BENCHMARK_FILES = {
+    f"{BENCHMARK}/check.py": "64736079ac97d41feb9f5cf91a376da5beaa2c63f0b539ece228f29fb90f518f",
+    f"{BENCHMARK}/rehearse.py": "eaebeff574af1c72159f4fe73f1de7ad717cde374505a32a9b68a54d58cd10a6",
+}
 FROZEN_FILES = {
     f"{BENCHMARK}/check.py": "88847fb860825a618827f2116f4b03334bdbb49b26f5dfbcf4a42e09dfc09227",
     f"{BENCHMARK}/rehearse.py": "617b2eff25b1739abbe3fa3df5b8f22815c26c5002a67e893723dbf39290bf64",
@@ -58,9 +66,8 @@ def clean_environment() -> dict[str, str]:
 
 
 def verify_frozen_files(root: Path, *, benchmark_only: bool = False) -> None:
-    for relative, expected in FROZEN_FILES.items():
-        if benchmark_only and not relative.startswith(BENCHMARK + "/"):
-            continue
+    files = PUBLISHED_BENCHMARK_FILES if benchmark_only else FROZEN_FILES
+    for relative, expected in files.items():
         path = root / relative
         if path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to(root.resolve()):
             raise ValueError(f"missing or unsafe frozen verifier file: {relative}")
