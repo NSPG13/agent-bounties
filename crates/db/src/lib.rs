@@ -13620,10 +13620,10 @@ mod tests {
     async fn certify_metrics_fixture_history(store: &PostgresStore, network: &str) {
         sqlx::query(r#"
             INSERT INTO autonomous_bounty_events
-              (id,network,log_key,tx_hash,block_number,log_index,contract_address,bounty_id,kind,data,occurred_at)
+              (id,network,log_key,tx_hash,block_number,log_index,contract_address,bounty_id,kind,data,occurred_at,block_time_verified)
             SELECT gen_random_uuid(),e.network,'fixture-creation:'||e.contract_address||':'||e.bounty_id,
                    min(e.tx_hash),min(e.block_number),0,e.contract_address,e.bounty_id,
-                   'canonical_bounty_created','{}'::jsonb,min(e.occurred_at)
+                   'canonical_bounty_created','{}'::jsonb,min(e.occurred_at),true
             FROM autonomous_bounty_events e
             WHERE e.network=$1 AND NOT EXISTS (
               SELECT 1 FROM autonomous_bounty_events created
