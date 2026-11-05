@@ -6,6 +6,9 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+import email.message
+import urllib.request
+import urllib.response
 from unittest.mock import patch
 from deploy_public_runtime import PUBLIC,ReleaseError,prepare,prepare_release,reader_readiness,validate_deploy,public_ci_revision,verify_live_readers,main,validate_release_approval,validate_accepted_reader
 class Client:
@@ -17,7 +20,7 @@ class Client:
 class PublicReleaseTests(unittest.TestCase):
     def setUp(self):
         self.expected={'id':'srv-one','name':'api','type':'web_service'}
-        self.manifest={'repository':PUBLIC,'branch':'main','migration_from_repository':'https://github.com/NSPG13/AB-PRIVATE','workspace_id':'tea-reviewed','services':[self.expected]}
+        self.manifest={'repository':PUBLIC,'branch':'main','migration_from_repository':'https://github.com/NSPG13/AB-PRIVATE','workspace_id':'tea-reviewed','services':[self.expected],'blueprints':[]}
         self.service={**self.expected,'ownerId':'tea-reviewed','repo':self.manifest['migration_from_repository'],'branch':'reviewed-private','autoDeploy':'no'}
     def test_manual_approval_is_exact_and_separate_from_live_expectation(self):
         validate_release_approval('a'*40,'b'*40,'a'*40,'workflow_dispatch')
@@ -47,6 +50,39 @@ class PublicReleaseTests(unittest.TestCase):
         client=Client({'srv-one':self.service,'srv-two':{**self.service,'id':'srv-two','ownerId':'wrong'}})
         with self.assertRaises(ReleaseError):prepare(client,manifest,True)
         self.assertTrue(all(call[0]=='GET' for call in client.calls))
+    def test_blueprint_drift_blocks_all_source_mutations(self):
+        expected={'id':'exs-reviewed','name':'marketplace','path':'render.yaml',
+            'resource_ids':['srv-one','dpg-database','evg-shared']}
+        manifest={**self.manifest,'blueprints':[expected]}
+        blueprint={key:expected[key] for key in ('id','name','path')}
+        blueprint.update(ownerId='tea-reviewed',repo=PUBLIC,branch='main',autoSync=False,
+            status='paused',resources=[{'id':value} for value in expected['resource_ids']])
+        for mutation in ('id','name','path','ownerId','repo','branch','autoSync','status',
+                'missing_sync','string_false','missing_resource','extra_resource','duplicate_resource'):
+            value=copy.deepcopy(blueprint)
+            if mutation=='missing_sync':del value['autoSync']
+            elif mutation=='string_false':value['autoSync']='false'
+            elif mutation=='missing_resource':value['resources'].pop()
+            elif mutation=='extra_resource':value['resources'].append({'id':'srv-unreviewed'})
+            elif mutation=='duplicate_resource':value['resources'][-1]=value['resources'][0]
+            else:value[mutation]=True if mutation=='autoSync' else 'other'
+            client=Client({'srv-one':self.service,'exs-reviewed':value})
+            with self.subTest(mutation=mutation),self.assertRaises(ReleaseError):
+                prepare(client,manifest,True)
+            self.assertTrue(all(call[0]=='GET' for call in client.calls))
+        client=Client({'srv-one':self.service,'exs-reviewed':blueprint})
+        prepare(client,manifest,True)
+        self.assertIn(('GET','blueprints/exs-reviewed',None),client.calls)
+        self.assertEqual([call[1] for call in client.calls if call[0]!='GET'],['services/srv-one'])
+    def test_missing_blueprint_inventory_cannot_silently_skip_control(self):
+        manifest=copy.deepcopy(self.manifest);del manifest['blueprints']
+        client=Client({'srv-one':self.service})
+        with self.assertRaises(ReleaseError):prepare(client,manifest,True)
+        self.assertTrue(all(call[0]=='GET' for call in client.calls))
+    def test_production_inventory_keeps_the_reviewed_blueprint_dependency(self):
+        manifest=json.loads((Path(__file__).resolve().parents[1]/'ops/public-runtime-services.json').read_text())
+        self.assertEqual([row['id'] for row in manifest['blueprints']],['exs-d97too57vvec73ctvmh0'])
+        self.assertIn(manifest['autonomous_bootstrap_service_id'],manifest['blueprints'][0]['resource_ids'])
     def bootstrap_fixture(self):
         manifest=copy.deepcopy(self.manifest)
         reader={'id':'srv-reader','name':'reader','type':'background_worker','dockerfile':'./Dockerfile.posting-indexers'}
@@ -241,16 +277,97 @@ class PublicReleaseTests(unittest.TestCase):
                     minutes=-2 if mutation == 'stale' else 2)).isoformat()
             elif mutation == 'schema':value['schema'] = 'other'
             else:value['ready'] = False
-            with self.subTest(mutation=mutation), patch('deploy_public_runtime.urllib.request.urlopen',
+            with self.subTest(mutation=mutation), patch('deploy_public_runtime.public_provenance_open',
                     return_value=self.readiness_response(value)), self.assertRaises(ReleaseError):
                 reader_readiness(manifest)
 
     def test_readiness_requires_the_exact_deployed_revision(self):
         manifest, value = self.readiness_fixture()
-        with patch('deploy_public_runtime.urllib.request.urlopen', return_value=self.readiness_response(value)):
+        with patch('deploy_public_runtime.public_provenance_open', return_value=self.readiness_response(value)):
             self.assertEqual(reader_readiness(manifest, 'a'*40)['revision'], 'a'*40)
-        with patch('deploy_public_runtime.urllib.request.urlopen', return_value=self.readiness_response(value)), self.assertRaises(ReleaseError):
+        with patch('deploy_public_runtime.public_provenance_open', return_value=self.readiness_response(value)), self.assertRaises(ReleaseError):
             reader_readiness(manifest, 'b'*40)
+
+    def test_legacy_header_fallback_is_explicit_preflight_only(self):
+        manifest,value=self.readiness_fixture()
+        responses=[self.readiness_response({}),self.readiness_response(value,revision=''),self.readiness_response({})]
+        with patch('deploy_public_runtime.public_provenance_open',side_effect=responses) as request:
+            result=reader_readiness(manifest,allow_legacy_revision=True)
+            self.assertEqual(result['revision'],'a'*40)
+            self.assertEqual(result['revision_source'],'legacy_health_bracket')
+            self.assertEqual([call.args[0].full_url for call in request.call_args_list],[
+                'https://api.agentizable.ai/health',manifest['marketplace_readiness']['url'],
+                'https://api.agentizable.ai/health'])
+        for revision,allow in [(None,False),('a'*40,False),('a'*40,True)]:
+            with self.subTest(revision=revision,allow=allow), \
+                    patch('deploy_public_runtime.public_provenance_open',return_value=self.readiness_response(value,revision='')) as request, \
+                    self.assertRaises(ReleaseError):
+                reader_readiness(manifest,revision,allow_legacy_revision=allow)
+            self.assertEqual(request.call_count,1)
+
+    def test_legacy_bracket_cannot_hide_revision_or_reader_failures(self):
+        for failure in ('missing_before','missing_after','changed','bad_health_status','bad_ready_status',
+                        'malformed_header','failed','missing','stale','future','malformed_json'):
+            manifest,value=self.readiness_fixture()
+            before=self.readiness_response({});after=self.readiness_response({})
+            ready=self.readiness_response(value,revision='')
+            if failure=='missing_before':before.headers={}
+            elif failure=='missing_after':after.headers={}
+            elif failure=='changed':after.headers['x-agent-bounties-revision']='b'*40
+            elif failure=='bad_health_status':before.status=503
+            elif failure=='bad_ready_status':ready.status=503
+            elif failure=='malformed_header':ready.headers['x-agent-bounties-revision']='invalid'
+            elif failure=='malformed_json':ready=io.StringIO('{');ready.status=200;ready.headers={}
+            else:
+                if failure=='failed':value['readers'][0]['ready']=False
+                elif failure=='missing':value['readers'].pop()
+                else:value['checked_at']=(dt.datetime.now(dt.timezone.utc)+dt.timedelta(minutes=-2 if failure=='stale' else 2)).isoformat()
+                ready=self.readiness_response(value,revision='')
+            with self.subTest(failure=failure),patch('deploy_public_runtime.public_provenance_open',side_effect=[before,ready,after]),self.assertRaises(ReleaseError):
+                reader_readiness(manifest,allow_legacy_revision=True)
+
+    def test_only_explicit_migration_enables_legacy_preflight(self):
+        for migrate in (False,True):
+            client=Client({'srv-one':{**self.service,'repo':PUBLIC,'branch':'main'}})
+            record={}
+            with patch('deploy_public_runtime.reader_readiness',return_value={'revision':'a'*40}) as observe:
+                prepare_release(client,self.manifest,migrate,preflight_record=record)
+            observe.assert_called_once_with(self.manifest,allow_legacy_revision=migrate)
+            self.assertEqual(record,{'revision':'a'*40})
+
+    def test_public_revision_reads_reject_cross_origin_redirects(self):
+        real_build=urllib.request.build_opener
+        for route in ('health','readiness/marketplace'):
+            manifest,value=self.readiness_fixture()
+            calls=[]
+            source='https://api.agentizable.ai/'+route
+            foreign='https://unrelated.invalid/'+route
+            class MemoryHttps(urllib.request.HTTPSHandler):
+                def https_open(self,request):
+                    calls.append(request.full_url)
+                    headers=email.message.Message()
+                    if request.full_url==source:
+                        headers['Location']=foreign;status=302;body=b''
+                    else:
+                        status=200
+                        body=b'ok' if request.full_url.endswith('/health') else json.dumps(value).encode()
+                        if request.full_url.endswith('/health'):headers['x-agent-bounties-revision']='a'*40
+                    response=urllib.response.addinfourl(io.BytesIO(body),headers,request.full_url,status)
+                    response.msg='Found' if status==302 else 'OK'
+                    return response
+            # The former default redirect policy accepts foreign source proof.
+            with patch('socket.create_connection',side_effect=AssertionError('external network forbidden')), \
+                    patch('deploy_public_runtime.urllib.request.build_opener',side_effect=lambda *handlers:real_build(MemoryHttps())):
+                self.assertEqual(reader_readiness(manifest,allow_legacy_revision=True)['revision'],'a'*40)
+            self.assertIn(foreign,calls)
+            calls.clear()
+            # Exercise actual urllib redirect processing, preserving our handler.
+            with self.subTest(route=route),patch('socket.create_connection',side_effect=AssertionError('external network forbidden')), \
+                    patch('deploy_public_runtime.urllib.request.build_opener',side_effect=lambda *handlers:real_build(*handlers,MemoryHttps())), \
+                    self.assertRaises(ReleaseError):
+                reader_readiness(manifest,allow_legacy_revision=True)
+            self.assertNotIn(foreign,calls)
+            self.assertEqual(calls[-1],source)
 
     def test_reader_incident_blocks_all_source_changes_and_deploys(self):
         client = Client({'srv-one': self.service})

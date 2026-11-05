@@ -4,9 +4,24 @@ from deploy_public_runtime import PUBLIC, ReleaseError
 
 
 class ObserverTests(unittest.TestCase):
+    def test_observer_rejects_automatic_blueprint_sync_without_mutating(self):
+        expected={'id':'exs-reviewed','name':'marketplace','path':'render.yaml','resource_ids':['srv-one']}
+        manifest={'workspace_id':'tea-one','services':[],'blueprints':[expected]}
+        blueprint={**expected,'ownerId':'tea-one','repo':PUBLIC,'branch':'main','autoSync':False,
+                   'status':'paused','resources':[{'id':'srv-one'}]}
+        calls=[]
+        class Client:
+            def request(self,method,path):
+                calls.append((method,path))
+                return blueprint
+        self.assertEqual(audit(Client(),manifest,lambda _:True),[])
+        blueprint['autoSync']=True
+        with self.assertRaises(ReleaseError):audit(Client(),manifest,lambda _:True)
+        self.assertEqual(calls,[('GET','blueprints/exs-reviewed')]*2)
+
     def test_workers_must_have_public_source_and_live_revision_without_mutations(self):
         expected = {'id': 'srv-worker', 'name': 'worker', 'type': 'background_worker'}
-        manifest = {'workspace_id': 'tea-one', 'services': [expected]}
+        manifest = {'workspace_id': 'tea-one', 'services': [expected], 'blueprints': []}
         service = {**expected, 'ownerId': 'tea-one', 'repo': PUBLIC, 'branch': 'main', 'autoDeploy': 'no'}
         deploys = [{'deploy': {'status': 'live', 'commit': {'id': 'a' * 40}}}]
         calls = []

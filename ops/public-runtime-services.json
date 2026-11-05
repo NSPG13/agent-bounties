@@ -71,5 +71,22 @@
       "type": "background_worker",
       "dockerfile": "./Dockerfile"
     }
+  ],
+  "blueprints": [
+    {
+      "id": "exs-d97too57vvec73ctvmh0",
+      "name": "agent-bounties",
+      "path": "render.yaml",
+      "resource_ids": [
+        "srv-d982ftu7r5hc73ar4stg",
+        "srv-d982ftu7r5hc73ar4su0",
+        "srv-d982ftu7r5hc73ar4st0",
+        "dpg-d982fie7r5hc73ar4660-a",
+        "evg-d982fie7r5hc73ar45s0",
+        "evg-d982fie7r5hc73ar45t0",
+        "evg-d982fie7r5hc73ar45ug",
+        "evg-d9aulujeo5us73djqjbg"
+      ]
+    }
   ]
 }

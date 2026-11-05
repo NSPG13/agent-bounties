@@ -7,7 +7,14 @@ payment.
 
 ## Current Status
 
-Implemented and enabled for the precommitted Base-mainnet verifier set:
+The implementation supports the precommitted Base-mainnet verifier set.
+Production operation requires an approved release, current canonical jobs and
+fresh component health checkpoints. The old traceback-vulnerable artifact is
+revoked; approving a replacement artifact does not enable signing workflows or
+establish earning readiness. See the [security remediation record](security-remediation-20261030.md)
+for the separate custody, activation and historical-obligation requirements.
+
+Implemented capabilities include:
 
 - exact autonomous verification-job validation;
 - content-addressed source and benchmark staging;
@@ -148,12 +155,14 @@ digest and an independently computed local EIP-712 digest before exposing the
 signing key to a child process. Candidate revalidation runs with signing and
 keeper secrets removed from its environment.
 
-The production workflows also pin the complete Cargo workspace, lockfile,
-configuration, and local crate source set used to build the worker. They verify
-that digest before building and revalidate both the build inputs and the exact
-signing runtime afterward. Any new build script, dependency drift, or
-post-build mutation stops the workflow before a verifier or keeper key reaches
-a child process.
+The production workflows authorize the selected release against approval and
+revocation records in protected main before executing its source. They verify
+the complete Cargo workspace, lockfile, configuration, local crate sources and
+embedded build inputs against the approved manifest, then verify the downloaded
+or cached worker's binary digest. These workflows use that exact prebuilt
+artifact. They also verify the signing runtime, and recheck the binary before
+any signer diagnostic receives a key. Source, dependency, profile or binary
+drift stops execution before credentials reach the worker.
 
 The candidate runner processes up to five successful candidates while examining at
 most 100 feed entries per batch (`--max-jobs` and `--max-scan`). Invalid jobs,

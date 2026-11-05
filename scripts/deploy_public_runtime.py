@@ -23,6 +23,16 @@ TERMINAL_FAILURE={'build_failed','update_failed','pre_deploy_failed','canceled',
 
 class ReleaseError(RuntimeError):pass
 
+class NoPublicRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self,*args,**kwargs):return None
+
+def public_provenance_open(request,timeout=15):
+    try:
+        return urllib.request.build_opener(NoPublicRedirect()).open(request,timeout=timeout)
+    except urllib.error.HTTPError as error:
+        error.close()
+        raise
+
 def validate_release_approval(revision, expected, approved, event):
     if not re.fullmatch(r'[0-9a-f]{40}',revision):raise ReleaseError('exact Git revision required')
     if approved:
@@ -83,6 +93,30 @@ def public_ci_revision(revision):
         if not eligible or max(eligible,key=lambda run:run['id']).get('conclusion')!='success':
             raise ReleaseError(f'latest public main {workflow} attempt must have succeeded for this exact revision')
 
+def validate_blueprints(client, manifest):
+    policies=manifest.get('blueprints')
+    if not isinstance(policies,list):
+        raise ReleaseError('reviewed Blueprint inventory is required')
+    seen=set()
+    for expected in policies:
+        identity=expected.get('id','')
+        if not re.fullmatch(r'exs-[a-z0-9]+',identity) or identity in seen:
+            raise ReleaseError('invalid or duplicate Blueprint identity')
+        seen.add(identity)
+        value=client.request('GET','blueprints/'+identity)
+        resources=value.get('resources')
+        expected_ids=expected.get('resource_ids')
+        if (any(value.get(key)!=expected.get(key) for key in ('id','name','path'))
+                or value.get('ownerId')!=manifest['workspace_id']
+                or value.get('repo','').removesuffix('.git')!=PUBLIC
+                or value.get('branch')!='main' or value.get('autoSync') is not False
+                or value.get('status')!='paused'
+                or not isinstance(resources,list) or not isinstance(expected_ids,list)
+                or not expected_ids or len(set(expected_ids))!=len(expected_ids)
+                or len(resources)!=len(expected_ids)
+                or {row.get('id') for row in resources}!=set(expected_ids)):
+            raise ReleaseError('Blueprint identity, ownership or automatic-sync policy changed')
+
 def prepare(client, manifest, migrate, bootstrap=False):
     if manifest.get('repository')!=PUBLIC or manifest.get('branch')!='main':raise ReleaseError('invalid public source policy')
     bootstrap_id=manifest.get('autonomous_bootstrap_service_id')
@@ -94,6 +128,7 @@ def prepare(client, manifest, migrate, bootstrap=False):
         service=client.request('GET','services/'+expected['id'])
         validate_service(service,expected,manifest,migrate)
         services.append((expected,service))
+    validate_blueprints(client,manifest)
     # Validate the entire inventory before narrowing the mutation boundary.
     # Bootstrap is not a full release: its checkpoint acceptance is independent.
     if bootstrap:services=[pair for pair in services if pair[0]['id']==bootstrap_id]
@@ -105,17 +140,37 @@ def prepare(client, manifest, migrate, bootstrap=False):
         validate_service(client.request('GET','services/'+expected['id']),expected,manifest,False)
     return services
 
-def reader_readiness(manifest, revision=None):
+def reader_readiness(manifest, revision=None, allow_legacy_revision=False):
     policy = manifest['marketplace_readiness']
     request = urllib.request.Request(policy['url'], headers={'Cache-Control': 'no-cache'})
+    def legacy_health_revision():
+        if policy['url']!='https://api.agentizable.ai/readiness/marketplace':
+            raise ReleaseError('legacy readiness must use the canonical API origin')
+        health=urllib.request.Request('https://api.agentizable.ai/health',headers={'Cache-Control':'no-cache'})
+        with public_provenance_open(health,timeout=15) as response:
+            value=response.headers.get('x-agent-bounties-revision','')
+            if response.status!=200 or not re.fullmatch(r'[0-9a-f]{40}',value):
+                raise ReleaseError('legacy API health revision is unavailable')
+            return value
     try:
-        with urllib.request.urlopen(request, timeout=15) as response:
+        # Only explicit source migration may preflight an older API that does
+        # not identify readiness responses. Bracket it with stable health reads.
+        legacy_before=legacy_health_revision() if allow_legacy_revision and revision is None else None
+        revision_source='readiness_header'
+        with public_provenance_open(request, timeout=15) as response:
             observed_revision = response.headers.get('x-agent-bounties-revision', '')
-            if response.status != 200 or not re.fullmatch(r'[0-9a-f]{40}', observed_revision):
+            if response.status != 200:
                 raise ReleaseError('marketplace readiness or revision is unavailable')
+            value = json.load(response)
+            if observed_revision=='' and legacy_before is not None:
+                observed_revision=legacy_health_revision()
+                if observed_revision!=legacy_before:
+                    raise ReleaseError('legacy API revision changed during readiness observation')
+                revision_source='legacy_health_bracket'
+            if not re.fullmatch(r'[0-9a-f]{40}', observed_revision):
+                raise ReleaseError('marketplace readiness revision is unavailable')
             if revision is not None and observed_revision != revision:
                 raise ReleaseError('marketplace readiness has the wrong source revision')
-            value = json.load(response)
         readers = value['readers']
         checked = dt.datetime.fromisoformat(value['checked_at'].replace('Z', '+00:00'))
         age = (dt.datetime.now(dt.timezone.utc) - checked).total_seconds()
@@ -126,15 +181,16 @@ def reader_readiness(manifest, revision=None):
                 or {row['protocol'] for row in readers} != set(expected)
                 or any(row.get('ready') is not True or row.get('blocker') is not None for row in readers)):
             raise ReleaseError('marketplace readers are not all current and ready')
-        return {'revision': observed_revision, 'checked_at': value['checked_at'],
+        return {'revision': observed_revision, 'revision_source':revision_source, 'checked_at': value['checked_at'],
                 'protocols': [row['protocol'] for row in readers]}
     except (urllib.error.URLError, TimeoutError, KeyError, TypeError, ValueError):
         raise ReleaseError('marketplace readiness is unavailable; investigate before restarting readers') from None
 
-def prepare_release(client, manifest, migrate, bootstrap=False):
+def prepare_release(client, manifest, migrate, bootstrap=False, preflight_record=None):
     # Deploying a worker also restarts it. Never use a routine source release to
     # bypass a reader's integrity halt or an unresolved lag/health incident.
-    reader_readiness(manifest)
+    observation=reader_readiness(manifest,allow_legacy_revision=migrate)
+    if preflight_record is not None:preflight_record.update(observation)
     return prepare(client, manifest, migrate, bootstrap)
 
 def verify_live_readers(manifest, revision):
@@ -193,7 +249,8 @@ def main():
         temporary=directory/'release.tmp';temporary.write_text(json.dumps(record,indent=2)+'\n');temporary.replace(directory/'release.json')
     save()
     try:
-        services=prepare_release(client,manifest,args.migrate_source,args.bootstrap_autonomous_readers)
+        record['preflight']={}
+        services=prepare_release(client,manifest,args.migrate_source,args.bootstrap_autonomous_readers,record['preflight'])
         for expected,previous in services:
             deploys=client.request('GET',f"services/{expected['id']}/deploys?limit=20")
             live=[v.get('deploy',v) for v in deploys if v.get('deploy',v).get('status')=='live']
@@ -227,7 +284,7 @@ def main():
             for row in record['services']:
                 if not row.get('health_url'):continue
                 request=urllib.request.Request(row['health_url'],headers={'Cache-Control':'no-cache'})
-                with urllib.request.urlopen(request,timeout=15) as response:
+                with public_provenance_open(request,timeout=15) as response:
                     if response.status!=200 or response.headers.get('x-agent-bounties-revision')!=args.revision:
                         raise ReleaseError('production health or public source revision mismatch')
             time.sleep(3)
