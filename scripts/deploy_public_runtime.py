@@ -23,6 +23,22 @@ TERMINAL_FAILURE={'build_failed','update_failed','pre_deploy_failed','canceled',
 
 class ReleaseError(RuntimeError):pass
 
+def validate_release_approval(revision, expected, approved, event):
+    if not re.fullmatch(r'[0-9a-f]{40}',revision):raise ReleaseError('exact Git revision required')
+    if approved:
+        if event!='workflow_dispatch' or approved!=revision:
+            raise ReleaseError('manual approval must name this exact public revision')
+    elif expected and expected!=revision:
+        raise ReleaseError('production expectation differs; supply an exact manual approval without changing live monitors')
+
+def validate_accepted_reader(previous, expected, manifest, deploys, deploy_id, revision):
+    # A historical matching deployment is not the current running artifact.
+    # Its original binding must already have been the reviewed public source.
+    validate_service(previous,expected,manifest,False)
+    newest=deploys[0].get('deploy',deploys[0]) if deploys else {}
+    if newest.get('id')!=deploy_id or not validate_deploy(newest,revision):
+        raise ReleaseError('accepted autonomous deployment is no longer the exact current live revision')
+
 class Render:
     def __init__(self, token):
         if not token:raise ReleaseError('RENDER_API_KEY is required')
@@ -149,10 +165,23 @@ def main():
     parser.add_argument('--migrate-source',action='store_true')
     parser.add_argument('--bootstrap-autonomous-readers',action='store_true',
         help='Deploy only the reviewed autonomous reader service; independent checkpoint acceptance is required before the full release')
+    parser.add_argument('--accepted-autonomous-deploy-id',
+        help='Reuse the exact independently accepted autonomous deployment during manual full promotion')
     parser.add_argument('--evidence-dir',type=Path,required=True)
     args=parser.parse_args()
+    approved=os.environ.get('APPROVED_REVISION','')
+    event=os.environ.get('RELEASE_EVENT','')
+    validate_release_approval(args.revision,os.environ.get('PRODUCTION_EXPECTED_REVISION',''),approved,event)
+    if args.accepted_autonomous_deploy_id and (args.bootstrap_autonomous_readers
+            or event!='workflow_dispatch' or approved!=args.revision
+            or not re.fullmatch(r'dep-[a-z0-9]+',args.accepted_autonomous_deploy_id)):
+        raise ReleaseError('accepted reader reuse requires an exact approved manual full release')
     public_ci_revision(args.revision)
     manifest=json.loads((ROOT/'ops/public-runtime-services.json').read_text())
+    if args.accepted_autonomous_deploy_id and sum(row.get('id')==manifest.get('autonomous_bootstrap_service_id')
+            and row.get('type')=='background_worker' and row.get('dockerfile')=='./Dockerfile.posting-indexers'
+            for row in manifest['services'])!=1:
+        raise ReleaseError('accepted reader is absent from the reviewed inventory')
     client=Render(os.environ.get('RENDER_API_KEY'))
     directory=args.evidence_dir;directory.mkdir(parents=True,exist_ok=False)
     record={'revision':args.revision,'repository':PUBLIC,'workspace_id':manifest['workspace_id'],
@@ -167,8 +196,15 @@ def main():
             deploys=client.request('GET',f"services/{expected['id']}/deploys?limit=20")
             live=[v.get('deploy',v) for v in deploys if v.get('deploy',v).get('status')=='live']
             row={**expected,'previous_live':[{'id':v['id'],'commit':v.get('commit',{}).get('id')} for v in live]}
+            if args.accepted_autonomous_deploy_id and expected['id']==manifest['autonomous_bootstrap_service_id']:
+                validate_accepted_reader(previous,expected,manifest,deploys,args.accepted_autonomous_deploy_id,args.revision)
+                row.update(deploy_id=args.accepted_autonomous_deploy_id,reused_accepted_deployment=True)
             record['services'].append(row);save()
-            deployed=client.request('POST',f"services/{expected['id']}/deploys",{'commitId':args.revision,'clearCache':'do_not_clear'})
+        # Validate any accepted reader before starting another service deploy.
+        for row in record['services']:
+            if row.get('reused_accepted_deployment'):continue
+            deployed=client.request('POST',f"services/{row['id']}/deploys",{'commitId':args.revision,'clearCache':'do_not_clear'})
+            validate_deploy(deployed,args.revision)
             row.update(deploy_id=deployed['id'],status=deployed.get('status'));save()
         deadline=time.monotonic()+40*60
         while True:
