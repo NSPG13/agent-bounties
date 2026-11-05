@@ -299,6 +299,9 @@ pub fn submission_summary(submission: &Submission) -> String {
 pub struct AutonomousIndexerConfig {
     pub network: String,
     pub rpc_url: String,
+    /// Optional historical logs provider, used only before the first checkpoint.
+    #[serde(default)]
+    pub bootstrap_archive_rpc_url: Option<String>,
     pub factory_contract: String,
     pub start_block: Option<u64>,
     pub poll_seconds: u64,
@@ -364,6 +367,8 @@ impl AutonomousIndexerConfig {
                     descriptor.rpc_url_env
                 )
             })?;
+        let bootstrap_archive_rpc_url =
+            lookup("BASE_INDEXER_BOOTSTRAP_ARCHIVE_RPC_URL").filter(|value| nonempty(value));
         let start_block = lookup("BASE_INDEXER_START_BLOCK")
             .or_else(|| lookup("BASE_INDEXER_FROM_BLOCK"))
             .filter(|value| nonempty(value))
@@ -403,6 +408,7 @@ impl AutonomousIndexerConfig {
         Ok(Self {
             network,
             rpc_url,
+            bootstrap_archive_rpc_url,
             factory_contract,
             start_block,
             poll_seconds,
@@ -2074,11 +2080,30 @@ mod tests {
 
         assert_eq!(config.network, "base-mainnet");
         assert_eq!(config.rpc_url, "https://base.example");
+        assert!(config.bootstrap_archive_rpc_url.is_none());
         assert_eq!(
             config.factory_contract,
             "0x1111111111111111111111111111111111111111"
         );
         assert_eq!(config.start_block, Some(456));
+    }
+
+    #[test]
+    fn bootstrap_archive_configuration_does_not_replace_the_current_rpc() {
+        for archive in ["", "  ", "https://archive.example"] {
+            let config = AutonomousIndexerConfig::from_lookup(|key| match key {
+                "BASE_MAINNET_RPC_URL" => Some("https://primary.example".into()),
+                "BASE_INDEXER_FACTORY_CONTRACT" => Some(format!("0x{}", "11".repeat(20))),
+                "BASE_INDEXER_BOOTSTRAP_ARCHIVE_RPC_URL" => Some(archive.into()),
+                _ => None,
+            })
+            .unwrap();
+            assert_eq!(config.rpc_url, "https://primary.example");
+            assert_eq!(
+                config.bootstrap_archive_rpc_url.as_deref(),
+                (!archive.trim().is_empty()).then_some(archive)
+            );
+        }
     }
 
     #[test]

@@ -30,10 +30,13 @@ Keep the old expected-live pins throughout bootstrap and promotion. The explicit
 manual approval names the deployment target separately from observed live state.
 
 Legacy history requires an RPC with historical log coverage. Qualify the oldest
-stored events and current cursor before setting a service-local
-`BASE_INDEXER_RPC_URL` override through a separately reviewed configuration change.
-The posting-indexer launcher applies it only to autonomous-v1; autonomous-v2 keeps
-`BASE_MAINNET_RPC_URL`. The release controller never sets either variable. An old
+stored events and current cursor before setting the optional service-local
+`BASE_INDEXER_BOOTSTRAP_ARCHIVE_RPC_URL` through a separately reviewed configuration
+change. The archive serves historical logs only during initial certification; its
+cursor header must match the primary before and after replay. Current safe/latest
+heads, new-event reads and subsequent checkpoint checks keep the primary
+`BASE_INDEXER_RPC_URL`. The posting-indexer launcher forwards the archive setting
+only to autonomous-v1. The release controller never sets either variable. An old
 latest-minus-confirmations cursor ahead of safe remains unavailable and uses the
 existing bounded retry policy until safe catches up. Regression below an already
 certified checkpoint remains a terminal integrity failure.

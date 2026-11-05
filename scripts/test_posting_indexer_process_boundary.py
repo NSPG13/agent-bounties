@@ -24,6 +24,7 @@ class ProductionIndexerBoundary(unittest.TestCase):
             supervisor.write_text(script)
             env = {'PATH': os.environ['PATH'], 'RENDER_SERVICE_ID': service,
                 'DATABASE_URL':'postgres://fixture-only', 'BASE_MAINNET_RPC_URL':'https://mainnet.base.org',
+                'BASE_INDEXER_BOOTSTRAP_ARCHIVE_RPC_URL':'https://archive.example',
                 'BASE_INDEXER_PROTOCOL':'open-competition-v2-keeper', 'BASE_INDEXER_START_BLOCK':'42',
                 'BASE_INDEXER_MAX_BLOCKS_PER_QUERY':'1000', 'DISCOVERY_WEBHOOK_SIGNING_KEY':'existing-discovery-only',
                 'X402_RELAYER_PRIVATE_KEY':'must-not-inherit', 'GAS_SPONSOR_BUDGET_TOKEN':'must-not-inherit',
@@ -50,6 +51,8 @@ class ProductionIndexerBoundary(unittest.TestCase):
                         'RESEND_API_KEY','VERIFIER_EMAIL_ENABLED','CREATOR_PUSH_ENABLED'):
                 self.assertNotIn(key, env)
         self.assertNotIn('DISCOVERY_WEBHOOK_SIGNING_KEY', children['creator-open-v1'])
+        self.assertNotIn('BASE_INDEXER_BOOTSTRAP_ARCHIVE_RPC_URL', children['creator-open-v1'])
+        self.assertEqual(children['autonomous-v1']['BASE_INDEXER_BOOTSTRAP_ARCHIVE_RPC_URL'], 'https://archive.example')
         self.assertEqual(children['autonomous-v1']['DISCOVERY_WEBHOOK_SIGNING_KEY'], 'existing-discovery-only')
         self.assertEqual(children['creator-open-v1']['DATABASE_URL'], children['autonomous-v1']['DATABASE_URL'])
 
@@ -62,7 +65,8 @@ class ProductionIndexerBoundary(unittest.TestCase):
         self.assertEqual(v2['BASE_INDEXER_NETWORK'], 'base-mainnet')
         self.assertEqual(v2['BASE_INDEXER_RPC_URL'], 'https://mainnet.base.org')
         for key in ('X402_RELAYER_PRIVATE_KEY', 'GAS_SPONSOR_BUDGET_TOKEN', 'GITHUB_APP_PRIVATE_KEY',
-                    'RESEND_API_KEY', 'DISCOVERY_WEBHOOK_SIGNING_KEY', 'BASE_INDEXER_MAX_BLOCKS_PER_QUERY'):
+                    'RESEND_API_KEY', 'DISCOVERY_WEBHOOK_SIGNING_KEY', 'BASE_INDEXER_MAX_BLOCKS_PER_QUERY',
+                    'BASE_INDEXER_BOOTSTRAP_ARCHIVE_RPC_URL'):
             self.assertNotIn(key, v2)
         self.assertEqual(children['autonomous-v1']['BASE_INDEXER_FACTORY_CONTRACT'],
                          '0x082c52131aaf0c56e76b075f895eab6fcab6d2f9')
