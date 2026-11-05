@@ -1652,6 +1652,7 @@ def main() -> int:
         privacy,
         [
             "Provider access tokens and client secrets are never exposed to the browser",
+            "When you open the Workspace at <code>agentizable.ai/workspace</code>, the service gives it a signed proof",
             "The challenge expires after five minutes and cannot be reused.",
             "Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event proves solver payment",
         ],
