@@ -285,6 +285,53 @@ class PublicReleaseTests(unittest.TestCase):
         with patch('deploy_public_runtime.urllib.request.urlopen', return_value=self.readiness_response(value)), self.assertRaises(ReleaseError):
             reader_readiness(manifest, 'b'*40)
 
+    def test_legacy_header_fallback_is_explicit_preflight_only(self):
+        manifest,value=self.readiness_fixture()
+        responses=[self.readiness_response({}),self.readiness_response(value,revision=''),self.readiness_response({})]
+        with patch('deploy_public_runtime.urllib.request.urlopen',side_effect=responses) as request:
+            result=reader_readiness(manifest,allow_legacy_revision=True)
+            self.assertEqual(result['revision'],'a'*40)
+            self.assertEqual(result['revision_source'],'legacy_health_bracket')
+            self.assertEqual([call.args[0].full_url for call in request.call_args_list],[
+                'https://api.agentizable.ai/health',manifest['marketplace_readiness']['url'],
+                'https://api.agentizable.ai/health'])
+        for revision,allow in [(None,False),('a'*40,False),('a'*40,True)]:
+            with self.subTest(revision=revision,allow=allow), \
+                    patch('deploy_public_runtime.urllib.request.urlopen',return_value=self.readiness_response(value,revision='')) as request, \
+                    self.assertRaises(ReleaseError):
+                reader_readiness(manifest,revision,allow_legacy_revision=allow)
+            self.assertEqual(request.call_count,1)
+
+    def test_legacy_bracket_cannot_hide_revision_or_reader_failures(self):
+        for failure in ('missing_before','missing_after','changed','bad_health_status','bad_ready_status',
+                        'malformed_header','failed','missing','stale','future','malformed_json'):
+            manifest,value=self.readiness_fixture()
+            before=self.readiness_response({});after=self.readiness_response({})
+            ready=self.readiness_response(value,revision='')
+            if failure=='missing_before':before.headers={}
+            elif failure=='missing_after':after.headers={}
+            elif failure=='changed':after.headers['x-agent-bounties-revision']='b'*40
+            elif failure=='bad_health_status':before.status=503
+            elif failure=='bad_ready_status':ready.status=503
+            elif failure=='malformed_header':ready.headers['x-agent-bounties-revision']='invalid'
+            elif failure=='malformed_json':ready=io.StringIO('{');ready.status=200;ready.headers={}
+            else:
+                if failure=='failed':value['readers'][0]['ready']=False
+                elif failure=='missing':value['readers'].pop()
+                else:value['checked_at']=(dt.datetime.now(dt.timezone.utc)+dt.timedelta(minutes=-2 if failure=='stale' else 2)).isoformat()
+                ready=self.readiness_response(value,revision='')
+            with self.subTest(failure=failure),patch('deploy_public_runtime.urllib.request.urlopen',side_effect=[before,ready,after]),self.assertRaises(ReleaseError):
+                reader_readiness(manifest,allow_legacy_revision=True)
+
+    def test_only_explicit_migration_enables_legacy_preflight(self):
+        for migrate in (False,True):
+            client=Client({'srv-one':{**self.service,'repo':PUBLIC,'branch':'main'}})
+            record={}
+            with patch('deploy_public_runtime.reader_readiness',return_value={'revision':'a'*40}) as observe:
+                prepare_release(client,self.manifest,migrate,preflight_record=record)
+            observe.assert_called_once_with(self.manifest,allow_legacy_revision=migrate)
+            self.assertEqual(record,{'revision':'a'*40})
+
     def test_reader_incident_blocks_all_source_changes_and_deploys(self):
         client = Client({'srv-one': self.service})
         with patch('deploy_public_runtime.reader_readiness', side_effect=ReleaseError('reader halted')), self.assertRaises(ReleaseError):

@@ -932,7 +932,7 @@ pub(super) async fn readiness(State(state): State<SharedState>) -> Response {
         })
         .collect();
     let ready = readers.iter().all(|r| r["ready"] == true);
-    (
+    let mut response = (
         if ready { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE },
         [(header::CACHE_CONTROL, "no-store")],
         Json(serde_json::json!({
@@ -941,12 +941,56 @@ pub(super) async fn readiness(State(state): State<SharedState>) -> Response {
             "limits": { "heartbeat_age_seconds": 90, "lag_blocks": 20 },
             "evidence_boundary": "Reader freshness only. Does not approve verification, prove funding or payment, authorize a restart, or lift a protocol hold."
         })),
-    ).into_response()
+    ).into_response();
+    response.headers_mut().insert(
+        "x-agent-bounties-revision",
+        HeaderValue::from_str(&deployment_revision())
+            .unwrap_or_else(|_| HeaderValue::from_static("invalid")),
+    );
+    response
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn readiness_http_response_identifies_its_revision_even_when_unavailable() {
+        let rpc = Router::new().route(
+            "/",
+            axum::routing::post(|Json(request): Json<Value>| async move {
+                Json(json!({"jsonrpc":"2.0","id":request["id"],"result":"0x1"}))
+            }),
+        );
+        let rpc_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let rpc_url = format!("http://{}", rpc_listener.local_addr().unwrap());
+        let rpc_server = tokio::spawn(async move { axum::serve(rpc_listener, rpc).await.unwrap() });
+        let mut state = crate::tests::test_state(BountyNetwork::default());
+        Arc::get_mut(&mut state)
+            .unwrap()
+            .marketplace_head_rpc
+            .base_mainnet = Some(rpc_url);
+        let app = Router::new()
+            .route("/readiness/marketplace", get(readiness))
+            .with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/readiness/marketplace",
+            listener.local_addr().unwrap()
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let response = reqwest::Client::new().get(url).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response.headers()["x-agent-bounties-revision"],
+            deployment_revision()
+        );
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(body["ready"], false);
+        rpc_server.abort();
+        server.abort();
+    }
 
     #[test]
     fn head_time_diagnostics_distinguish_rejected_inputs_at_the_exact_boundary() {

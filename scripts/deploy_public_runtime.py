@@ -130,17 +130,37 @@ def prepare(client, manifest, migrate, bootstrap=False):
         validate_service(client.request('GET','services/'+expected['id']),expected,manifest,False)
     return services
 
-def reader_readiness(manifest, revision=None):
+def reader_readiness(manifest, revision=None, allow_legacy_revision=False):
     policy = manifest['marketplace_readiness']
     request = urllib.request.Request(policy['url'], headers={'Cache-Control': 'no-cache'})
+    def legacy_health_revision():
+        if policy['url']!='https://api.agentizable.ai/readiness/marketplace':
+            raise ReleaseError('legacy readiness must use the canonical API origin')
+        health=urllib.request.Request('https://api.agentizable.ai/health',headers={'Cache-Control':'no-cache'})
+        with urllib.request.urlopen(health,timeout=15) as response:
+            value=response.headers.get('x-agent-bounties-revision','')
+            if response.status!=200 or not re.fullmatch(r'[0-9a-f]{40}',value):
+                raise ReleaseError('legacy API health revision is unavailable')
+            return value
     try:
+        # Only explicit source migration may preflight an older API that does
+        # not identify readiness responses. Bracket it with stable health reads.
+        legacy_before=legacy_health_revision() if allow_legacy_revision and revision is None else None
+        revision_source='readiness_header'
         with urllib.request.urlopen(request, timeout=15) as response:
             observed_revision = response.headers.get('x-agent-bounties-revision', '')
-            if response.status != 200 or not re.fullmatch(r'[0-9a-f]{40}', observed_revision):
+            if response.status != 200:
                 raise ReleaseError('marketplace readiness or revision is unavailable')
+            value = json.load(response)
+            if observed_revision=='' and legacy_before is not None:
+                observed_revision=legacy_health_revision()
+                if observed_revision!=legacy_before:
+                    raise ReleaseError('legacy API revision changed during readiness observation')
+                revision_source='legacy_health_bracket'
+            if not re.fullmatch(r'[0-9a-f]{40}', observed_revision):
+                raise ReleaseError('marketplace readiness revision is unavailable')
             if revision is not None and observed_revision != revision:
                 raise ReleaseError('marketplace readiness has the wrong source revision')
-            value = json.load(response)
         readers = value['readers']
         checked = dt.datetime.fromisoformat(value['checked_at'].replace('Z', '+00:00'))
         age = (dt.datetime.now(dt.timezone.utc) - checked).total_seconds()
@@ -151,15 +171,16 @@ def reader_readiness(manifest, revision=None):
                 or {row['protocol'] for row in readers} != set(expected)
                 or any(row.get('ready') is not True or row.get('blocker') is not None for row in readers)):
             raise ReleaseError('marketplace readers are not all current and ready')
-        return {'revision': observed_revision, 'checked_at': value['checked_at'],
+        return {'revision': observed_revision, 'revision_source':revision_source, 'checked_at': value['checked_at'],
                 'protocols': [row['protocol'] for row in readers]}
     except (urllib.error.URLError, TimeoutError, KeyError, TypeError, ValueError):
         raise ReleaseError('marketplace readiness is unavailable; investigate before restarting readers') from None
 
-def prepare_release(client, manifest, migrate, bootstrap=False):
+def prepare_release(client, manifest, migrate, bootstrap=False, preflight_record=None):
     # Deploying a worker also restarts it. Never use a routine source release to
     # bypass a reader's integrity halt or an unresolved lag/health incident.
-    reader_readiness(manifest)
+    observation=reader_readiness(manifest,allow_legacy_revision=migrate)
+    if preflight_record is not None:preflight_record.update(observation)
     return prepare(client, manifest, migrate, bootstrap)
 
 def verify_live_readers(manifest, revision):
@@ -218,7 +239,8 @@ def main():
         temporary=directory/'release.tmp';temporary.write_text(json.dumps(record,indent=2)+'\n');temporary.replace(directory/'release.json')
     save()
     try:
-        services=prepare_release(client,manifest,args.migrate_source,args.bootstrap_autonomous_readers)
+        record['preflight']={}
+        services=prepare_release(client,manifest,args.migrate_source,args.bootstrap_autonomous_readers,record['preflight'])
         for expected,previous in services:
             deploys=client.request('GET',f"services/{expected['id']}/deploys?limit=20")
             live=[v.get('deploy',v) for v in deploys if v.get('deploy',v).get('status')=='live']
