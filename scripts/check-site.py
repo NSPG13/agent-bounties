@@ -50,6 +50,7 @@ CANONICAL_PAGES = {
     "install/vscode/index.html": "https://agentizable.ai/install/vscode/",
     "authorize.html": "https://agentizable.ai/authorize",
     "cancel.html": "https://agentizable.ai/cancel",
+    "workspace/index.html": "https://agentizable.ai/workspace/",
     "earn-money-using-ai.html": "https://agentizable.ai/earn-money-using-ai",
     "post-a-bounty-with-chatgpt-claude-gemini.html": "https://agentizable.ai/post-a-bounty-with-chatgpt-claude-gemini",
     "metrics.html": "https://agentizable.ai/metrics",
@@ -1657,6 +1658,7 @@ def main() -> int:
         privacy,
         [
             "Provider access tokens and client secrets are never exposed to the browser",
+            "When you open the Workspace at <code>agentizable.ai/workspace</code>, the service gives it a signed proof",
             "The challenge expires after five minutes and cannot be reused.",
             "Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event proves solver payment",
         ],

@@ -111,7 +111,7 @@ async function main() {
           const url = new URL(el.href);
           return { text: el.textContent.trim(), href: url.pathname + url.search + url.hash };
         }));
-        assert.deepEqual(links, [{ text: "How it works", href: "/#how-it-works" }, { text: "Browse work", href: "/earn.html" }], file);
+        assert.deepEqual(links, [{ text: "How it works", href: "/#how-it-works" }, { text: "Workspace", href: "/workspace" }, { text: "Browse work", href: "/earn.html" }], file);
         const appearance = await page.locator("[data-site-header]").evaluate(el => {
           const css = getComputedStyle(el), brand = getComputedStyle(el.querySelector("strong"));
           return { height: el.getBoundingClientRect().height, background: css.backgroundImage, padding: css.padding, brand: brand.font, color: brand.color };
@@ -119,7 +119,7 @@ async function main() {
         if (!reference) reference = appearance;
         assert.deepEqual(appearance, reference, `same homepage header: ${file} at ${width}`);
         assert.equal(await page.locator(".ab-site-menu, [data-site-header] .ab-site-login").count(), 0);
-        for (const n of [1, 2]) await assertFits(page, `.ab-site-nav a:nth-child(${n})`);
+        for (const n of [1, 2, 3]) await assertFits(page, `.ab-site-nav a:nth-child(${n})`);
       }
       console.log(`Shared homepage header and accessible links passed on ${pages.length} pages at ${width}px`);
       await page.goto(`${origin}/blog/`);
