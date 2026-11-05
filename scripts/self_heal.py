@@ -20,9 +20,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 if __package__:
-    from .marketplace_readiness import UNAVAILABLE_REASONS, enabled_for_release, observe as observe_marketplace
+    from .marketplace_readiness import UNAVAILABLE_REASONS, release_admission, observe as observe_marketplace
 else:
-    from marketplace_readiness import UNAVAILABLE_REASONS, enabled_for_release, observe as observe_marketplace
+    from marketplace_readiness import UNAVAILABLE_REASONS, release_admission, observe as observe_marketplace
 
 POLICY_SCHEMA = "agent-bounties/self-healing-policy-v1"
 SNAPSHOT_SCHEMA = "agent-bounties/operations-snapshot-v1"
@@ -149,6 +149,9 @@ def validate_snapshot(snapshot: dict[str, Any]) -> None:
     expected_revision = snapshot.get("expected_revision")
     if expected_revision is not None and not isinstance(expected_revision, str):
         raise ContractError("snapshot expected_revision must be a string or null")
+    verified_revision = snapshot.get("marketplace_verified_revision")
+    if verified_revision is not None and not isinstance(verified_revision, str):
+        raise ContractError("snapshot marketplace_verified_revision must be a string or null")
     components = snapshot.get("components")
     invariants = snapshot.get("invariants")
     if not isinstance(components, dict):
@@ -231,6 +234,22 @@ def evaluate(policy: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]
     reasons: list[str] = []
     thresholds = policy["thresholds"]
     invariants = snapshot["invariants"]
+    admission = release_admission(
+        snapshot.get("expected_revision"), snapshot.get("marketplace_verified_revision"),
+    )
+    if not admission["qualified"]:
+        reasons.append(admission["reason"])
+        _add_action(
+            manual,
+            manual_action(
+                "release", "verify_release_pins", admission["reason"],
+                [
+                    "inspect the saved service and reader observations; they grant no repair authority",
+                    "verify both live services and marketplace readiness against the reviewed release",
+                    "record matching exact expected and verified release pins, then repeat the read-only probes",
+                ],
+            ),
+        )
 
     failed_invariants = sorted(
         name
@@ -536,6 +555,10 @@ def evaluate(policy: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]
                 ),
             )
 
+    # Observation must survive a bad pin, but no automatic action may escape
+    # that admission failure, including actions selected from trusted fixtures.
+    if not admission["qualified"]:
+        automatic.clear()
     automatic.sort(key=lambda action: action.action_id)
     manual.sort(key=lambda action: action.action_id)
     prohibited = set(policy["prohibited_automatic_actions"])
@@ -563,6 +586,7 @@ def evaluate(policy: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]
         "decision": decision,
         "severity": severity,
         "reasons": reasons,
+        "release_admission": admission,
         "automatic_actions": [asdict(action) for action in automatic],
         "manual_actions": [asdict(action) for action in manual],
         "recovery_verification": [
@@ -644,10 +668,7 @@ def build_public_snapshot(
     policy: dict[str, Any], api_url: str, mcp_url: str, expected_revision: str | None,
     marketplace_verified_revision: str | None = None,
 ) -> dict[str, Any]:
-    try:
-        marketplace_enabled = enabled_for_release(expected_revision, marketplace_verified_revision)
-    except ValueError as error:
-        raise ContractError(str(error)) from error
+    admission = release_admission(expected_revision, marketplace_verified_revision)
     probe = policy["probe"]
     api_base = normalize_base_url(api_url)
     mcp_base = normalize_base_url(mcp_url)
@@ -663,13 +684,13 @@ def build_public_snapshot(
         probe["interval_seconds"],
         probe["timeout_seconds"],
     )
-    components = {"api": api, "mcp": mcp}
-    if marketplace_enabled:
-        components["indexer"] = observe_marketplace(api_base, probe["timeout_seconds"])
+    components = {"api": api, "mcp": mcp,
+                  "indexer": observe_marketplace(api_base, probe["timeout_seconds"])}
     return {
         "schema": SNAPSHOT_SCHEMA,
         "observed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "expected_revision": expected_revision,
+        "marketplace_verified_revision": marketplace_verified_revision,
         "components": components,
         "invariants": {name: None for name in sorted(CRITICAL_INVARIANTS)},
         "probe_evidence": {
@@ -677,13 +698,13 @@ def build_public_snapshot(
             "mcp_url": mcp_base,
             "api_attempts": api_attempts,
             "mcp_attempts": mcp_attempts,
-            "marketplace_readiness_enabled": marketplace_enabled,
+            "marketplace_readiness_enabled": True,
+            "marketplace_release_qualified": admission["qualified"],
             "marketplace_verified_revision": marketplace_verified_revision,
         },
         "coverage_note": (
             "Public probes cover service availability and revision agreement. "
-            + ("Marketplace reader heartbeat/progress is checked separately against a current safe head. "
-               if marketplace_enabled else "Marketplace readiness is NOT monitored until its deployed endpoint release is verified and activated. ")
+            + "Marketplace reader heartbeat/progress is checked even when release pins block all automatic repairs. "
             + "Integrity, verifier, webhook and accounting signals still require trusted runtime observations. A stale reader alone never authorizes a restart."
         ),
     }

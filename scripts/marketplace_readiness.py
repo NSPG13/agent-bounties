@@ -30,6 +30,11 @@ UNAVAILABLE_REASONS = {
     'marketplace_probe_unavailable': 'The marketplace readiness endpoint could not be read.',
     'marketplace_readiness_http_inconsistent': 'The readiness HTTP status contradicts its healthy report.',
 }
+RELEASE_BLOCKERS = {
+    'marketplace_release_pin_missing': 'A required release pin is missing; automatic repairs are blocked.',
+    'marketplace_release_pin_invalid': 'Release pins must be exact 40-character commit hashes; automatic repairs are blocked.',
+    'marketplace_release_pin_mismatch': 'The verified marketplace release differs from the expected release; automatic repairs are blocked.',
+}
 
 
 def unavailable(blocker, reason=None, readers=None):
@@ -55,6 +60,22 @@ def enabled_for_release(expected_revision, verified_revision):
             or expected_revision.lower() != verified_revision.lower()):
         raise ValueError('marketplace readiness verified revision must match the exact expected release')
     return True
+
+
+def release_admission(expected_revision, verified_revision):
+    """Separate read-only observations from release-qualified repair eligibility."""
+    if expected_revision in (None, '') or verified_revision in (None, ''):
+        blocker = 'marketplace_release_pin_missing'
+    elif (not isinstance(expected_revision, str)
+          or not isinstance(verified_revision, str)
+          or not re.fullmatch(r'[0-9a-fA-F]{40}', expected_revision)
+          or not re.fullmatch(r'[0-9a-fA-F]{40}', verified_revision)):
+        blocker = 'marketplace_release_pin_invalid'
+    elif expected_revision.lower() != verified_revision.lower():
+        blocker = 'marketplace_release_pin_mismatch'
+    else:
+        return {'qualified': enabled_for_release(expected_revision, verified_revision), 'blocker': None}
+    return {'qualified': False, 'blocker': blocker, 'reason': RELEASE_BLOCKERS[blocker]}
 
 
 def inspect(payload, now=None):
@@ -180,19 +201,14 @@ def main(argv=None):
     parser.add_argument('--verified-revision')
     parser.add_argument('--output', type=Path)
     args = parser.parse_args(argv)
-    try:
-        enabled = enabled_for_release(args.expected_revision, args.verified_revision)
-    except ValueError as error:
-        parser.error(str(error))
-    result = observe(args.api_base_url) if enabled else {
-        'state': 'unknown', 'restartable': False,
-        'blocker': 'marketplace_readiness_not_activated', 'readers': [],
-    }
+    admission = release_admission(args.expected_revision, args.verified_revision)
+    result = observe(args.api_base_url)
+    result['release_admission'] = admission
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
     print(json.dumps(result, indent=2))
-    return 0 if not enabled or result['state'] == 'healthy' else 1
+    return 0 if admission['qualified'] and result['state'] == 'healthy' else 1
 
 
 if __name__ == '__main__':

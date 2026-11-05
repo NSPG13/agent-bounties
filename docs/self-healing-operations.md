@@ -177,16 +177,23 @@ so they cannot be mistaken for a complete-body hash. Parsed reports retain only
 known protocol/blocker codes, typed reader diagnostics and normalized timing. Raw response bodies, provider
 URLs and exception messages are not copied into public recovery artifacts.
 
-The existing Production Smoke and Operational Control Loop workflows include
-this probe, but it stays inactive until the endpoint has been deployed and
-verified. After checking both live service revisions and the endpoint, set
-`MARKETPLACE_READINESS_VERIFIED_REVISION` to the exact 40-character release SHA,
-matching `PRODUCTION_EXPECTED_REVISION`. Until then, reports explicitly say
-readiness is not monitored. Once configured, a malformed or different revision
-fails closed rather than silently skipping the check. Reverify the endpoint and
-update both pins together for later releases.
+The existing Production Smoke and Operational Control Loop workflows always
+collect bounded read-only service and marketplace observations. Missing,
+malformed or mismatched release pins must not hide reader failures. The probes
+still fail, save their evidence, and report `marketplace_release_pin_missing`,
+`marketplace_release_pin_invalid` or `marketplace_release_pin_mismatch` in
+`release_admission`. The control loop emits a manual `verify_release_pins`
+action and no automatic actions, even when other observations would otherwise
+qualify a repair. Matching pins are only one prerequisite; they never override
+integrity, revision or reader restart restrictions.
 
-The same activation gate applies to a local run:
+After checking both live service revisions and the endpoint, set
+`MARKETPLACE_READINESS_VERIFIED_REVISION` to the exact 40-character release SHA,
+matching `PRODUCTION_EXPECTED_REVISION`. Reverify the endpoint and update both
+pins together for later releases. Do not change a pin merely to silence a
+failure or conceal differing live API and MCP revisions.
+
+The same repair admission gate applies to a local run:
 
 ```bash
 python scripts/self_heal.py observe \
@@ -329,6 +336,11 @@ hold credentials and cannot mutate the platform.
 - claimable inventory count;
 - canonical event, contract hash, cursor, ledger, and payment-evidence
   invariants.
+
+Snapshots include the exact `expected_revision` and
+`marketplace_verified_revision` pins. The planner recomputes their agreement;
+a supplied success flag is not authority. Older snapshots without both pins
+remain readable but produce a manual release check and no automatic actions.
 
 Public HTTP probes can assert availability and revision only. Unknown internal
 invariants remain `null`; they are never silently assumed true. Automatic

@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import copy
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import importlib.util
+import io
 import json
 import sys
 import threading
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -26,7 +28,8 @@ from marketplace_readiness import PROTOCOLS
 
 @contextmanager
 def hosted_monitor_fixture(reader_ready=True, readiness_status=200, revision='a' * 40,
-                           ahead_cursor=None, missing_heads=False, partial_head=None):
+                           ahead_cursor=None, missing_heads=False, partial_head=None,
+                           malformed_readiness=False):
     requests = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -41,6 +44,9 @@ def hosted_monitor_fixture(reader_ready=True, readiness_status=200, revision='a'
             elif self.path == '/readiness/marketplace':
                 self.send_response(readiness_status)
                 self.end_headers()
+                if malformed_readiness:
+                    self.wfile.write(b'{"readers":')
+                    return
                 body = {
                     'schema': 'agent-bounties/marketplace-readiness-v1',
                     'checked_at': datetime.now(timezone.utc).isoformat(),
@@ -74,6 +80,11 @@ def hosted_monitor_fixture(reader_ready=True, readiness_status=200, revision='a'
 
         def log_message(self, *args):
             pass
+
+        def do_POST(self):
+            requests.append('POST ' + self.path)
+            self.send_response(405)
+            self.end_headers()
 
     with HTTPServer(('127.0.0.1', 0), Handler) as server:
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -266,16 +277,72 @@ class SelfHealingContractTests(unittest.TestCase):
         self.assertEqual({a['action_id'] for a in plan['manual_actions']},
                          {'indexer:investigate_indexer_integrity'})
 
-    def test_readiness_activation_waits_for_deployed_revision_confirmation(self):
-        with hosted_monitor_fixture(readiness_status=404) as (url, requests):
-            snapshot = self_heal.build_public_snapshot(self.policy, url, url, 'a' * 40)
-        self.assertNotIn('/readiness/marketplace', requests)
-        self.assertNotIn('indexer', snapshot['components'])
-        self.assertFalse(snapshot['probe_evidence']['marketplace_readiness_enabled'])
-        self.assertIn('NOT monitored', snapshot['coverage_note'])
-        with self.assertRaises(self_heal.ContractError):
-            self_heal.build_public_snapshot(self.policy, 'https://example.invalid',
-                                            'https://example.invalid', 'a' * 40, 'b' * 40)
+    def test_bad_pins_preserve_cli_snapshot_and_block_all_repairs(self):
+        for expected, verified, blocker in [
+                (None, None, 'missing'), ('a' * 40, None, 'missing'),
+                (None, 'a' * 40, 'missing'), ('a' * 40, 'b' * 40, 'mismatch'),
+                ('main', 'a' * 40, 'invalid'), ('a' * 40, 'a' * 8, 'invalid')]:
+            with self.subTest(expected=expected, verified=verified), tempfile.TemporaryDirectory() as directory:
+                snapshot_path, plan_path = (Path(directory) / name for name in ('snapshot.json', 'plan.json'))
+                with hosted_monitor_fixture(reader_ready=False, readiness_status=503) as (url, requests):
+                    args = ['observe', '--policy', str(REPO_ROOT / 'ops/self-healing-policy.json'),
+                            '--api-url', url, '--mcp-url', url,
+                            '--snapshot-out', str(snapshot_path), '--plan-out', str(plan_path)]
+                    if expected is not None:
+                        args += ['--expected-revision', expected]
+                    if verified is not None:
+                        args += ['--marketplace-readiness-verified-revision', verified]
+                    with redirect_stdout(io.StringIO()):
+                        self.assertEqual(self_heal.main(args), 2)
+                self.assertEqual(requests, ['/health', '/health', '/readiness/marketplace'])
+                snapshot = json.loads(snapshot_path.read_text())
+                plan = json.loads(plan_path.read_text())
+                self.assertEqual(snapshot['components']['indexer']['state'], 'stale')
+                self.assertEqual(len(snapshot['components']['indexer']['readers']), 3)
+                self.assertTrue(snapshot['probe_evidence']['marketplace_readiness_enabled'])
+                self.assertFalse(snapshot['probe_evidence']['marketplace_release_qualified'])
+                self.assertEqual(plan['automatic_actions'], [])
+                self.assertEqual(plan['release_admission']['blocker'], 'marketplace_release_pin_' + blocker)
+                self.assertTrue({'release:verify_release_pins', 'indexer:investigate_indexer_integrity'} <=
+                                {action['action_id'] for action in plan['manual_actions']})
+
+    def test_bad_pins_deny_every_automatic_action_even_with_trusted_runtime_evidence(self):
+        fixture = self_heal.load_json(self.fixtures)
+        observed_candidates = set()
+        for case in fixture['cases']:
+            candidate = self_heal.deep_merge(fixture['base_snapshot'], case.get('patch', {}))
+            observed_candidates.update(a['action'] for a in self_heal.evaluate(self.policy, candidate)['automatic_actions'])
+            for pins in [{}, {'expected_revision': 'a' * 40},
+                         {'expected_revision': 'a' * 40, 'marketplace_verified_revision': 'b' * 40},
+                         {'expected_revision': 'main', 'marketplace_verified_revision': 'a' * 40}]:
+                snapshot = copy.deepcopy(candidate)
+                snapshot.pop('expected_revision', None)
+                snapshot.pop('marketplace_verified_revision', None)
+                snapshot.update(pins)
+                # A cached or supplied success flag cannot substitute for exact pins.
+                snapshot['release_admission'] = {'qualified': True, 'blocker': None}
+                snapshot['probe_evidence'] = {'marketplace_release_qualified': True}
+                plan = self_heal.evaluate(self.policy, snapshot)
+                self.assertEqual(plan['automatic_actions'], [], (case['name'], pins))
+                self.assertFalse(plan['release_admission']['qualified'])
+                self.assertIn('release:verify_release_pins', {a['action_id'] for a in plan['manual_actions']})
+        self.assertTrue({'restart_service', 'resume_indexer_from_persisted_cursor',
+                         'switch_to_attested_rpc', 'replay_verified_webhook',
+                         'suppress_unready_inventory', 'retry_probe'} <= observed_candidates)
+
+    def test_malformed_reader_data_never_authorizes_restart_even_after_pins_match(self):
+        for verified in (None, 'b' * 40, 'a' * 40):
+            with hosted_monitor_fixture(malformed_readiness=True) as (url, requests):
+                snapshot = self_heal.build_public_snapshot(self.policy, url, url, 'a' * 40, verified)
+            snapshot['invariants'] = {name: True for name in self_heal.CRITICAL_INVARIANTS}
+            snapshot['components']['indexer']['cursor_monotonic'] = True
+            self.assertEqual(requests, ['/health', '/health', '/readiness/marketplace'])
+            self.assertEqual(snapshot['components']['indexer']['blocker'], 'marketplace_readiness_invalid')
+            self.assertFalse(snapshot['components']['indexer']['restartable'])
+            plan = self_heal.evaluate(self.policy, snapshot)
+            self.assertEqual(plan['automatic_actions'], [])
+            self.assertIn('indexer:investigate_marketplace_readiness',
+                          {action['action_id'] for action in plan['manual_actions']})
 
 
 if __name__ == "__main__":
