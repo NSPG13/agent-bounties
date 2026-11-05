@@ -26,6 +26,45 @@
   };
   const BOUNTY_POSTING_PROMPT = postingPrompt.build();
 
+  // Same account modal for Workspace. The intent contains a route, never a credential.
+  const WORKSPACE_RETURN_KEY = "agentizable:workspace-account-return:v1";
+  function workspaceAccountReturn(win, action, now = Date.now()) {
+    const safe = (candidate) => {
+      if (typeof candidate !== "string" || candidate.length > 160) return null;
+      try {
+        const target = new URL(candidate, win.location.origin);
+        if (target.origin !== win.location.origin || target.username || target.password
+          || target.pathname !== "/workspace/" || target.hash) return null;
+        const project = target.searchParams.get("project");
+        if ([...target.searchParams.keys()].some(key => key !== "project")
+          || target.searchParams.getAll("project").length > 1
+          || (project !== null && !/^[a-zA-Z0-9-]{1,64}$/.test(project))) return null;
+        return target.pathname + target.search;
+      } catch (_) { return null; }
+    };
+    try {
+      if (action === "remember") {
+        const requested = new URLSearchParams(win.location.search).get("workspaceReturn");
+        if (requested !== null) {
+          const target = safe(requested);
+          if (target) win.sessionStorage.setItem(WORKSPACE_RETURN_KEY, JSON.stringify({ target, at: now }));
+          else win.sessionStorage.removeItem(WORKSPACE_RETURN_KEY);
+        }
+      }
+      if (action === "clear") { win.sessionStorage.removeItem(WORKSPACE_RETURN_KEY); return null; }
+      const intent = JSON.parse(win.sessionStorage.getItem(WORKSPACE_RETURN_KEY));
+      const target = safe(intent?.target);
+      if (!target || !Number.isFinite(intent.at) || now < intent.at || now - intent.at >= 30 * 60 * 1000) {
+        win.sessionStorage.removeItem(WORKSPACE_RETURN_KEY); return null;
+      }
+      if (action === "complete") {
+        win.sessionStorage.removeItem(WORKSPACE_RETURN_KEY);
+        win.location.replace(target);
+      }
+      return target;
+    } catch (_) { return null; }
+  }
+
   function reviewNotificationView(payload, provider) {
     if (!payload || typeof payload.enabled !== "boolean") return {
       checked: false, disabled: true, address: "", confirmEmail: false, linkWallet: false,
@@ -843,6 +882,7 @@ ${competitionChildBrief(item)}`;
       const dialog = doc.querySelector("[data-auth-dialog]");
       const openButton = doc.querySelector("[data-auth-open]");
       if (!dialog || !openButton || typeof dialog.showModal !== "function") return;
+      workspaceAccountReturn(win, "remember");
       const closeButton = dialog.querySelector("[data-auth-close]");
       const form = dialog.querySelector("[data-auth-form]");
       const accountDashboard = dialog.querySelector("[data-account-dashboard]");
@@ -954,6 +994,7 @@ ${competitionChildBrief(item)}`;
         openButton.setAttribute("aria-expanded", "true");
       };
       const closeDialog = () => {
+        workspaceAccountReturn(win, "clear");
         if (dialog.open) dialog.close();
       };
 
@@ -1268,6 +1309,10 @@ ${competitionChildBrief(item)}`;
           const payload = await response.json();
           if (requestId !== accountLoadId || !currentUser) return null;
           renderAccountDashboard(payload);
+          // Only a fresh, successful account response can finish the shared onboarding.
+          if (accountStatus === "ready" && currentUser && verifiedWallets.length) {
+            workspaceAccountReturn(win, "complete");
+          }
           if (Array.isArray(payload.wallets) && payload.wallets.length === 0) {
             win.agentBountiesAnalytics?.track("wallet_missing_detected");
           }
@@ -1321,6 +1366,7 @@ ${competitionChildBrief(item)}`;
       });
       closeButton?.addEventListener("click", closeDialog);
       dialog.addEventListener("close", () => {
+        workspaceAccountReturn(win, "clear");
         openButton.setAttribute("aria-expanded", "false");
         openButton.focus();
         if (["#login", "#account"].includes(win.location.hash)) win.history?.replaceState?.(null, "", `${win.location.pathname}${win.location.search}`);
@@ -1770,6 +1816,7 @@ ${competitionChildBrief(item)}`;
   }
 
   return {
+    workspaceAccountReturn,
     BOUNTY_POSTING_PROMPT,
     accountDashboardView,
     accountInboxView,
