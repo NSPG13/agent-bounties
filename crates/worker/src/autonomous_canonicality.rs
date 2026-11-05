@@ -60,10 +60,27 @@ pub(super) async fn verify_previous(
         }
     } else if let Some(cursor) = cursor {
         if cursor > safe.number {
-            return Err(anyhow!("legacy cursor is not yet safe"));
+            // Legacy indexers used latest-minus-confirmations. Wait for safe to
+            // catch up before certifying their cursor, without treating this
+            // initial wait as a regression of an already certified checkpoint.
+            return Err(anyhow::Error::new(IndexerOperationalError {
+                message: "legacy cursor is not yet safe".into(),
+                retryable: true,
+                provider_delay_seconds: None,
+            }));
         }
         let before =
             fetch_exact_block_identity(&config.rpc_url, cursor, config.request_id + 30_002).await?;
+        let archive_rpc = config.bootstrap_archive_rpc_url.as_deref();
+        if let Some(archive) = archive_rpc {
+            let anchor =
+                fetch_exact_block_identity(archive, cursor, config.request_id + 30_005).await?;
+            if anchor != before {
+                return Err(anyhow!(
+                    "bootstrap archive disagrees with primary canonical cursor"
+                ));
+            }
+        }
         let events = store
             .list_autonomous_bounty_events_for_factory(
                 &config.network,
@@ -89,9 +106,12 @@ pub(super) async fn verify_previous(
                 Some(number),
                 autonomous_bounty_event_topics(),
             )?;
-            let logs =
-                fetch_base_multi_contract_logs(&config.rpc_url, &query, config.request_id + 30_003)
-                    .await?;
+            let logs = fetch_base_multi_contract_logs(
+                archive_rpc.unwrap_or(&config.rpc_url),
+                &query,
+                config.request_id + 30_003,
+            )
+            .await?;
             let mut canonical = decode_autonomous_bounty_logs(rpc_logs_to_evm_logs(logs.result)?)?;
             let observed_keys = stored
                 .iter()
@@ -108,6 +128,15 @@ pub(super) async fn verify_previous(
             return Err(anyhow!(
                 "canonical chain changed during legacy reconciliation"
             ));
+        }
+        if let Some(archive) = archive_rpc {
+            let anchor =
+                fetch_exact_block_identity(archive, cursor, config.request_id + 30_006).await?;
+            if anchor != after {
+                return Err(anyhow!(
+                    "bootstrap archive changed during legacy reconciliation"
+                ));
+            }
         }
         store
             .commit_autonomous_canonical_checkpoint(
@@ -131,6 +160,396 @@ pub(super) async fn verify_previous(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn test_rpc(
+        reply: impl Fn(&serde_json::Value) -> serde_json::Value + Send + 'static,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(socket);
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).await.unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse::<usize>().unwrap();
+                    }
+                }
+                let mut body = vec![0; length];
+                reader.read_exact(&mut body).await.unwrap();
+                let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                let mut response = reply(&request);
+                response["jsonrpc"] = "2.0".into();
+                response["id"] = request["id"].clone();
+                let body = response.to_string();
+                reader.get_mut().write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).as_bytes()).await.unwrap();
+            }
+        });
+        (format!("http://{address}"), task)
+    }
+
+    #[tokio::test]
+    #[ignore = "requires isolated local PostgreSQL"]
+    async fn archive_bootstrap_requires_primary_anchor_and_exact_history_then_uses_only_primary() {
+        use serde_json::json;
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        let url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        db::test_support::assert_isolated_security_database(&url);
+        let admin = sqlx::PgPool::connect(&url).await.unwrap();
+        let schema = format!("archive_{}", uuid::Uuid::new_v4().simple());
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        let options = url
+            .parse::<sqlx::postgres::PgConnectOptions>()
+            .unwrap()
+            .options([("search_path", schema.as_str())]);
+        let store = PostgresStore::from_pool(sqlx::PgPool::connect_with(options).await.unwrap());
+        store.migrate().await.unwrap();
+        let factory = format!("0x{}", "61".repeat(20));
+        let log = json!({
+            "address": factory,
+            "topics": [autonomous_bounty_event_topics()[0], format!("0x{}", "dd".repeat(32)),
+                format!("0x{}{}", "00".repeat(12), "62".repeat(20)),
+                format!("0x{}{}", "00".repeat(12), "63".repeat(20))],
+            "data": format!("0x{}{}{}", "11".repeat(32), "22".repeat(32), "33".repeat(32)),
+            "transactionHash": format!("0x{}", "cc".repeat(32)),
+            "blockNumber": "0x32", "logIndex": "0x0"
+        });
+        let event = decode_autonomous_bounty_logs(
+            rpc_logs_to_evm_logs([
+                serde_json::from_value::<chain_base::RpcEvmLog>(log.clone()).unwrap()
+            ])
+            .unwrap(),
+        )
+        .unwrap()
+        .remove(0);
+        store
+            .upsert_autonomous_bounty_event("base-sepolia", &event)
+            .await
+            .unwrap();
+        store
+            .upsert_base_log_cursor("base-sepolia", &factory, 100, Some(&event.log_key))
+            .await
+            .unwrap();
+        let original_events = serde_json::to_value(
+            store
+                .list_autonomous_bounty_events_for_factory("base-sepolia", &factory, false)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(original_events.as_array().unwrap().len(), 1);
+        let original_cursor = store
+            .get_base_log_cursor("base-sepolia", &factory)
+            .await
+            .unwrap()
+            .unwrap();
+        let header =
+            json!({"number":"0x64", "hash":format!("0x{}", "aa".repeat(32)), "timestamp":"0x1"});
+        let primary_header = header.clone();
+        let (primary, primary_task) = test_rpc(move |request| {
+            assert_eq!(request["method"], "eth_getBlockByNumber");
+            assert_eq!(request["params"][0], "0x64");
+            json!({"result": primary_header})
+        })
+        .await;
+        let mode = Arc::new(AtomicUsize::new(0));
+        let anchors = Arc::new(AtomicUsize::new(0));
+        let archive_mode = mode.clone();
+        let archive_anchors = anchors.clone();
+        let (archive, archive_task) = test_rpc(move |request| {
+            let mode = archive_mode.load(Ordering::SeqCst);
+            match request["method"].as_str().unwrap() {
+                "eth_getBlockByNumber" => {
+                    assert_eq!(request["params"][0], "0x64");
+                    let index = archive_anchors.fetch_add(1, Ordering::SeqCst);
+                    let mut value = header.clone();
+                    if mode == 1 || (mode == 2 && index == 1) {
+                        value["hash"] = format!("0x{}", "bb".repeat(32)).into();
+                    }
+                    json!({"result":value})
+                }
+                "eth_getLogs" => {
+                    assert_eq!(request["params"][0]["fromBlock"], "0x32");
+                    assert_eq!(request["params"][0]["toBlock"], "0x32");
+                    if mode == 3 {
+                        return json!({"result":[]});
+                    }
+                    if mode == 5 {
+                        return json!({"error":{"code":-32000,"message":"archive unavailable"}});
+                    }
+                    let mut value = log.clone();
+                    if mode == 4 {
+                        value["data"] = format!("0x{}", "44".repeat(96)).into();
+                    }
+                    if mode == 6 {
+                        value["data"] = "0x01".into();
+                    }
+                    json!({"result":[value]})
+                }
+                other => panic!("archive must never supply live heads: {other}"),
+            }
+        })
+        .await;
+        let config = AutonomousIndexerConfig {
+            network: "base-sepolia".into(),
+            rpc_url: primary,
+            bootstrap_archive_rpc_url: Some(archive),
+            factory_contract: factory.clone(),
+            request_id: 123,
+            ..Default::default()
+        };
+        let safe = chain_base::BaseBlockIdentity {
+            number: 100,
+            hash: format!("0x{}", "aa".repeat(32)),
+            timestamp: 1,
+        };
+        // Before/after anchor disagreement, missing/changed payload, provider
+        // outage and malformed logs cannot certify or mutate historical rows.
+        for failure in 1..=6 {
+            mode.store(failure, Ordering::SeqCst);
+            anchors.store(0, Ordering::SeqCst);
+            let error = verify_previous(&store, &config, Some(100), &safe)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                indexer_error_is_retryable(&error),
+                failure == 5,
+                "case {failure}"
+            );
+            assert!(store
+                .autonomous_canonical_checkpoint(&config.network, &factory)
+                .await
+                .unwrap()
+                .is_none());
+            let cursor = store
+                .get_base_log_cursor(&config.network, &factory)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(cursor.last_scanned_block, 100);
+            assert_eq!(cursor.last_log_key, original_cursor.last_log_key);
+            assert_eq!(cursor.updated_at, original_cursor.updated_at);
+            assert_eq!(
+                serde_json::to_value(
+                    store
+                        .list_autonomous_bounty_events_for_factory(&config.network, &factory, false)
+                        .await
+                        .unwrap()
+                )
+                .unwrap(),
+                original_events
+            );
+        }
+        mode.store(0, Ordering::SeqCst);
+        anchors.store(0, Ordering::SeqCst);
+        let checkpoint = verify_previous(&store, &config, Some(100), &safe)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(checkpoint.block_hash, safe.hash);
+        assert_eq!(anchors.load(Ordering::SeqCst), 2);
+        archive_task.abort();
+        assert!(verify_previous(&store, &config, Some(100), &safe)
+            .await
+            .is_ok());
+        assert_eq!(
+            serde_json::to_value(
+                store
+                    .list_autonomous_bounty_events_for_factory(&config.network, &factory, false)
+                    .await
+                    .unwrap()
+            )
+            .unwrap(),
+            original_events
+        );
+        primary_task.abort();
+        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires isolated local PostgreSQL"]
+    async fn legacy_cursor_waits_for_safe_without_certifying_or_advancing_history() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+        let url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        db::test_support::assert_isolated_security_database(&url);
+        let admin = sqlx::PgPool::connect(&url).await.unwrap();
+        let schema = format!("legacy_safe_{}", uuid::Uuid::new_v4().simple());
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        let options = url
+            .parse::<sqlx::postgres::PgConnectOptions>()
+            .unwrap()
+            .options([("search_path", schema.as_str())]);
+        let store = PostgresStore::from_pool(sqlx::PgPool::connect_with(options).await.unwrap());
+        store.migrate().await.unwrap();
+
+        let requests = Arc::new(AtomicUsize::new(0));
+        let observed = requests.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            // Empty legacy history still requires matching cursor headers before
+            // and after reconciliation. No request is allowed during safe lag.
+            for _ in 0..2 {
+                let (socket, _) = listener.accept().await.unwrap();
+                observed.fetch_add(1, Ordering::SeqCst);
+                let mut reader = BufReader::new(socket);
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).await.unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse::<usize>().unwrap();
+                    }
+                }
+                let mut body = vec![0; length];
+                reader.read_exact(&mut body).await.unwrap();
+                let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(request["method"], "eth_getBlockByNumber");
+                assert_eq!(request["params"][0], "0x64");
+                let body = serde_json::json!({"jsonrpc":"2.0","id":request["id"],"result":{
+                    "number":"0x64", "hash":format!("0x{}", "aa".repeat(32)),"timestamp":"0x1"}})
+                .to_string();
+                reader.get_mut().write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).as_bytes()).await.unwrap();
+            }
+        });
+        let factory = format!("0x{}", "61".repeat(20));
+        let config = AutonomousIndexerConfig {
+            network: "base-sepolia".into(),
+            rpc_url: format!("http://{address}"),
+            bootstrap_archive_rpc_url: None,
+            factory_contract: factory.clone(),
+            start_block: None,
+            poll_seconds: 5,
+            confirmations: 2,
+            max_blocks_per_query: 100,
+            request_id: 123,
+            public_base_url: "http://localhost".into(),
+        };
+        store
+            .upsert_base_log_cursor(&config.network, &factory, 100, None)
+            .await
+            .unwrap();
+        let original = store
+            .get_base_log_cursor(&config.network, &factory)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut safe = chain_base::BaseBlockIdentity {
+            number: 99,
+            hash: format!("0x{}", "aa".repeat(32)),
+            timestamp: 1,
+        };
+        let error = verify_previous(&store, &config, Some(100), &safe)
+            .await
+            .unwrap_err();
+        let recovery = IndexerRecoveryPolicy {
+            initial_backoff_seconds: 5,
+            max_backoff_seconds: 120,
+            exit_after_consecutive_failures: 8,
+        };
+        assert_eq!(
+            recovery.decision_for_error(1, &error),
+            IndexerRecoveryDecision::RetryFromPersistedCursor {
+                consecutive_failures: 1,
+                backoff_seconds: 5,
+            }
+        );
+        assert_eq!(
+            recovery.decision_for_error(8, &error),
+            IndexerRecoveryDecision::ExitForSupervisorRestart {
+                consecutive_failures: 8,
+            }
+        );
+        assert!(indexer_provider_delay(&error).is_none());
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
+        assert!(store
+            .autonomous_canonical_checkpoint(&config.network, &factory)
+            .await
+            .unwrap()
+            .is_none());
+        let waiting = store
+            .get_base_log_cursor(&config.network, &factory)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(waiting.last_scanned_block, original.last_scanned_block);
+        assert_eq!(waiting.last_log_key, original.last_log_key);
+        assert_eq!(waiting.updated_at, original.updated_at);
+
+        safe.number = 100;
+        let certified = verify_previous(&store, &config, Some(100), &safe)
+            .await
+            .unwrap()
+            .unwrap();
+        server.await.unwrap();
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        assert_eq!(certified.block_number, 100);
+        assert_eq!(certified.block_hash, safe.hash);
+        assert!(!certified.invalidated);
+
+        // The identical height lag after certification is an integrity failure,
+        // not a bootstrap wait. It must quarantine and remain nonretryable.
+        safe.number = 99;
+        let error = verify_previous(&store, &config, Some(100), &safe)
+            .await
+            .unwrap_err();
+        assert!(!indexer_error_is_retryable(&error));
+        assert!(
+            store
+                .autonomous_canonical_checkpoint(&config.network, &factory)
+                .await
+                .unwrap()
+                .unwrap()
+                .invalidated
+        );
+        safe.number = 100;
+        let error = verify_previous(&store, &config, Some(100), &safe)
+            .await
+            .unwrap_err();
+        assert!(!indexer_error_is_retryable(&error));
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            store
+                .get_base_log_cursor(&config.network, &factory)
+                .await
+                .unwrap()
+                .unwrap()
+                .last_scanned_block,
+            100
+        );
+        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     #[ignore = "requires isolated local PostgreSQL"]
     async fn changed_rpc_hash_quarantines_paid_history_without_rewriting_it() {
@@ -194,6 +613,7 @@ mod tests {
         let config = AutonomousIndexerConfig {
             network: "base-sepolia".into(),
             rpc_url: format!("http://{address}"),
+            bootstrap_archive_rpc_url: None,
             factory_contract: factory.clone(),
             start_block: None,
             poll_seconds: 5,
@@ -261,9 +681,10 @@ mod tests {
             2
         );
         reorg.store(true, Ordering::SeqCst);
-        assert!(verify_previous(&store, &config, Some(100), &block)
+        let error = verify_previous(&store, &config, Some(100), &block)
             .await
-            .is_err());
+            .unwrap_err();
+        assert!(!indexer_error_is_retryable(&error));
         let independent =
             PostgresStore::from_pool(sqlx::PgPool::connect_with(options).await.unwrap());
         assert!(independent

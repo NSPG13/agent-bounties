@@ -324,6 +324,7 @@ impl Chain {
             network: "base-sepolia".into(),
             rpc_url: self.url.clone(),
             factory_contract: self.factory.clone(),
+            bootstrap_archive_rpc_url: None,
             start_block: Some(0),
             poll_seconds: 1,
             confirmations: 1,

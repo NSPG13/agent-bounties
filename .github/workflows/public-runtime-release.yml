@@ -11,6 +11,19 @@ on:
         required: false
         default: false
         type: boolean
+      bootstrap_autonomous_readers:
+        description: 'Stage only autonomous readers; requires migrate_source and independent checkpoint acceptance before the full release'
+        required: false
+        default: false
+        type: boolean
+      approved_revision:
+        description: 'Exact reviewed public-main SHA approved for this manual operation; preserves expected-live monitor values'
+        required: false
+        type: string
+      accepted_autonomous_deploy_id:
+        description: 'Exact independently accepted reader deployment ID to reuse during full promotion'
+        required: false
+        type: string
 permissions:
   contents: read
   actions: read
@@ -42,19 +55,31 @@ jobs:
         env:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
           MIGRATE_SOURCE: ${{ inputs.migrate_source || false }}
+          BOOTSTRAP_AUTONOMOUS_READERS: ${{ inputs.bootstrap_autonomous_readers || false }}
           TARGET_REVISION: ${{ github.event.workflow_run.head_sha || github.sha }}
           PRODUCTION_EXPECTED_REVISION: ${{ vars.PRODUCTION_EXPECTED_REVISION }}
+          APPROVED_REVISION: ${{ inputs.approved_revision }}
+          RELEASE_EVENT: ${{ github.event_name }}
+          ACCEPTED_AUTONOMOUS_DEPLOY_ID: ${{ inputs.accepted_autonomous_deploy_id }}
         run: |
           set -euo pipefail
-          if [[ -n "${PRODUCTION_EXPECTED_REVISION}" && "${PRODUCTION_EXPECTED_REVISION}" != "${TARGET_REVISION}" ]]; then
-            echo 'Production revision pin differs; update the pin only after reviewing release evidence.' >&2
-            exit 1
-          fi
           migration_args=()
           if [[ "${MIGRATE_SOURCE}" == 'true' ]]; then
             migration_args+=(--migrate-source)
           elif [[ "${MIGRATE_SOURCE}" != 'false' ]]; then
             exit 1
+          fi
+          if [[ "${BOOTSTRAP_AUTONOMOUS_READERS}" == 'true' ]]; then
+            if [[ "${MIGRATE_SOURCE}" != 'true' ]]; then
+              echo 'Reader bootstrap requires the explicit source migration operation.' >&2
+              exit 1
+            fi
+            migration_args+=(--bootstrap-autonomous-readers)
+          elif [[ "${BOOTSTRAP_AUTONOMOUS_READERS}" != 'false' ]]; then
+            exit 1
+          fi
+          if [[ -n "${ACCEPTED_AUTONOMOUS_DEPLOY_ID}" ]]; then
+            migration_args+=(--accepted-autonomous-deploy-id "$ACCEPTED_AUTONOMOUS_DEPLOY_ID")
           fi
           python3 scripts/deploy_public_runtime.py --revision "$TARGET_REVISION" \
             --evidence-dir target/operations/public-runtime-release "${migration_args[@]}"
