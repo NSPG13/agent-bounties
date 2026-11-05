@@ -1372,8 +1372,118 @@ pub struct EvalRun {
     pub created_at: DateTime<Utc>,
 }
 
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DirectBountySubmissionEvidence {
+    pub repository: String,
+    pub subdirectory: String,
+    pub source_commit: String,
+    pub pull_request_url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DirectBountyVerificationEvidence {
+    pub check_run_urls: Vec<String>,
+    pub artifact_reference: String,
+    pub artifact_digest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DirectBountyPaymentEvidence {
+    pub settlement_boundary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DirectBountyEvidenceChecklist {
+    pub submission: DirectBountySubmissionEvidence,
+    pub verification: DirectBountyVerificationEvidence,
+    pub payment: DirectBountyPaymentEvidence,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ChecklistError {
+    #[error("Missing or empty field")]
+    MissingField,
+    #[error("Artifact reference must be HTTPS")]
+    InsecureArtifactReference,
+    #[error("Artifact reference appears mutable")]
+    MutableArtifactReference,
+}
+
+impl DirectBountyEvidenceChecklist {
+    pub fn validate(&self) -> Result<(), ChecklistError> {
+        if self.submission.repository.trim().is_empty() ||
+           self.submission.subdirectory.trim().is_empty() ||
+           self.submission.source_commit.trim().is_empty() ||
+           self.submission.pull_request_url.trim().is_empty() ||
+           self.verification.artifact_reference.trim().is_empty() ||
+           self.verification.artifact_digest.trim().is_empty() ||
+           self.payment.settlement_boundary.trim().is_empty() {
+            return Err(ChecklistError::MissingField);
+        }
+
+        if self.verification.check_run_urls.is_empty() {
+            return Err(ChecklistError::MissingField);
+        }
+        for url in &self.verification.check_run_urls {
+            if url.trim().is_empty() {
+                return Err(ChecklistError::MissingField);
+            }
+        }
+
+        if !self.verification.artifact_reference.starts_with("https://") {
+            return Err(ChecklistError::InsecureArtifactReference);
+        }
+
+        let ref_lower = self.verification.artifact_reference.to_lowercase();
+        let digest_lower = self.verification.artifact_digest.to_lowercase();
+        let commit_lower = self.submission.source_commit.to_lowercase();
+
+        if !ref_lower.contains(&digest_lower) && !ref_lower.contains(&commit_lower) {
+            return Err(ChecklistError::MutableArtifactReference);
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn direct_bounty_evidence_checklist_validation() {
+        let checklist = DirectBountyEvidenceChecklist {
+            submission: DirectBountySubmissionEvidence {
+                repository: "owner/repo".to_string(),
+                subdirectory: "crates/my_crate".to_string(),
+                source_commit: "a1b2c3d4e5f6".to_string(),
+                pull_request_url: "https://github.com/owner/repo/pull/1".to_string(),
+            },
+            verification: DirectBountyVerificationEvidence {
+                check_run_urls: vec!["https://github.com/owner/repo/runs/123".to_string()],
+                artifact_reference: "https://example.com/artifact@sha256:abcdef".to_string(),
+                artifact_digest: "sha256:abcdef".to_string(),
+            },
+            payment: DirectBountyPaymentEvidence {
+                settlement_boundary: "Base EscrowReleased".to_string(),
+            }
+        };
+
+        assert_eq!(checklist.validate(), Ok(()));
+
+        let mut bad_checklist = checklist.clone();
+        bad_checklist.submission.repository = "".to_string();
+        assert_eq!(bad_checklist.validate(), Err(ChecklistError::MissingField));
+
+        let mut bad_checklist2 = checklist.clone();
+        bad_checklist2.verification.artifact_reference = "http://example.com/artifact@sha256:abcdef".to_string();
+        assert_eq!(bad_checklist2.validate(), Err(ChecklistError::InsecureArtifactReference));
+
+        let mut bad_checklist3 = checklist.clone();
+        bad_checklist3.verification.artifact_reference = "https://example.com/artifact/latest".to_string();
+        assert_eq!(bad_checklist3.validate(), Err(ChecklistError::MutableArtifactReference));
+    }
     use super::*;
 
     #[test]
