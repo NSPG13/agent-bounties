@@ -259,6 +259,7 @@ def main() -> int:
     py("scripts/test_render_public_sources.py", "-v")
     run_many([
         [cargo, "fmt", "--all", "--", "--check"], [cargo, "clippy", "--workspace", "--", "-D", "warnings"],
+        [cargo, "check", "--locked", "-p", "competition-metric-core", "--no-default-features"],
         [cargo, "test", "--workspace"],
     ])
     platform_script("check-x402-relayer", platform)

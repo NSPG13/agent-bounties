@@ -1,5 +1,12 @@
 # Invoiced Business Path (Seller of Record)
 
+**Historical design:** this legacy HTTP path is not enabled in the hosted runtime.
+The retained projection and Stripe refund-evidence libraries are tested independently.
+Production checkout and refunds use the managed-order implementation, whose
+durable storage and API suites are required by the PostgreSQL release gate.
+The legacy endpoint and end-to-end descriptions below are archival, not current
+service promises.
+
 Business buyers often cannot hold crypto and need a vendor invoice. On this
 path:
 - Agentizable, the US entity, sells the verified outcome and invoices it

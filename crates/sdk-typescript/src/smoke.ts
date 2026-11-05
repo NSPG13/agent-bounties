@@ -93,7 +93,6 @@ async function exerciseSurface(client: AgentBountiesClient, solverClient: AgentB
     "discovery_subscriptions",
     "discovery_subscription",
     "opportunity_conversion_funnel",
-    "autonomous_bounty_analysis",
     "autonomous_creation_plan",
     "autonomous_bounty_feed",
     "autonomous_verification_jobs",
@@ -102,6 +101,7 @@ async function exerciseSurface(client: AgentBountiesClient, solverClient: AgentB
   ]) {
     requireCondition(typeof endpoints[endpoint] === "string", `missing endpoint ${endpoint}`);
   }
+  requireCondition(!("autonomous_bounty_analysis" in endpoints), "discovery manifest advertises retired hosted analysis");
   const schema = asObject(await client.getDiscoveryManifestSchema(), "schema");
   requireCondition(schema.$id === discovery.schema, "schema id mismatch");
   const endpointRequired = asArray(

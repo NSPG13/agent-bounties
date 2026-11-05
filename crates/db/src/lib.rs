@@ -13614,6 +13614,34 @@ mod tests {
         }));
     }
 
+    // These historical reporting fixtures predate factory metadata. Materialize
+    // their synthetic creation records and canonical checkpoint explicitly; no
+    // public reader may infer certification merely from a settlement row.
+    async fn certify_metrics_fixture_history(store: &PostgresStore, network: &str) {
+        sqlx::query(r#"
+            INSERT INTO autonomous_bounty_events
+              (id,network,log_key,tx_hash,block_number,log_index,contract_address,bounty_id,kind,data,occurred_at)
+            SELECT gen_random_uuid(),e.network,'fixture-creation:'||e.contract_address||':'||e.bounty_id,
+                   min(e.tx_hash),min(e.block_number),0,e.contract_address,e.bounty_id,
+                   'canonical_bounty_created','{}'::jsonb,min(e.occurred_at)
+            FROM autonomous_bounty_events e
+            WHERE e.network=$1 AND NOT EXISTS (
+              SELECT 1 FROM autonomous_bounty_events created
+              WHERE created.network=e.network AND created.bounty_id=e.bounty_id
+                AND created.kind='canonical_bounty_created'
+                AND e.contract_address IN(created.contract_address,lower(created.data->>'bounty_contract')))
+            GROUP BY e.network,e.contract_address,e.bounty_id
+        "#).bind(network).execute(&store.pool).await.unwrap();
+        sqlx::query(r#"
+            INSERT INTO autonomous_canonical_checkpoints(network,factory_contract,block_number,block_hash)
+            SELECT DISTINCT network,contract_address,
+                (SELECT max(block_number) FROM autonomous_bounty_events WHERE network=$1),$2
+            FROM autonomous_bounty_events WHERE network=$1 AND kind='canonical_bounty_created'
+            ON CONFLICT(network,factory_contract) DO UPDATE SET block_number=EXCLUDED.block_number
+        "#).bind(network).bind(format!("0x{}", "11".repeat(32)))
+            .execute(&store.pool).await.unwrap();
+    }
+
     #[tokio::test]
     #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
     async fn controlled_card_test_exclusion_preserves_money_and_shared_wallet_customers() {
@@ -13700,6 +13728,7 @@ mod tests {
                 );
                 block += 1;
             }
+            certify_metrics_fixture_history(&store, &network).await;
             let growth = store
                 .platform_demand_growth_stats(
                     &network,
@@ -14407,6 +14436,7 @@ mod tests {
             .unwrap();
         }
 
+        certify_metrics_fixture_history(&store, &network).await;
         let stats = store
             .platform_metrics_stats(
                 &network,

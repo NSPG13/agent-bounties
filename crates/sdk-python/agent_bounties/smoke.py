@@ -88,7 +88,6 @@ def exercise_surface(client: AgentBountiesClient, solver_client: AgentBountiesCl
         "discovery_subscriptions",
         "discovery_subscription",
         "opportunity_conversion_funnel",
-        "autonomous_bounty_analysis",
         "autonomous_creation_plan",
         "autonomous_agent_native_claim",
         "autonomous_bounty_feed",
@@ -97,6 +96,8 @@ def exercise_surface(client: AgentBountiesClient, solver_client: AgentBountiesCl
         "autonomous_terms_publish",
     ):
         _require(isinstance(endpoints.get(endpoint), str), f"missing endpoint {endpoint}")
+    _require("autonomous_bounty_analysis" not in endpoints,
+             "discovery manifest advertises retired hosted analysis")
 
     schema = client.get_discovery_manifest_schema()
     _require(schema.get("$id") == discovery.get("schema"), "schema id mismatch")

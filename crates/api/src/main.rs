@@ -15057,6 +15057,24 @@ async fn relay_agent_native_claim(
     signature: &AutonomousBountyAuthorizationSignature,
     v2_round: Option<u64>,
 ) -> Result<ClaimCandidate, AgentClaimProblem> {
+    // A caller snapshot can predate another process's completed broadcast.
+    // Reconcile that durable result before rejecting new v1 exposure. The
+    // under-lease refresh below still fences every actual send.
+    let current = match state.store.as_ref() {
+        Some(store) => store
+            .get_claim_candidate(candidate.id)
+            .await
+            .map_err(map_agent_claim_db_error)?,
+        None => None,
+    };
+    if let Some(current) = current.filter(|current| {
+        matches!(
+            current.status,
+            ClaimCandidateStatus::Relaying | ClaimCandidateStatus::Claimed
+        )
+    }) {
+        return reconcile_agent_native_claim(state, current, claim_bond).await;
+    }
     if candidate.status == ClaimCandidateStatus::Relaying {
         return reconcile_agent_native_claim(state, candidate.clone(), claim_bond).await;
     }

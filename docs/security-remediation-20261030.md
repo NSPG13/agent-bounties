@@ -59,3 +59,22 @@ key injection reduce third-party action exposure but do not make compromised run
 The current deployed diagnostic patch also remains included: fixed failure classes
 separate local request pacing, provider transport and database/head timeouts, retaining
 the existing twelve-second freshness deadline and excluding raw error values.
+
+## November 5 integration
+
+The coordinated marketplace-head deadline and customer-metrics corrections are
+included. Controlled tests are excluded from customer-demand cohorts, while their
+actual GMV, payouts and card refunds remain recorded. Historical card receipts are
+loaded only for the selected period or its refund evidence. Payout totals and proof
+rows now require canonical certification inside their own repeatable-read snapshot,
+so a quarantined v1 event cannot bypass the feed guard through a reporting endpoint.
+
+The Workspace authentication implementation deployed in API revision
+`0db95a5c1eec51100778f1961c69e1624fb4b599` is retained from public PR #1741.
+The application release does not reconcile or replace service environment values.
+Existing signed claims remain recoverable after v1 retirement: a stale caller
+snapshot first reloads the durable broadcast result; new v1 exposure stays denied.
+
+API schema derivation is an optional metric-core feature, excluded from proving
+programs. Their pinned SP1 dependencies, lockfiles and verifier identities remain
+subject to the existing independent build and comparison gates.

@@ -71,10 +71,10 @@ try {
             & $python.Source @pythonArgs scripts/run-required-postgres-test.py -p db tests::autonomous_v2_events_round_trip_through_postgres --exact
         }
         Invoke-Checked {
-            & $python.Source @pythonArgs scripts/run-required-postgres-test.py -p db tests::invoice_order_events_are_sequenced_and_evidence_is_unique_postgres --exact
+            & $python.Source @pythonArgs scripts/run-required-postgres-test.py -p db managed_service_orders::tests:: --test-threads=1
         }
         Invoke-Checked {
-            & $python.Source @pythonArgs scripts/run-required-postgres-test.py -p api tests::invoiced_seller_of_record_path_runs_end_to_end_postgres --exact
+            & $python.Source @pythonArgs scripts/run-required-postgres-test.py -p api managed_payments::tests:: --test-threads=1
         }
         Invoke-Checked {
             & $python.Source @pythonArgs scripts/run-required-postgres-test.py -p db tests::discoverability_snapshot_idempotency_and_restart_hydration_are_durable --exact
