@@ -59,6 +59,10 @@ python3 scripts/run-required-postgres-test.py -p api tests::github_issue_api_syn
 python3 scripts/run-required-postgres-test.py -p api tests::neynar_webhook_persists_one_short_draft_and_one_reply_across_retries --exact
 python3 scripts/run-required-postgres-test.py -p api tests::bounty_status_reads_scoped_postgres_after_cross_process_funding --exact
 python3 scripts/run-required-postgres-test.py -p mcp-server tests::mcp_bounty_status_reads_scoped_postgres_after_cross_process_funding --exact
+# Security regressions use their own explicit loopback-only fixture, even when
+# the caller supplied a different database for ordinary sync checks.
+python3 scripts/run-with-test-postgres.py -- python3 scripts/run-required-postgres-test.py -p db projection_snapshot::tests::projection_snapshot_cannot_mix_new_rows_with_old_certification_postgres --exact --test-threads=1
+python3 scripts/run-with-test-postgres.py -- python3 scripts/run-required-postgres-test.py -p api marketplace_readiness::progress_tests::progress_shared_observation_uses_four_rpc_calls_with_real_db_progress_postgres --exact --test-threads=1
 cargo run -p cli -- service-smoke-spawn \
   --api-base-url http://127.0.0.1:18180 \
   --mcp-base-url http://127.0.0.1:18190 \

@@ -19,3 +19,24 @@ availability during provider failures or exhausted capacity.
 The admission and transport regressions exercise cancellation, exhausted deadlines,
 negative holds and the original incident timing. Production acceptance still
 requires observing the combined release against the configured providers.
+
+A healthy reader can finish its next normal poll after the request observes a new
+safe batch. Only a reader whose sole problem is block lag may recheck its durable
+database progress. The first recheck is immediate; subsequent checks are at least
+one second apart, at most twelve in total, and share the original observation
+deadline. The original safe/latest targets and safe timestamp never change. The
+20-block limit and 90-second heartbeat limit remain unchanged. Failed, quarantined,
+stale or inconsistent readers cannot be retried into a successful response.
+
+A recheck reads the completed heartbeat before its cursor in a read-only,
+repeatable-read database snapshot. Current projection loaders then read their
+reader evidence, scoped rows and canonical certification together in a new full
+snapshot, bounded by the original observation. They never attach a new cursor to
+old feed rows. Autonomous terms remain selected by canonical creation hashes;
+Beta3 current-state rows beyond the boundary remain unavailable, not empty.
+Historical financial reads retain their existing certification and privacy rules.
+
+Database progress adds no chain RPC calls or worker polling. It can bridge a
+short ordinary poll gap but cannot promise success when the next poll falls after
+the remaining deadline. Those requests still return unavailable. Waiting also
+cannot renew a head near its maximum age or extend a captured projection's expiry.

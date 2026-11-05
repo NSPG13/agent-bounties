@@ -45,8 +45,19 @@ impl PostgresStore {
         network: &str,
         factory: &str,
     ) -> DbResult<Option<AutonomousCanonicalCheckpoint>> {
+        Self::autonomous_canonical_checkpoint_on(&self.pool, network, factory).await
+    }
+
+    pub(crate) async fn autonomous_canonical_checkpoint_on<
+        'e,
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    >(
+        executor: E,
+        network: &str,
+        factory: &str,
+    ) -> DbResult<Option<AutonomousCanonicalCheckpoint>> {
         let row = sqlx::query("SELECT block_number,block_hash,invalidated FROM autonomous_canonical_checkpoints WHERE network=$1 AND factory_contract=$2")
-            .bind(network).bind(normalize_key_address(factory)).fetch_optional(&self.pool).await?;
+            .bind(network).bind(normalize_key_address(factory)).fetch_optional(executor).await?;
         row.map(|r| {
             Ok(AutonomousCanonicalCheckpoint {
                 block_number: u64_from_i64(r.try_get("block_number")?)?,

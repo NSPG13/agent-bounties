@@ -178,6 +178,7 @@ async fn run_case(case: &str) {
                 "base-mainnet",
                 Some((&rpc_url, 8453)),
                 vec![snapshot],
+                None,
             )
             .await;
             assert!(observation
@@ -195,6 +196,7 @@ async fn run_case(case: &str) {
                 "base-mainnet",
                 Some((&rpc_url, 8453)),
                 vec![snapshot],
+                None,
             )
             .await;
             assert!(observation

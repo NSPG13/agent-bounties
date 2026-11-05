@@ -1,3 +1,8 @@
+mod projection_snapshot;
+pub use projection_snapshot::{
+    AutonomousProjectionSnapshot, OpenCompetitionProjectionSnapshot,
+    OpenCompetitionV2ProjectionSnapshot, ProjectionReaderSnapshot,
+};
 mod autonomous_canonicality;
 pub use autonomous_canonicality::AutonomousCanonicalCheckpoint;
 mod stripe_reconciliation;
@@ -7955,6 +7960,24 @@ impl PostgresStore {
         factory_contract: &str,
         bounty_contract: &str,
     ) -> DbResult<Vec<OpenCompetitionEvent>> {
+        Self::list_open_competition_history_for_contract_on(
+            &self.pool,
+            network,
+            factory_contract,
+            bounty_contract,
+        )
+        .await
+    }
+
+    async fn list_open_competition_history_for_contract_on<
+        'e,
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    >(
+        executor: E,
+        network: &str,
+        factory_contract: &str,
+        bounty_contract: &str,
+    ) -> DbResult<Vec<OpenCompetitionEvent>> {
         let rows = sqlx::query(
             r#"
             SELECT id, protocol_version, log_key, tx_hash, block_number, log_index,
@@ -7974,7 +7997,7 @@ impl PostgresStore {
         .bind(network)
         .bind(normalize_key_address(factory_contract))
         .bind(normalize_key_address(bounty_contract))
-        .fetch_all(&self.pool)
+        .fetch_all(executor)
         .await?;
         rows.into_iter()
             .map(open_competition_event_from_row)
@@ -7983,6 +8006,17 @@ impl PostgresStore {
 
     pub async fn list_open_competition_events(
         &self,
+        network: &str,
+        factory_contract: &str,
+    ) -> DbResult<Vec<OpenCompetitionEvent>> {
+        Self::list_open_competition_events_on(&self.pool, network, factory_contract).await
+    }
+
+    async fn list_open_competition_events_on<
+        'e,
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    >(
+        executor: E,
         network: &str,
         factory_contract: &str,
     ) -> DbResult<Vec<OpenCompetitionEvent>> {
@@ -7997,7 +8031,7 @@ impl PostgresStore {
         )
         .bind(network)
         .bind(normalize_key_address(factory_contract))
-        .fetch_all(&self.pool)
+        .fetch_all(executor)
         .await?;
         rows.into_iter()
             .map(open_competition_event_from_row)
@@ -8134,6 +8168,24 @@ impl PostgresStore {
         factory_contract: &str,
         bounty_contract: &str,
     ) -> DbResult<Vec<OpenCompetitionV2Event>> {
+        Self::list_open_competition_v2_history_for_contract_on(
+            &self.pool,
+            network,
+            factory_contract,
+            bounty_contract,
+        )
+        .await
+    }
+
+    async fn list_open_competition_v2_history_for_contract_on<
+        'e,
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    >(
+        executor: E,
+        network: &str,
+        factory_contract: &str,
+        bounty_contract: &str,
+    ) -> DbResult<Vec<OpenCompetitionV2Event>> {
         let rows = sqlx::query(
             r#"
             SELECT id, protocol_version, log_key, tx_hash, block_number, log_index,
@@ -8153,7 +8205,7 @@ impl PostgresStore {
         .bind(network)
         .bind(normalize_key_address(factory_contract))
         .bind(normalize_key_address(bounty_contract))
-        .fetch_all(&self.pool)
+        .fetch_all(executor)
         .await?;
         rows.into_iter()
             .map(open_competition_v2_event_from_row)
@@ -8162,6 +8214,17 @@ impl PostgresStore {
 
     pub async fn list_open_competition_v2_events(
         &self,
+        network: &str,
+        factory_contract: &str,
+    ) -> DbResult<Vec<OpenCompetitionV2Event>> {
+        Self::list_open_competition_v2_events_on(&self.pool, network, factory_contract).await
+    }
+
+    async fn list_open_competition_v2_events_on<
+        'e,
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    >(
+        executor: E,
         network: &str,
         factory_contract: &str,
     ) -> DbResult<Vec<OpenCompetitionV2Event>> {
@@ -8176,7 +8239,7 @@ impl PostgresStore {
         )
         .bind(network)
         .bind(normalize_key_address(factory_contract))
-        .fetch_all(&self.pool)
+        .fetch_all(executor)
         .await?;
         rows.into_iter()
             .map(open_competition_v2_event_from_row)
@@ -8232,6 +8295,18 @@ impl PostgresStore {
         network: &str,
         factory_contract: &str,
     ) -> DbResult<Option<OpenCompetitionV2IndexerAgreement>> {
+        Self::get_open_competition_v2_indexer_agreement_on(&self.pool, network, factory_contract)
+            .await
+    }
+
+    async fn get_open_competition_v2_indexer_agreement_on<
+        'e,
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    >(
+        executor: E,
+        network: &str,
+        factory_contract: &str,
+    ) -> DbResult<Option<OpenCompetitionV2IndexerAgreement>> {
         let row = sqlx::query(
             r#"
             SELECT network, factory_contract, protocol_version, common_safe_block,
@@ -8244,7 +8319,7 @@ impl PostgresStore {
         )
         .bind(network)
         .bind(normalize_key_address(factory_contract))
-        .fetch_optional(&self.pool)
+        .fetch_optional(executor)
         .await?;
         row.map(|row| {
             Ok(OpenCompetitionV2IndexerAgreement {
@@ -8402,6 +8477,17 @@ impl PostgresStore {
         network: &str,
         factory_contract: &str,
     ) -> DbResult<Vec<OpenCompetitionV2StoredProjection>> {
+        Self::list_open_competition_v2_projections_on(&self.pool, network, factory_contract).await
+    }
+
+    async fn list_open_competition_v2_projections_on<
+        'e,
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    >(
+        executor: E,
+        network: &str,
+        factory_contract: &str,
+    ) -> DbResult<Vec<OpenCompetitionV2StoredProjection>> {
         let rows = sqlx::query(
             r#"
             SELECT network, factory_contract, bounty_id, competition_contract,
@@ -8421,7 +8507,7 @@ impl PostgresStore {
         )
         .bind(network)
         .bind(normalize_key_address(factory_contract))
-        .fetch_all(&self.pool)
+        .fetch_all(executor)
         .await?;
         rows.into_iter()
             .map(open_competition_v2_projection_from_row)
@@ -8430,6 +8516,24 @@ impl PostgresStore {
 
     pub async fn list_open_competition_v2_projections_for_contract(
         &self,
+        network: &str,
+        factory_contract: &str,
+        competition_contract: &str,
+    ) -> DbResult<Vec<OpenCompetitionV2StoredProjection>> {
+        Self::list_open_competition_v2_projections_for_contract_on(
+            &self.pool,
+            network,
+            factory_contract,
+            competition_contract,
+        )
+        .await
+    }
+
+    async fn list_open_competition_v2_projections_for_contract_on<
+        'e,
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    >(
+        executor: E,
         network: &str,
         factory_contract: &str,
         competition_contract: &str,
@@ -8454,7 +8558,7 @@ impl PostgresStore {
         .bind(network)
         .bind(normalize_key_address(factory_contract))
         .bind(normalize_key_address(competition_contract))
-        .fetch_all(&self.pool)
+        .fetch_all(executor)
         .await?;
         rows.into_iter()
             .map(open_competition_v2_projection_from_row)
@@ -8803,6 +8907,24 @@ impl PostgresStore {
         factory_contract: &str,
         bounty_contract: &str,
     ) -> DbResult<Vec<AutonomousBountyEvent>> {
+        Self::list_autonomous_bounty_history_for_contract_on(
+            &self.pool,
+            network,
+            factory_contract,
+            bounty_contract,
+        )
+        .await
+    }
+
+    async fn list_autonomous_bounty_history_for_contract_on<
+        'e,
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    >(
+        executor: E,
+        network: &str,
+        factory_contract: &str,
+        bounty_contract: &str,
+    ) -> DbResult<Vec<AutonomousBountyEvent>> {
         let rows = sqlx::query(
             r#"
             SELECT id, log_key, tx_hash, block_number, log_index,
@@ -8822,7 +8944,7 @@ impl PostgresStore {
         .bind(network)
         .bind(normalize_key_address(factory_contract))
         .bind(normalize_key_address(bounty_contract))
-        .fetch_all(&self.pool)
+        .fetch_all(executor)
         .await?;
         rows.into_iter().map(autonomous_event_from_row).collect()
     }
@@ -8831,6 +8953,24 @@ impl PostgresStore {
     /// emitters. Bounty IDs alone are not unique across factories.
     pub async fn list_autonomous_bounty_events_for_factory(
         &self,
+        network: &str,
+        factory_contract: &str,
+        verified_only: bool,
+    ) -> DbResult<Vec<AutonomousBountyEvent>> {
+        Self::list_autonomous_bounty_events_for_factory_on(
+            &self.pool,
+            network,
+            factory_contract,
+            verified_only,
+        )
+        .await
+    }
+
+    async fn list_autonomous_bounty_events_for_factory_on<
+        'e,
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    >(
+        executor: E,
         network: &str,
         factory_contract: &str,
         verified_only: bool,
@@ -8856,7 +8996,7 @@ impl PostgresStore {
         .bind(network)
         .bind(normalize_key_address(factory_contract))
         .bind(verified_only)
-        .fetch_all(&self.pool)
+        .fetch_all(executor)
         .await?;
         rows.into_iter().map(autonomous_event_from_row).collect()
     }
@@ -9102,6 +9242,16 @@ impl PostgresStore {
         &self,
         terms_hash: &str,
     ) -> DbResult<Option<AutonomousBountyTermsRecord>> {
+        Self::get_autonomous_bounty_terms_on(&self.pool, terms_hash).await
+    }
+
+    async fn get_autonomous_bounty_terms_on<
+        'e,
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    >(
+        executor: E,
+        terms_hash: &str,
+    ) -> DbResult<Option<AutonomousBountyTermsRecord>> {
         let row = sqlx::query(
             r#"
             SELECT terms_hash, policy_hash, acceptance_criteria_hash, benchmark_hash,
@@ -9111,7 +9261,7 @@ impl PostgresStore {
             "#,
         )
         .bind(terms_hash.to_ascii_lowercase())
-        .fetch_optional(&self.pool)
+        .fetch_optional(executor)
         .await?;
         row.map(autonomous_terms_from_row).transpose()
     }
@@ -9236,6 +9386,14 @@ impl PostgresStore {
         network: &str,
         escrow_contract: &str,
     ) -> DbResult<Option<BaseLogScanCursor>> {
+        Self::get_base_log_cursor_on(&self.pool, network, escrow_contract).await
+    }
+
+    async fn get_base_log_cursor_on<'e, E: sqlx::Executor<'e, Database = sqlx::Postgres>>(
+        executor: E,
+        network: &str,
+        escrow_contract: &str,
+    ) -> DbResult<Option<BaseLogScanCursor>> {
         let row = sqlx::query(
             r#"
             SELECT network, escrow_contract, last_scanned_block, last_log_key, updated_at
@@ -9245,7 +9403,7 @@ impl PostgresStore {
         )
         .bind(network)
         .bind(normalize_key_address(escrow_contract))
-        .fetch_optional(&self.pool)
+        .fetch_optional(executor)
         .await?;
 
         row.map(|row| {
@@ -9292,6 +9450,14 @@ impl PostgresStore {
         network: &str,
         escrow_contract: &str,
     ) -> DbResult<Option<BaseIndexerHeartbeat>> {
+        Self::get_base_indexer_heartbeat_on(&self.pool, network, escrow_contract).await
+    }
+
+    async fn get_base_indexer_heartbeat_on<'e, E: sqlx::Executor<'e, Database = sqlx::Postgres>>(
+        executor: E,
+        network: &str,
+        escrow_contract: &str,
+    ) -> DbResult<Option<BaseIndexerHeartbeat>> {
         let row = sqlx::query(
             r#"
             SELECT network, escrow_contract, status, started_at, completed_at,
@@ -9304,7 +9470,7 @@ impl PostgresStore {
         )
         .bind(network)
         .bind(normalize_key_address(escrow_contract))
-        .fetch_optional(&self.pool)
+        .fetch_optional(executor)
         .await?;
 
         row.map(|row| {

@@ -5705,51 +5705,24 @@ async fn load_public_open_competition_v2_opportunities_scoped(
             .await?
         }
     };
-    let agreement = open_competition_v2_api::current_indexer_agreement(state, network, &release)
-        .await
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let store = state
         .store
         .as_ref()
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-    let records = if let Some(contract) = contract {
-        store
-            .list_open_competition_v2_projections_for_contract(
-                network,
-                &release.factory_contract,
-                contract,
-            )
-            .await
-    } else {
-        store
-            .list_open_competition_v2_projections(network, &release.factory_contract)
-            .await
-    }
-    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-    // Stored projections are current state, not historical snapshots. A row
-    // beyond this boundary cannot be dropped and described as an empty source.
-    if records.iter().any(|record| {
-        record.projection.last_block > agreement.common_safe_block.min(boundary.block_number)
-    }) {
-        return Err(StatusCode::SERVICE_UNAVAILABLE);
-    }
-    let mut events = if let Some(contract) = contract {
-        store
-            .list_open_competition_v2_history_for_contract(
-                network,
-                &release.factory_contract,
-                contract,
-            )
-            .await
-    } else {
-        store
-            .list_open_competition_v2_events(network, &release.factory_contract)
-            .await
-    }
-    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-    events.retain(|event| {
-        event.block_number <= agreement.common_safe_block.min(boundary.block_number)
-    });
+    let snapshot = store
+        .open_competition_v2_projection_snapshot(
+            network,
+            &release.factory_contract,
+            contract,
+            boundary.block_number,
+        )
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    boundary.validate_snapshot(&snapshot.reader)?;
+    open_competition_v2_api::validate_current_indexer_agreement(&release, snapshot.agreement)
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let records = snapshot.records;
+    let events = snapshot.events;
     let proof_fee_name = |proof_system: &str| {
         format!(
             "OPEN_COMPETITION_V2_{}_PROOF_FEE_BASE_UNITS",
@@ -5865,21 +5838,17 @@ async fn load_public_open_competition_opportunities_scoped(
         .store
         .as_ref()
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-    let mut events: Vec<OpenCompetitionEvent> = if let Some(contract) = contract {
-        store
-            .list_open_competition_history_for_contract(
-                network,
-                &release.factory_contract,
-                contract,
-            )
-            .await
-    } else {
-        store
-            .list_open_competition_events(network, &release.factory_contract)
-            .await
-    }
-    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-    events.retain(|event| event.block_number <= boundary.block_number);
+    let snapshot = store
+        .open_competition_projection_snapshot(
+            network,
+            &release.factory_contract,
+            contract,
+            boundary.block_number,
+        )
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    boundary.validate_snapshot(&snapshot.reader)?;
+    let events = snapshot.events;
     boundary.ensure_current()?;
     let website_base_url =
         legal_website_base_url(env::var("WEBSITE_BASE_URL").ok(), &state.public_base_url);

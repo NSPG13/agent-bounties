@@ -2608,6 +2608,13 @@ pub(crate) async fn current_indexer_agreement(
                 "Primary and shadow V2 indexers have not produced agreement evidence.",
             )
         })?;
+    validate_current_indexer_agreement(release, agreement)
+}
+
+pub(crate) fn validate_current_indexer_agreement(
+    release: &OpenCompetitionV2Release,
+    agreement: db::OpenCompetitionV2IndexerAgreement,
+) -> Result<db::OpenCompetitionV2IndexerAgreement, (StatusCode, Json<Value>)> {
     let max_age_seconds = env::var("OPEN_COMPETITION_V2_INDEXER_AGREEMENT_MAX_AGE_SECONDS")
         .ok()
         .and_then(|value| value.parse::<i64>().ok())

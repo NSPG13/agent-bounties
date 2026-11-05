@@ -35,6 +35,8 @@ POSTGRES = (
     ("api", "terms_publication::tests::publication_http_wallet_ownership_and_exact_historical_replay", 1),
     ("api", "marketplace_readiness::tests::database_snapshots_finish_before_first_shared_head_postgres", 1),
     ("api", "marketplace_readiness::diagnostic_tests::observation_timeout_stages_postgres", 1),
+    ("db", "projection_snapshot::tests::projection_snapshot_cannot_mix_new_rows_with_old_certification_postgres", 1),
+    ("api", "marketplace_readiness::progress_tests::progress_shared_observation_uses_four_rpc_calls_with_real_db_progress_postgres", 1),
     ("db", "timeout_revalidation::tests::", 1),
     ("db", "timeout_relay::tests::", 3),
     ("api", "timeout_revalidation::tests::", 3),

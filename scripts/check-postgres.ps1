@@ -104,6 +104,13 @@ try {
     finally {
         $env:AGENT_BOUNTIES_TEST_DATABASE_URL = $previousTestDatabaseUrl
     }
+    # Security regressions always use their own explicit local fixture.
+    Invoke-Checked {
+        & $python.Source @pythonArgs scripts/run-with-test-postgres.py -- $python.Source @pythonArgs scripts/run-required-postgres-test.py -p db projection_snapshot::tests::projection_snapshot_cannot_mix_new_rows_with_old_certification_postgres --exact --test-threads=1
+    }
+    Invoke-Checked {
+        & $python.Source @pythonArgs scripts/run-with-test-postgres.py -- $python.Source @pythonArgs scripts/run-required-postgres-test.py -p api marketplace_readiness::progress_tests::progress_shared_observation_uses_four_rpc_calls_with_real_db_progress_postgres --exact --test-threads=1
+    }
     Invoke-Checked {
         cargo run -p cli -- service-smoke-spawn `
             --api-base-url http://127.0.0.1:18180 `

@@ -10,6 +10,10 @@ mod diagnostic_tests;
 #[path = "marketplace_readiness_admission_tests.rs"]
 mod admission_tests;
 
+#[cfg(test)]
+#[path = "marketplace_readiness_progress_tests.rs"]
+mod progress_tests;
+
 // Diagnostic detail only: the accepted interval remains exactly 0..=300 seconds.
 fn checked_head_timestamp(timestamp: u64, now: i64) -> Result<i64, FailureClass> {
     let timestamp = i64::try_from(timestamp).map_err(|_| FailureClass::TimeOutOfRange)?;
@@ -44,6 +48,18 @@ fn observed_head_time_failure(
         }
     }
     None
+}
+
+fn current_observed_heads(
+    heads: Option<(u64, i64, u64)>,
+    now: DateTime<Utc>,
+) -> Option<(u64, i64, u64)> {
+    heads.filter(|(_, time, _)| {
+        u64::try_from(*time)
+            .ok()
+            .and_then(|time| checked_head_timestamp(time, now.timestamp()).ok())
+            .is_some()
+    })
 }
 
 // Diagnostic progress only. It never extends a deadline or authorizes stale data.
@@ -250,6 +266,11 @@ async fn observed_heads_with_transport(
 pub(super) struct ProjectionReadBoundary {
     pub block_number: u64,
     pub safe_block_number: u64,
+    protocol: String,
+    observed_cursor: u64,
+    completed_cursor: u64,
+    completed_at: DateTime<Utc>,
+    latest_block: u64,
     expires_at: DateTime<Utc>,
 }
 pub(super) struct CheckedProjection<T> {
@@ -293,6 +314,40 @@ impl ProjectionReadBoundary {
             boundary: self,
         }
     }
+    pub fn validate_snapshot(
+        &self,
+        snapshot: &db::ProjectionReaderSnapshot,
+    ) -> Result<(), StatusCode> {
+        self.ensure_current()?;
+        let cursor = snapshot
+            .cursor
+            .as_ref()
+            .map(|cursor| cursor.last_scanned_block);
+        if cursor.is_none_or(|cursor| cursor < self.observed_cursor)
+            || snapshot
+                .heartbeat
+                .as_ref()
+                .and_then(|heartbeat| heartbeat.persisted_cursor_block)
+                .is_none_or(|cursor| cursor < self.completed_cursor)
+            || snapshot
+                .heartbeat
+                .as_ref()
+                .and_then(|heartbeat| heartbeat.completed_at)
+                .is_none_or(|completed| completed < self.completed_at)
+            || reader_status(
+                &self.protocol,
+                snapshot.heartbeat.as_ref(),
+                cursor,
+                Some(self.safe_block_number),
+                Some(self.latest_block),
+                Utc::now(),
+            )["ready"]
+                != true
+        {
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
+        Ok(())
+    }
     pub fn ensure_current(&self) -> Result<(), StatusCode> {
         if Utc::now() <= self.expires_at {
             Ok(())
@@ -327,6 +382,13 @@ fn projection_boundary(
     Ok(ProjectionReadBoundary {
         block_number: safe_block.min(cursor.ok_or(StatusCode::SERVICE_UNAVAILABLE)?),
         safe_block_number: safe_block,
+        protocol: protocol.to_string(),
+        observed_cursor: cursor.ok_or(StatusCode::SERVICE_UNAVAILABLE)?,
+        completed_cursor: heartbeat
+            .and_then(|heartbeat| heartbeat.persisted_cursor_block)
+            .ok_or(StatusCode::SERVICE_UNAVAILABLE)?,
+        completed_at: completed,
+        latest_block: latest.ok_or(StatusCode::SERVICE_UNAVAILABLE)?,
         expires_at: (completed + chrono::Duration::seconds(90)).min(safe_expires),
     })
 }
@@ -339,21 +401,30 @@ pub(super) async fn require_current_reader(
     protocol: &str,
     factory: &str,
 ) -> Result<ProjectionReadBoundary, StatusCode> {
+    let protocol = match protocol {
+        AUTONOMOUS_PROTOCOL_VERSION => AUTONOMOUS_PROTOCOL_VERSION,
+        AUTONOMOUS_V2_PROTOCOL_VERSION => AUTONOMOUS_V2_PROTOCOL_VERSION,
+        OPEN_COMPETITION_PROTOCOL_VERSION => OPEN_COMPETITION_PROTOCOL_VERSION,
+        "agent-bounties/open-competition-v2-beta3" => "agent-bounties/open-competition-v2-beta3",
+        _ => return Err(StatusCode::SERVICE_UNAVAILABLE),
+    };
     let heads_started = std::sync::atomic::AtomicBool::new(false);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(12);
     tokio::time::timeout_at(deadline, async {
-        let store = state
-            .store
-            .as_ref()
-            .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-        let heartbeat = store
-            .get_base_indexer_heartbeat(network, factory)
-            .await
-            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-        let cursor = store
-            .get_base_log_cursor(network, factory)
-            .await
-            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        let snapshot = capture_reader_until(
+            state,
+            network,
+            protocol,
+            Some(factory.to_string()),
+            deadline,
+        )
+        .await;
+        if snapshot.heartbeat.is_none()
+            || snapshot.cursor.is_none()
+            || tokio::time::Instant::now() >= deadline
+        {
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
         let (descriptor, rpc) = state
             .marketplace_head_rpc
             .resolve(&state.base_rpc_urls, network)
@@ -363,10 +434,11 @@ pub(super) async fn require_current_reader(
             })?;
         heads_started.store(true, std::sync::atomic::Ordering::Relaxed);
         let heads = observed_heads_for_chain(&rpc, descriptor.chain_id, deadline).await;
+        let snapshot = refresh_lagging_reader(state, network, snapshot, heads, deadline).await;
         projection_boundary(
             protocol,
-            heartbeat.as_ref(),
-            cursor.map(|c| c.last_scanned_block),
+            snapshot.heartbeat.as_ref(),
+            snapshot.cursor,
             heads.map(|(safe, time, _)| (safe, time)),
             heads.map(|(_, _, latest)| latest),
             Utc::now(),
@@ -382,11 +454,136 @@ pub(super) async fn require_current_reader(
     })?
 }
 
+#[derive(Clone)]
 struct ReaderSnapshot {
     protocol: &'static str,
     factory: Option<String>,
     heartbeat: Option<BaseIndexerHeartbeat>,
     cursor: Option<u64>,
+}
+
+// A new safe batch can arrive during a healthy reader's ordinary poll interval.
+// Wait only for that reader's durable progress, never for an error to disappear.
+fn only_reader_lag(snapshot: &ReaderSnapshot, heads: (u64, i64, u64)) -> bool {
+    let now = Utc::now();
+    let (safe, safe_time, latest) = heads;
+    let committed = snapshot
+        .cursor
+        .zip(
+            snapshot
+                .heartbeat
+                .as_ref()
+                .and_then(|heartbeat| heartbeat.persisted_cursor_block),
+        )
+        .map(|(cursor, completed)| cursor.min(completed));
+    if u64::try_from(safe_time)
+        .ok()
+        .and_then(|time| checked_head_timestamp(time, now.timestamp()).ok())
+        .is_none()
+        || committed.is_none_or(|cursor| safe.saturating_sub(cursor) <= 20)
+    {
+        return false;
+    }
+    let status = reader_status(
+        snapshot.protocol,
+        snapshot.heartbeat.as_ref(),
+        snapshot.cursor,
+        Some(safe),
+        Some(latest),
+        now,
+    );
+    // The second check isolates lag from age and all other existing guards. Its
+    // synthetic safe argument is eligibility-only, never returned as evidence.
+    status["blocker"] == "reader_stale_or_behind"
+        && reader_status(
+            snapshot.protocol,
+            snapshot.heartbeat.as_ref(),
+            snapshot.cursor,
+            committed,
+            Some(latest),
+            now,
+        )["ready"]
+            == true
+}
+
+async fn wait_for_reader_progress<F, Fut>(
+    mut snapshot: ReaderSnapshot,
+    heads: (u64, i64, u64),
+    deadline: tokio::time::Instant,
+    mut capture: F,
+) -> ReaderSnapshot
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = ReaderSnapshot>,
+{
+    for attempt in 0..12 {
+        if !only_reader_lag(&snapshot, heads) || tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        if attempt > 0 {
+            let next = tokio::time::Instant::now() + Duration::from_secs(1);
+            if next >= deadline {
+                break;
+            }
+            tokio::time::sleep_until(next).await;
+        }
+        let next = match tokio::time::timeout_at(deadline, capture()).await {
+            Ok(next) => next,
+            Err(_) => break,
+        };
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        let regressed = next.protocol != snapshot.protocol
+            || next.factory != snapshot.factory
+            || next
+                .cursor
+                .zip(snapshot.cursor)
+                .is_some_and(|(new, old)| new < old)
+            || next
+                .heartbeat
+                .as_ref()
+                .and_then(|h| h.persisted_cursor_block)
+                .zip(
+                    snapshot
+                        .heartbeat
+                        .as_ref()
+                        .and_then(|h| h.persisted_cursor_block),
+                )
+                .is_some_and(|(new, old)| new < old)
+            || next
+                .heartbeat
+                .as_ref()
+                .and_then(|h| h.completed_at)
+                .zip(snapshot.heartbeat.as_ref().and_then(|h| h.completed_at))
+                .is_some_and(|(new, old)| new < old);
+        if regressed {
+            // Preserve identity but make the failed re-observation unavailable.
+            snapshot.heartbeat = None;
+            snapshot.cursor = None;
+            break;
+        }
+        snapshot = next;
+    }
+    snapshot
+}
+
+async fn refresh_lagging_reader(
+    state: &SharedState,
+    network: &str,
+    snapshot: ReaderSnapshot,
+    heads: Option<(u64, i64, u64)>,
+    deadline: tokio::time::Instant,
+) -> ReaderSnapshot {
+    let Some(heads) = heads else {
+        return snapshot;
+    };
+    let protocol = snapshot.protocol;
+    let factory = snapshot.factory.clone();
+    wait_for_reader_progress(snapshot, heads, deadline, || {
+        capture_reader_until(state, network, protocol, factory.clone(), deadline)
+    })
+    .await
 }
 
 /// One request's captured DB/head evidence, never a cross-request success cache.
@@ -431,25 +628,37 @@ async fn capture_reader(
     protocol: &'static str,
     factory: Option<String>,
 ) -> ReaderSnapshot {
+    capture_reader_until(
+        state,
+        network,
+        protocol,
+        factory,
+        tokio::time::Instant::now() + Duration::from_secs(12),
+    )
+    .await
+}
+
+async fn capture_reader_until(
+    state: &SharedState,
+    network: &str,
+    protocol: &'static str,
+    factory: Option<String>,
+    deadline: tokio::time::Instant,
+) -> ReaderSnapshot {
     let read = async {
         let store = state.store.as_ref()?;
         let factory = factory.as_deref()?;
         // Writer persists heartbeat after cursor. This order avoids combining
         // an older cursor with a newer heartbeat.
-        let heartbeat = store
-            .get_base_indexer_heartbeat(network, factory)
+        let snapshot = store
+            .projection_reader_snapshot(network, factory)
             .await
-            .ok()
-            .flatten();
-        let cursor = store
-            .get_base_log_cursor(network, factory)
-            .await
-            .ok()
-            .flatten()
-            .map(|c| c.last_scanned_block);
+            .ok()?;
+        let heartbeat = snapshot.heartbeat;
+        let cursor = snapshot.cursor.map(|cursor| cursor.last_scanned_block);
         Some((heartbeat, cursor))
     };
-    let (heartbeat, cursor) = match tokio::time::timeout(Duration::from_secs(12), read).await {
+    let (heartbeat, cursor) = match tokio::time::timeout_at(deadline, read).await {
         Ok(value) => value.unwrap_or_default(),
         Err(_) => {
             record_failure_stage(
@@ -471,16 +680,17 @@ async fn finish_projection_observation(
     network: &str,
     rpc: Option<(&str, u64)>,
     snapshots: Vec<ReaderSnapshot>,
+    state: Option<&SharedState>,
 ) -> ProjectionObservation {
     // Every represented heartbeat/cursor snapshot is complete before any head
     // request starts. No future from an earlier request can be reused here.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(12);
     let heads = if snapshots
         .iter()
         .any(|s| s.heartbeat.is_some() && s.cursor.is_some())
     {
         match rpc {
             Some((url, chain)) => {
-                let deadline = tokio::time::Instant::now() + Duration::from_secs(12);
                 match tokio::time::timeout_at(
                     deadline,
                     observed_heads_for_chain(url, chain, deadline),
@@ -505,8 +715,15 @@ async fn finish_projection_observation(
     } else {
         None
     };
+    let mut refreshed = Vec::with_capacity(snapshots.len());
+    for snapshot in snapshots {
+        refreshed.push(match state {
+            Some(state) => refresh_lagging_reader(state, network, snapshot, heads, deadline).await,
+            None => snapshot,
+        });
+    }
     let now = Utc::now();
-    let boundaries = snapshots
+    let boundaries = refreshed
         .into_iter()
         .map(|s| {
             let result = projection_boundary(
@@ -596,6 +813,7 @@ async fn observe_resolved_projection_readers(
         network,
         rpc.as_ref().map(|(d, url)| (url.as_str(), d.chain_id)),
         vec![a, b, c, d],
+        Some(state),
     )
     .await
 }
@@ -640,20 +858,22 @@ pub(super) async fn readiness(State(state): State<SharedState>) -> Response {
     let observation = async {
         let mut snapshots = Vec::new();
         for (protocol, factory) in &factories {
-            let (heartbeat, cursor) = match (state.store.as_ref(), factory.as_deref()) {
-                (Some(store), Some(factory)) => {
-                    let heartbeat = store
-                        .get_base_indexer_heartbeat("base-mainnet", factory)
-                        .await;
-                    let cursor = store.get_base_log_cursor("base-mainnet", factory).await;
-                    (
-                        heartbeat.ok().flatten(),
-                        cursor.ok().flatten().map(|c| c.last_scanned_block),
-                    )
-                }
-                _ => (None, None),
-            };
-            snapshots.push((*protocol, heartbeat, cursor));
+            if tokio::time::Instant::now() >= deadline {
+                snapshots.push(ReaderSnapshot {
+                    protocol,
+                    factory: factory.clone(),
+                    heartbeat: None,
+                    cursor: None,
+                });
+                continue;
+            }
+            snapshots.push(
+                capture_reader_until(&state, "base-mainnet", protocol, factory.clone(), deadline)
+                    .await,
+            );
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return (None, snapshots);
         }
         heads_started.store(true, std::sync::atomic::Ordering::Relaxed);
         let heads = match state
@@ -679,17 +899,36 @@ pub(super) async fn readiness(State(state): State<SharedState>) -> Response {
                 None,
                 factories
                     .iter()
-                    .map(|(protocol, _)| (*protocol, None, None))
+                    .map(|(protocol, factory)| ReaderSnapshot {
+                        protocol,
+                        factory: factory.clone(),
+                        heartbeat: None,
+                        cursor: None,
+                    })
                     .collect(),
             )
         });
+    let mut refreshed = Vec::with_capacity(snapshots.len());
+    for snapshot in snapshots {
+        refreshed
+            .push(refresh_lagging_reader(&state, "base-mainnet", snapshot, heads, deadline).await);
+    }
     let now = Utc::now();
+    // Waiting for database progress never refreshes the original head's age.
+    let heads = current_observed_heads(heads, now);
     let safe = heads.map(|(safe, _, _)| safe);
     let latest = heads.map(|(_, _, latest)| latest);
-    let readers: Vec<_> = snapshots
+    let readers: Vec<_> = refreshed
         .into_iter()
-        .map(|(protocol, heartbeat, cursor)| {
-            reader_status(protocol, heartbeat.as_ref(), cursor, safe, latest, now)
+        .map(|snapshot| {
+            reader_status(
+                snapshot.protocol,
+                snapshot.heartbeat.as_ref(),
+                snapshot.cursor,
+                safe,
+                latest,
+                now,
+            )
         })
         .collect();
     let ready = readers.iter().all(|r| r["ready"] == true);
@@ -797,6 +1036,11 @@ mod tests {
             ProjectionReadBoundary {
                 block_number: 998,
                 safe_block_number: 998,
+                protocol: AUTONOMOUS_PROTOCOL_VERSION.into(),
+                observed_cursor: 998,
+                completed_cursor: 998,
+                completed_at: Utc::now(),
+                latest_block: 1000,
                 expires_at: Utc::now() + chrono::Duration::seconds(seconds),
             }
             .bind(vec![1])
@@ -1033,7 +1277,8 @@ mod tests {
             ];
             observed.store(0, Ordering::SeqCst);
             let mut observation =
-                finish_projection_observation("base-mainnet", Some((&url, 8453)), snapshots).await;
+                finish_projection_observation("base-mainnet", Some((&url, 8453)), snapshots, None)
+                    .await;
             assert_eq!(
                 observed.load(Ordering::SeqCst),
                 4,
@@ -1077,9 +1322,13 @@ mod tests {
             cursor: None,
         };
         observed.store(0, Ordering::SeqCst);
-        let mut unavailable =
-            finish_projection_observation("base-mainnet", Some((&url, 8453)), vec![no_snapshot])
-                .await;
+        let mut unavailable = finish_projection_observation(
+            "base-mainnet",
+            Some((&url, 8453)),
+            vec![no_snapshot],
+            None,
+        )
+        .await;
         assert_eq!(
             observed.load(Ordering::SeqCst),
             0,
@@ -1418,6 +1667,11 @@ mod tests {
         assert!(ProjectionReadBoundary {
             block_number: 998,
             safe_block_number: 998,
+            protocol: AUTONOMOUS_PROTOCOL_VERSION.into(),
+            observed_cursor: 998,
+            completed_cursor: 998,
+            completed_at: Utc::now(),
+            latest_block: 1000,
             expires_at: now - chrono::Duration::seconds(1)
         }
         .ensure_current()
@@ -1429,6 +1683,11 @@ mod tests {
         let expired = ProjectionReadBoundary {
             block_number: 998,
             safe_block_number: 998,
+            protocol: AUTONOMOUS_PROTOCOL_VERSION.into(),
+            observed_cursor: 998,
+            completed_cursor: 998,
+            completed_at: Utc::now(),
+            latest_block: 1000,
             expires_at: Utc::now() - chrono::Duration::seconds(1),
         };
         let captured = expired.bind(vec!["stale ready row"]).map(|items| items);
@@ -1436,6 +1695,11 @@ mod tests {
         let current = ProjectionReadBoundary {
             block_number: 998,
             safe_block_number: 998,
+            protocol: AUTONOMOUS_PROTOCOL_VERSION.into(),
+            observed_cursor: 998,
+            completed_cursor: 998,
+            completed_at: Utc::now(),
+            latest_block: 1000,
             expires_at: Utc::now() + chrono::Duration::seconds(5),
         };
         assert_eq!(

@@ -85,31 +85,12 @@ pub(super) async fn load(
                 .await?
         }
     };
-    store
-        .require_autonomous_canonical_checkpoint(network, &factory, boundary.block_number)
+    let snapshot = store
+        .autonomous_projection_snapshot(network, &factory, contract, boundary.block_number)
         .await
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-    let mut events = if let Some(contract) = contract {
-        store
-            .list_autonomous_bounty_history_for_contract(network, &factory, contract)
-            .await
-    } else {
-        store
-            .list_autonomous_bounty_events_for_factory(network, &factory, false)
-            .await
-    }
-    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-    events.retain(|event| event.block_number <= boundary.block_number);
-    let mut terms = Vec::new();
-    for hash in scoped_autonomous_terms_hashes(&events) {
-        if let Some(record) = store
-            .get_autonomous_bounty_terms(&hash)
-            .await
-            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
-        {
-            terms.push(record);
-        }
-    }
+    boundary.validate_snapshot(&snapshot.reader)?;
+    let (events, terms) = (snapshot.events, snapshot.terms);
     let mut feed = build_autonomous_bounty_feed(events, terms, false)
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     if feed

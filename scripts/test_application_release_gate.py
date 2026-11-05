@@ -165,6 +165,41 @@ class ReleaseGateTests(unittest.TestCase):
             "db", "managed_service_orders::metrics::postgres_tests::", 2,
         )), 1)
 
+    def test_progress_and_coherent_snapshot_are_required_nonempty_regressions(self):
+        selectors = (
+            ("db", "projection_snapshot::tests::projection_snapshot_cannot_mix_new_rows_with_old_certification_postgres", 1),
+            ("api", "marketplace_readiness::progress_tests::progress_shared_observation_uses_four_rpc_calls_with_real_db_progress_postgres", 1),
+        )
+        environment = {
+            "AGENT_BOUNTIES_LOCAL_TEST_DATABASE": "1",
+            "AGENT_BOUNTIES_TEST_DATABASE_URL":
+                "postgres://agent_bounties_test:fixture@127.0.0.1/agent_bounties_test",
+        }
+        for selector in selectors:
+            self.assertEqual(gate.POSTGRES.count(selector), 1)
+            for name in ("scripts/check-postgres.sh", "scripts/check-postgres.ps1"):
+                text = (gate.ROOT / name).read_text()
+                line = next(line for line in text.splitlines() if selector[1] in line)
+                self.assertIn("scripts/run-with-test-postgres.py", line)
+                self.assertIn("scripts/run-required-postgres-test.py", line)
+                self.assertIn("--exact --test-threads=1", line)
+            for passed, ignored, status, accepted in ((0, 0, 0, False), (0, 1, 0, False), (1, 0, 1, False), (1, 0, 0, True)):
+                output = f"test result: ok. {passed} passed; 0 failed; {ignored} ignored\n"
+                result = subprocess.CompletedProcess([], status, stdout=output)
+                with self.subTest(selector=selector, passed=passed, ignored=ignored, status=status), \
+                        patch.dict(os.environ, environment, clear=True), \
+                        patch.object(gate, "POSTGRES", (selector,)), \
+                        patch.object(gate.subprocess, "run", return_value=result), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    if accepted:
+                        self.assertEqual(gate.postgres(), 0)
+                    else:
+                        with self.assertRaises(gate.GateError):
+                            gate.postgres()
+        # Hosted CI already runs this complete inventory; no duplicate job.
+        self.assertIn("scripts/run-with-test-postgres.py -- python3 scripts/application_release_gate.py postgres",
+                      (gate.ROOT / ".github/workflows/ci.yml").read_text())
+
     def test_remote_database_is_rejected(self):
         with patch.dict(os.environ, {"AGENT_BOUNTIES_LOCAL_TEST_DATABASE": "1",
                                      "AGENT_BOUNTIES_TEST_DATABASE_URL":
