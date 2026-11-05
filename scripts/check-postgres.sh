@@ -39,6 +39,8 @@ python3 scripts/run-required-postgres-test.py -p db tests::claim_funnel_counts_d
 python3 scripts/run-required-postgres-test.py -p db tests::opportunity_lifecycle_query_executes_against_migrated_postgres --exact
 python3 scripts/run-required-postgres-test.py -p db tests::site_analytics_round_trip_executes_against_migrated_postgres --exact
 python3 scripts/run-required-postgres-test.py -p db tests::platform_metrics_query_separates_history_from_identity_and_cohort_boundaries --exact
+python3 scripts/run-required-postgres-test.py -p db tests::controlled_card_test_exclusion_preserves_money_and_shared_wallet_customers --exact
+python3 scripts/run-required-postgres-test.py -p db managed_service_orders::metrics::postgres_tests:: --test-threads=1
 python3 scripts/run-required-postgres-test.py -p api platform_payouts::tests::platform_payout_http_replays_real_database_selection --exact
 python3 scripts/run-required-postgres-test.py -p db tests::opportunity_comment_round_trip_is_durable_and_idempotent --exact
 python3 scripts/run-required-postgres-test.py -p db tests::chatgpt_action_intent_replays_and_confirms_only_observed_transaction --exact

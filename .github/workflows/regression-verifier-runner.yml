@@ -19,6 +19,7 @@ on:
       - "crates/**"
       - "contracts/base-escrow/fixtures/**"
       - "migrations/**"
+      - "deployments/**"
       - "ops/**"
       - "programs/**"
       - "rust-toolchain"

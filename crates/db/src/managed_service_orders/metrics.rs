@@ -71,6 +71,46 @@ impl PostgresStore {
         sqlx::query("SET LOCAL statement_timeout='5s'")
             .execute(&mut *tx)
             .await?;
+        let mut refund_batches = Vec::new();
+        let mut refund_order_ids = std::collections::HashSet::new();
+        // Tables and kinds are fixed source constants, never caller-supplied SQL.
+        for (table, kind) in [
+            ("managed_refund", "full"),
+            ("managed_deposit_refund", "review_deposit"),
+            ("managed_recovered_refund", "recovered_bounty"),
+        ] {
+            let sql = format!(
+                r#"
+                SELECT f.order_id, to_jsonb(f) AS operation, ev.evidence, ev.outcome, ev.succeeded_at
+                FROM {table}_operations f
+                JOIN LATERAL (
+                    SELECT (array_agg(e.outcome ORDER BY CASE e.outcome WHEN 'failed' THEN 4 WHEN 'canceled' THEN 4 WHEN 'succeeded' THEN 3 ELSE 0 END DESC, e.event_created_at DESC))[1] AS outcome,
+                        (array_agg(to_jsonb(e) ORDER BY CASE e.outcome WHEN 'failed' THEN 4 WHEN 'canceled' THEN 4 WHEN 'succeeded' THEN 3 ELSE 0 END DESC, e.event_created_at DESC))[1] AS evidence,
+                        min(e.event_created_at) FILTER(WHERE e.outcome='succeeded') AS succeeded_at
+                    FROM {table}_events e WHERE e.order_id=f.order_id AND e.operation_id=f.operation_id
+                        AND e.stripe_account_id=f.stripe_account_id AND e.livemode=f.livemode
+                        AND e.disposition='processed' AND to_timestamp(e.event_created_at)<$2
+                ) ev ON ev.outcome='succeeded'
+                WHERE f.livemode AND f.stripe_account_id=$1 AND f.refund_id IS NOT NULL
+                  AND to_timestamp(ev.succeeded_at)>=$3 ORDER BY f.order_id LIMIT 5001
+            "#
+            );
+            let refunds = sqlx::query(&sql)
+                .bind(account)
+                .bind(end)
+                .bind(start)
+                .fetch_all(&mut *tx)
+                .await?;
+            if refunds.len() > LIMIT {
+                return Err(ManagedOrderStoreError::Integrity);
+            }
+            for row in &refunds {
+                refund_order_ids.insert(row.try_get::<Uuid, _>("order_id")?);
+            }
+            refund_batches.push((kind, refunds));
+        }
+        let refund_order_ids: Vec<Uuid> = refund_order_ids.into_iter().collect();
+        // Old receipts are needed only for refunds in the requested window.
         // A receipt is unique per order/PaymentIntent. Repeated webhook deliveries cannot add sales.
         // First paid event time, not checkout creation or latest redelivery, assigns the period.
         let rows = sqlx::query(r#"
@@ -83,8 +123,9 @@ impl PostgresStore {
                 WHERE e.order_id=p.order_id AND e.stripe_account_id=p.stripe_account_id
                   AND e.livemode AND e.disposition='processed' AND e.outcome='paid') paid ON true
             WHERE p.livemode AND p.stripe_account_id=$1 AND (paid.at IS NULL OR to_timestamp(paid.at)<$2)
+              AND (paid.at IS NULL OR to_timestamp(paid.at)>=$3 OR p.order_id=ANY($4))
             ORDER BY p.order_id LIMIT 5001
-        "#).bind(account).bind(end).fetch_all(&mut *tx).await?;
+        "#).bind(account).bind(end).bind(start).bind(&refund_order_ids).fetch_all(&mut *tx).await?;
         if rows.len() > LIMIT {
             return Err(ManagedOrderStoreError::Integrity);
         }
@@ -143,37 +184,7 @@ impl PostgresStore {
                 ),
             );
         }
-        // Tables and kinds are fixed source constants, never caller-supplied SQL.
-        for (table, kind) in [
-            ("managed_refund", "full"),
-            ("managed_deposit_refund", "review_deposit"),
-            ("managed_recovered_refund", "recovered_bounty"),
-        ] {
-            let sql = format!(
-                r#"
-                SELECT f.order_id, to_jsonb(f) AS operation, ev.evidence, ev.outcome, ev.succeeded_at
-                FROM {table}_operations f
-                JOIN LATERAL (
-                    SELECT (array_agg(e.outcome ORDER BY CASE e.outcome WHEN 'failed' THEN 4 WHEN 'canceled' THEN 4 WHEN 'succeeded' THEN 3 ELSE 0 END DESC, e.event_created_at DESC))[1] AS outcome,
-                        (array_agg(to_jsonb(e) ORDER BY CASE e.outcome WHEN 'failed' THEN 4 WHEN 'canceled' THEN 4 WHEN 'succeeded' THEN 3 ELSE 0 END DESC, e.event_created_at DESC))[1] AS evidence,
-                        min(e.event_created_at) FILTER(WHERE e.outcome='succeeded') AS succeeded_at
-                    FROM {table}_events e WHERE e.order_id=f.order_id AND e.operation_id=f.operation_id
-                        AND e.stripe_account_id=f.stripe_account_id AND e.livemode=f.livemode
-                        AND e.disposition='processed' AND to_timestamp(e.event_created_at)<$2
-                ) ev ON ev.outcome='succeeded'
-                WHERE f.livemode AND f.stripe_account_id=$1 AND f.refund_id IS NOT NULL
-                  AND to_timestamp(ev.succeeded_at)>=$3 ORDER BY f.order_id LIMIT 5001
-            "#
-            );
-            let refunds = sqlx::query(&sql)
-                .bind(account)
-                .bind(end)
-                .bind(start)
-                .fetch_all(&mut *tx)
-                .await?;
-            if refunds.len() > LIMIT {
-                return Err(ManagedOrderStoreError::Integrity);
-            }
+        for (kind, refunds) in refund_batches {
             for row in refunds {
                 let id: Uuid = row.try_get("order_id")?;
                 let (quote, pi, accepted_at) =
@@ -264,6 +275,7 @@ mod postgres_tests {
     async fn live_paid(
         f: &Fixture,
         currency: FiatCurrency,
+        paid_offset: i64,
     ) -> (
         ManagedOrder,
         managed_orders::stripe_checkout::ManagedCheckoutPlan,
@@ -320,7 +332,7 @@ mod postgres_tests {
                 &format!("evt_{}", order.order_id.simple()),
                 "checkout.session.completed",
                 response,
-                0,
+                paid_offset,
             ))
             .await
             .unwrap();
@@ -337,12 +349,200 @@ mod postgres_tests {
             .unwrap()
     }
 
+    // Synthetic persisted history exercises the real query and its production schema.
+    // This is a reporting-capacity fixture, not evidence of authentic processor events.
+    async fn historical_receipts(
+        f: &Fixture,
+        template: &ManagedOrder,
+        policy: &CheckoutPolicy,
+        paid_at: i64,
+    ) -> Vec<Uuid> {
+        let mut records = Vec::new();
+        let mut ids = Vec::new();
+        for _ in 0..6_000 {
+            let id = Uuid::new_v4();
+            let operation_id = Uuid::new_v4();
+            let mut input = template.quote.input().clone();
+            input.quote_id = Uuid::new_v4();
+            let quote = ManagedQuote::new(input).unwrap();
+            let plan = managed_orders::stripe_checkout::ManagedCheckoutPlan::new(
+                &quote,
+                id,
+                operation_id,
+                policy.clone(),
+                template.accepted_at,
+            )
+            .unwrap();
+            records.push(json!({
+                "order_id":id, "quote_id":quote.input().quote_id,
+                "quote_digest":quote.digest().unwrap(), "quote":quote,
+                "issued_at":quote.input().issued_at, "expires_at":quote.input().expires_at,
+                "accepted_at":template.accepted_at, "operation_id":operation_id,
+                "plan":plan, "plan_digest":plan.digest(),
+                "session_id":format!("cs_history_{}",id.simple()),
+                "payment_intent_id":format!("pi_history_{}",id.simple()),
+                "event_id":format!("evt_history_{}",id.simple()),
+                "amount_minor":quote.total_minor(), "paid_at":paid_at
+            }));
+            ids.push(id);
+        }
+        let mut tx = f.store.pool.begin().await.unwrap();
+        for batch in records.chunks(500) {
+            let values = Value::Array(batch.to_vec());
+            for sql in [
+                r#"INSERT INTO managed_service_quotes
+                    (quote_id,buyer_principal,quote_digest,quote,issued_at,expires_at)
+                    SELECT quote_id,'fixture-buyer',quote_digest,quote,issued_at,expires_at
+                    FROM jsonb_to_recordset($1) x(quote_id uuid,quote_digest text,quote jsonb,issued_at bigint,expires_at bigint)"#,
+                r#"INSERT INTO managed_service_orders
+                    (order_id,quote_id,buyer_principal,quote_digest,accepted_at,idempotency_key)
+                    SELECT order_id,quote_id,'fixture-buyer',quote_digest,accepted_at,order_id::text
+                    FROM jsonb_to_recordset($1) x(order_id uuid,quote_id uuid,quote_digest text,accepted_at bigint)"#,
+                r#"INSERT INTO managed_stripe_checkout_operations
+                    (order_id,operation_id,stripe_account_id,livemode,plan,plan_digest,session_id,payment_intent_id)
+                    SELECT order_id,operation_id,'acct_fixture_only',true,plan,plan_digest,session_id,payment_intent_id
+                    FROM jsonb_to_recordset($1) x(order_id uuid,operation_id uuid,plan jsonb,plan_digest text,session_id text,payment_intent_id text)"#,
+                r#"INSERT INTO managed_stripe_event_inbox
+                    (stripe_account_id,livemode,event_id,order_id,operation_id,body_sha256,event_fingerprint,event,event_created_at,outcome,disposition)
+                    SELECT 'acct_fixture_only',true,event_id,order_id,operation_id,plan_digest,plan_digest,'{}'::jsonb,paid_at,'paid','processed'
+                    FROM jsonb_to_recordset($1) x(event_id text,order_id uuid,operation_id uuid,plan_digest text,paid_at bigint)"#,
+                r#"INSERT INTO managed_stripe_paid_receipts
+                    (order_id,stripe_account_id,livemode,payment_intent_id,session_id,quote_digest,amount_minor,currency)
+                    SELECT order_id,'acct_fixture_only',true,payment_intent_id,session_id,quote_digest,amount_minor,'mxn'
+                    FROM jsonb_to_recordset($1) x(order_id uuid,payment_intent_id text,session_id text,quote_digest text,amount_minor bigint)"#,
+            ] {
+                sqlx::query(sql)
+                    .bind(&values)
+                    .execute(&mut *tx)
+                    .await
+                    .unwrap();
+            }
+        }
+        tx.commit().await.unwrap();
+        ids
+    }
+
+    #[tokio::test]
+    #[ignore = "requires isolated AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn card_receipts_ignore_history_but_keep_refunds_and_capacity_guards() {
+        let f = Fixture::new().await;
+        let (old, old_checkout) = live_paid(&f, FiatCurrency::Mxn, 0).await;
+        let (current, current_checkout) = live_paid(&f, FiatCurrency::Mxn, 200).await;
+        f.store
+            .request_managed_refund("fixture-buyer", old.order_id)
+            .await
+            .unwrap();
+        let refund = f
+            .store
+            .get_managed_refund_plan("fixture-buyer", old.order_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let lease = f
+            .store
+            .claim_managed_refund(old.order_id)
+            .await
+            .unwrap()
+            .unwrap();
+        f.store
+            .complete_managed_refund(
+                &lease,
+                &refund.binding(&object(&refund, "succeeded")).unwrap(),
+            )
+            .await
+            .unwrap();
+        let event = signed(
+            &refund,
+            "evt_capacity_refund",
+            object(&refund, "succeeded"),
+            10,
+        );
+        f.store
+            .reconcile_managed_refund_event(&event)
+            .await
+            .unwrap();
+        let start = refund.created_at() + 1;
+        let end = current_checkout.created_at() + 300;
+        assert!(old_checkout.created_at() < start);
+        assert!(current_checkout.created_at() + 200 >= start);
+        let history =
+            historical_receipts(&f, &old, old_checkout.policy(), old_checkout.created_at()).await;
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM managed_stripe_paid_receipts")
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 6_002);
+        let result = metrics(&f, start, end).await;
+        assert_eq!(result["paid_orders"], 1);
+        assert_eq!(result["refund_operations"], 1);
+        assert_eq!(result["gross_received_usd"], "112.500000");
+        assert_eq!(result["refunded_usd"], "112.500000");
+        assert_eq!(result["net_received_usd"], "0.000000");
+        assert_eq!(result["platform_fees_collected_usd"], "0.000000");
+        let empty = metrics(&f, end + 1, end + 60).await;
+        assert_eq!(empty["status"], "ready");
+        assert_eq!(empty["paid_orders"], 0);
+        assert_eq!(empty["refund_operations"], 0);
+        assert_eq!(empty["net_received_usd"], "0.000000");
+        for private in [
+            old.order_id.to_string(),
+            current.order_id.to_string(),
+            "acct_fixture_only".into(),
+            "fixture-buyer".into(),
+        ] {
+            assert!(!result.to_string().contains(&private));
+        }
+        // A genuinely over-capacity requested period remains unavailable, never truncated.
+        sqlx::query(
+            "UPDATE managed_stripe_event_inbox SET event_created_at=$1 WHERE order_id=ANY($2)",
+        )
+        .bind(start)
+        .bind(&history)
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+        assert!(matches!(
+            f.store
+                .managed_card_payment_metrics(
+                    "acct_fixture_only",
+                    DateTime::from_timestamp(start, 0).unwrap(),
+                    DateTime::from_timestamp(end, 0).unwrap()
+                )
+                .await,
+            Err(ManagedOrderStoreError::Integrity)
+        ));
+        sqlx::query(
+            "UPDATE managed_stripe_event_inbox SET event_created_at=$1 WHERE order_id=ANY($2)",
+        )
+        .bind(old_checkout.created_at())
+        .bind(&history)
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+        // Even an old orphaned receipt must be retained for integrity rejection.
+        sqlx::query("DELETE FROM managed_stripe_event_inbox WHERE order_id=$1")
+            .bind(history[0])
+            .execute(&f.store.pool)
+            .await
+            .unwrap();
+        assert!(f
+            .store
+            .managed_card_payment_metrics(
+                "acct_fixture_only",
+                DateTime::from_timestamp(end + 1, 0).unwrap(),
+                DateTime::from_timestamp(end + 60, 0).unwrap()
+            )
+            .await
+            .is_err());
+        f.cleanup().await;
+    }
+
     #[tokio::test]
     #[ignore = "requires isolated AGENT_BOUNTIES_TEST_DATABASE_URL"]
     async fn mixed_live_receipts_signed_refunds_windows_replay_and_privacy() {
         let f = Fixture::new().await;
-        let (order, p) = live_paid(&f, FiatCurrency::Mxn).await;
-        let (_usd, _) = live_paid(&f, FiatCurrency::Usd).await;
+        let (order, p) = live_paid(&f, FiatCurrency::Mxn, 0).await;
+        let (_usd, _) = live_paid(&f, FiatCurrency::Usd, 0).await;
         let _sandbox = stripe_tests::paid(&f).await;
         let start = p.created_at() - 60;
         let end = p.created_at() + 60;

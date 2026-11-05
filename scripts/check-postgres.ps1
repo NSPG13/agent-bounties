@@ -41,6 +41,12 @@ try {
             & $python.Source @pythonArgs scripts/run-required-postgres-test.py -p db tests::platform_metrics_query_separates_history_from_identity_and_cohort_boundaries --exact
         }
         Invoke-Checked {
+            & $python.Source @pythonArgs scripts/run-required-postgres-test.py -p db tests::controlled_card_test_exclusion_preserves_money_and_shared_wallet_customers --exact
+        }
+        Invoke-Checked {
+            & $python.Source @pythonArgs scripts/run-required-postgres-test.py -p db managed_service_orders::metrics::postgres_tests:: --test-threads=1
+        }
+        Invoke-Checked {
             & $python.Source @pythonArgs scripts/run-required-postgres-test.py -p api platform_payouts::tests::platform_payout_http_replays_real_database_selection --exact
         }
         Invoke-Checked {

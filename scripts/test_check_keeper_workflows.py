@@ -11,6 +11,11 @@ class KeeperWorkflowTests(unittest.TestCase):
         doc['jobs']['sign']['steps'][1]['env']['KEY']='${{ secrets.verifier_private_key }}'
         del doc['jobs']['sign']['environment']
         self.assertTrue(violations(doc))
+    def test_bracket_and_indirect_access_cannot_hide_signing_keys(self):
+        for value in ["${{ secrets['BASE_KEEPER_PRIVATE_KEY'] }}", '${{ toJSON(secrets) }}', "${{ secrets[format('BASE_KEEPER_{0}', 'PRIVATE_KEY')] }}"]:
+            doc=copy.deepcopy(self.doc)
+            doc['jobs']['sign']['env']={'KEY':value}
+            with self.subTest(value=value):self.assertTrue(violations(doc))
     def test_reusable_caller_uses_only_reviewed_local_execution(self):
         doc=copy.deepcopy(self.doc)
         job=doc['jobs']['sign']

@@ -6,6 +6,10 @@ use super::*;
 #[path = "marketplace_readiness_diagnostic_tests.rs"]
 mod diagnostic_tests;
 
+#[cfg(test)]
+#[path = "marketplace_readiness_admission_tests.rs"]
+mod admission_tests;
+
 // Diagnostic detail only: the accepted interval remains exactly 0..=300 seconds.
 fn checked_head_timestamp(timestamp: u64, now: i64) -> Result<i64, FailureClass> {
     let timestamp = i64::try_from(timestamp).map_err(|_| FailureClass::TimeOutOfRange)?;
@@ -121,8 +125,12 @@ fn reader_status(
     result
 }
 
-async fn safe_head_for_chain(rpc: &str, chain_id: u64) -> Option<(u64, i64)> {
-    if chain_base::fetch_chain_id(rpc, 92)
+async fn safe_head_for_chain(
+    rpc: &str,
+    chain_id: u64,
+    transport: &chain_base::ReqwestJsonRpcTransport,
+) -> Option<(u64, i64)> {
+    if chain_base::fetch_chain_id_with_transport(rpc, 92, transport)
         .await
         .inspect_err(|error| {
             record_classified_failure(
@@ -141,7 +149,7 @@ async fn safe_head_for_chain(rpc: &str, chain_id: u64) -> Option<(u64, i64)> {
         );
         return None;
     }
-    let block = fetch_safe_block_identity(rpc, 93)
+    let block = chain_base::fetch_block_identity_with_transport(rpc, "safe", 93, transport)
         .await
         .inspect_err(|error| {
             record_classified_failure(
@@ -165,7 +173,7 @@ async fn safe_head_for_chain(rpc: &str, chain_id: u64) -> Option<(u64, i64)> {
 
 #[cfg(test)]
 async fn base_safe_head(rpc: &str) -> Option<u64> {
-    safe_head_for_chain(rpc, 8453)
+    safe_head_for_chain(rpc, 8453, &chain_base::ReqwestJsonRpcTransport::default())
         .await
         .map(|(number, _)| number)
 }
@@ -173,9 +181,23 @@ async fn base_safe_head(rpc: &str) -> Option<u64> {
 /// Independent heads sampled after the reader snapshots. A fresh safe tag may
 /// lag any reader's prior checkpoint, including Beta3 on another provider.
 /// Latest is the upper bound; safe still bounds projection data and cursor lag.
-async fn observed_heads_for_chain(rpc: &str, chain_id: u64) -> Option<(u64, i64, u64)> {
-    let (safe, safe_time) = safe_head_for_chain(rpc, chain_id).await?;
-    let latest_number = chain_base::fetch_block_number(rpc, 94)
+async fn observed_heads_for_chain(
+    rpc: &str,
+    chain_id: u64,
+    deadline: tokio::time::Instant,
+) -> Option<(u64, i64, u64)> {
+    let transport =
+        chain_base::ReqwestJsonRpcTransport::default().with_read_observation_deadline(deadline);
+    observed_heads_with_transport(rpc, chain_id, &transport).await
+}
+
+async fn observed_heads_with_transport(
+    rpc: &str,
+    chain_id: u64,
+    transport: &chain_base::ReqwestJsonRpcTransport,
+) -> Option<(u64, i64, u64)> {
+    let (safe, safe_time) = safe_head_for_chain(rpc, chain_id, transport).await?;
+    let latest_number = chain_base::fetch_block_number_with_transport(rpc, 94, transport)
         .await
         .inspect_err(|error| {
             record_classified_failure(
@@ -185,16 +207,21 @@ async fn observed_heads_for_chain(rpc: &str, chain_id: u64) -> Option<(u64, i64,
             );
         })
         .ok()?;
-    let latest = chain_base::fetch_exact_block_identity(rpc, latest_number, 95)
-        .await
-        .inspect_err(|error| {
-            record_classified_failure(
-                FailureStage::HeadLatestBlockRead,
-                chain_failure_class(error),
-                &deployment_revision(),
-            );
-        })
-        .ok()?;
+    let latest = chain_base::fetch_block_identity_with_transport(
+        rpc,
+        &format!("0x{latest_number:x}"),
+        95,
+        transport,
+    )
+    .await
+    .inspect_err(|error| {
+        record_classified_failure(
+            FailureStage::HeadLatestBlockRead,
+            chain_failure_class(error),
+            &deployment_revision(),
+        );
+    })
+    .ok()?;
     let latest_time = i64::try_from(latest.timestamp)
         .inspect_err(|_| {
             record_classified_failure(
@@ -313,7 +340,8 @@ pub(super) async fn require_current_reader(
     factory: &str,
 ) -> Result<ProjectionReadBoundary, StatusCode> {
     let heads_started = std::sync::atomic::AtomicBool::new(false);
-    tokio::time::timeout(Duration::from_secs(12), async {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(12);
+    tokio::time::timeout_at(deadline, async {
         let store = state
             .store
             .as_ref()
@@ -334,7 +362,7 @@ pub(super) async fn require_current_reader(
                 StatusCode::SERVICE_UNAVAILABLE
             })?;
         heads_started.store(true, std::sync::atomic::Ordering::Relaxed);
-        let heads = observed_heads_for_chain(&rpc, descriptor.chain_id).await;
+        let heads = observed_heads_for_chain(&rpc, descriptor.chain_id, deadline).await;
         projection_boundary(
             protocol,
             heartbeat.as_ref(),
@@ -451,21 +479,24 @@ async fn finish_projection_observation(
         .any(|s| s.heartbeat.is_some() && s.cursor.is_some())
     {
         match rpc {
-            Some((url, chain)) => match tokio::time::timeout(
-                Duration::from_secs(12),
-                observed_heads_for_chain(url, chain),
-            )
-            .await
-            {
-                Ok(heads) => heads,
-                Err(_) => {
-                    record_failure_stage(
-                        FailureStage::MarketplaceHeadsTimedOut,
-                        &deployment_revision(),
-                    );
-                    None
+            Some((url, chain)) => {
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(12);
+                match tokio::time::timeout_at(
+                    deadline,
+                    observed_heads_for_chain(url, chain, deadline),
+                )
+                .await
+                {
+                    Ok(heads) => heads,
+                    Err(_) => {
+                        record_failure_stage(
+                            FailureStage::MarketplaceHeadsTimedOut,
+                            &deployment_revision(),
+                        );
+                        None
+                    }
                 }
-            },
+            }
             None => {
                 record_failure_stage(FailureStage::HeadRpcNotConfigured, &deployment_revision());
                 None
@@ -605,6 +636,7 @@ pub(super) async fn readiness(State(state): State<SharedState>) -> Response {
     // One bound covers database reads and all RPC requests. Snapshot each
     // heartbeat before its cursor, then fetch heads after every snapshot.
     let heads_started = std::sync::atomic::AtomicBool::new(false);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(12);
     let observation = async {
         let mut snapshots = Vec::new();
         for (protocol, factory) in &factories {
@@ -628,7 +660,7 @@ pub(super) async fn readiness(State(state): State<SharedState>) -> Response {
             .marketplace_head_rpc
             .resolve(&state.base_rpc_urls, "base-mainnet")
         {
-            Ok((_, rpc)) => observed_heads_for_chain(&rpc, 8453).await,
+            Ok((_, rpc)) => observed_heads_for_chain(&rpc, 8453, deadline).await,
             Err(_) => {
                 record_failure_stage(FailureStage::HeadRpcNotConfigured, &deployment_revision());
                 None
@@ -636,7 +668,7 @@ pub(super) async fn readiness(State(state): State<SharedState>) -> Response {
         };
         (heads, snapshots)
     };
-    let (heads, snapshots) = tokio::time::timeout(Duration::from_secs(12), observation)
+    let (heads, snapshots) = tokio::time::timeout_at(deadline, observation)
         .await
         .unwrap_or_else(|_| {
             record_failure_stage(
@@ -1092,7 +1124,8 @@ mod tests {
             });
             assert!(observed_heads_for_chain(
                 &format!("http://{address}/?token=private-query-marker"),
-                8453
+                8453,
+                tokio::time::Instant::now() + Duration::from_secs(12)
             )
             .await
             .is_none());
@@ -1222,7 +1255,12 @@ mod tests {
             let server = tokio::spawn(async move {
                 axum::serve(listener, router).await.unwrap();
             });
-            let observed = observed_heads_for_chain(&format!("http://{address}"), 8453).await;
+            let observed = observed_heads_for_chain(
+                &format!("http://{address}"),
+                8453,
+                tokio::time::Instant::now() + Duration::from_secs(12),
+            )
+            .await;
             server.abort();
             assert_eq!(observed.is_some(), expected);
         }
@@ -1421,10 +1459,16 @@ mod tests {
         });
         let rpc = format!("http://{address}");
         assert_eq!(
-            safe_head_for_chain(&rpc, 84532).await.map(|head| head.0),
+            safe_head_for_chain(&rpc, 84532, &chain_base::ReqwestJsonRpcTransport::default())
+                .await
+                .map(|head| head.0),
             Some(998)
         );
-        assert!(safe_head_for_chain(&rpc, 8453).await.is_none());
+        assert!(
+            safe_head_for_chain(&rpc, 8453, &chain_base::ReqwestJsonRpcTransport::default())
+                .await
+                .is_none()
+        );
         server.abort();
     }
 

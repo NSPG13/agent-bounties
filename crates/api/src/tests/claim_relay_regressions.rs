@@ -199,6 +199,21 @@ async fn claimable_fixture(store: &PostgresStore) -> String {
             .await
             .unwrap();
     }
+    store
+        .commit_autonomous_canonical_checkpoint(
+            "base-mainnet",
+            &factory,
+            None,
+            None,
+            &chain_base::BaseBlockIdentity {
+                number: 1_000_000,
+                hash: format!("0x{}", "11".repeat(32)),
+                timestamp: now.timestamp() as u64,
+            },
+            None,
+        )
+        .await
+        .unwrap();
     bounty
 }
 
@@ -227,7 +242,17 @@ async fn call_claim(
 async fn expired_signed_retry_recovers_pending_claim_and_stale_direct_relay_never_sends() {
     let url = std::env::var("SECURITY_AUTH_TEST_DATABASE_URL").unwrap();
     db::test_support::assert_isolated_security_database(&url);
-    let store = PostgresStore::connect(&url).await.unwrap();
+    let admin = sqlx::PgPool::connect(&url).await.unwrap();
+    let schema = format!("claim_recovery_{}", Uuid::new_v4().simple());
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    let options = url
+        .parse::<sqlx::postgres::PgConnectOptions>()
+        .unwrap()
+        .options([("search_path", schema.as_str())]);
+    let store = PostgresStore::from_pool(sqlx::PgPool::connect_with(options).await.unwrap());
     store.migrate().await.unwrap();
     let bounty = claimable_fixture(&store).await;
     let methods = Arc::new(Mutex::new(Vec::<String>::new()));
@@ -396,6 +421,10 @@ async fn expired_signed_retry_recovers_pending_claim_and_stale_direct_relay_neve
     assert_eq!(claimed["candidate"]["status"], "claimed");
     assert_eq!(claimed["candidate"]["authorization_valid_before"], 1300);
     server.abort();
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

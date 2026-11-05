@@ -35,7 +35,7 @@ jobs:
       USDC: "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-    - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+    - uses: ./.github/actions/setup-rust
       with:
         toolchain: 1.94.0
     - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
@@ -85,7 +85,7 @@ jobs:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
-    - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+    - uses: ./.github/actions/setup-rust
       with:
         toolchain: 1.94.0
     - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae

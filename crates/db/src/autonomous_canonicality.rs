@@ -13,6 +13,32 @@ fn unavailable() -> DbError {
     DbError::InvalidEnum("autonomous canonical history requires reconciliation".into())
 }
 
+/// Call inside the same repeatable-read transaction as the public projection.
+/// Unassociated event rows cannot establish paid evidence on their own.
+pub(crate) async fn require_certified_history(
+    connection: &mut sqlx::PgConnection,
+    network: &str,
+) -> DbResult<()> {
+    let uncertified: bool = sqlx::query_scalar(r#"
+        SELECT EXISTS (
+            SELECT 1 FROM autonomous_bounty_events e
+            WHERE e.network=$1 AND NOT EXISTS (
+                SELECT 1 FROM autonomous_bounty_events created
+                JOIN autonomous_canonical_checkpoints c
+                  ON c.network=created.network AND c.factory_contract=created.contract_address
+                WHERE created.network=e.network AND created.kind='canonical_bounty_created'
+                  AND created.bounty_id=e.bounty_id
+                  AND e.contract_address IN (created.contract_address, lower(created.data->>'bounty_contract'))
+                  AND NOT c.invalidated AND e.block_number<=c.block_number
+            )
+        )
+    "#).bind(network).fetch_one(connection).await?;
+    if uncertified {
+        return Err(unavailable());
+    }
+    Ok(())
+}
+
 impl PostgresStore {
     pub async fn autonomous_canonical_checkpoint(
         &self,

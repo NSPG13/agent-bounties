@@ -2020,7 +2020,17 @@ struct PublicMetricsPolicy {
     maintainer_comment_authors: Vec<String>,
     maintainer_wallets: Vec<String>,
     excluded_bounty_contracts: Vec<String>,
+    #[serde(skip)]
+    customer_success_excluded_bounty_contracts: Vec<String>,
     wallet_ownership_boundary: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CustomerSuccessMetricsPolicy {
+    schema_version: String,
+    network: String,
+    controlled_test_bounty_contracts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -2109,6 +2119,7 @@ struct PlatformDemandGrowthResponse {
     gmv_usdc_7d: PlatformAmountResponse,
     gmv_usdc_28d: PlatformAmountResponse,
     lifetime_canonical_gmv_usdc: PlatformAmountResponse,
+    controlled_test_gmv_usdc_28d: PlatformAmountResponse,
     lifetime_canonical_payouts_usdc: PlatformAmountResponse,
     new_poster_funder_wallets_28d: u64,
     repeat_poster_funder_rate_28d: Option<f64>,
@@ -6567,6 +6578,33 @@ fn platform_metric_window(
     })
 }
 
+fn customer_success_metric_exclusions(document: &str) -> Result<Vec<String>, StatusCode> {
+    let policy: CustomerSuccessMetricsPolicy =
+        serde_json::from_str(document).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if policy.schema_version != "agent-bounties/customer-success-metrics-policy-v1"
+        || policy.network != "base-mainnet"
+        || policy.controlled_test_bounty_contracts.len() > 256
+    {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    policy
+        .controlled_test_bounty_contracts
+        .into_iter()
+        .map(|address| {
+            let address = normalize_evm_address(&address)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                .to_ascii_lowercase();
+            if address == "0x0000000000000000000000000000000000000000"
+                || !seen.insert(address.clone())
+            {
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+            Ok(address)
+        })
+        .collect()
+}
+
 fn public_metrics_policy() -> Result<PublicMetricsPolicy, StatusCode> {
     let mut policy: PublicMetricsPolicy = serde_json::from_str(PUBLIC_METRICS_POLICY_JSON)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -6600,6 +6638,9 @@ fn public_metrics_policy() -> Result<PublicMetricsPolicy, StatusCode> {
         .map(|value| normalize_evm_address(&value).map(|value| value.to_ascii_lowercase()))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    policy.customer_success_excluded_bounty_contracts = customer_success_metric_exclusions(
+        include_str!("../fixtures/customer-success-metrics-policy.json"),
+    )?;
     Ok(policy)
 }
 
@@ -6716,6 +6757,37 @@ fn add_platform_base_units(left: &str, right: &str) -> Result<String, StatusCode
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)
 }
 
+fn platform_demand_funding_share(
+    growth: &PlatformDemandGrowthStats,
+) -> Result<(bool, Option<f64>), StatusCode> {
+    let total_gmv_28d = growth
+        .gmv_28d_base_units
+        .parse::<u128>()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let controlled_test_gmv_28d = growth
+        .controlled_test_gmv_28d_base_units
+        .parse::<u128>()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let customer_gmv_28d = total_gmv_28d
+        .checked_sub(controlled_test_gmv_28d)
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    let attributed_gmv_28d = growth
+        .attributed_gmv_28d_base_units
+        .parse::<u128>()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let non_operator_gmv_28d = growth
+        .non_operator_attributed_gmv_28d_base_units
+        .parse::<u128>()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if attributed_gmv_28d > customer_gmv_28d || non_operator_gmv_28d > attributed_gmv_28d {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    let funding_attribution_complete_28d = attributed_gmv_28d == customer_gmv_28d;
+    let share = (funding_attribution_complete_28d && customer_gmv_28d > 0)
+        .then(|| non_operator_gmv_28d as f64 / customer_gmv_28d as f64);
+    Ok((funding_attribution_complete_28d, share))
+}
+
 fn platform_metrics_response(
     stats: PlatformMetricsStats,
     growth: PlatformDemandGrowthStats,
@@ -6746,33 +6818,8 @@ fn platform_metrics_response(
     )?;
     let lifetime_canonical_payouts =
         platform_amount(stats.payouts.lifetime_total_base_units.clone())?;
-    let total_gmv_28d = growth
-        .gmv_28d_base_units
-        .parse::<f64>()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let attributed_gmv_28d = growth
-        .attributed_gmv_28d_base_units
-        .parse::<f64>()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let non_operator_gmv_28d = growth
-        .non_operator_attributed_gmv_28d_base_units
-        .parse::<f64>()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    if !total_gmv_28d.is_finite()
-        || !attributed_gmv_28d.is_finite()
-        || !non_operator_gmv_28d.is_finite()
-        || total_gmv_28d < 0.0
-        || attributed_gmv_28d < 0.0
-        || non_operator_gmv_28d < 0.0
-        || attributed_gmv_28d > total_gmv_28d
-        || non_operator_gmv_28d > attributed_gmv_28d
-    {
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
-    }
-    let funding_attribution_complete_28d = (attributed_gmv_28d - total_gmv_28d).abs() < 0.5;
-    let non_operator_funded_gmv_share_28d = (funding_attribution_complete_28d
-        && total_gmv_28d > 0.0)
-        .then_some(non_operator_gmv_28d / total_gmv_28d);
+    let (funding_attribution_complete_28d, non_operator_funded_gmv_share_28d) =
+        platform_demand_funding_share(&growth)?;
     let repeat_poster_funder_rate_28d = (growth.active_poster_funder_wallets_28d > 0).then(|| {
         growth.repeat_poster_funder_wallets_28d as f64
             / growth.active_poster_funder_wallets_28d as f64
@@ -6864,12 +6911,13 @@ fn platform_metrics_response(
             gmv_usdc_7d: platform_amount(growth.gmv_7d_base_units)?,
             gmv_usdc_28d: platform_amount(growth.gmv_28d_base_units)?,
             lifetime_canonical_gmv_usdc: platform_amount(growth.lifetime_gmv_base_units)?,
+            controlled_test_gmv_usdc_28d: platform_amount(growth.controlled_test_gmv_28d_base_units)?,
             lifetime_canonical_payouts_usdc: lifetime_canonical_payouts,
             new_poster_funder_wallets_28d: growth.new_poster_funder_wallets_28d,
             repeat_poster_funder_rate_28d,
             non_operator_funded_gmv_share_28d,
             funding_attribution_complete_28d,
-            definition: "GMV counts confirmed canonical settlement events only. New and repeat poster/funder figures use non-operator wallets, not unique people. Non-operator-funded GMV is prorated by canonical FundingAdded amounts and withheld when any settled GMV lacks complete funding attribution.".to_string(),
+            definition: "GMV counts confirmed canonical settlement events, including real payments for controlled tests. Exact policy-listed test bounties are excluded only from new/repeat poster-funder cohorts and the funding-share numerator and denominator. Their GMV is shown separately; payouts and card receipts remain recorded. Wallets are not verified unique customers. Repeat activity means at least two posting or funding actions, including on the same bounty. The non-operator-funded share is prorated by canonical FundingAdded amounts and withheld when any non-test settlement lacks complete funding attribution.".to_string(),
         },
         daily: stats
             .daily
@@ -7033,6 +7081,7 @@ async fn platform_metrics(
             window.launch_at,
             &policy.maintainer_wallets,
             &excluded_contracts,
+            &policy.customer_success_excluded_bounty_contracts,
         )
         .await
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
@@ -23438,12 +23487,109 @@ mod tests {
             gmv_7d_base_units: "1000000".to_string(),
             gmv_28d_base_units: "1200000".to_string(),
             lifetime_gmv_base_units: "1200000".to_string(),
+            controlled_test_gmv_28d_base_units: "0".to_string(),
             new_poster_funder_wallets_28d: 2,
             active_poster_funder_wallets_28d: 4,
             repeat_poster_funder_wallets_28d: 1,
             non_operator_attributed_gmv_28d_base_units: "600000".to_string(),
             attributed_gmv_28d_base_units: "1200000".to_string(),
         }
+    }
+
+    #[test]
+    fn controlled_test_policy_rejects_unbounded_or_private_metadata() {
+        let valid: serde_json::Value = serde_json::from_str(include_str!(
+            "../fixtures/customer-success-metrics-policy.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            customer_success_metric_exclusions(&valid.to_string())
+                .unwrap()
+                .len(),
+            1
+        );
+        for key in ["schema_version", "network"] {
+            let mut malformed = valid.clone();
+            malformed[key] = serde_json::json!("wrong");
+            assert!(customer_success_metric_exclusions(&malformed.to_string()).is_err());
+        }
+        for addresses in [
+            serde_json::json!(["not-an-address"]),
+            serde_json::json!(["0x0000000000000000000000000000000000000000"]),
+            serde_json::json!([
+                "0xae7be7e198e8ed52d6878ea2c111847565087b1f",
+                "0xAE7BE7E198E8ED52D6878EA2C111847565087B1F"
+            ]),
+            serde_json::json!(vec!["0x1111111111111111111111111111111111111111"; 257]),
+        ] {
+            let mut malformed = valid.clone();
+            malformed["controlled_test_bounty_contracts"] = addresses;
+            assert!(customer_success_metric_exclusions(&malformed.to_string()).is_err());
+        }
+        let mut private = valid.clone();
+        private["order_id"] = serde_json::json!("private-customer-order");
+        assert!(customer_success_metric_exclusions(&private.to_string()).is_err());
+    }
+
+    #[test]
+    fn controlled_test_policy_preserves_real_payouts_and_shared_funding_wallet() {
+        let policy = public_metrics_policy().unwrap();
+        let canary = "0xae7be7e198e8ed52d6878ea2c111847565087b1f";
+        assert_eq!(
+            policy.customer_success_excluded_bounty_contracts,
+            vec![canary]
+        );
+        assert!(!historical_platform_metric_exclusions(&policy)
+            .iter()
+            .any(|c| c == canary));
+        assert!(!policy
+            .maintainer_wallets
+            .iter()
+            .any(|wallet| { wallet == "0x349fac043ede79adf18e9f9cfe29a23b883ca634" }));
+        let public_policy: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../site/generated/customer-success-metrics-policy.json"
+        ))
+        .unwrap();
+        let runtime_policy: serde_json::Value = serde_json::from_str(include_str!(
+            "../fixtures/customer-success-metrics-policy.json"
+        ))
+        .unwrap();
+        assert_eq!(public_policy, runtime_policy);
+    }
+
+    #[test]
+    fn controlled_test_funding_share_uses_non_test_denominator_and_fails_closed() {
+        let mut growth = test_platform_demand_growth_stats();
+        growth.controlled_test_gmv_28d_base_units = "200000".to_string();
+        growth.attributed_gmv_28d_base_units = "1000000".to_string();
+        growth.non_operator_attributed_gmv_28d_base_units = "600000".to_string();
+        assert_eq!(
+            platform_demand_funding_share(&growth).unwrap(),
+            (true, Some(0.6))
+        );
+        // An all-test window has real money, but no external-funding denominator.
+        growth.controlled_test_gmv_28d_base_units = "1200000".to_string();
+        growth.attributed_gmv_28d_base_units = "0".to_string();
+        growth.non_operator_attributed_gmv_28d_base_units = "0".to_string();
+        assert_eq!(
+            platform_demand_funding_share(&growth).unwrap(),
+            (true, None)
+        );
+        growth.controlled_test_gmv_28d_base_units = "200000".to_string();
+        assert_eq!(
+            platform_demand_funding_share(&growth).unwrap(),
+            (false, None)
+        );
+        growth.controlled_test_gmv_28d_base_units = "1200001".to_string();
+        assert_eq!(
+            platform_demand_funding_share(&growth),
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        );
+        growth.controlled_test_gmv_28d_base_units = "-1".to_string();
+        assert_eq!(
+            platform_demand_funding_share(&growth),
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        );
     }
 
     #[test]
@@ -23531,9 +23677,12 @@ mod tests {
         let mut policy = public_metrics_policy().unwrap();
         policy.maintainer_github_logins = vec!["private-maintainer-login".to_string()];
         policy.maintainer_wallets = vec!["0x1111111111111111111111111111111111111111".to_string()];
+        let mut growth = test_platform_demand_growth_stats();
+        growth.controlled_test_gmv_28d_base_units = "200000".to_string();
+        growth.attributed_gmv_28d_base_units = "1000000".to_string();
         let response = platform_metrics_response(
             stats,
-            test_platform_demand_growth_stats(),
+            growth,
             platform_metric_window(Some("7d"), generated_at).unwrap(),
             policy,
             None,
@@ -23574,13 +23723,19 @@ mod tests {
         );
         assert_eq!(response.current_inventory.status, "unavailable");
         assert_eq!(response.demand_growth.gmv_usdc_7d.usdc, "1.000000");
+        assert_eq!(response.demand_growth.gmv_usdc_28d.usdc, "1.200000");
+        assert_eq!(
+            response.demand_growth.controlled_test_gmv_usdc_28d.usdc,
+            "0.200000"
+        );
+        assert!(!json.contains("0xae7be7e198e8ed52d6878ea2c111847565087b1f"));
         assert_eq!(
             response.demand_growth.repeat_poster_funder_rate_28d,
             Some(0.25)
         );
         assert_eq!(
             response.demand_growth.non_operator_funded_gmv_share_28d,
-            Some(0.5)
+            Some(0.6)
         );
         assert_eq!(response.coverage.status, "partial");
         assert!(response.coverage.marketplace_indexers_fresh);
@@ -23710,6 +23865,7 @@ mod tests {
                     gmv_7d_base_units: "0".to_string(),
                     gmv_28d_base_units: "0".to_string(),
                     lifetime_gmv_base_units: "0".to_string(),
+                    controlled_test_gmv_28d_base_units: "0".to_string(),
                     new_poster_funder_wallets_28d: 0,
                     active_poster_funder_wallets_28d: 0,
                     repeat_poster_funder_wallets_28d: 0,

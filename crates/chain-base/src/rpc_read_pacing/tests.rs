@@ -87,6 +87,7 @@ fn transport(pacer: Pacer) -> ReqwestJsonRpcTransport {
     ReqwestJsonRpcTransport {
         client: reqwest::Client::new(),
         read_pacing: pacer,
+        read_observation_deadline: None,
     }
 }
 fn read(id: u64) -> Value {
@@ -413,5 +414,166 @@ async fn independent_endpoints_and_disabled_mode_do_not_share_delay() {
             .await
             .unwrap()
             .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn bounded_observation_waits_past_default_cap_without_resetting_its_deadline() {
+    let server = Server::start(vec![]).await;
+    let p = enabled(250);
+    p.wait(&server.url).await.unwrap();
+    let Pacer::Enabled { registry, .. } = &p else {
+        panic!()
+    };
+    let key: Key = Sha256::digest(server.url.as_bytes()).into();
+    let entry = registry.lock().unwrap().entries[&key].clone();
+    let gate = entry.next.lock().await;
+    let default = transport(p.clone());
+    let mut bounded = transport(p);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    bounded.read_observation_deadline = Some(deadline);
+    let release = async {
+        tokio::time::sleep(Duration::from_millis(2200)).await;
+        drop(gate);
+    };
+    let old_request = read(1);
+    let new_request = read(2);
+    let (old, new, ()) = tokio::join!(
+        default.post_json_value(&server.url, &old_request),
+        bounded.post_json_value(&server.url, &new_request),
+        release,
+    );
+    assert!(old
+        .unwrap_err()
+        .to_string()
+        .contains("pacing wait deadline"));
+    new.unwrap();
+    assert_eq!(server.seen.lock().unwrap().len(), 1);
+    assert_eq!(server.seen.lock().unwrap()[0].1["id"], 2);
+    assert_eq!(entry.callers.available_permits(), MAX_WAITERS);
+    tokio::time::sleep_until(deadline).await;
+    assert!(bounded
+        .post_json_value(&server.url, &read(3))
+        .await
+        .is_err());
+    assert_eq!(
+        server.seen.lock().unwrap().len(),
+        1,
+        "no reset or late dispatch"
+    );
+}
+
+#[tokio::test]
+async fn bounded_observation_cancellation_has_no_ghost_reservation_or_waiter() {
+    let server = Server::start(vec![]).await;
+    let p = enabled(250);
+    let mut t = transport(p.clone());
+    t.read_observation_deadline = Some(Instant::now() + Duration::from_secs(12));
+    t.post_json_value(&server.url, &read(1)).await.unwrap();
+    assert!(tokio::time::timeout(
+        Duration::from_millis(20),
+        t.post_json_value(&server.url, &read(2))
+    )
+    .await
+    .is_err());
+    let Pacer::Enabled { registry, .. } = &p else {
+        panic!()
+    };
+    let key: Key = Sha256::digest(server.url.as_bytes()).into();
+    let entry = registry.lock().unwrap().entries[&key].clone();
+    assert_eq!(entry.callers.available_permits(), MAX_WAITERS);
+    t.post_json_value(&server.url, &read(3)).await.unwrap();
+    let seen = server.seen.lock().unwrap();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[1].1["id"], 3);
+    assert!(seen[1].0.duration_since(seen[0].0) < Duration::from_millis(450));
+}
+
+#[tokio::test]
+async fn bounded_observation_never_dispatches_after_deadline_or_accepts_a_mutation() {
+    for pacer in [Pacer::Disabled, enabled(250)] {
+        let server = Server::start(vec![]).await;
+        let mut t = transport(pacer);
+        t.read_observation_deadline = Some(Instant::now());
+        assert!(t.post_json_value(&server.url, &read(1)).await.is_err());
+        t.read_observation_deadline = Some(Instant::now() + Duration::from_secs(12));
+        let mutation =
+            json!({"jsonrpc":"2.0","id":2,"method":"eth_sendRawTransaction","params":["0x00"]});
+        let unknown = json!({"jsonrpc":"2.0","id":3,"method":"unknown_method","params":[]});
+        for request in [&mutation, &unknown] {
+            assert!(t.post_json_value(&server.url, request).await.is_err());
+        }
+        assert!(t
+            .post_json_values(&server.url, &[read(1), mutation])
+            .await
+            .is_err());
+        assert!(server.seen.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn bounded_observation_rechecks_provider_hold_after_queued_admission() {
+    let server = Server::start(vec![(429, Duration::from_millis(80), Some(120))]).await;
+    let p = enabled(250);
+    let mut t = transport(p.clone());
+    t.read_observation_deadline = Some(Instant::now() + Duration::from_secs(12));
+    let other = transport(p);
+    let sibling = async {
+        server.received(1).await;
+        t.post_json_value(&server.url, &read(2)).await
+    };
+    let first_request = read(1);
+    let (first, second) = tokio::join!(other.post_json_value(&server.url, &first_request), sibling);
+    for result in [first, second] {
+        assert!(matches!(
+            result,
+            Err(ChainBaseError::RpcRetryAfter {
+                status: 429,
+                retry_after_seconds: 119..=120,
+            })
+        ));
+    }
+    assert_eq!(server.seen.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn bounded_observation_retries_consume_the_same_outer_deadline() {
+    let server = Server::start(vec![(503, Duration::ZERO, None); 3]).await;
+    let mut t = transport(enabled(250));
+    let deadline = Instant::now() + Duration::from_millis(1200);
+    t.read_observation_deadline = Some(deadline);
+    let result = tokio::time::timeout_at(deadline, t.post_json_value(&server.url, &read(1))).await;
+    assert!(result.is_err());
+    assert_eq!(server.seen.lock().unwrap().len(), 2);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        server.seen.lock().unwrap().len(),
+        2,
+        "no detached retry after cancellation"
+    );
+    assert!(t.post_json_value(&server.url, &read(2)).await.is_err());
+    assert_eq!(server.seen.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn bounded_observation_keeps_the_actual_250ms_admission_clock() {
+    let p = enabled(250);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let key: Key = Sha256::digest(b"admission-clock-fixture").into();
+    let mut reservations = Vec::new();
+    for _ in 0..4 {
+        p.wait_until("admission-clock-fixture", deadline)
+            .await
+            .unwrap();
+        let Pacer::Enabled { registry, .. } = &p else {
+            panic!()
+        };
+        let entry = registry.lock().unwrap().entries[&key].clone();
+        // No competing caller exists in this fixture: this is the timestamp
+        // written by the actual admission, independent of HTTP receive jitter.
+        reservations.push(*entry.next.lock().await);
+    }
+    for pair in reservations.windows(2) {
+        assert!(pair[1].duration_since(pair[0]) >= Duration::from_millis(250));
     }
 }

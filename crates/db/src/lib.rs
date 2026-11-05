@@ -1004,6 +1004,7 @@ pub struct PlatformDemandGrowthStats {
     pub gmv_7d_base_units: String,
     pub gmv_28d_base_units: String,
     pub lifetime_gmv_base_units: String,
+    pub controlled_test_gmv_28d_base_units: String,
     pub new_poster_funder_wallets_28d: u64,
     pub active_poster_funder_wallets_28d: u64,
     pub repeat_poster_funder_wallets_28d: u64,
@@ -3532,7 +3533,16 @@ impl PostgresStore {
         launch_at: DateTime<Utc>,
         excluded_wallets: &[String],
         excluded_bounty_contracts: &[String],
+        customer_success_excluded_contracts: &[String],
     ) -> DbResult<PlatformDemandGrowthStats> {
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *transaction)
+            .await?;
+        sqlx::query("SET LOCAL statement_timeout = '10s'")
+            .execute(&mut *transaction)
+            .await?;
+        autonomous_canonicality::require_certified_history(&mut transaction, network).await?;
         let row = sqlx::query(
             r#"
             WITH supply_actions AS (
@@ -3547,6 +3557,7 @@ impl PostgresStore {
               WHERE event.network = $1
                 AND event.block_time_verified = TRUE
                 AND event.occurred_at >= $3 AND event.occurred_at < $2
+                AND NOT lower(COALESCE(event.data->>'bounty_contract', event.contract_address)) = ANY($6)
                 AND NOT lower(COALESCE(event.data->>'bounty_contract', event.contract_address)) = ANY($5)
                 AND event.kind IN ('canonical_bounty_created', 'external_bounty_submitted', 'funding_added')
               UNION ALL
@@ -3558,6 +3569,7 @@ impl PostgresStore {
               WHERE event.network = $1
                 AND event.block_time_verified = TRUE
                 AND event.occurred_at >= $3 AND event.occurred_at < $2
+                AND NOT lower(COALESCE(event.data->>'bounty_contract', event.contract_address)) = ANY($6)
                 AND NOT lower(COALESCE(event.data->>'bounty_contract', event.contract_address)) = ANY($5)
                 AND event.kind IN ('canonical_competition_created', 'funding_added')
               UNION ALL
@@ -3568,6 +3580,7 @@ impl PostgresStore {
               FROM open_competition_v2_events AS event
               WHERE event.network = $1
                 AND event.occurred_at >= $3 AND event.occurred_at < $2
+                AND NOT lower(event.contract_address) = ANY($6)
                 AND NOT lower(event.contract_address) = ANY($5)
                 AND event.kind IN ('canonical_competition_created', 'funding_added')
             ), external_supply_actions AS (
@@ -3662,17 +3675,22 @@ impl PostgresStore {
               COALESCE((SELECT SUM(gmv) FROM attributed
                 WHERE occurred_at >= $2 - INTERVAL '28 days'), 0)::text AS gmv_28d,
               COALESCE((SELECT SUM(gmv) FROM attributed), 0)::text AS lifetime_gmv,
+              COALESCE((SELECT SUM(gmv) FROM attributed
+                WHERE occurred_at >= $2 - INTERVAL '28 days'
+                  AND lower(contract_address) = ANY($6)), 0)::text AS controlled_test_gmv_28d,
               (SELECT COUNT(*) FROM wallet_rollup
                 WHERE actions_28d > 0 AND first_action_at >= $2 - INTERVAL '28 days') AS new_wallets_28d,
               (SELECT COUNT(*) FROM wallet_rollup WHERE actions_28d > 0) AS active_wallets_28d,
               (SELECT COUNT(*) FROM wallet_rollup WHERE actions_28d >= 2) AS repeat_wallets_28d,
               TRUNC(COALESCE((SELECT SUM(gmv * non_operator_funding / total_funding)
                 FROM attributed
-                WHERE occurred_at >= $2 - INTERVAL '28 days' AND total_funding > 0), 0))::text
+                WHERE occurred_at >= $2 - INTERVAL '28 days' AND total_funding > 0
+                  AND NOT lower(contract_address) = ANY($6)), 0))::text
                 AS non_operator_attributed_gmv_28d,
               COALESCE((SELECT SUM(gmv)
                 FROM attributed
-                WHERE occurred_at >= $2 - INTERVAL '28 days' AND total_funding > 0), 0)::text
+                WHERE occurred_at >= $2 - INTERVAL '28 days' AND total_funding > 0
+                  AND NOT lower(contract_address) = ANY($6)), 0)::text
                 AS attributed_gmv_28d
             "#,
         )
@@ -3681,12 +3699,15 @@ impl PostgresStore {
         .bind(launch_at)
         .bind(excluded_wallets)
         .bind(excluded_bounty_contracts)
-        .fetch_one(&self.pool)
+        .bind(customer_success_excluded_contracts)
+        .fetch_one(&mut *transaction)
         .await?;
+        transaction.commit().await?;
         Ok(PlatformDemandGrowthStats {
             gmv_7d_base_units: row.try_get("gmv_7d")?,
             gmv_28d_base_units: row.try_get("gmv_28d")?,
             lifetime_gmv_base_units: row.try_get("lifetime_gmv")?,
+            controlled_test_gmv_28d_base_units: row.try_get("controlled_test_gmv_28d")?,
             new_poster_funder_wallets_28d: u64_from_i64(row.try_get("new_wallets_28d")?)?,
             active_poster_funder_wallets_28d: u64_from_i64(row.try_get("active_wallets_28d")?)?,
             repeat_poster_funder_wallets_28d: u64_from_i64(row.try_get("repeat_wallets_28d")?)?,
@@ -3716,6 +3737,7 @@ impl PostgresStore {
         sqlx::query("SET LOCAL statement_timeout = '10s'")
             .execute(&mut *transaction)
             .await?;
+        autonomous_canonicality::require_certified_history(&mut transaction, network).await?;
         let identity_row = sqlx::query(
             r#"
             WITH event_actors AS (
@@ -8866,25 +8888,7 @@ impl PostgresStore {
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
             .execute(&mut *tx)
             .await?;
-        let uncertified: bool = sqlx::query_scalar(r#"
-            SELECT EXISTS (
-                SELECT 1 FROM autonomous_bounty_events created
-                LEFT JOIN autonomous_canonical_checkpoints c
-                  ON c.network=created.network AND c.factory_contract=created.contract_address
-                WHERE created.network=$1 AND created.kind='canonical_bounty_created'
-                  AND (c.block_number IS NULL OR c.invalidated OR EXISTS (
-                    SELECT 1 FROM autonomous_bounty_events e
-                    WHERE e.network=created.network AND e.bounty_id=created.bounty_id
-                      AND e.contract_address IN (created.contract_address, lower(created.data->>'bounty_contract'))
-                      AND e.block_number>c.block_number
-                  ))
-            )
-        "#).bind(network).fetch_one(&mut *tx).await?;
-        if uncertified {
-            return Err(DbError::InvalidEnum(
-                "autonomous canonical history is not certified".into(),
-            ));
-        }
+        autonomous_canonicality::require_certified_history(&mut tx, network).await?;
         let rows = sqlx::query(
             r#"
             SELECT id, log_key, tx_hash, block_number, log_index, contract_address,
@@ -13612,6 +13616,159 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn controlled_card_test_exclusion_preserves_money_and_shared_wallet_customers() {
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+        let network = format!("controlled-card-metrics-{}", Uuid::new_v4());
+        let at = |value: &str| {
+            DateTime::parse_from_rfc3339(value)
+                .unwrap()
+                .with_timezone(&Utc)
+        };
+        let ended_at = at("2099-03-01T00:00:00Z");
+        let launch_at = at("2099-01-01T00:00:00Z");
+        let wallet = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let factory = "0xffffffffffffffffffffffffffffffffffffffff";
+        let controlled = "0x1111111111111111111111111111111111111111";
+        let customer = "0x2222222222222222222222222222222222222222";
+        let test_exclusions = vec![controlled.to_string()];
+        let mut block = 1_u64;
+
+        for (contract, bounty_id, amount, created_at, settled_at) in [
+            (
+                controlled,
+                "controlled",
+                2_000_000_u64,
+                at("2099-01-10T00:00:00Z"),
+                at("2099-02-25T00:00:00Z"),
+            ),
+            (
+                customer,
+                "customer",
+                3_000_000_u64,
+                at("2099-02-26T00:00:00Z"),
+                at("2099-02-27T00:00:00Z"),
+            ),
+        ] {
+            for (kind, address, data, occurred_at) in [
+                (
+                    AutonomousBountyEventKind::CanonicalBountyCreated,
+                    factory,
+                    serde_json::json!({"creator":wallet,"bounty_contract":contract}),
+                    created_at,
+                ),
+                (
+                    AutonomousBountyEventKind::FundingAdded,
+                    contract,
+                    serde_json::json!({"contributor":wallet,"amount":amount}),
+                    created_at,
+                ),
+                (
+                    AutonomousBountyEventKind::BountySettled,
+                    contract,
+                    serde_json::json!({"solver":"0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                     "solver_reward":amount-100_000,"verifier_reward":100_000,
+                     "claim_bond_returned":100_000,"timeout_bond_bonus":0}),
+                    settled_at,
+                ),
+            ] {
+                store
+                    .upsert_autonomous_bounty_event(
+                        &network,
+                        &AutonomousBountyEvent {
+                            id: Uuid::new_v4(),
+                            log_key: format!("{network}:{block}:0"),
+                            tx_hash: format!("0x{block:064x}"),
+                            block_number: block,
+                            log_index: 0,
+                            contract_address: address.to_string(),
+                            bounty_id: bounty_id.to_string(),
+                            kind,
+                            data,
+                            occurred_at,
+                        },
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    store
+                        .confirm_autonomous_event_block_time(&network, block, occurred_at)
+                        .await
+                        .unwrap(),
+                    1
+                );
+                block += 1;
+            }
+            let growth = store
+                .platform_demand_growth_stats(
+                    &network,
+                    ended_at,
+                    launch_at,
+                    &[],
+                    &[],
+                    &test_exclusions,
+                )
+                .await
+                .unwrap();
+            let proof = store
+                .platform_payout_proof_rows(
+                    &network,
+                    ended_at - chrono::Duration::days(28),
+                    ended_at,
+                    &[],
+                )
+                .await
+                .unwrap();
+            assert_eq!(growth.controlled_test_gmv_28d_base_units, "2000000");
+            assert!(proof.iter().any(|row| row.contract_address == controlled));
+            if contract == controlled {
+                assert_eq!(growth.gmv_28d_base_units, "2000000");
+                assert_eq!(growth.new_poster_funder_wallets_28d, 0);
+                assert_eq!(growth.active_poster_funder_wallets_28d, 0);
+                assert_eq!(growth.repeat_poster_funder_wallets_28d, 0);
+                assert_eq!(growth.attributed_gmv_28d_base_units, "0");
+                assert_eq!(growth.non_operator_attributed_gmv_28d_base_units, "0");
+                assert_eq!(proof.len(), 1);
+                assert_eq!(proof[0].total_base_units, "2000000");
+            } else {
+                assert_eq!(growth.gmv_7d_base_units, "5000000");
+                assert_eq!(growth.gmv_28d_base_units, "5000000");
+                assert_eq!(growth.lifetime_gmv_base_units, "5000000");
+                assert_eq!(
+                    growth.new_poster_funder_wallets_28d, 1,
+                    "old test actions cannot make a real new customer wallet look old"
+                );
+                assert_eq!(growth.active_poster_funder_wallets_28d, 1);
+                assert_eq!(growth.repeat_poster_funder_wallets_28d, 1);
+                assert_eq!(growth.attributed_gmv_28d_base_units, "3000000");
+                assert_eq!(growth.non_operator_attributed_gmv_28d_base_units, "3000000");
+                assert_eq!(proof.len(), 2);
+                assert_eq!(
+                    proof
+                        .iter()
+                        .map(|r| r.total_base_units.parse::<u64>().unwrap())
+                        .sum::<u64>(),
+                    5_000_000
+                );
+                let baseline = store
+                    .platform_demand_growth_stats(&network, ended_at, launch_at, &[], &[], &[])
+                    .await
+                    .unwrap();
+                assert_eq!(baseline.new_poster_funder_wallets_28d, 0);
+                assert_eq!(baseline.controlled_test_gmv_28d_base_units, "0");
+                assert_eq!(baseline.gmv_28d_base_units, growth.gmv_28d_base_units);
+            }
+        }
+        sqlx::query("DELETE FROM autonomous_bounty_events WHERE network = $1")
+            .bind(&network)
+            .execute(&store.pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
     async fn platform_metrics_query_separates_history_from_identity_and_cohort_boundaries() {
         async fn add_event(
             store: &PostgresStore,
@@ -14388,6 +14545,7 @@ mod tests {
                 launch_at,
                 &[maintainer_wallet.to_string()],
                 &[policy_excluded_contract.to_string()],
+                &[],
             )
             .await
             .unwrap();

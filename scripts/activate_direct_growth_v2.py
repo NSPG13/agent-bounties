@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import argparse
-if __package__:
-    from . import terms_publication_client
-else:
+try:
     import terms_publication_client
+except ModuleNotFoundError as error:
+    if error.name != "terms_publication_client":
+        raise
+    from scripts import terms_publication_client
 import hashlib
 import json
 import os

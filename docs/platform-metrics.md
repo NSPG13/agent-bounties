@@ -105,16 +105,40 @@ The versioned `demand_growth` object reports:
 - `gmv_usdc_7d` and `gmv_usdc_28d`;
 - `lifetime_canonical_gmv_usdc` and the broader
   `lifetime_canonical_payouts_usdc`;
+- `controlled_test_gmv_usdc_28d`, the real settlement value of exactly identified
+  controlled tests, included in the GMV and payment totals above;
 - new non-operator poster/funder wallets in the rolling 28-day window;
-- the share of active poster/funder wallets with at least two canonical supply
-  actions in that window;
+- the share of active poster/funder wallets with at least two posting or funding
+  actions in that window, including actions on the same bounty;
 - the non-operator-funded share of 28-day GMV, prorated from canonical
   `FundingAdded` amounts.
 
-Funding share is unavailable unless every settlement in the window can be
-attributed to canonical funding events. Wallet cohorts are directional and are
-not unique people. Operator wallets and declared synthetic canary contracts from
-the public policy are excluded.
+Funding share is unavailable unless every non-test settlement in the window can
+be attributed to canonical funding events. An all-test window has no funding-share
+denominator, so the share is null, not zero or 100%. Wallet cohorts are directional
+and are not verified independent customers.
+
+`controlled_test_bounty_contracts` in the separate versioned
+[`customer-success-metrics-policy.json`](../site/generated/customer-success-metrics-policy.json)
+identifies exact controlled-test contracts. Schema
+`agent-bounties/customer-success-metrics-policy-v1` accepts only `schema_version`,
+`network` (`base-mainnet`) and `controlled_test_bounty_contracts`. The list has at
+most 256 unique, nonzero EVM addresses; malformed, repeated or unknown fields
+fail closed. It contains public contract addresses only, never private order IDs,
+account IDs, emails, wallet-owner labels or payment-provider identifiers. Their supply actions are omitted from new/repeat wallet
+cohorts, including the first-action history, and their settlement amounts are
+omitted from both sides of the funding-share calculation. They remain in real GMV,
+payout proof, payment history and card receipt/refund accounting. This policy is
+separate from the older `excluded_bounty_contracts` synthetic-canary exclusions.
+The existing participation/payout policy and its observation hashes do not change.
+Do not add a shared managed funding wallet to the operator list to hide one test:
+real customer orders can use that same wallet. Private order/customer identifiers
+are never published in the policy or aggregate.
+
+The October 30, 2026 owner-paid launch test is one such controlled test. Its exact
+contract binding is recorded in both copies of the customer-success policy. Its genuine
+solver reward and returned bond remain separately inspectable; the test cannot
+establish organic customer demand. No funded terms or payment outcome changes.
 
 ### Mature claim-to-settlement rate
 

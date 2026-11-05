@@ -270,6 +270,30 @@ mod tests {
             .list_autonomous_bounty_events(&config.network)
             .await
             .is_err());
+        let now = Utc::now();
+        let start = now - chrono::Duration::days(1);
+        assert!(independent
+            .platform_payout_proof_rows(&config.network, start, now, &[])
+            .await
+            .is_err());
+        assert!(independent
+            .platform_demand_growth_stats(&config.network, now, start, &[], &[], &[])
+            .await
+            .is_err());
+        assert!(independent
+            .platform_metrics_stats(
+                &config.network,
+                start,
+                now,
+                start,
+                start,
+                now,
+                &[],
+                &[],
+                &[]
+            )
+            .await
+            .is_err());
         assert_eq!(
             independent
                 .list_autonomous_bounty_events_for_factory(&config.network, &factory, false)

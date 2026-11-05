@@ -9,6 +9,7 @@ import re
 import tempfile
 import unittest
 from pathlib import Path
+import yaml
 
 
 SCRIPT = Path(__file__).with_name("regression_verifier_source_guard.py")
@@ -162,11 +163,11 @@ class RegressionVerifierSourceGuardTests(unittest.TestCase):
             ".github/workflows/regression-verifier-signer.yml",
         ):
             workflow = (REPOSITORY / relative).read_text(encoding="utf-8")
-            if "pull_request:" in workflow:
-                self.assertIn('      - "rust-toolchain"', workflow)
-                self.assertIn('      - "rust-toolchain.toml"', workflow)
-                paths_block = workflow.split("    paths:\n", 1)[1].split("  schedule:", 1)[0]
-                watched = re.findall(r'^\s+- "([^"]+)"$', paths_block, re.MULTILINE)
+            triggers = yaml.load(workflow, Loader=yaml.BaseLoader).get("on", {})
+            if "pull_request" in triggers:
+                watched = triggers["pull_request"]["paths"]
+                self.assertIn("rust-toolchain", watched)
+                self.assertIn("rust-toolchain.toml", watched)
                 for included in external_inputs:
                     self.assertTrue(
                         any(fnmatch.fnmatchcase(included, pattern) for pattern in watched),

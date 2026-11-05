@@ -18,6 +18,7 @@ on:
     - "Cargo.toml"
     - "bounties/**"
     - "crates/**"
+    - "deployments/**"
     - "contracts/base-escrow/fixtures/**"
     - "migrations/**"
     - "ops/**"

@@ -72,6 +72,16 @@ impl Pacer {
         }
     }
     pub async fn wait(&self, endpoint: &str) -> Result<(), ChainBaseError> {
+        self.wait_until(endpoint, Instant::now() + MAX_WAIT).await
+    }
+    pub async fn wait_until(
+        &self,
+        endpoint: &str,
+        deadline: Instant,
+    ) -> Result<(), ChainBaseError> {
+        if Instant::now() >= deadline {
+            return Err(unavailable("RPC read pacing wait deadline elapsed"));
+        }
         let (interval, registry) = match self {
             Self::Disabled => return Ok(()),
             Self::Invalid => return Err(unavailable("RPC read pacing configuration unavailable")),
@@ -112,15 +122,19 @@ impl Pacer {
             .clone()
             .try_acquire_owned()
             .map_err(|_| unavailable("RPC read pacing caller capacity unavailable"))?;
-        tokio::time::timeout(MAX_WAIT, async {
+        tokio::time::timeout_at(deadline, async {
             let mut next = entry.next.lock().await;
             tokio::time::sleep_until(*next).await;
+            if Instant::now() >= deadline {
+                return Err(unavailable("RPC read pacing wait deadline elapsed"));
+            }
             // Reserve only at admission, never enqueue future timestamps. A
             // canceled waiting future drops both locks/permits without a gap.
             *next = Instant::now() + interval;
+            Ok(())
         })
         .await
-        .map_err(|_| unavailable("RPC read pacing wait deadline elapsed"))?;
+        .map_err(|_| unavailable("RPC read pacing wait deadline elapsed"))??;
         Ok(())
     }
 }

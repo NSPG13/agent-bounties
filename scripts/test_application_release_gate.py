@@ -138,6 +138,33 @@ class ReleaseGateTests(unittest.TestCase):
                     "--ignored", "--test-threads=1",
                 ])
 
+    def test_controlled_card_metrics_gate_rejects_zero_or_ignored_tests(self):
+        selector = ("db", "tests::controlled_card_test_exclusion_preserves_money_and_shared_wallet_customers", 1)
+        self.assertEqual(gate.POSTGRES.count(selector), 1)
+        environment = {
+            "AGENT_BOUNTIES_LOCAL_TEST_DATABASE": "1",
+            "AGENT_BOUNTIES_TEST_DATABASE_URL":
+                "postgres://agent_bounties_test:fixture@127.0.0.1/agent_bounties_test",
+        }
+        for passed, ignored, accepted in [(0, 0, False), (0, 1, False), (1, 0, True)]:
+            output = f"test result: ok. {passed} passed; 0 failed; {ignored} ignored\n"
+            result = subprocess.CompletedProcess([], 0, stdout=output)
+            with self.subTest(passed=passed, ignored=ignored), \
+                    patch.dict(os.environ, environment, clear=True), \
+                    patch.object(gate, "POSTGRES", (selector,)), \
+                    patch.object(gate.subprocess, "run", return_value=result), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                if accepted:
+                    self.assertEqual(gate.postgres(), 0)
+                else:
+                    with self.assertRaises(gate.GateError):
+                        gate.postgres()
+
+    def test_card_receipt_history_and_signed_refunds_are_both_required(self):
+        self.assertEqual(gate.POSTGRES.count((
+            "db", "managed_service_orders::metrics::postgres_tests::", 2,
+        )), 1)
+
     def test_remote_database_is_rejected(self):
         with patch.dict(os.environ, {"AGENT_BOUNTIES_LOCAL_TEST_DATABASE": "1",
                                      "AGENT_BOUNTIES_TEST_DATABASE_URL":

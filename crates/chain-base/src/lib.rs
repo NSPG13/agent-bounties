@@ -3143,6 +3143,7 @@ pub trait JsonRpcTransport: Send + Sync {
 pub struct ReqwestJsonRpcTransport {
     client: reqwest::Client,
     read_pacing: rpc_read_pacing::Pacer,
+    read_observation_deadline: Option<tokio::time::Instant>,
 }
 
 impl Default for ReqwestJsonRpcTransport {
@@ -3150,11 +3151,20 @@ impl Default for ReqwestJsonRpcTransport {
         Self {
             client: reqwest::Client::new(),
             read_pacing: rpc_read_pacing::Pacer::process(),
+            read_observation_deadline: None,
         }
     }
 }
 
 impl ReqwestJsonRpcTransport {
+    /// Read-only transport for an observation already bounded by this absolute
+    /// caller deadline. Admission consumes the remaining observation budget;
+    /// it does not restart a per-read timer or change wire spacing. The caller
+    /// must retain its outer timeout, including database and HTTP waits.
+    pub fn with_read_observation_deadline(mut self, deadline: tokio::time::Instant) -> Self {
+        self.read_observation_deadline = Some(deadline);
+        self
+    }
     /// Explicit endpoint transport for recovery: no redirects, failover or unbounded waits.
     /// The existing admission policy still applies; mutation requests are never retried.
     pub fn without_redirects(timeout: std::time::Duration) -> Result<Self, ChainBaseError> {
@@ -3171,6 +3181,7 @@ impl ReqwestJsonRpcTransport {
         Ok(Self {
             client,
             read_pacing: rpc_read_pacing::Pacer::process(),
+            read_observation_deadline: None,
         })
     }
     async fn post_with_read_retry<T: Serialize + ?Sized>(
@@ -3179,6 +3190,11 @@ impl ReqwestJsonRpcTransport {
         request: &T,
         read_only: bool,
     ) -> Result<Value, ChainBaseError> {
+        if self.read_observation_deadline.is_some() && !read_only {
+            return Err(ChainBaseError::RpcTransport(
+                "bounded observation transport accepts read-only RPC only".into(),
+            ));
+        }
         let request_value = serde_json::to_value(request).map_err(|_| {
             ChainBaseError::InvalidRpcResponse("request serialization failed".into())
         })?;
@@ -3189,11 +3205,22 @@ impl ReqwestJsonRpcTransport {
                 // Every wire attempt, including existing bounded retries, shares
                 // this process endpoint gate. Recheck negative admission AFTER
                 // waiting: a sibling may have established a hold meanwhile.
-                self.read_pacing.wait(rpc_url).await?;
+                match self.read_observation_deadline {
+                    Some(deadline) => self.read_pacing.wait_until(rpc_url, deadline).await?,
+                    None => self.read_pacing.wait(rpc_url).await?,
+                }
                 Some(rpc_read_admission::ReadLease::acquire(rpc_url)?)
             } else {
                 None
             };
+            if self
+                .read_observation_deadline
+                .is_some_and(|deadline| tokio::time::Instant::now() >= deadline)
+            {
+                return Err(ChainBaseError::RpcTransport(
+                    "RPC read pacing wait deadline elapsed".into(),
+                ));
+            }
             let probe = lease.as_ref().is_some_and(|lease| lease.probe);
             let (result, probe_timed_out) = if probe {
                 match tokio::time::timeout(
@@ -3818,8 +3845,19 @@ pub async fn fetch_block_number(rpc_url: &str, request_id: u64) -> Result<u64, C
 }
 
 pub async fn fetch_chain_id(rpc_url: &str, request_id: u64) -> Result<u64, ChainBaseError> {
+    fetch_chain_id_with_transport(rpc_url, request_id, &ReqwestJsonRpcTransport::default()).await
+}
+
+pub async fn fetch_chain_id_with_transport<T>(
+    rpc_url: &str,
+    request_id: u64,
+    transport: &T,
+) -> Result<u64, ChainBaseError>
+where
+    T: JsonRpcTransport + ?Sized,
+{
     let result = rpc_result(
-        ReqwestJsonRpcTransport::default()
+        transport
             .post_json_value(
                 rpc_url,
                 &json!({"jsonrpc":"2.0","id":request_id,"method":"eth_chainId","params":[]}),
