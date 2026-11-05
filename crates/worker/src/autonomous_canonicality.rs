@@ -60,7 +60,14 @@ pub(super) async fn verify_previous(
         }
     } else if let Some(cursor) = cursor {
         if cursor > safe.number {
-            return Err(anyhow!("legacy cursor is not yet safe"));
+            // Legacy indexers used latest-minus-confirmations. Wait for safe to
+            // catch up before certifying their cursor, without treating this
+            // initial wait as a regression of an already certified checkpoint.
+            return Err(anyhow::Error::new(IndexerOperationalError {
+                message: "legacy cursor is not yet safe".into(),
+                retryable: true,
+                provider_delay_seconds: None,
+            }));
         }
         let before =
             fetch_exact_block_identity(&config.rpc_url, cursor, config.request_id + 30_002).await?;
@@ -131,6 +138,174 @@ pub(super) async fn verify_previous(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires isolated local PostgreSQL"]
+    async fn legacy_cursor_waits_for_safe_without_certifying_or_advancing_history() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+        let url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        db::test_support::assert_isolated_security_database(&url);
+        let admin = sqlx::PgPool::connect(&url).await.unwrap();
+        let schema = format!("legacy_safe_{}", uuid::Uuid::new_v4().simple());
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        let options = url
+            .parse::<sqlx::postgres::PgConnectOptions>()
+            .unwrap()
+            .options([("search_path", schema.as_str())]);
+        let store = PostgresStore::from_pool(sqlx::PgPool::connect_with(options).await.unwrap());
+        store.migrate().await.unwrap();
+
+        let requests = Arc::new(AtomicUsize::new(0));
+        let observed = requests.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            // Empty legacy history still requires matching cursor headers before
+            // and after reconciliation. No request is allowed during safe lag.
+            for _ in 0..2 {
+                let (socket, _) = listener.accept().await.unwrap();
+                observed.fetch_add(1, Ordering::SeqCst);
+                let mut reader = BufReader::new(socket);
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).await.unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse::<usize>().unwrap();
+                    }
+                }
+                let mut body = vec![0; length];
+                reader.read_exact(&mut body).await.unwrap();
+                let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(request["method"], "eth_getBlockByNumber");
+                assert_eq!(request["params"][0], "0x64");
+                let body = serde_json::json!({"jsonrpc":"2.0","id":request["id"],"result":{
+                    "number":"0x64", "hash":format!("0x{}", "aa".repeat(32)),"timestamp":"0x1"}})
+                .to_string();
+                reader.get_mut().write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).as_bytes()).await.unwrap();
+            }
+        });
+        let factory = format!("0x{}", "61".repeat(20));
+        let config = AutonomousIndexerConfig {
+            network: "base-sepolia".into(),
+            rpc_url: format!("http://{address}"),
+            factory_contract: factory.clone(),
+            start_block: None,
+            poll_seconds: 5,
+            confirmations: 2,
+            max_blocks_per_query: 100,
+            request_id: 123,
+            public_base_url: "http://localhost".into(),
+        };
+        store
+            .upsert_base_log_cursor(&config.network, &factory, 100, None)
+            .await
+            .unwrap();
+        let original = store
+            .get_base_log_cursor(&config.network, &factory)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut safe = chain_base::BaseBlockIdentity {
+            number: 99,
+            hash: format!("0x{}", "aa".repeat(32)),
+            timestamp: 1,
+        };
+        let error = verify_previous(&store, &config, Some(100), &safe)
+            .await
+            .unwrap_err();
+        let recovery = IndexerRecoveryPolicy {
+            initial_backoff_seconds: 5,
+            max_backoff_seconds: 120,
+            exit_after_consecutive_failures: 8,
+        };
+        assert_eq!(
+            recovery.decision_for_error(1, &error),
+            IndexerRecoveryDecision::RetryFromPersistedCursor {
+                consecutive_failures: 1,
+                backoff_seconds: 5,
+            }
+        );
+        assert_eq!(
+            recovery.decision_for_error(8, &error),
+            IndexerRecoveryDecision::ExitForSupervisorRestart {
+                consecutive_failures: 8,
+            }
+        );
+        assert!(indexer_provider_delay(&error).is_none());
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
+        assert!(store
+            .autonomous_canonical_checkpoint(&config.network, &factory)
+            .await
+            .unwrap()
+            .is_none());
+        let waiting = store
+            .get_base_log_cursor(&config.network, &factory)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(waiting.last_scanned_block, original.last_scanned_block);
+        assert_eq!(waiting.last_log_key, original.last_log_key);
+        assert_eq!(waiting.updated_at, original.updated_at);
+
+        safe.number = 100;
+        let certified = verify_previous(&store, &config, Some(100), &safe)
+            .await
+            .unwrap()
+            .unwrap();
+        server.await.unwrap();
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        assert_eq!(certified.block_number, 100);
+        assert_eq!(certified.block_hash, safe.hash);
+        assert!(!certified.invalidated);
+
+        // The identical height lag after certification is an integrity failure,
+        // not a bootstrap wait. It must quarantine and remain nonretryable.
+        safe.number = 99;
+        let error = verify_previous(&store, &config, Some(100), &safe)
+            .await
+            .unwrap_err();
+        assert!(!indexer_error_is_retryable(&error));
+        assert!(
+            store
+                .autonomous_canonical_checkpoint(&config.network, &factory)
+                .await
+                .unwrap()
+                .unwrap()
+                .invalidated
+        );
+        safe.number = 100;
+        let error = verify_previous(&store, &config, Some(100), &safe)
+            .await
+            .unwrap_err();
+        assert!(!indexer_error_is_retryable(&error));
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            store
+                .get_base_log_cursor(&config.network, &factory)
+                .await
+                .unwrap()
+                .unwrap()
+                .last_scanned_block,
+            100
+        );
+        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     #[ignore = "requires isolated local PostgreSQL"]
     async fn changed_rpc_hash_quarantines_paid_history_without_rewriting_it() {
@@ -261,9 +436,10 @@ mod tests {
             2
         );
         reorg.store(true, Ordering::SeqCst);
-        assert!(verify_previous(&store, &config, Some(100), &block)
+        let error = verify_previous(&store, &config, Some(100), &block)
             .await
-            .is_err());
+            .unwrap_err();
+        assert!(!indexer_error_is_retryable(&error));
         let independent =
             PostgresStore::from_pool(sqlx::PgPool::connect_with(options).await.unwrap());
         assert!(independent
