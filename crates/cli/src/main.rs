@@ -1,4 +1,6 @@
+mod authentication;
 mod broad_checks;
+mod managed_services;
 mod opportunities;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -121,11 +123,20 @@ struct DiscoveryReportArgs {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Create and track account-owned managed-service orders (gated).
+    ManagedService {
+        #[command(subcommand)]
+        command: managed_services::ManagedServiceCommand,
+    },
     /// List checked public opportunities with per-protocol coverage; no wallet action.
     Opportunities(opportunities::OpportunityArgs),
     Verification {
         #[command(subcommand)]
         command: broad_checks::VerificationCommand,
+    },
+    Auth {
+        #[command(subcommand)]
+        command: authentication::AuthCommand,
     },
     Demo,
     PooledFundingDemo,
@@ -656,6 +667,8 @@ async fn async_main() -> Result<()> {
     match args.command {
         Command::Opportunities(args) => opportunities::run(args).await,
         Command::Verification { command } => broad_checks::execute(command).await,
+        Command::ManagedService { command } => managed_services::execute(command).await,
+        Command::Auth { command } => authentication::run(command).await,
         Command::Demo => demo().await,
         Command::PooledFundingDemo => pooled_funding_demo(),
         Command::RealFundingReadiness {
@@ -2207,6 +2220,10 @@ fn real_funding_readiness(
             "STRIPE_PAYMENT_METHOD_CONFIGURATION",
         ),
         stripe_webhook_secret_configured: env_nonempty("STRIPE_WEBHOOK_SECRET"),
+        stripe_webhook_livemode: env::var("STRIPE_WEBHOOK_LIVEMODE")
+            .ok()
+            .and_then(|value| app::parse_stripe_webhook_livemode(&value)),
+        durable_store_configured: env_nonempty("DATABASE_URL"),
         allow_unsigned_stripe_webhooks: env_flag("ALLOW_UNSIGNED_STRIPE_WEBHOOKS"),
         operator_auth_configured: env_nonempty("OPERATOR_API_TOKEN"),
         base_rpc_url_configured: env_nonempty(&rpc_env),
@@ -4598,7 +4615,10 @@ async fn service_smoke(api_base_url: String, mcp_base_url: String) -> Result<()>
     let api = normalize_base_url(&api_base_url);
     let mcp = normalize_base_url(&mcp_base_url);
     let operator_token = env::var("OPERATOR_API_TOKEN").ok();
-    let report = service_smoke_check(&api, &mcp, operator_token.as_deref(), true).await?;
+    let wallet_session = env::var("AGENT_BOUNTIES_SMOKE_WALLET_SESSION")
+        .context("A synthetic local wallet session is required; use the local smoke wrappers")?;
+    let report =
+        service_smoke_check(&api, &mcp, operator_token.as_deref(), &wallet_session, true).await?;
     print_service_smoke_report(&report)
 }
 
@@ -4611,17 +4631,25 @@ struct ServiceSmokeReport {
     final_status: String,
     autonomous_events: usize,
     mcp_tools: usize,
+    auth_rejections: usize,
 }
 
 async fn service_smoke_check(
     api: &str,
     mcp: &str,
     operator_token: Option<&str>,
+    wallet_session: &str,
     expect_shared_persistence: bool,
 ) -> Result<ServiceSmokeReport> {
+    require_local_smoke_url(api)?;
+    require_local_smoke_url(mcp)?;
+    let operator_token = operator_token
+        .filter(|token| !token.trim().is_empty())
+        .context("OPERATOR_API_TOKEN is required for intentional local smoke fixture writes")?;
     wait_for_health(&format!("{api}/health"))?;
     wait_for_health(&format!("{mcp}/health"))?;
     let _production_contract = production_smoke_check(api, mcp, false, None).await?;
+    let auth_rejections = local_smoke_auth_rejections(api, mcp).await?;
 
     let discovery = get_json(&format!("{api}/.well-known/agent-bounties.json"))?;
     require(
@@ -4671,18 +4699,19 @@ async fn service_smoke_check(
         .len();
 
     let smoke_id = Uuid::new_v4();
-    let solver = post_json(
+    let solver = post_json_with_wallet_session(
         &format!("{api}/v1/agents"),
         serde_json::json!({
             "handle": format!("autonomous-service-smoke-solver-{smoke_id}"),
             "payout_wallet": "0x2222222222222222222222222222222222222222"
         }),
+        wallet_session,
     )?;
     let solver_id = value_str(&solver, "/id")
         .context("service smoke solver id missing")?
         .to_string();
 
-    let bounty = post_json(
+    let bounty = post_json_with_operator_token(
         &format!("{api}/v1/bounties/pooled"),
         serde_json::json!({
             "title": "Autonomous protocol local paid-loop smoke",
@@ -4692,11 +4721,12 @@ async fn service_smoke_check(
             "funding_mode": "Simulated",
             "privacy": "Public"
         }),
+        operator_token,
     )?;
     let bounty_id = value_str(&bounty, "/id")
         .context("service smoke bounty id missing")?
         .to_string();
-    let funding = post_json(
+    let funding = post_json_with_operator_token(
         &format!("{api}/v1/bounties/{bounty_id}/funding-contributions"),
         serde_json::json!({
             "bounty_id": bounty_id,
@@ -4707,24 +4737,26 @@ async fn service_smoke_check(
             "rail": "Simulated",
             "external_reference": format!("autonomous-service-smoke-{smoke_id}")
         }),
+        operator_token,
     )?;
     require(
         value_str(&funding, "/bounty/status") == Some("Claimable"),
         "simulated funding must make the local smoke bounty claimable",
     )?;
-    let claim = post_json(
+    let claim = post_json_with_wallet_session(
         &format!("{api}/v1/bounties/{bounty_id}/claim"),
         serde_json::json!({
             "bounty_id": bounty_id,
             "solver_agent_id": solver_id
         }),
+        wallet_session,
     )?;
     require(
         value_str(&claim, "/status") == Some("Claimed"),
         "local smoke bounty must become claimed",
     )?;
     let artifact_body = "{\"autonomous_service_smoke\":true}";
-    let submission = post_json(
+    let submission = post_json_with_wallet_session(
         &format!("{api}/v1/bounties/{bounty_id}/submit"),
         serde_json::json!({
             "bounty_id": bounty_id,
@@ -4732,6 +4764,7 @@ async fn service_smoke_check(
             "artifact_uri": "memory://autonomous-service-smoke/artifact.json",
             "artifact_body": artifact_body
         }),
+        wallet_session,
     )?;
     let submission_id =
         value_str(&submission, "/id").context("service smoke submission id missing")?;
@@ -4746,15 +4779,14 @@ async fn service_smoke_check(
             "evidence": null,
             "approved_risk_event_id": null
         }),
-        operator_token.context(
-            "OPERATOR_API_TOKEN is required for the legacy simulated verification smoke step",
-        )?,
+        operator_token,
     )?;
     require(
         value_str(&proof, "/proof_hash").is_some(),
         "local smoke verification must return a proof hash",
     )?;
-    let status = get_json(&format!("{api}/v1/bounties/{bounty_id}"))?;
+    let status =
+        get_json_with_operator_token(&format!("{api}/v1/bounties/{bounty_id}"), operator_token)?;
     let final_status = value_str(&status, "/bounty/status")
         .context("service smoke final bounty status missing")?
         .to_string();
@@ -4763,21 +4795,24 @@ async fn service_smoke_check(
         "simulated local bounty loop must finish Paid",
     )?;
 
-    let retried_status = get_json(&format!("{api}/v1/bounties/{bounty_id}"))?;
+    let retried_status =
+        get_json_with_operator_token(&format!("{api}/v1/bounties/{bounty_id}"), operator_token)?;
     require(
         status == retried_status,
         "API bounty status retries must be idempotent",
     )?;
     if expect_shared_persistence {
-        let mcp_status = mcp_tool_post(
+        let mcp_status = mcp_tool_post_with_operator_token(
             mcp,
             "get_bounty_status",
             serde_json::json!({ "bounty_id": bounty_id.as_str() }),
+            operator_token,
         )?;
-        let retried_mcp_status = mcp_tool_post(
+        let retried_mcp_status = mcp_tool_post_with_operator_token(
             mcp,
             "get_bounty_status",
             serde_json::json!({ "bounty_id": bounty_id.as_str() }),
+            operator_token,
         )?;
         require(
             status == mcp_status && mcp_status == retried_mcp_status,
@@ -4820,7 +4855,7 @@ async fn service_smoke_check(
         mcp_events.as_array().is_some(),
         "MCP autonomous event listing must return an array",
     )?;
-    let eval_loops = mcp_tool_get(mcp, "run_eval_loops")?;
+    let eval_loops = mcp_tool_get_with_operator_token(mcp, "run_eval_loops", operator_token)?;
     require(
         eval_loops
             .pointer("/passed")
@@ -4837,7 +4872,104 @@ async fn service_smoke_check(
         final_status,
         autonomous_events: autonomous_event_count,
         mcp_tools: tool_list.len(),
+        auth_rejections,
     })
+}
+
+async fn local_smoke_auth_rejections(api: &str, mcp: &str) -> Result<usize> {
+    // Deliberately use a fresh client without fixture credentials. MCP must not
+    // add its process-level operator token to these requests.
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(10))
+        .build()?;
+    let registration = serde_json::json!({
+        "handle": format!("denied-smoke-{}", Uuid::new_v4()),
+        "payout_wallet": "0x2222222222222222222222222222222222222222"
+    });
+    for supplied_token in [None, Some("invalid-local-smoke-credential")] {
+        let mut request = client.post(format!("{api}/v1/agents")).json(&registration);
+        if let Some(token) = supplied_token {
+            request = request.header("x-operator-token", token);
+        }
+        require(
+            request.send().await?.status() == reqwest::StatusCode::UNAUTHORIZED,
+            "API registration must reject anonymous and invalid fixture credentials",
+        )?;
+    }
+    let tool_response: serde_json::Value = client
+        .post(format!("{mcp}/tools/register_agent"))
+        .json(&registration)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    require(
+        value_str(&tool_response, "/error")
+            .is_some_and(|message| message.contains("hosted API returned 401")),
+        "MCP HTTP registration must preserve the anonymous API authorization failure",
+    )?;
+
+    let publication = serde_json::json!({
+        "title": "Denied local smoke publication",
+        "goal": "Document one local test result.",
+        "acceptance_criteria": ["The result is described in plain language."],
+        "idempotency_key": format!("denied-smoke-{}", Uuid::new_v4())
+    });
+    let publication_response: serde_json::Value = client
+        .post(format!("{mcp}/tools/publish_unfunded_bounty"))
+        .json(&publication)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    require(
+        value_str(&publication_response, "/error")
+            .is_some_and(|message| message.contains("hosted API returned 401")),
+        "MCP HTTP publication must preserve the anonymous API authorization failure",
+    )?;
+    for version in ["2025-06-18", "2026-07-28"] {
+        let mut params = serde_json::json!({
+            "name": "publish_unfunded_bounty",
+            "arguments": publication,
+        });
+        if version == "2026-07-28" {
+            params["_meta"] = serde_json::json!({
+                "io.modelcontextprotocol/protocolVersion": version,
+                "io.modelcontextprotocol/clientCapabilities": {},
+            });
+        }
+        let result: serde_json::Value = client
+            .post(format!("{mcp}/mcp"))
+            .header("Accept", "application/json, text/event-stream")
+            .header("MCP-Protocol-Version", version)
+            .header("Mcp-Method", "tools/call")
+            .header("Mcp-Name", "publish_unfunded_bounty")
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0", "id": format!("denied-smoke-{version}"),
+                "method": "tools/call", "params": params,
+            }))
+            .send()
+            .await?
+            .json()
+            .await?;
+        require(
+            result
+                .pointer("/error/code")
+                .and_then(serde_json::Value::as_i64)
+                == Some(-32602)
+                && value_str(&result, "/error/message").is_some_and(|message| {
+                    message.contains("unknown or unavailable")
+                        && message.contains("publish_unfunded_bounty")
+                }),
+            &format!(
+                "MCP {version} must reject publication outside its advertised catalog: {result}"
+            ),
+        )?;
+    }
+    Ok(4)
 }
 
 fn print_service_smoke_report(report: &ServiceSmokeReport) -> Result<()> {
@@ -4851,7 +4983,8 @@ fn print_service_smoke_report(report: &ServiceSmokeReport) -> Result<()> {
             "solver_id": report.solver_id,
             "final_status": report.final_status,
             "autonomous_events": report.autonomous_events,
-            "mcp_tools": report.mcp_tools
+            "mcp_tools": report.mcp_tools,
+            "auth_rejections": report.auth_rejections
         }))?
     );
     Ok(())
@@ -4895,9 +5028,13 @@ async fn service_smoke_spawn(
     );
     let api = normalize_base_url(&api_base_url);
     let mcp = normalize_base_url(&mcp_base_url);
-    if verify_restart_persistence && database_url.is_none() {
-        bail!("--verify-restart-persistence requires --database-url");
-    }
+    require_local_smoke_url(&api)?;
+    require_local_smoke_url(&mcp)?;
+    let database_url = database_url
+        .or_else(|| env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").ok().filter(|value| !value.trim().is_empty()))
+        .context("Authenticated registration requires PostgreSQL. Pass --database-url for a test database or run through scripts/run-with-test-postgres.py.")?;
+    require_local_smoke_database(&database_url)?;
+    let wallet_session = create_local_smoke_wallet_session(&database_url).await?;
     let api_bind = bind_addr_from_base_url(&api)?;
     let mcp_bind = bind_addr_from_base_url(&mcp)?;
     let api_bin = sibling_binary("api")?;
@@ -4912,18 +5049,20 @@ async fn service_smoke_spawn(
             ("OPERATOR_API_TOKEN", SMOKE_OPERATOR_TOKEN),
             ("ANALYTICS_EXCLUSION_TOKEN", SMOKE_ANALYTICS_EXCLUSION_TOKEN),
         ],
-        database_url.as_deref(),
+        Some(database_url.as_str()),
     )
     .with_context(|| format!("failed to spawn {}", api_bin.display()))?;
     let mut mcp_child = match spawn_service(
         &mcp_bin,
         &[
             ("MCP_BIND_ADDR", mcp_bind.as_str()),
+            ("API_UPSTREAM_BASE_URL", api.as_str()),
+            ("OPERATOR_API_TOKEN", SMOKE_OPERATOR_TOKEN),
             ("PUBLIC_BASE_URL", api.as_str()),
             ("MCP_BASE_URL", mcp.as_str()),
             ("ANALYTICS_EXCLUSION_TOKEN", SMOKE_ANALYTICS_EXCLUSION_TOKEN),
         ],
-        database_url.as_deref(),
+        Some(database_url.as_str()),
     ) {
         Ok(child) => child,
         Err(error) => {
@@ -4936,7 +5075,8 @@ async fn service_smoke_spawn(
         &api,
         &mcp,
         Some(SMOKE_OPERATOR_TOKEN),
-        database_url.is_some(),
+        &wallet_session,
+        true,
     )
     .await;
     stop_child(&mut api_child);
@@ -4944,7 +5084,7 @@ async fn service_smoke_spawn(
     let report = result?;
 
     if verify_restart_persistence {
-        let store = PostgresStore::connect(database_url.as_deref().unwrap())
+        let store = PostgresStore::connect(database_url.as_str())
             .await
             .context("failed to connect for the pre-restart durable-data snapshot")?;
         let before = store
@@ -4954,7 +5094,7 @@ async fn service_smoke_spawn(
         verify_service_smoke_restart_persistence(
             &api,
             &mcp,
-            database_url.as_deref().unwrap(),
+            database_url.as_str(),
             &report,
             SMOKE_OPERATOR_TOKEN,
             SMOKE_ANALYTICS_EXCLUSION_TOKEN,
@@ -4964,6 +5104,38 @@ async fn service_smoke_spawn(
     }
 
     print_service_smoke_report(&report)
+}
+
+async fn create_local_smoke_wallet_session(database_url: &str) -> Result<String> {
+    require_local_smoke_database(database_url)?;
+    let store = PostgresStore::connect(database_url).await?;
+    store.migrate().await?;
+    let now = chrono::Utc::now();
+    let id = Uuid::new_v4();
+    store
+        .create_wallet_challenge(&db::auth::WalletChallenge {
+            id,
+            domain: "localhost".into(),
+            chain_id: 8453,
+            address: "0x2222222222222222222222222222222222222222".into(),
+            message: "Synthetic local fixture; wallet signature exchange tested separately".into(),
+            created_at: now,
+            expires_at: now + chrono::Duration::minutes(5),
+        })
+        .await?;
+    let token = format!(
+        "abws_{}{}",
+        Uuid::new_v4().simple(),
+        Uuid::new_v4().simple()
+    );
+    store
+        .consume_wallet_challenge_and_create_session(
+            id,
+            &hex::encode(sha2::Sha256::digest(token.as_bytes())),
+            None,
+        )
+        .await?;
+    Ok(token)
 }
 
 async fn verify_service_smoke_restart_persistence(
@@ -4996,6 +5168,8 @@ async fn verify_service_smoke_restart_persistence(
         &mcp_bin,
         &[
             ("MCP_BIND_ADDR", mcp_bind.as_str()),
+            ("API_UPSTREAM_BASE_URL", api),
+            ("OPERATOR_API_TOKEN", operator_token),
             ("PUBLIC_BASE_URL", api),
             ("MCP_BASE_URL", mcp),
             ("ANALYTICS_EXCLUSION_TOKEN", analytics_exclusion_token),
@@ -5043,7 +5217,10 @@ async fn verify_service_smoke_restart_persistence(
             "restarted MCP must hydrate persisted EvalLoops/all-v0 run history",
         )?;
 
-        let api_bounty_status = get_json(&format!("{api}/v1/bounties/{}", report.paid_bounty_id))?;
+        let api_bounty_status = get_json_with_operator_token(
+            &format!("{api}/v1/bounties/{}", report.paid_bounty_id),
+            operator_token,
+        )?;
         require(
             value_str(&api_bounty_status, "/bounty/status") == Some("Paid"),
             "restarted API must hydrate the paid local-loop bounty from Postgres",
@@ -5064,36 +5241,41 @@ async fn verify_service_smoke_restart_persistence(
             "restarted API must hydrate the contribution ledger linkage",
         )?;
 
-        let mcp_bounty_status = mcp_tool_post(
+        let mcp_bounty_status = mcp_tool_post_with_operator_token(
             mcp,
             "get_bounty_status",
             serde_json::json!({ "bounty_id": report.paid_bounty_id.as_str() }),
+            operator_token,
         )?;
         require(
             api_bounty_status == mcp_bounty_status,
             "restarted API and MCP adapters must hydrate identical shared-runtime bounty status",
         )?;
 
-        let mcp_paid_status = mcp_tool_post(
+        let mcp_paid_status = mcp_tool_post_with_operator_token(
             mcp,
             "get_paid_status",
             serde_json::json!({ "bounty_id": report.paid_bounty_id.as_str() }),
+            operator_token,
         )?;
         require(
             value_str(&mcp_paid_status, "/bounty_status") == Some("Paid"),
             "restarted MCP must hydrate paid status from Postgres",
         )?;
-        let api_agent_paid_status =
-            get_json(&format!("{api}/v1/agents/{}/paid-status", report.solver_id))?;
+        let api_agent_paid_status = get_json_with_operator_token(
+            &format!("{api}/v1/agents/{}/paid-status", report.solver_id),
+            operator_token,
+        )?;
         require_agent_paid_status(
             &api_agent_paid_status,
             "restarted API must hydrate solver payout summary from Postgres",
         )?;
 
-        let mcp_agent_paid_status = mcp_tool_post(
+        let mcp_agent_paid_status = mcp_tool_post_with_operator_token(
             mcp,
             "get_paid_status",
             serde_json::json!({ "agent_id": report.solver_id.as_str() }),
+            operator_token,
         )?;
         require(
             value_str(&mcp_agent_paid_status, "/scope") == Some("agent"),
@@ -5152,6 +5334,15 @@ fn get_json(url: &str) -> Result<serde_json::Value> {
     Ok(serde_json::from_str(&get_text(url)?)?)
 }
 
+fn get_json_with_operator_token(url: &str, operator_token: &str) -> Result<serde_json::Value> {
+    Ok(serde_json::from_str(&http_request_with_headers(
+        "GET",
+        url,
+        None,
+        &[("x-operator-token", operator_token)],
+    )?)?)
+}
+
 fn post_json(url: &str, body: serde_json::Value) -> Result<serde_json::Value> {
     Ok(serde_json::from_str(&http_request(
         "POST",
@@ -5176,6 +5367,22 @@ fn post_json_with_operator_token(
     )?)?)
 }
 
+fn post_json_with_wallet_session(
+    url: &str,
+    body: serde_json::Value,
+    session: &str,
+) -> Result<serde_json::Value> {
+    if session.is_empty() || session.bytes().any(|byte| byte.is_ascii_control()) {
+        bail!("wallet fixture session cannot be empty or contain control characters");
+    }
+    Ok(serde_json::from_str(&http_request_with_headers(
+        "POST",
+        url,
+        Some(body.to_string()),
+        &[("authorization", &format!("Bearer {session}"))],
+    )?)?)
+}
+
 fn mcp_tool_get(mcp_base_url: &str, tool_name: &str) -> Result<serde_json::Value> {
     let response = get_json(&format!("{mcp_base_url}/tools/{tool_name}"))?;
     mcp_tool_result(response, tool_name)
@@ -5188,6 +5395,55 @@ fn mcp_tool_post(
 ) -> Result<serde_json::Value> {
     let response = post_json(&format!("{mcp_base_url}/tools/{tool_name}"), body)?;
     mcp_tool_result(response, tool_name)
+}
+
+fn mcp_tool_get_with_operator_token(
+    mcp_base_url: &str,
+    tool_name: &str,
+    operator_token: &str,
+) -> Result<serde_json::Value> {
+    let response =
+        get_json_with_operator_token(&format!("{mcp_base_url}/tools/{tool_name}"), operator_token)?;
+    mcp_tool_result(response, tool_name)
+}
+
+fn mcp_tool_post_with_operator_token(
+    mcp_base_url: &str,
+    tool_name: &str,
+    body: serde_json::Value,
+    operator_token: &str,
+) -> Result<serde_json::Value> {
+    let response = post_json_with_operator_token(
+        &format!("{mcp_base_url}/tools/{tool_name}"),
+        body,
+        operator_token,
+    )?;
+    mcp_tool_result(response, tool_name)
+}
+
+fn require_local_smoke_url(value: &str) -> Result<()> {
+    let url = reqwest::Url::parse(value).context("local smoke URL is invalid")?;
+    require(
+        url.scheme() == "http"
+            && matches!(url.host_str(), Some("127.0.0.1" | "localhost"))
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.path() == "/"
+            && url.query().is_none()
+            && url.fragment().is_none(),
+        "Fixture mutation smoke requires an http://127.0.0.1 or http://localhost base URL; use production-smoke for deployed services",
+    )
+}
+
+fn require_local_smoke_database(value: &str) -> Result<()> {
+    let url = reqwest::Url::parse(value).context("local smoke database URL is invalid")?;
+    require(
+        matches!(url.scheme(), "postgres" | "postgresql")
+            && matches!(url.host_str(), Some("127.0.0.1" | "localhost"))
+            && url.query().is_none()
+            && url.fragment().is_none(),
+        "Fixture mutation smoke requires a local PostgreSQL test database",
+    )
 }
 
 fn mcp_tool_result(response: serde_json::Value, tool_name: &str) -> Result<serde_json::Value> {
@@ -5732,6 +5988,7 @@ fn production_live_money_env_vars() -> &'static [&'static str] {
         "STRIPE_SECRET_KEY",
         "STRIPE_API_BASE_URL",
         "STRIPE_WEBHOOK_SECRET",
+        "STRIPE_WEBHOOK_LIVEMODE",
         "ALLOW_UNSIGNED_STRIPE_WEBHOOKS",
     ]
 }
@@ -5948,11 +6205,31 @@ fn load_api_routes(contract_root: &Path) -> Result<BTreeSet<String>> {
         "crates/api/src/distribution.rs",
         "crates/api/src/open_competition_v2_api.rs",
         "crates/api/src/site_auth.rs",
+        "crates/api/src/security_auth.rs",
+        "crates/api/src/secure_operations.rs",
+        "crates/api/src/claim_queue_security.rs",
+        "crates/api/src/verification.rs",
+        "crates/api/src/artifact_submission.rs",
+        "crates/api/src/review_reports.rs",
+        "crates/api/src/review_tasks.rs",
+        "crates/api/src/github_origin.rs",
+        "crates/api/src/managed_payments.rs",
         "crates/mcp-server/src/main.rs",
     ] {
         let source_path = contract_root.join(relative_path);
-        let source = fs::read_to_string(&source_path)
-            .with_context(|| format!("failed to read {}", source_path.display()))?;
+        // Older reviewed branches do not have the managed-service module. Its absence
+        // contributes no routes; documentation naming those routes still fails closed.
+        let source = match fs::read_to_string(&source_path) {
+            Err(error)
+                if relative_path == "crates/api/src/managed_payments.rs"
+                    && error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                continue
+            }
+            result => {
+                result.with_context(|| format!("failed to read {}", source_path.display()))?
+            }
+        };
         let mut expecting_route = false;
         for line in source.lines() {
             let trimmed = line.trim();
@@ -6010,7 +6287,6 @@ fn load_mcp_tools(contract_root: &Path) -> Result<BTreeSet<String>> {
             "prepare_bounty_post",
             "prepare_bounty_action",
             "get_bounty_action_status",
-            "compile_objective_with_cloud_agent",
             "list_bounty_comments",
             "add_bounty_comment",
             "create_share_bundle",
@@ -6617,20 +6893,8 @@ fn is_checked_api_path(path: &str) -> bool {
         || matches!(path, "/llms.txt" | "/docs" | "/health")
 }
 
-/// Stripe API paths that docs may cite verbatim. They are Stripe's endpoints, not Agentizable
-/// routes.
 fn is_external_api_path(path: &str) -> bool {
-    matches!(
-        path,
-        "/v1/checkout/sessions"
-            | "/v1/customers"
-            | "/v1/invoices"
-            | "/v1/invoiceitems"
-            | "/v1/invoices/{param}/finalize"
-            | "/v1/invoices/{param}/send"
-            | "/v1/invoices/{param}/void"
-            | "/v1/credit_notes"
-    )
+    matches!(path, "/v1/checkout/sessions")
 }
 
 fn normalize_route(path: &str) -> String {
@@ -6826,7 +7090,7 @@ fn spawn_service(path: &Path, envs: &[(&str, &str)], database_url: Option<&str>)
     let mut command = ProcessCommand::new(path);
     command.stdin(Stdio::null());
     command.stdout(Stdio::null());
-    command.stderr(Stdio::null());
+    command.stderr(Stdio::inherit());
     if let Some(database_url) = database_url {
         command.env("DATABASE_URL", database_url);
     } else {
@@ -6846,6 +7110,33 @@ fn stop_child(child: &mut Child) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixture_smoke_rejects_nonlocal_targets_before_sending_credentials() {
+        for url in ["http://127.0.0.1:18080", "http://localhost:18090/"] {
+            require_local_smoke_url(url).unwrap();
+        }
+        for url in [
+            "https://api.agentizable.ai",
+            "http://example.com",
+            "http://localhost.example.com",
+            "http://localhost@remote.example",
+            "http://token@127.0.0.1",
+            "http://127.0.0.1/private",
+            "http://127.0.0.1?forward=remote",
+            "http://127.0.0.1#remote",
+        ] {
+            assert!(require_local_smoke_url(url).is_err(), "{url}");
+        }
+        require_local_smoke_database("postgres://fixture:local@127.0.0.1:5432/test").unwrap();
+        assert!(
+            require_local_smoke_database("postgres://fixture:local@remote.example/test").is_err()
+        );
+        assert!(require_local_smoke_database(
+            "postgres://fixture:local@localhost/test?host=remote.example"
+        )
+        .is_err());
+    }
 
     #[test]
     fn cli_help_matches_compatibility_fixture() {
@@ -7342,9 +7633,11 @@ mod tests {
             &request_contracts,
             &mut active_issues,
         );
-        assert!(active_issues.iter().any(|issue| issue
-            .message
-            .contains("unknown API route `/v1/base/release-plan`")));
+        assert!(active_issues.iter().any(|issue| {
+            issue
+                .message
+                .contains("unknown API route `/v1/base/release-plan`")
+        }));
     }
 
     #[test]
@@ -7362,6 +7655,16 @@ mod tests {
             "/v1/distribution/handoffs/wallet-review",
             "/v1/site-auth/session",
             "/v1/site-auth/posting-drafts/{param}",
+            "/v1/auth/wallet/challenge",
+            "/v1/auth/wallet/session",
+            "/v1/auth/session",
+            "/v1/auth/session/revoke",
+            "/v1/managed-service/quotes",
+            "/v1/managed-service/quotes/{param}",
+            "/v1/managed-service/quotes/{param}/accept",
+            "/v1/managed-service/orders/{param}",
+            "/v1/managed-service/orders/{param}/checkout",
+            "/v1/managed-service/orders/{param}/refund",
         ] {
             assert!(routes.contains(route), "missing modular API route {route}");
         }
@@ -7498,20 +7801,26 @@ mod tests {
         let mut issues = Vec::new();
         check_operational_sdlc_contract(&root, &mut issues);
 
-        assert!(issues.iter().any(|issue| issue
-            .message
-            .contains("software development lifecycle missing required marker `RecoveryBench`")));
+        assert!(issues.iter().any(|issue| {
+            issue
+                .message
+                .contains("software development lifecycle missing required marker `RecoveryBench`")
+        }));
         assert!(issues.iter().any(|issue| {
             issue.message.contains(
             "self-healing operations contract missing required marker `Prohibited Automatic Repair`"
         )
         }));
-        assert!(issues.iter().any(|issue| issue
-            .message
-            .contains("pull request template missing required marker `Recovery fixture added`")));
-        assert!(issues.iter().any(|issue| issue
-            .message
-            .contains("incident issue template missing required marker `Regression fixture`")));
+        assert!(issues.iter().any(|issue| {
+            issue
+                .message
+                .contains("pull request template missing required marker `Recovery fixture added`")
+        }));
+        assert!(issues.iter().any(|issue| {
+            issue
+                .message
+                .contains("incident issue template missing required marker `Regression fixture`")
+        }));
 
         let _ = fs::remove_dir_all(root);
     }

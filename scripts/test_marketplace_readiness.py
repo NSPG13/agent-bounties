@@ -1,29 +1,57 @@
 import copy
+from contextlib import redirect_stdout
 from datetime import datetime, timezone, timedelta
 import json
 import hashlib
+import io
 from pathlib import Path
 import sys
+import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import unittest
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from marketplace_readiness import PROTOCOLS, enabled_for_release, inspect, main, observe
+from marketplace_readiness import PROTOCOLS, enabled_for_release, inspect, main, observe, release_admission
 
 
 class MarketplaceReadinessTests(unittest.TestCase):
-    def test_activation_requires_exact_verified_release_and_does_not_probe_early(self):
+    def test_repair_admission_requires_exact_verified_release(self):
         self.assertFalse(enabled_for_release('a' * 40, None))
         self.assertTrue(enabled_for_release('a' * 40, 'A' * 40))
         for expected, verified in [('a' * 40, 'b' * 40), ('main', 'a' * 40),
                                    (None, 'a' * 40), ('a' * 40, 'a' * 8)]:
             with self.assertRaises(ValueError):
                 enabled_for_release(expected, verified)
-        with patch('marketplace_readiness.observe') as probe:
-            self.assertEqual(main(['--api-base-url', 'https://example.invalid',
-                                   '--expected-revision', 'a' * 40]), 0)
-            probe.assert_not_called()
+        self.assertEqual(release_admission('a' * 40, 'A' * 40),
+                         {'qualified': True, 'blocker': None})
+        for expected, verified, blocker in [
+                ('a' * 40, None, 'missing'), (None, 'a' * 40, 'missing'),
+                ('a' * 40, 'b' * 40, 'mismatch'), ('main', 'a' * 40, 'invalid'),
+                ('a' * 40, 'a' * 8, 'invalid'), (True, 'a' * 40, 'invalid')]:
+            result = release_admission(expected, verified)
+            self.assertFalse(result['qualified'])
+            self.assertEqual(result['blocker'], 'marketplace_release_pin_' + blocker)
+
+    def test_cli_saves_read_only_evidence_and_fails_when_release_pins_block_repairs(self):
+        for pins, blocker in [([], 'missing'),
+                              (['--expected-revision', 'a' * 40], 'missing'),
+                              (['--expected-revision', 'a' * 40, '--verified-revision', 'b' * 40], 'mismatch'),
+                              (['--expected-revision', 'main', '--verified-revision', 'a' * 40], 'invalid')]:
+            for state in ('healthy', 'unavailable'):
+                observation = {'state': state, 'restartable': False, 'readers': [],
+                               'blocker': None if state == 'healthy' else 'marketplace_readiness_invalid'}
+                with self.subTest(pins=pins, state=state), tempfile.TemporaryDirectory() as directory:
+                    output = Path(directory) / 'readiness.json'
+                    with patch('marketplace_readiness.observe', return_value=observation) as probe, redirect_stdout(io.StringIO()):
+                        result = main(['--api-base-url', 'https://example.invalid', '--output', str(output)] + pins)
+                    self.assertEqual(result, 1)
+                    probe.assert_called_once_with('https://example.invalid')
+                    saved = json.loads(output.read_text())
+                    self.assertEqual(saved['state'], state)
+                    self.assertFalse(saved['restartable'])
+                    self.assertFalse(saved['release_admission']['qualified'])
+                    self.assertEqual(saved['release_admission']['blocker'], 'marketplace_release_pin_' + blocker)
 
     def setUp(self):
         self.now = datetime.now(timezone.utc)

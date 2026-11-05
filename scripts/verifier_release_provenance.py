@@ -64,6 +64,28 @@ def protected_blob(root: Path, trusted_revision: str, path: str) -> str:
     return git(root, 'show', trusted_revision + ':' + path)
 
 
+def reject_revoked_release(root: Path, trusted_revision: str, value: dict) -> None:
+    # Revocation belongs to today's protected workflow, never to the selected
+    # historical release. Preserve old approvals as evidence, not authority.
+    policy = json.loads(protected_blob(root, trusted_revision,
+                        '.github/verifier-releases/revocations.json'),
+                        object_pairs_hook=object_without_duplicates)
+    if (not isinstance(policy, dict) or set(policy) != {'schema', 'releases'}
+            or policy['schema'] != 'agent-bounties/verifier-release-revocations-v1'
+            or not isinstance(policy['releases'], list)):
+        raise ValueError('invalid protected verifier revocation policy')
+    for row in policy['releases']:
+        if (not isinstance(row, dict)
+                or set(row) != {'release_id', 'source_revision', 'worker_binary_digest', 'reason'}
+                or not isinstance(row['release_id'], str) or not DIGEST.fullmatch(row['release_id'])
+                or not isinstance(row['worker_binary_digest'], str) or not DIGEST.fullmatch(row['worker_binary_digest'])
+                or not isinstance(row['source_revision'], str) or not REVISION.fullmatch(row['source_revision'])
+                or not isinstance(row['reason'], str) or not row['reason'].strip()):
+            raise ValueError('invalid protected verifier revocation entry')
+        if any(value[key] == row[key] for key in ('release_id', 'source_revision', 'worker_binary_digest')):
+            raise ValueError('verifier release is revoked; qualify a corrected artifact before execution')
+
+
 def authorize(root: Path, trusted_revision: str, manifest: str, expected_revision: str = '') -> dict:
     if not REVISION.fullmatch(trusted_revision):
         raise ValueError('trusted workflow revision is not exact')
@@ -75,6 +97,7 @@ def authorize(root: Path, trusted_revision: str, manifest: str, expected_revisio
     revision = value['source_revision']
     if expected_revision and revision != expected_revision:
         raise ValueError('release changed between authorization and execution')
+    reject_revoked_release(root, trusted_revision, value)
     approval = '.github/verifier-releases/' + value['release_id'].removeprefix('sha256:') + '.json'
     approved = parse_release(protected_blob(root, trusted_revision, approval))
     if approved != value:

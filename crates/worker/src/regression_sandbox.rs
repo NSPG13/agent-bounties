@@ -317,10 +317,9 @@ impl RegressionSandboxExecutor for DockerCliRegressionExecutor {
                 let code = status
                     .code()
                     .ok_or(RegressionSandboxExecutorError::ResourceLimitExceeded)?;
-                if !matches!(code, 0 | 1) && code < 128
-                    || stdout.runtime_error
-                    || stderr.runtime_error
-                {
+                // Only the committed checker's exit code is a verdict. Untrusted
+                // stdout/stderr must never turn failure into refundable infrastructure error.
+                if !matches!(code, 0 | 1) && code < 128 {
                     return Err(RegressionSandboxExecutorError::FailedClosed);
                 }
                 if code >= 128 {
@@ -343,7 +342,6 @@ impl RegressionSandboxExecutor for DockerCliRegressionExecutor {
 struct StreamDigest {
     digest: String,
     bytes: u64,
-    runtime_error: bool,
 }
 
 async fn hash_stream(
@@ -355,23 +353,12 @@ async fn hash_stream(
     let mut hasher = Sha256::new();
     let mut bytes = 0u64;
     let mut buffer = [0u8; 8 * 1024];
-    let mut tail = Vec::new();
-    let mut runtime_error = false;
     loop {
         let read = stream.read(&mut buffer).await?;
         if read == 0 {
             break;
         }
         hasher.update(&buffer[..read]);
-        // Reviewed Python profiles use SystemExit(1) for failed checks. A traceback
-        // (including nested checker timeouts or missing dependencies) is not a verdict.
-        tail.extend_from_slice(&buffer[..read]);
-        runtime_error |= tail
-            .windows(b"Traceback (most recent call last):".len())
-            .any(|window| window == b"Traceback (most recent call last):");
-        if tail.len() > 64 {
-            tail.drain(..tail.len() - 64);
-        }
         bytes = bytes.saturating_add(read as u64);
         let previous_total = total_bytes.fetch_add(read as u64, Ordering::AcqRel);
         if previous_total
@@ -384,7 +371,6 @@ async fn hash_stream(
     Ok(StreamDigest {
         digest: format!("sha256:{}", hex::encode(hasher.finalize())),
         bytes,
-        runtime_error,
     })
 }
 
@@ -1060,26 +1046,25 @@ mod tests {
     use serde_json::json;
 
     #[tokio::test]
-    async fn checker_runtime_failures_are_detected_without_retaining_output() {
-        let stream = &b"Traceback (most recent call last):\nModuleNotFoundError"[..];
-        let result = hash_stream(
-            stream,
-            1024,
-            Arc::new(AtomicU64::new(0)),
-            Arc::new(AtomicBool::new(false)),
-        )
-        .await
-        .unwrap();
-        assert!(result.runtime_error);
-        let result = hash_stream(
-            &b"missing required file: report.json"[..],
-            1024,
-            Arc::new(AtomicU64::new(0)),
-            Arc::new(AtomicBool::new(false)),
-        )
-        .await
-        .unwrap();
-        assert!(!result.runtime_error);
+    async fn solver_traceback_text_is_only_hashed_and_cannot_select_no_verdict() {
+        for text in [
+            "Traceback (most recent call last):\nModuleNotFoundError",
+            "missing report.json",
+        ] {
+            let result = hash_stream(
+                text.as_bytes(),
+                1024,
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await
+            .unwrap();
+            assert_eq!(result.bytes, text.len() as u64);
+            assert_eq!(
+                result.digest,
+                format!("sha256:{}", hex::encode(Sha256::digest(text.as_bytes())))
+            );
+        }
     }
 
     #[test]
@@ -1332,6 +1317,21 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(failed.verdict, verifier_sdk::RegressionVerdict::Failed);
+
+        let mut spoof_policy = policy.clone();
+        spoof_policy.command = vec![
+            "sh".into(),
+            "-c".into(),
+            "printf 'Traceback (most recent call last):\\n' >&2; exit 1".into(),
+        ];
+        let spoofed = executor()
+            .execute(&spoof_policy, &task.source_digest)
+            .await
+            .unwrap();
+        assert_eq!(
+            spoofed.exit_code, 1,
+            "solver output must not suppress the failing exit"
+        );
 
         let mut timeout_policy = policy.clone();
         timeout_policy.command = vec!["sleep".to_string(), "2".to_string()];

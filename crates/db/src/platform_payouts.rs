@@ -108,11 +108,13 @@ impl PostgresStore {
         excluded_contracts: &[String],
     ) -> DbResult<Vec<PlatformPayoutProofRow>> {
         let mut transaction = self.pool.begin().await?;
-        sqlx::query("SET TRANSACTION READ ONLY")
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
             .execute(&mut *transaction)
             .await?;
         sqlx::query("SET LOCAL statement_timeout = '5s'")
             .execute(&mut *transaction)
+            .await?;
+        crate::autonomous_canonicality::require_certified_history(&mut transaction, network)
             .await?;
         let rows = read_rows(
             &mut transaction,

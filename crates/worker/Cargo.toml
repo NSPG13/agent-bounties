@@ -6,8 +6,19 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+# Loopback Anvil fixtures shared with API rehearsals; never enabled in a release build.
+rehearsal-support = ["dep:alloy", "dep:sqlx", "chain-base/testing-customer-review-signer"]
+
 [dependencies]
+alloy = { workspace = true, optional = true }
+sqlx = { workspace = true, optional = true }
+broad-verification = { path = "../broad-verification" }
+object_store = { version = "0.12", default-features = false, features = ["aws"] }
+zip = { version = "4", default-features = false, features = ["deflate"] }
 anyhow.workspace = true
+web-push = { version = "=0.11.0", default-features = false }
+base64.workspace = true
 app = { path = "../app" }
 async-trait.workspace = true
 chain-base = { path = "../chain-base" }
@@ -16,6 +27,7 @@ db = { path = "../db" }
 domain = { path = "../domain" }
 hex.workspace = true
 hmac.workspace = true
+managed-orders = { path = "../managed-orders" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -26,9 +38,9 @@ tokio = { workspace = true, features = ["fs", "io-util", "net", "process"] }
 verifier-sdk = { path = "../verifier-sdk" }
 web-public = { path = "../web-public" }
 uuid.workspace = true
-
 tempfile = "3"
-zip = { version = "4", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
+alloy.workspace = true
+chain-base = { path = "../chain-base", features = ["testing-customer-review-signer"] }
 sqlx.workspace = true

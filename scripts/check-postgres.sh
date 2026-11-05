@@ -39,6 +39,8 @@ python3 scripts/run-required-postgres-test.py -p db tests::claim_funnel_counts_d
 python3 scripts/run-required-postgres-test.py -p db tests::opportunity_lifecycle_query_executes_against_migrated_postgres --exact
 python3 scripts/run-required-postgres-test.py -p db tests::site_analytics_round_trip_executes_against_migrated_postgres --exact
 python3 scripts/run-required-postgres-test.py -p db tests::platform_metrics_query_separates_history_from_identity_and_cohort_boundaries --exact
+python3 scripts/run-required-postgres-test.py -p db tests::controlled_card_test_exclusion_preserves_money_and_shared_wallet_customers --exact
+python3 scripts/run-required-postgres-test.py -p db managed_service_orders::metrics::postgres_tests:: --test-threads=1
 python3 scripts/run-required-postgres-test.py -p api platform_payouts::tests::platform_payout_http_replays_real_database_selection --exact
 python3 scripts/run-required-postgres-test.py -p db tests::opportunity_comment_round_trip_is_durable_and_idempotent --exact
 python3 scripts/run-required-postgres-test.py -p db tests::chatgpt_action_intent_replays_and_confirms_only_observed_transaction --exact
@@ -50,13 +52,17 @@ python3 scripts/run-required-postgres-test.py -p api tests::audience_audit_persi
 python3 scripts/run-required-postgres-test.py -p api tests::github_issue_api_sync_postgres_rejects_stale_cross_process_activity --exact
 python3 scripts/run-required-postgres-test.py -p db scoped_submission_history_reads_only_selected_bounty_postgres
 python3 scripts/run-required-postgres-test.py -p db tests::autonomous_v2_events_round_trip_through_postgres --exact
-python3 scripts/run-required-postgres-test.py -p db tests::invoice_order_events_are_sequenced_and_evidence_is_unique_postgres --exact
-python3 scripts/run-required-postgres-test.py -p api tests::invoiced_seller_of_record_path_runs_end_to_end_postgres --exact
+python3 scripts/run-required-postgres-test.py -p db managed_service_orders::tests:: --test-threads=1
+python3 scripts/run-required-postgres-test.py -p api managed_payments::tests:: --test-threads=1
 python3 scripts/run-required-postgres-test.py -p api tests::opportunity_exact_unfunded_lookup_crosses_list_window_postgres --exact
 python3 scripts/run-required-postgres-test.py -p api tests::github_issue_api_sync_postgres_serializes_concurrent_initial_sync --exact
 python3 scripts/run-required-postgres-test.py -p api tests::neynar_webhook_persists_one_short_draft_and_one_reply_across_retries --exact
 python3 scripts/run-required-postgres-test.py -p api tests::bounty_status_reads_scoped_postgres_after_cross_process_funding --exact
 python3 scripts/run-required-postgres-test.py -p mcp-server tests::mcp_bounty_status_reads_scoped_postgres_after_cross_process_funding --exact
+# Security regressions use their own explicit loopback-only fixture, even when
+# the caller supplied a different database for ordinary sync checks.
+python3 scripts/run-with-test-postgres.py -- python3 scripts/run-required-postgres-test.py -p db projection_snapshot::tests::projection_snapshot_cannot_mix_new_rows_with_old_certification_postgres --exact --test-threads=1
+python3 scripts/run-with-test-postgres.py -- python3 scripts/run-required-postgres-test.py -p api marketplace_readiness::progress_tests::progress_shared_observation_uses_four_rpc_calls_with_real_db_progress_postgres --exact --test-threads=1
 cargo run -p cli -- service-smoke-spawn \
   --api-base-url http://127.0.0.1:18180 \
   --mcp-base-url http://127.0.0.1:18190 \

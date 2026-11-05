@@ -94,6 +94,8 @@ pub struct GitHubDiscoveryItem {
     pub lifecycle_state: String,
     pub funded: bool,
     pub verification_ready: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_details: Option<serde_json::Value>,
     pub ready_to_earn: bool,
     pub reward_usdc_base_units: String,
     pub verifier_reward_usdc_base_units: String,
@@ -353,6 +355,7 @@ fn autonomous_discovery_item(
         lifecycle_state: lifecycle_state.to_string(),
         funded: fully_funded,
         verification_ready,
+        verification_details: item.verification_details.clone(),
         ready_to_earn: lifecycle_state == "ready_to_earn",
         reward_usdc_base_units: item.solver_reward.clone(),
         verifier_reward_usdc_base_units: item.verifier_reward.clone(),
@@ -780,6 +783,7 @@ fn open_competition_discovery_item(
         lifecycle_state: lifecycle_state.to_string(),
         funded: fully_funded,
         verification_ready: true,
+        verification_details: None,
         ready_to_earn: lifecycle_state == "ready_to_earn",
         reward_usdc_base_units: solver_reward.to_string(),
         verifier_reward_usdc_base_units: verifier_reward.to_string(),
@@ -1045,6 +1049,7 @@ mod tests {
             });
         }
         AutonomousBountyFeedItem {
+            verification_details: None,
             bounty_id: format!("0x{}", "bb".repeat(32)),
             bounty_contract: contract.to_string(),
             creator: "0x2222222222222222222222222222222222222222".to_string(),

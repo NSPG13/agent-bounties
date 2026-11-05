@@ -624,10 +624,22 @@ mod tests {
         use chain_base::{OpenCompetitionV2Event, OpenCompetitionV2EventKind};
         use db::OpenCompetitionV2SafeContext;
         use tower::ServiceExt;
-        let store =
-            PostgresStore::connect(&std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap())
-                .await
-                .unwrap();
+        // This fixture asserts the complete reporting snapshot. Other release
+        // tests deliberately retain uncertified or invalidated v1 history;
+        // never certify or discard their rows merely to make this test pass.
+        let url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        db::test_support::assert_isolated_security_database(&url);
+        let admin = sqlx::PgPool::connect(&url).await.unwrap();
+        let schema = format!("payout_proof_{}", Uuid::new_v4().simple());
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        let options = url
+            .parse::<sqlx::postgres::PgConnectOptions>()
+            .unwrap()
+            .options([("search_path", schema.as_str())]);
+        let store = PostgresStore::from_pool(sqlx::PgPool::connect_with(options).await.unwrap());
         store.migrate().await.unwrap();
         for number in [901_u64, 902] {
             store.upsert_open_competition_v2_event("base-mainnet", &format!("0x{number:040x}"),

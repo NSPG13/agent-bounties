@@ -13,6 +13,13 @@ if (-not $pythonCommand) {
     throw "python or py is required to run the Python SDK smoke"
 }
 
+if ($env:AGENT_BOUNTIES_LOCAL_TEST_DATABASE -ne "1") {
+    $shellPath = (Get-Process -Id $PID).Path
+    Invoke-Checked { & $pythonCommand.Source @pythonArgs (Join-Path $PSScriptRoot "run-with-test-postgres.py") -- $shellPath -NoProfile -File $PSCommandPath }
+    return
+}
+Invoke-Checked { & $pythonCommand.Source @pythonArgs (Join-Path $PSScriptRoot "run-with-test-postgres.py") --validate-existing }
+
 & $pythonCommand.Source @pythonArgs -c "import httpx; from eth_hash.auto import keccak" *> $null
 if ($LASTEXITCODE -ne 0) {
     Invoke-Checked { & $pythonCommand.Source @pythonArgs -m pip install -e (Join-Path $repoRoot "crates\sdk-python") }
@@ -30,17 +37,21 @@ try {
     $oldDatabaseUrl = $env:DATABASE_URL
     $oldPythonPath = $env:PYTHONPATH
     $oldOperatorApiToken = $env:OPERATOR_API_TOKEN
+    $oldWalletSession = $env:AGENT_BOUNTIES_SMOKE_WALLET_SESSION
+    $oldPublicationLimit = $env:AUTH_PUBLICATIONS_PER_DAY
+    $walletSessionFile = [System.IO.Path]::GetTempFileName()
 
     $env:API_BIND_ADDR = "127.0.0.1:18280"
     $env:PUBLIC_BASE_URL = $apiBaseUrl
     $env:MCP_BASE_URL = "http://127.0.0.1:18290"
     $env:PYTHONPATH = Join-Path $repoRoot "crates\sdk-python"
     $env:OPERATOR_API_TOKEN = "agent-bounties-local-sdk-smoke"
-    Remove-Item Env:DATABASE_URL -ErrorAction SilentlyContinue
+    $env:AUTH_PUBLICATIONS_PER_DAY = "4"
 
-    $apiPath = Join-Path $repoRoot "target\debug\api.exe"
+    $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $repoRoot "target" }
+    $apiPath = Join-Path $targetDir "debug\api.exe"
     if (-not (Test-Path $apiPath)) {
-        $apiPath = Join-Path $repoRoot "target\debug\api"
+        $apiPath = Join-Path $targetDir "debug\api"
     }
     $api = Start-Process `
         -FilePath $apiPath `
@@ -67,6 +78,9 @@ try {
             throw "API did not become ready at $apiBaseUrl"
         }
 
+        Invoke-Checked { & $pythonCommand.Source @pythonArgs scripts\seed-smoke-wallet.py --container $env:AGENT_BOUNTIES_TEST_POSTGRES_CONTAINER --output $walletSessionFile }
+        $env:AGENT_BOUNTIES_SMOKE_WALLET_SESSION = [System.IO.File]::ReadAllText($walletSessionFile)
+
         Invoke-Checked { & $pythonCommand.Source @pythonArgs -m agent_bounties.smoke --base-url $apiBaseUrl }
         Invoke-Checked { & $pythonCommand.Source @pythonArgs crates\sdk-python\examples\cofund_claim.py --base-url $apiBaseUrl }
 
@@ -89,6 +103,9 @@ try {
         if ($null -ne $oldDatabaseUrl) { $env:DATABASE_URL = $oldDatabaseUrl } else { Remove-Item Env:DATABASE_URL -ErrorAction SilentlyContinue }
         if ($null -ne $oldPythonPath) { $env:PYTHONPATH = $oldPythonPath } else { Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue }
         if ($null -ne $oldOperatorApiToken) { $env:OPERATOR_API_TOKEN = $oldOperatorApiToken } else { Remove-Item Env:OPERATOR_API_TOKEN -ErrorAction SilentlyContinue }
+        if ($null -ne $oldWalletSession) { $env:AGENT_BOUNTIES_SMOKE_WALLET_SESSION = $oldWalletSession } else { Remove-Item Env:AGENT_BOUNTIES_SMOKE_WALLET_SESSION -ErrorAction SilentlyContinue }
+        if ($null -ne $oldPublicationLimit) { $env:AUTH_PUBLICATIONS_PER_DAY = $oldPublicationLimit } else { Remove-Item Env:AUTH_PUBLICATIONS_PER_DAY -ErrorAction SilentlyContinue }
+        Remove-Item $walletSessionFile -ErrorAction SilentlyContinue
     }
 }
 finally {

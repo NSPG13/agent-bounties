@@ -18,6 +18,19 @@ SPEC.loader.exec_module(guard)
 
 
 class AgentDiscoveryContractTests(unittest.TestCase):
+    def test_retired_v1_cannot_be_readvertised_for_new_exposure(self) -> None:
+        protocol = {
+            "protocol_version": "agent-bounties/autonomous-v1", "chain_id": 8453,
+            "status": "recovery_only", "new_creation_enabled": False,
+            "new_funding_enabled": False, "new_claims_enabled": False,
+        }
+        guard.validate_protocol_retirement(protocol)
+        for key, value in (("status", "active"), ("chain_id", 84532),
+                           ("new_creation_enabled", True), ("new_funding_enabled", None),
+                           ("new_claims_enabled", 0)):
+            with self.subTest(key=key), self.assertRaises(SystemExit):
+                guard.validate_protocol_retirement({**protocol, key: value})
+
     def create_repository(
         self, root: Path, *, advertise_a2a: bool, conforming_a2a: bool = False
     ) -> None:

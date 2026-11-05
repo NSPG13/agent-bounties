@@ -182,28 +182,23 @@ R3 changes start disabled, then progress through test mode, internal canary,
 low-value public canary, and bounded expansion. R4 changes never deploy or
 activate from an unattended CI wallet.
 
-Reviewed application releases use the `Render Deploy Recovery` workflow as an
-R2 action. It runs only after successful `CI` for a same-repository push to
-`main`, requires the latest successful SHA reachable from current `main`,
-deploys that exact SHA through Render's API, waits for API, MCP, the legacy
-indexer, and the versioned Open Competition indexer to reach terminal `live`,
-and verifies API/MCP revision headers. The sole provisioning recovery is an
-absent allowlisted Open Competition indexer: the controller verifies the exact
-repository Blueprint identity and synchronizes it. If Render reports the
-Blueprint healthy without materializing the worker, the controller may create
-only that worker through the service API using the validated legacy worker's
-workspace, project environment, database binding, and exact existing
-environment group. It read-verifies the new worker and revalidates all bindings
-before deployment. The controller then reconciles only the checked-in
-hidden-canary manifest, verifier catalog, and explicit false activation gates
-on the exact shared environment group. Other missing or ambiguous services fail closed.
-Native provider commit triggers are disabled so two independent deploy
-authorities cannot race. The Render credential is isolated to this workflow;
-the scheduled observer and application containers never receive it. This
-authority does not extend to contracts, wallets, payments, verification, or
-settlement. Provisioning, rotating, or revoking the Render credential remains
-an explicit R3 access change; unattended use is limited to the allowlisted R2
-application deployment.
+Reviewed application releases use `Public Runtime Release` after successful CI
+for an exact public-main push. The controller checks public build-input parity,
+validates the complete service inventory, waits for that exact revision to be live,
+and verifies API/MCP health headers. A production revision pin can hold expansion.
+The old `Render Deploy Recovery` workflow remains disabled. See
+[public runtime provenance](public-runtime-provenance.md).
+
+Native provider commit triggers are disabled. The deploy controller receives only
+the Render credential at its deploy step; it never changes runtime environment
+values or payment settings. Initial repository migration is an explicit manual
+operation limited to the reviewed inventory. An hourly observer uses GET requests
+to check that every listed service, including workers, still uses public main and
+a publicly reachable live commit. Its separate HTTP check verifies API/MCP revision
+agreement. Repository administrators and Render operators remain a trust boundary.
+
+These controls grant no contract, wallet, payment, verifier or settlement authority.
+Credential provisioning and rotation remain R3 access decisions.
 
 Exit: zero-downtime deployment reports the expected revision and post-deploy
 smoke passes before traffic or feature scope expands.

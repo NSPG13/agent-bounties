@@ -1,4 +1,5 @@
 import { AgentBountiesClient, hashArtifact } from "../src/index.js";
+import { localFixtureClient } from "../src/smoke-fixture.js";
 
 declare const process: {
   argv: string[];
@@ -43,7 +44,7 @@ function baseUrlFromArgs(): string {
   return "http://127.0.0.1:8080";
 }
 
-async function runExample(client: AgentBountiesClient): Promise<JsonObject> {
+async function runExample(client: AgentBountiesClient, solverClient: AgentBountiesClient): Promise<JsonObject> {
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
   const discovery = asObject(await client.getDiscoveryManifest(), "discovery");
@@ -64,7 +65,7 @@ async function runExample(client: AgentBountiesClient): Promise<JsonObject> {
   );
 
   const solver = asObject(
-    await client.registerAgent(
+    await solverClient.registerAgent(
       `typescript-example-solver-${suffix}`,
       "0x2222222222222222222222222222222222222222",
     ),
@@ -140,7 +141,7 @@ async function runExample(client: AgentBountiesClient): Promise<JsonObject> {
   );
 
   const claimed = asObject(
-    await client.claimBounty(bountyId, { solver_agent_id: stringField(solver, "id") }),
+    await solverClient.claimBounty(bountyId, { solver_agent_id: stringField(solver, "id") }),
     "claimed",
   );
   requireCondition(claimed.status === "Claimed", "claim did not move bounty to Claimed");
@@ -169,7 +170,7 @@ async function runExample(client: AgentBountiesClient): Promise<JsonObject> {
 
   const artifactBody = JSON.stringify({ sdk: "typescript", cofunded: true });
   const submission = asObject(
-    await client.submitResult(bountyId, {
+    await solverClient.submitResult(bountyId, {
       solver_agent_id: stringField(solver, "id"),
       artifact_uri: "memory://typescript-sdk-cofund-claim.json",
       artifact_body: artifactBody,
@@ -204,9 +205,7 @@ async function runExample(client: AgentBountiesClient): Promise<JsonObject> {
 }
 
 const result = await runExample(
-  new AgentBountiesClient({
-    baseUrl: baseUrlFromArgs(),
-    operatorApiToken: process.env.OPERATOR_API_TOKEN,
-  }),
+  localFixtureClient(baseUrlFromArgs(), process.env.OPERATOR_API_TOKEN),
+      localFixtureClient(baseUrlFromArgs(), process.env.AGENT_BOUNTIES_SMOKE_WALLET_SESSION, "wallet"),
 );
 console.log(JSON.stringify(result, null, 2));

@@ -389,35 +389,7 @@ fn wallet_exclusion_response(
     }
 }
 
-pub(crate) async fn bind_terms_attribution(
-    state: &SharedState,
-    headers: &HeaderMap,
-    terms_hash: &str,
-    creator_wallet: &str,
-) -> Result<(), StatusCode> {
-    let Some((token_hash, handoff_id)) = authenticated_handoff(state, headers)? else {
-        return Ok(());
-    };
-    state
-        .store
-        .as_ref()
-        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?
-        .bind_distribution_handoff_terms(
-            &token_hash,
-            handoff_id,
-            terms_hash,
-            creator_wallet,
-            Utc::now(),
-        )
-        .await
-        .map(|_| ())
-        .map_err(|error| match error {
-            db::DbError::DistributionAttributionConflict(_) => StatusCode::CONFLICT,
-            _ => StatusCode::SERVICE_UNAVAILABLE,
-        })
-}
-
-fn authenticated_handoff(
+pub(crate) fn authenticated_handoff(
     state: &SharedState,
     headers: &HeaderMap,
 ) -> Result<Option<(String, Uuid)>, StatusCode> {

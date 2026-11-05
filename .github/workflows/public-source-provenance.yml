@@ -1,0 +1,55 @@
+name: Public source provenance
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'scripts/check_public_runtime_parity.py'
+      - 'scripts/test_public_runtime_parity.py'
+      - 'scripts/check_production_public_revision.py'
+      - 'scripts/test_production_public_revision.py'
+      - 'scripts/check_render_public_sources.py'
+      - 'scripts/test_render_public_sources.py'
+      - 'scripts/deploy_public_runtime.py'
+      - 'ops/public-runtime-services.json'
+      - '.github/workflows/public-source-provenance.yml'
+permissions:
+  contents: read
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - run: |
+          python scripts/test_public_runtime_parity.py -v
+          python scripts/test_production_public_revision.py -v
+          python scripts/test_render_public_sources.py -v
+  observe:
+    if: github.event_name != 'pull_request' && github.repository == 'NSPG13/agent-bounties'
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: python scripts/check_production_public_revision.py
+  inventory:
+    if: github.event_name != 'pull_request' && github.repository == 'NSPG13/agent-bounties' && github.ref == 'refs/heads/main'
+    needs: contract
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Read production service bindings and live public revisions
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        run: python scripts/check_render_public_sources.py

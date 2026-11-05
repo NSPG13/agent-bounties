@@ -1848,7 +1848,7 @@ mod tests {
         StructuredArtifactProgramInput {
             scope: fixture().scope,
             threshold: 7,
-            artifact: br#"{"schema":"agent-bounties/agent-guide-v1","canonical_url":"https://agentizable.ai/tasks/","steps":["discover","inspect","solve","prove","get_paid"]}"#.to_vec(),
+            artifact: br#"{"schema":"agent-bounties/agent-guide-v1","canonical_url":"https://agentbounties.app/tasks/","steps":["discover","inspect","solve","prove","get_paid"]}"#.to_vec(),
             requirements: alloc::vec![
                 ArtifactRequirement::JsonValid { weight: 1 },
                 ArtifactRequirement::JsonPointerStringEquals {
@@ -1858,7 +1858,7 @@ mod tests {
                 },
                 ArtifactRequirement::JsonPointerStringEquals {
                     pointer: "/canonical_url".into(),
-                    expected: "https://agentizable.ai/tasks/".into(),
+                    expected: "https://agentbounties.app/tasks/".into(),
                     weight: 2,
                 },
                 ArtifactRequirement::JsonArrayMinimumLength {

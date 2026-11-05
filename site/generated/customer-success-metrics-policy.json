@@ -1,0 +1,7 @@
+{
+  "schema_version": "agent-bounties/customer-success-metrics-policy-v1",
+  "network": "base-mainnet",
+  "controlled_test_bounty_contracts": [
+    "0xae7be7e198e8ed52d6878ea2c111847565087b1f"
+  ]
+}

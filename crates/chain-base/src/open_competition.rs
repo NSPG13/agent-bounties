@@ -3858,16 +3858,7 @@ fn take_batch_words(
             bytes.len() / 32
         )));
     }
-    bytes
-        .chunks_exact(32)
-        .map(|word| {
-            word.try_into().map_err(|_| {
-                ChainBaseError::InvalidRpcResponse(
-                    "eth_call result contains a partial ABI word".to_string(),
-                )
-            })
-        })
-        .collect()
+    Ok(bytes.as_chunks::<32>().0.to_vec())
 }
 
 fn take_batch_code_hash(

@@ -69,6 +69,37 @@ fn project(events: &[OrderEvent]) -> Result<OrderState> {
     project_order(ORDER, &policy(), events)
 }
 
+fn buyer_refund(status: BuyerRefundStatus, evidence: &str, observed_sequence: usize) -> OrderEvent {
+    OrderEvent::BuyerRefundReconciled {
+        credit_note_id: "cn_1".into(),
+        invoice_id: "in_1".into(),
+        livemode: false,
+        evidence_id: evidence.into(),
+        observed_sequence,
+        refunds: vec![BuyerRefund {
+            refund_id: "re_1".into(),
+            amount_cents: 11_750,
+            currency: "usd".into(),
+            status,
+        }],
+    }
+}
+
+fn credit_note_events() -> Vec<OrderEvent> {
+    let mut events = through_funding()[..3].to_vec();
+    events.push(OrderEvent::CancellationRequested {
+        reason: "customer cancellation".into(),
+    });
+    events.push(OrderEvent::CreditNoteIssued {
+        credit_note_id: "cn_1".into(),
+        invoice_id: "in_1".into(),
+        refund_cents: 11_750,
+        stripe_event_id: "evt_cn".into(),
+        livemode: false,
+    });
+    events
+}
+
 #[test]
 fn quote_escrows_the_exact_v2_target_and_invoices_whole_cents() {
     let quote = quote();
@@ -298,8 +329,17 @@ fn cancellation_before_funding_refunds_the_buyer_once() {
     assert!(project(&partial).is_err());
     events.push(credit(11_750, "evt_cn"));
     let state = project(&events).unwrap();
-    assert_eq!(state.status, OrderStatus::Refunded);
+    assert_eq!(state.status, OrderStatus::RefundPending);
+    assert_eq!(state.refund_outstanding_cents(), 11_750);
     assert_eq!(state.refund_due_cents(), 0);
+    events.push(buyer_refund(
+        BuyerRefundStatus::Succeeded,
+        "refund_success",
+        events.len(),
+    ));
+    let state = project(&events).unwrap();
+    assert_eq!(state.status, OrderStatus::Refunded);
+    assert_eq!(state.refund_outstanding_cents(), 0);
     events.push(credit(11_750, "evt_cn_2"));
     assert!(project(&events).is_err(), "no second refund");
 }
@@ -342,6 +382,179 @@ fn cancellation_after_funding_waits_for_the_treasury_refund() {
         log_key: "84532:0xrefund:0".to_string(),
     });
     assert_eq!(project(&events).unwrap().refund_due_cents(), 11_750);
+}
+
+#[test]
+fn credit_note_history_replays_as_pending_without_repayment_evidence() {
+    // The stored legacy event shape stays readable, but never claims a refund.
+    let bytes = serde_json::to_vec(&credit_note_events()).unwrap();
+    let restored: Vec<OrderEvent> = serde_json::from_slice(&bytes).unwrap();
+    let state = project(&restored).unwrap();
+    assert_eq!(state.status, OrderStatus::RefundPending);
+    assert_eq!(state.next_action, "reconcile_buyer_refund");
+    assert_eq!(state.refund_outstanding_cents(), 11_750);
+    assert!(state.buyer_refunds.is_empty());
+}
+
+#[test]
+fn buyer_refunds_wait_for_success_and_preserve_failed_or_action_required_states() {
+    for (status, expected, action) in [
+        (
+            BuyerRefundStatus::Pending,
+            OrderStatus::RefundPending,
+            "reconcile_buyer_refund",
+        ),
+        (
+            BuyerRefundStatus::RequiresAction,
+            OrderStatus::RefundPending,
+            "complete_buyer_refund_action_then_reconcile",
+        ),
+        (
+            BuyerRefundStatus::Failed,
+            OrderStatus::RefundFailed,
+            "recover_failed_buyer_refund",
+        ),
+        (
+            BuyerRefundStatus::Canceled,
+            OrderStatus::RefundFailed,
+            "recover_failed_buyer_refund",
+        ),
+    ] {
+        let mut events = credit_note_events();
+        events.push(buyer_refund(status, "refund_status", events.len()));
+        let state = project(&events).unwrap();
+        assert_eq!(state.status, expected);
+        assert_eq!(state.next_action, action);
+        assert_eq!(state.refund_outstanding_cents(), 11_750);
+    }
+}
+
+#[test]
+fn refund_bindings_and_total_cannot_change_or_cross_orders() {
+    let event = buyer_refund(
+        BuyerRefundStatus::Succeeded,
+        "refund_status",
+        credit_note_events().len(),
+    );
+    let base = serde_json::to_value(&event).unwrap();
+    for (pointer, value) in [
+        ("/credit_note_id", serde_json::json!("cn_other")),
+        ("/invoice_id", serde_json::json!("in_other")),
+        ("/livemode", serde_json::json!(true)),
+        ("/refunds/0/currency", serde_json::json!("mxn")),
+        ("/refunds/0/amount_cents", serde_json::json!(11_749)),
+        ("/refunds/0/refund_id", serde_json::json!("re_bad/path")),
+        ("/refunds", serde_json::json!([])),
+        (
+            "/refunds",
+            serde_json::json!([base["refunds"][0], base["refunds"][0]]),
+        ),
+    ] {
+        let mut value_event = base.clone();
+        *value_event.pointer_mut(pointer).unwrap() = value;
+        let mut events = credit_note_events();
+        events.push(serde_json::from_value(value_event).unwrap());
+        assert!(project(&events).is_err(), "{pointer}");
+    }
+    let mut early = through_funding()[..3].to_vec();
+    early.push(event.clone());
+    assert!(project(&early).is_err());
+    let mut duplicate = credit_note_events();
+    duplicate.extend([event.clone(), event]);
+    assert!(project(&duplicate).is_err());
+}
+
+#[test]
+fn stale_refund_reads_cannot_overwrite_newer_evidence_and_bank_returns_stay_visible() {
+    let mut events = credit_note_events();
+    events.push(buyer_refund(
+        BuyerRefundStatus::Pending,
+        "pending",
+        events.len(),
+    ));
+    let stale_read = buyer_refund(BuyerRefundStatus::Pending, "stale_pending", events.len());
+    events.push(buyer_refund(
+        BuyerRefundStatus::Succeeded,
+        "success",
+        events.len(),
+    ));
+    let mut stale = events.clone();
+    stale.push(stale_read);
+    assert!(
+        project(&stale).is_err(),
+        "the order changed while Stripe was being read"
+    );
+
+    // Stripe can ask for corrected banking information after initially reporting success.
+    for (status, identity) in [
+        (BuyerRefundStatus::RequiresAction, "bank_return_action"),
+        (BuyerRefundStatus::Pending, "bank_retry_pending"),
+        (BuyerRefundStatus::Succeeded, "bank_retry_success"),
+        (BuyerRefundStatus::Failed, "bank_failure"),
+    ] {
+        events.push(buyer_refund(status, identity, events.len()));
+        let state = project(&events).unwrap();
+        assert_eq!(
+            state.refund_outstanding_cents(),
+            if status == BuyerRefundStatus::Succeeded {
+                0
+            } else {
+                11_750
+            }
+        );
+    }
+    assert_eq!(project(&events).unwrap().status, OrderStatus::RefundFailed);
+    let mut replaced = events.clone();
+    let mut replacement = buyer_refund(BuyerRefundStatus::Succeeded, "replacement", events.len());
+    if let OrderEvent::BuyerRefundReconciled { refunds, .. } = &mut replacement {
+        refunds[0].refund_id = "re_other".into();
+    }
+    replaced.push(replacement);
+    assert!(
+        project(&replaced).is_err(),
+        "retrying payment is a separate recovery operation"
+    );
+    events.push(buyer_refund(
+        BuyerRefundStatus::Succeeded,
+        "terminal_failure",
+        events.len(),
+    ));
+    assert!(
+        project(&events).is_err(),
+        "a failed refund needs a separate recovery operation"
+    );
+}
+
+#[test]
+fn split_refund_requires_every_allocated_part_to_succeed() {
+    let mut events = credit_note_events();
+    let mut split = buyer_refund(BuyerRefundStatus::Succeeded, "split_pending", events.len());
+    if let OrderEvent::BuyerRefundReconciled { refunds, .. } = &mut split {
+        refunds[0].amount_cents = 5_000;
+        refunds.push(BuyerRefund {
+            refund_id: "pyr_2".into(),
+            amount_cents: 6_750,
+            currency: "usd".into(),
+            status: BuyerRefundStatus::Pending,
+        });
+    }
+    events.push(split.clone());
+    let state = project(&events).unwrap();
+    assert_eq!(state.status, OrderStatus::RefundPending);
+    assert_eq!(state.refund_outstanding_cents(), 6_750);
+    if let OrderEvent::BuyerRefundReconciled {
+        refunds,
+        evidence_id,
+        observed_sequence,
+        ..
+    } = &mut split
+    {
+        refunds[1].status = BuyerRefundStatus::Succeeded;
+        *evidence_id = "split_success".into();
+        *observed_sequence = events.len();
+    }
+    events.push(split);
+    assert_eq!(project(&events).unwrap().status, OrderStatus::Refunded);
 }
 
 #[test]
@@ -395,6 +608,12 @@ fn cancellation_after_planned_funding_never_refunds_until_the_treasury_is_refund
     });
     assert_eq!(project(&events).unwrap().refund_due_cents(), 11_750);
     events.push(credit);
+    assert_eq!(project(&events).unwrap().status, OrderStatus::RefundPending);
+    events.push(buyer_refund(
+        BuyerRefundStatus::Succeeded,
+        "refund_success",
+        events.len(),
+    ));
     assert_eq!(project(&events).unwrap().status, OrderStatus::Refunded);
 
     // A contractor who settles the late-funded bounty first is paid and the buyer is not refunded.

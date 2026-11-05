@@ -52,6 +52,19 @@ def parse_event(value: object, expected_repository: str) -> RegistrationRequest:
         raise RegistrationError("registration event belongs to a different repository")
     if issue.get("pull_request") is not None:
         raise RegistrationError("participant registration must be requested on an issue")
+    # This legacy relay spends a shared operator allowance. Public signup must
+    # not confer spending authority merely by creating a GitHub account.
+    if comment.get("author_association") not in {"OWNER", "MEMBER", "COLLABORATOR"}:
+        raise RegistrationError("sponsored registration requires a trusted repository participant; request maintainer review")
+    labels = issue.get("labels", [])
+    if not isinstance(labels, list) or not any(
+        isinstance(label, dict) and label.get("name") == "participant-registration-approved"
+        for label in labels
+    ):
+        raise RegistrationError("sponsored registration requires an explicitly approved registration issue")
+    author = comment.get("user", {})
+    if not isinstance(author, dict) or author.get("id") != sender.get("id"):
+        raise RegistrationError("comment author and requesting GitHub identity must agree")
     match = COMMAND.fullmatch(str(comment.get("body", "")))
     if match is None:
         raise RegistrationError("registration command must be `/agent-bounty register 0xWallet`")

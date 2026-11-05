@@ -160,10 +160,9 @@ pub fn assert_funded(value: &serde_json::Value, selected: uuid::Uuid, other: uui
     let contributions = value["funding_contributions"].as_array().unwrap();
     assert_eq!(contributions.len(), 1);
     assert_eq!(contributions[0]["bounty_id"], selected.to_string());
-    assert_eq!(
-        contributions[0]["external_reference"],
-        format!("pg-status-fixture:{selected}")
-    );
+    // Anonymous status keeps the durable funding amount but hides provider references.
+    assert!(contributions[0]["external_reference"].is_null());
+    assert_eq!(contributions[0]["amount"]["amount"], 1_000_000);
     assert!(!serde_json::to_string(value)
         .unwrap()
         .contains(&other.to_string()));

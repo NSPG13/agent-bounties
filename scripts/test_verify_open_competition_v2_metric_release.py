@@ -14,6 +14,27 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(MODULE)
 
 
+class ReviewedMetricSourceTests(unittest.TestCase):
+    def test_current_inputs_preserve_each_reviewed_source_identity(self) -> None:
+        root = SCRIPT.resolve().parents[1]
+        for profile in (
+            "public-vector-metric-v1",
+            "structured-artifact-metric-v1",
+            "forward-canonical-gmv-attribution-metric-v2",
+        ):
+            with self.subTest(profile=profile):
+                identity = json.loads((root / "programs" / profile / "release-identity.json").read_text())
+                files = (
+                    "crates/competition-metric-core/Cargo.toml",
+                    "crates/competition-metric-core/src/lib.rs",
+                    f"programs/{profile}/program/Cargo.toml",
+                    f"programs/{profile}/program/Cargo.lock",
+                    f"programs/{profile}/program/src/main.rs",
+                )
+                self.assertEqual(identity["status"], "reproduced_beta3")
+                self.assertEqual(MODULE.canonical_source_hash(root, files), identity["source_hash"])
+
+
 class MetricReleaseCandidateTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()

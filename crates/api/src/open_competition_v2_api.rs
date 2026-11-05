@@ -155,7 +155,7 @@ pub(crate) struct EventQuery {
     bounty_contract: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CreationBody {
     network: Option<String>,
@@ -166,9 +166,9 @@ pub(crate) struct CreationBody {
     params: CreateParamsBody,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
-struct CreateParamsBody {
+pub(crate) struct CreateParamsBody {
     solver_reward: String,
     keeper_reward: String,
     funding_deadline: u64,
@@ -188,7 +188,7 @@ struct CreateParamsBody {
     beta_risk_hash: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FundingBody {
     network: Option<String>,
@@ -198,15 +198,18 @@ pub(crate) struct FundingBody {
     acknowledged_risk_hash: String,
 }
 
-#[derive(Debug, Deserialize)]
+// Explicit schema references use the API-only mirrors registered in ApiDoc;
+// deriving schemas inside metric-core would change its approved proof identity.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct StructuredArtifactProfileBody {
     network: Option<String>,
     threshold: String,
+    #[schema(value_type = Vec<ArtifactRequirement>)]
     requirements: Vec<ArtifactRequirement>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProofQuoteBody {
     network: Option<String>,
@@ -225,40 +228,45 @@ pub(crate) struct ProofAttributionQuery {
     competition_contract: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
-struct PublicVectorMetricBody {
+pub(crate) struct PublicVectorMetricBody {
+    #[schema(value_type = PublicVectorMode)]
     mode: PublicVectorMode,
     threshold: String,
+    #[schema(value_type = Vec<PublicVectorCase>)]
     vectors: Vec<PublicVectorCase>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
-struct StructuredArtifactMetricBody {
+pub(crate) struct StructuredArtifactMetricBody {
     profile_id: String,
     threshold: String,
     artifact_utf8: String,
+    #[schema(value_type = Vec<ArtifactRequirement>)]
     requirements: Vec<ArtifactRequirement>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
-struct ForwardCanonicalGmvMetricBody {
+pub(crate) struct ForwardCanonicalGmvMetricBody {
     profile_id: String,
+    #[schema(value_type = ForwardCanonicalGmvCampaign)]
     campaign: ForwardCanonicalGmvCampaign,
+    #[schema(value_type = ForwardCanonicalGmvSnapshot)]
     snapshot: ForwardCanonicalGmvSnapshot,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(untagged)]
-enum ProofMetricBody {
+pub(crate) enum ProofMetricBody {
     PublicVector(PublicVectorMetricBody),
     StructuredArtifact(StructuredArtifactMetricBody),
     ForwardCanonicalGmv(ForwardCanonicalGmvMetricBody),
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProofBody {
     network: Option<String>,
@@ -272,7 +280,7 @@ pub(crate) struct ProofBody {
     solver_signature: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ActionBody {
     network: Option<String>,
@@ -282,7 +290,7 @@ pub(crate) struct ActionBody {
     contributor: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProofRelayAuthorizationBody {
     authorization_deadline: u64,
@@ -357,7 +365,9 @@ fn profiles_document(
     }))
 }
 
-#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta3/structured-artifact-profile", responses((status = 200, description = "Exact immutable structured-artifact metric fields for V2 creation"), (status = 400, description = "Invalid deterministic artifact requirements"), (status = 503, description = "Reviewed metric profile is unavailable")))]
+#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta3/structured-artifact-profile", responses((status = 200, description = "Exact immutable structured-artifact metric fields for V2 creation"), (status = 400, description = "Invalid deterministic artifact requirements"), (status = 503, description = "Reviewed metric profile is unavailable")),
+    request_body = StructuredArtifactProfileBody
+)]
 pub(crate) async fn prepare_structured_artifact_profile(
     Json(body): Json<StructuredArtifactProfileBody>,
 ) -> ApiResult {
@@ -429,7 +439,9 @@ pub(crate) async fn release(
     })))
 }
 
-#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta3/validate", responses((status = 200, description = "Immutable competition profile is valid"), (status = 400, description = "Machine-readable profile validation failure")))]
+#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta3/validate", responses((status = 200, description = "Immutable competition profile is valid"), (status = 400, description = "Machine-readable profile validation failure")),
+    request_body = CreationBody
+)]
 pub(crate) async fn validate_creation(Json(body): Json<CreationBody>) -> ApiResult {
     match build_creation_plan(body, false) {
         Ok(plan) => Ok(Json(json!({
@@ -445,7 +457,9 @@ pub(crate) async fn validate_creation(Json(body): Json<CreationBody>) -> ApiResu
     }
 }
 
-#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta3/creation-preparation", responses((status = 200, description = "Exact unsigned create and optional funding calls"), (status = 503, description = "Public Beta3 creation is gated")))]
+#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta3/creation-preparation", responses((status = 200, description = "Exact unsigned create and optional funding calls"), (status = 503, description = "Public Beta3 creation is gated")),
+    request_body = CreationBody
+)]
 pub(crate) async fn prepare_creation(
     State(state): State<SharedState>,
     Json(body): Json<CreationBody>,
@@ -470,7 +484,9 @@ pub(crate) async fn prepare_creation(
     })))
 }
 
-#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta3/funding-preparation", responses((status = 200, description = "Exact unsigned pooled-funding calls")))]
+#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta3/funding-preparation", responses((status = 200, description = "Exact unsigned pooled-funding calls")),
+    request_body = FundingBody
+)]
 pub(crate) async fn prepare_funding(Json(body): Json<FundingBody>) -> ApiResult {
     let network = network_or_default(body.network.clone());
     let release = release_from_environment(&network)?;
@@ -507,8 +523,12 @@ pub(crate) async fn inventory(
     let mut records = store
         .list_open_competition_v2_projections(&network, &release.factory_contract)
         .await
-        .map_err(|error| {
-            service_error("load_inventory", "database_read_failed", error.to_string())
+        .map_err(|_| {
+            service_error(
+                "load_inventory",
+                "database_read_failed",
+                "Canonical V2 inventory is temporarily unavailable. Try again later.",
+            )
         })?;
     if let Some(filter) = query.state {
         records.retain(|record| {
@@ -661,7 +681,14 @@ pub(crate) async fn events(
             .list_open_competition_v2_events(&network, &release.factory_contract)
             .await
     }
-    .map_err(|error| service_error("load_events", "database_read_failed", error.to_string()))?;
+    .map_err(|error| {
+        database_problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "load_events",
+            "database_read_failed",
+            error,
+        )
+    })?;
     if let Some(bounty_id) = query.bounty_id {
         events.retain(|event| event.bounty_id.eq_ignore_ascii_case(&bounty_id));
     }
@@ -679,7 +706,9 @@ pub(crate) async fn events(
     })))
 }
 
-#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta3/proof-quotes", responses((status = 200, description = "Five-minute solver- and artifact-bound x402 proof quote"), (status = 409, description = "Proof SLA cannot fit or competition is not active")))]
+#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta3/proof-quotes", responses((status = 200, description = "Five-minute solver- and artifact-bound x402 proof quote"), (status = 409, description = "Proof SLA cannot fit or competition is not active")),
+    request_body = ProofQuoteBody
+)]
 pub(crate) async fn create_proof_quote(
     State(state): State<SharedState>,
     Json(body): Json<ProofQuoteBody>,
@@ -690,7 +719,14 @@ pub(crate) async fn create_proof_quote(
     let records = store
         .list_open_competition_v2_projections(&network, &release.factory_contract)
         .await
-        .map_err(|error| service_error("quote_proof", "database_read_failed", error.to_string()))?;
+        .map_err(|error| {
+            database_problem(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "quote_proof",
+                "database_read_failed",
+                error,
+            )
+        })?;
     let record = records
         .into_iter()
         .find(|record| {
@@ -850,7 +886,14 @@ pub(crate) async fn create_proof_quote(
     let stored = store
         .insert_open_competition_v2_proof_job(&job)
         .await
-        .map_err(|error| conflict("quote_proof", "quote_replay_conflict", error.to_string()))?;
+        .map_err(|error| {
+            database_problem(
+                StatusCode::CONFLICT,
+                "quote_proof",
+                "quote_replay_conflict",
+                error,
+            )
+        })?;
     let challenge = proof_job_payment_challenge(&state, &release, &broker, &stored)?;
     Ok(Json(json!({
         "quote": quote,
@@ -861,7 +904,9 @@ pub(crate) async fn create_proof_quote(
     })))
 }
 
-#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta3/proof-preparation", responses((status = 200, description = "Direct call and exact EIP-712 relay authorization")))]
+#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta3/proof-preparation", responses((status = 200, description = "Direct call and exact EIP-712 relay authorization")),
+    request_body = ProofBody
+)]
 pub(crate) async fn prepare_proof(Json(body): Json<ProofBody>) -> ApiResult {
     let network = network_or_default(body.network);
     let solver_nonce = decimal_u128(&body.solver_nonce, "solver_nonce")?;
@@ -894,7 +939,9 @@ pub(crate) async fn prepare_proof(Json(body): Json<ProofBody>) -> ApiResult {
     })))
 }
 
-#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta3/action-preparation", responses((status = 200, description = "Finalization, expiry, cancellation, or permissionless refund call")))]
+#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta3/action-preparation", responses((status = 200, description = "Finalization, expiry, cancellation, or permissionless refund call")),
+    request_body = ActionBody
+)]
 pub(crate) async fn prepare_action(Json(body): Json<ActionBody>) -> ApiResult {
     let network = network_or_default(body.network);
     let plan = plan_open_competition_v2_action(
@@ -917,7 +964,14 @@ pub(crate) async fn get_proof_job(
     let mut job = store
         .get_open_competition_v2_proof_job(job_id)
         .await
-        .map_err(|error| service_error("get_proof_job", "database_read_failed", error.to_string()))?
+        .map_err(|error| {
+            database_problem(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "get_proof_job",
+                "database_read_failed",
+                error,
+            )
+        })?
         .ok_or_else(|| not_found("get_proof_job", "proof_job_not_found"))?;
     if job.state == OpenCompetitionV2ProofJobState::PaymentPending && job.payment_tx_hash.is_some()
     {
@@ -960,10 +1014,11 @@ pub(crate) async fn proof_attribution(
         .list_open_competition_v2_proof_jobs_for_contract(&network, &competition_contract)
         .await
         .map_err(|error| {
-            service_error(
+            database_problem(
+                StatusCode::SERVICE_UNAVAILABLE,
                 "proof_attribution",
                 "proof_job_read_failed",
-                error.to_string(),
+                error,
             )
         })?;
     if jobs.is_empty() {
@@ -976,10 +1031,11 @@ pub(crate) async fn proof_attribution(
         .list_open_competition_v2_events_for_contract(&network, &competition_contract)
         .await
         .map_err(|error| {
-            service_error(
+            database_problem(
+                StatusCode::SERVICE_UNAVAILABLE,
                 "proof_attribution",
                 "canonical_event_read_failed",
-                error.to_string(),
+                error,
             )
         })?;
     let relayer = state.x402_relayer.address();
@@ -1245,7 +1301,9 @@ pub(crate) async fn pay_proof_job(
     proof_job_payment_response(&job)
 }
 
-#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta3/proof-jobs/{job_id}/relay-authorization", params(("job_id" = Uuid, Path, description = "Proved hosted job ID")), responses((status = 200, description = "Exact EIP-712 typed data or accepted scoped signature"), (status = 409, description = "Job is not relayable")))]
+#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta3/proof-jobs/{job_id}/relay-authorization", params(("job_id" = Uuid, Path, description = "Proved hosted job ID")), responses((status = 200, description = "Exact EIP-712 typed data or accepted scoped signature"), (status = 409, description = "Job is not relayable")),
+    request_body = ProofRelayAuthorizationBody
+)]
 pub(crate) async fn authorize_proof_job_relay(
     State(state): State<SharedState>,
     Path(job_id): Path<Uuid>,
@@ -1256,10 +1314,11 @@ pub(crate) async fn authorize_proof_job_relay(
         .get_open_competition_v2_proof_job(job_id)
         .await
         .map_err(|error| {
-            service_error(
+            database_problem(
+                StatusCode::SERVICE_UNAVAILABLE,
                 "authorize_proof_relay",
                 "database_read_failed",
-                error.to_string(),
+                error,
             )
         })?
         .ok_or_else(|| not_found("authorize_proof_relay", "proof_job_not_found"))?;
@@ -1303,10 +1362,11 @@ pub(crate) async fn authorize_proof_job_relay(
         .list_open_competition_v2_projections(&job.network, &release.factory_contract)
         .await
         .map_err(|error| {
-            service_error(
+            database_problem(
+                StatusCode::SERVICE_UNAVAILABLE,
                 "authorize_proof_relay",
                 "database_read_failed",
-                error.to_string(),
+                error,
             )
         })?
         .into_iter()
@@ -1402,10 +1462,11 @@ pub(crate) async fn authorize_proof_job_relay(
             )
             .await
             .map_err(|error| {
-                conflict(
+                database_problem(
+                    StatusCode::CONFLICT,
                     "authorize_proof_relay",
                     "proof_job_transition_conflict",
-                    error.to_string(),
+                    error,
                 )
             })?;
         return Ok(Json(json!({
@@ -2533,11 +2594,11 @@ pub(crate) async fn current_indexer_agreement(
     let agreement = store
         .get_open_competition_v2_indexer_agreement(network, &release.factory_contract)
         .await
-        .map_err(|error| {
+        .map_err(|_| {
             service_error(
                 "resolve_release",
                 "indexer_agreement_read_failed",
-                error.to_string(),
+                "Canonical V2 reader checks are temporarily unavailable. Try again later.",
             )
         })?
         .ok_or_else(|| {
@@ -2547,6 +2608,13 @@ pub(crate) async fn current_indexer_agreement(
                 "Primary and shadow V2 indexers have not produced agreement evidence.",
             )
         })?;
+    validate_current_indexer_agreement(release, agreement)
+}
+
+pub(crate) fn validate_current_indexer_agreement(
+    release: &OpenCompetitionV2Release,
+    agreement: db::OpenCompetitionV2IndexerAgreement,
+) -> Result<db::OpenCompetitionV2IndexerAgreement, (StatusCode, Json<Value>)> {
     let max_age_seconds = env::var("OPEN_COMPETITION_V2_INDEXER_AGREEMENT_MAX_AGE_SECONDS")
         .ok()
         .and_then(|value| value.parse::<i64>().ok())
@@ -2827,6 +2895,22 @@ fn network_or_default(network: Option<String>) -> String {
         .unwrap_or_else(|| "base-mainnet".to_string())
 }
 
+// Database errors can contain SQL, persisted values, or connection details.
+// Retain the endpoint's machine-readable contract without serializing that data.
+fn database_problem(
+    status: StatusCode,
+    transition: &'static str,
+    code: &'static str,
+    _error: db::DbError,
+) -> (StatusCode, Json<Value>) {
+    let message = if status == StatusCode::CONFLICT {
+        "Saved proof-job state could not be confirmed. Check the existing job before retrying."
+    } else {
+        "Canonical V2 data is temporarily unavailable. Try again later."
+    };
+    problem(status, transition, code, true, message)
+}
+
 fn database_unavailable() -> (StatusCode, Json<Value>) {
     service_error(
         "load_canonical_state",
@@ -2892,6 +2976,72 @@ mod tests {
         OpenCompetitionV2MetricProgramRelease, OpenCompetitionV2ProjectedState,
         OpenCompetitionV2Projection,
     };
+
+    #[test]
+    fn diagnostics_database_problem_redacts_raw_details_and_preserves_contracts() {
+        for (status, transition, code) in [
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "load_events",
+                "database_read_failed",
+            ),
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "quote_proof",
+                "database_read_failed",
+            ),
+            (StatusCode::CONFLICT, "quote_proof", "quote_replay_conflict"),
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "get_proof_job",
+                "database_read_failed",
+            ),
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "proof_attribution",
+                "proof_job_read_failed",
+            ),
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "proof_attribution",
+                "canonical_event_read_failed",
+            ),
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "authorize_proof_relay",
+                "database_read_failed",
+            ),
+            (
+                StatusCode::CONFLICT,
+                "authorize_proof_relay",
+                "proof_job_transition_conflict",
+            ),
+        ] {
+            let error = db::DbError::OpenCompetitionV2Conflict(
+                "private-marker SQL row postgres://secret@private-db/token".to_string(),
+            );
+            let (actual_status, Json(body)) = database_problem(status, transition, code, error);
+            assert_eq!(actual_status, status);
+            assert_eq!(
+                body["schema_version"],
+                "agent-bounties/open-competition-v2-problem-v1"
+            );
+            assert_eq!(body["state"], "failed");
+            assert_eq!(body["failed_transition"], transition);
+            assert_eq!(body["error_code"], code);
+            assert_eq!(body["retryable"], true);
+            let text = body.to_string();
+            for private in [
+                "private-marker",
+                "SQL",
+                "postgres://",
+                "secret",
+                "private-db",
+            ] {
+                assert!(!text.contains(private));
+            }
+        }
+    }
 
     fn hash(byte: u8) -> String {
         format!("0x{}", hex::encode([byte; 32]))

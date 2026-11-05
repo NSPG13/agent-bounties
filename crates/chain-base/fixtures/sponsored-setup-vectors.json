@@ -1,0 +1,203 @@
+[
+  {
+    "digest": "0x2ece82ae0fc0d599c0cab7ee124f88fbeabd04831f2125c2890d72e3c6dd9b53",
+    "predicted_wallet": "0x68eff6ce023f2e9ce767fd623209ecc329335d28",
+    "release": {
+      "bounty_factory": "0x0101010101010101010101010101010101010101",
+      "bounty_factory_code_hash": "0x0202020202020202020202020202020202020202020202020202020202020202",
+      "deployment_block": 1,
+      "network": "base-sepolia",
+      "participant_registry": "0x0707070707070707070707070707070707070707",
+      "participant_registry_code_hash": "0x0808080808080808080808080808080808080808080808080808080808080808",
+      "wallet_factory": "0x0303030303030303030303030303030303030303",
+      "wallet_factory_code_hash": "0x0404040404040404040404040404040404040404040404040404040404040404",
+      "wallet_implementation": "0x0505050505050505050505050505050505050505",
+      "wallet_implementation_code_hash": "0x0606060606060606060606060606060606060606060606060606060606060606"
+    },
+    "request": {
+      "action": {
+        "kind": "wallet_deploy",
+        "policy": {
+          "ai_judge_verifier_set_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "allowed_actions": 15,
+          "allowed_verification_modes": 2,
+          "delegate": "0x0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+          "deterministic_verifier_module": "0x0000000000000000000000000000000000000000",
+          "max_bounty_target_micro_usdc": 100000000,
+          "max_lifetime_micro_usdc": 20000000,
+          "max_per_action_micro_usdc": 5000000,
+          "max_per_period_micro_usdc": 10000000,
+          "period_seconds": 86400,
+          "signed_quorum_verifier_set_hash": "0x0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+          "valid_after": 1999999000,
+          "valid_until": 2000086000
+        },
+        "user_salt": "0x0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"
+      },
+      "network": "base-sepolia",
+      "owner": "0x0909090909090909090909090909090909090909",
+      "valid_before": 2000003600
+    },
+    "schema": "agent-bounties/sponsored-setup-v1",
+    "transaction": {
+      "data": "0xdd6ed7ca00000000000000000000000009090909090909090909090909090909090909090000000000000000000000000a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0000000000000000000000000000000000000000000000000000000077359018000000000000000000000000000000000000000000000000000000007736e3f0000000000000000000000000000000000000000000000000000000000001518000000000000000000000000000000000000000000000000000000000004c4b4000000000000000000000000000000000000000000000000000000000009896800000000000000000000000000000000000000000000000000000000001312d000000000000000000000000000000000000000000000000000000000005f5e100000000000000000000000000000000000000000000000000000000000000000f000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000000b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b00000000000000000000000000000000000000000000000000000000000000000c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
+      "from": null,
+      "function": "createWallet",
+      "to": "0x0303030303030303030303030303030303030303",
+      "value_wei": 0
+    },
+    "typed_data": {
+      "domain": {
+        "chainId": 84532,
+        "name": "Agent Bounties Sponsored Setup",
+        "verifyingContract": "0x0303030303030303030303030303030303030303",
+        "version": "1"
+      },
+      "message": {
+        "callHash": "0x149885ff05b3921f8738edb6b52c2b278fe1078c15d69d37b8344e8d9cab8c9a",
+        "owner": "0x0909090909090909090909090909090909090909",
+        "releaseHash": "0x6231848c45c869afbc1a2bdcdaf184122b8cf512f3ecebbd53e2c6037fd8cd1e",
+        "target": "0x0303030303030303030303030303030303030303",
+        "validBefore": "2000003600"
+      },
+      "primaryType": "SponsoredSetup",
+      "types": {
+        "EIP712Domain": [
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "version",
+            "type": "string"
+          },
+          {
+            "name": "chainId",
+            "type": "uint256"
+          },
+          {
+            "name": "verifyingContract",
+            "type": "address"
+          }
+        ],
+        "SponsoredSetup": [
+          {
+            "name": "owner",
+            "type": "address"
+          },
+          {
+            "name": "target",
+            "type": "address"
+          },
+          {
+            "name": "callHash",
+            "type": "bytes32"
+          },
+          {
+            "name": "releaseHash",
+            "type": "bytes32"
+          },
+          {
+            "name": "validBefore",
+            "type": "uint256"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "digest": "0x0288cd352542053dc7f6588d9ef2010faa5ddb790140b47e5bbda851dc8cebfe",
+    "predicted_wallet": null,
+    "release": {
+      "bounty_factory": "0x0101010101010101010101010101010101010101",
+      "bounty_factory_code_hash": "0x0202020202020202020202020202020202020202020202020202020202020202",
+      "deployment_block": 1,
+      "network": "base-sepolia",
+      "participant_registry": "0x0707070707070707070707070707070707070707",
+      "participant_registry_code_hash": "0x0808080808080808080808080808080808080808080808080808080808080808",
+      "wallet_factory": "0x0303030303030303030303030303030303030303",
+      "wallet_factory_code_hash": "0x0404040404040404040404040404040404040404040404040404040404040404",
+      "wallet_implementation": "0x0505050505050505050505050505050505050505",
+      "wallet_implementation_code_hash": "0x0606060606060606060606060606060606060606060606060606060606060606"
+    },
+    "request": {
+      "action": {
+        "attester_signature": "0x747a6c6bd9a8ff0b77a99b8f274f5df5198b5dddc33edd4bc89e459d13dfa6177431bfa016325b8f27491781d1c462999f1dde760560373a517d29161c2df1391c",
+        "kind": "participant_register",
+        "participant_id": "0x0101010101010101010101010101010101010101010101010101010101010101",
+        "registry_nonce": 0,
+        "source_hash": "0x0202020202020202020202020202020202020202020202020202020202020202",
+        "valid_until": 2000086400
+      },
+      "network": "base-sepolia",
+      "owner": "0x0909090909090909090909090909090909090909",
+      "valid_before": 2000003600
+    },
+    "schema": "agent-bounties/sponsored-setup-v1",
+    "transaction": {
+      "data": "0x3b321125000000000000000000000000090909090909090909090909090909090909090901010101010101010101010101010101010101010101010101010101010101010202020202020202020202020202020202020202020202020202020202020202000000000000000000000000000000000000000000000000000000007736e58000000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000041747a6c6bd9a8ff0b77a99b8f274f5df5198b5dddc33edd4bc89e459d13dfa6177431bfa016325b8f27491781d1c462999f1dde760560373a517d29161c2df1391c00000000000000000000000000000000000000000000000000000000000000",
+      "from": null,
+      "function": "register",
+      "to": "0x0707070707070707070707070707070707070707",
+      "value_wei": 0
+    },
+    "typed_data": {
+      "domain": {
+        "chainId": 84532,
+        "name": "Agent Bounties Sponsored Setup",
+        "verifyingContract": "0x0707070707070707070707070707070707070707",
+        "version": "1"
+      },
+      "message": {
+        "callHash": "0x683dd609b405241b5a1ebf71056c796c615f5709cd9f97f2e6ec0ad6ba75e8d8",
+        "owner": "0x0909090909090909090909090909090909090909",
+        "releaseHash": "0x6231848c45c869afbc1a2bdcdaf184122b8cf512f3ecebbd53e2c6037fd8cd1e",
+        "target": "0x0707070707070707070707070707070707070707",
+        "validBefore": "2000003600"
+      },
+      "primaryType": "SponsoredSetup",
+      "types": {
+        "EIP712Domain": [
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "version",
+            "type": "string"
+          },
+          {
+            "name": "chainId",
+            "type": "uint256"
+          },
+          {
+            "name": "verifyingContract",
+            "type": "address"
+          }
+        ],
+        "SponsoredSetup": [
+          {
+            "name": "owner",
+            "type": "address"
+          },
+          {
+            "name": "target",
+            "type": "address"
+          },
+          {
+            "name": "callHash",
+            "type": "bytes32"
+          },
+          {
+            "name": "releaseHash",
+            "type": "bytes32"
+          },
+          {
+            "name": "validBefore",
+            "type": "uint256"
+          }
+        ]
+      }
+    }
+  }
+]

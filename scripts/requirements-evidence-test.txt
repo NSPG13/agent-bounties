@@ -1,0 +1,2 @@
+# Local disposable S3 fixture; never a production dependency.
+moto[server,s3]==5.2.3

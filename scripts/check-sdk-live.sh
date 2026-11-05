@@ -25,6 +25,11 @@ else
   exit 127
 fi
 
+if [[ "${AGENT_BOUNTIES_LOCAL_TEST_DATABASE:-}" != "1" ]]; then
+  exec "${python_cmd[@]}" "$repo_root/scripts/run-with-test-postgres.py" -- bash "$repo_root/scripts/check-sdk-live.sh"
+fi
+"${python_cmd[@]}" "$repo_root/scripts/run-with-test-postgres.py" --validate-existing
+
 if ! "${python_cmd[@]}" -c "import httpx; from eth_hash.auto import keccak" >/dev/null 2>&1; then
   "${python_cmd[@]}" -m pip install -e "$repo_root/crates/sdk-python"
 fi
@@ -32,7 +37,7 @@ fi
 cd "$repo_root"
 cargo build -p api
 
-api_bin="$repo_root/target/debug/api"
+api_bin="${CARGO_TARGET_DIR:-$repo_root/target}/debug/api"
 if [[ -f "$api_bin.exe" ]]; then
   api_bin="$api_bin.exe"
 fi
@@ -45,16 +50,19 @@ if [[ "$api_bin" == *.exe ]] && [[ -f /proc/version ]] && grep -qi microsoft /pr
   exit 2
 fi
 
-env -u DATABASE_URL \
+env \
   API_BIND_ADDR="$api_bind_addr" \
+  AUTH_PUBLICATIONS_PER_DAY="4" \
   PUBLIC_BASE_URL="$api_base_url" \
   MCP_BASE_URL="http://127.0.0.1:18290" \
   "$api_bin" >"$repo_root/.api-sdk-smoke.out.log" 2>"$repo_root/.api-sdk-smoke.err.log" &
 api_pid=$!
+wallet_session_file="$(mktemp)"
 
 cleanup() {
   kill "$api_pid" >/dev/null 2>&1 || true
   wait "$api_pid" >/dev/null 2>&1 || true
+  rm -f "$wallet_session_file"
 }
 trap cleanup EXIT
 
@@ -79,6 +87,10 @@ if [[ "$ready" != "1" ]]; then
   echo "API did not become ready at $api_base_url" >&2
   exit 1
 fi
+
+"${python_cmd[@]}" scripts/seed-smoke-wallet.py \
+  --container "$AGENT_BOUNTIES_TEST_POSTGRES_CONTAINER" --output "$wallet_session_file"
+export AGENT_BOUNTIES_SMOKE_WALLET_SESSION="$(cat "$wallet_session_file")"
 
 PYTHONPATH="$sdk_python_path" "${python_cmd[@]}" -m agent_bounties.smoke --base-url "$api_base_url"
 PYTHONPATH="$sdk_python_path" "${python_cmd[@]}" \

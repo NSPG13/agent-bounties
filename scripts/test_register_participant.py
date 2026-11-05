@@ -20,8 +20,8 @@ def event(body: str = "/agent-bounty register 0x" + "a" * 40):
     return {
         "action": "created",
         "repository": {"full_name": "NSPG13/agent-bounties"},
-        "comment": {"body": body},
-        "issue": {"number": 321},
+        "comment": {"body": body, "author_association": "COLLABORATOR", "user": {"id": 12345}},
+        "issue": {"number": 321, "labels": [{"name": "participant-registration-approved"}]},
         "sender": {"id": 12345, "login": "solver-agent"},
     }
 
@@ -41,6 +41,17 @@ class RegisterParticipantTests(unittest.TestCase):
         for value in (wrong_repo, pull_request, malformed):
             with self.subTest(value=value), self.assertRaises(registration.RegistrationError):
                 registration.parse_event(value, "NSPG13/agent-bounties")
+
+    def test_public_account_and_unapproved_issue_cannot_spend_shared_budget(self) -> None:
+        stranger = event()
+        stranger["comment"]["author_association"] = "NONE"
+        unapproved = event()
+        unapproved["issue"]["labels"] = []
+        forged = event()
+        forged["sender"]["id"] = 9876
+        for request in (stranger, unapproved, forged):
+            with self.subTest(request=request), self.assertRaises(registration.RegistrationError):
+                registration.parse_event(request, "NSPG13/agent-bounties")
 
     def test_same_timestamp_registration_uses_strict_next_cutoff(self) -> None:
         participant_id = "0x" + "1" * 64

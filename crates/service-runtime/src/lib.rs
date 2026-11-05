@@ -1,5 +1,17 @@
-pub mod client_ip;
+pub mod auth;
+pub mod bounty_read_inputs;
+pub mod http_observability;
+pub mod managed_bridge;
+pub mod managed_checkout;
+pub mod managed_refund;
+pub mod privacy;
+pub mod recovered_refund;
+pub mod standing_meta_child;
+pub mod stripe_reconciliation;
+pub mod terms_publication;
+pub mod verifier_checkpoints;
 pub mod verifier_readiness;
+
 use anyhow::Context;
 use app::{
     stripe_secret_key_mode_from_secret, AddFundingContributionRequest, AppResult,
@@ -237,11 +249,15 @@ pub struct LiveMoneyRuntimeSettings<'a> {
     pub stripe_live_execution_enabled: bool,
     pub stripe_payment_method_configuration_configured: bool,
     pub stripe_webhook_secret_configured: bool,
+    pub stripe_webhook_livemode: Option<bool>,
+    pub durable_store_configured: bool,
     pub allow_unsigned_stripe_webhooks: bool,
     pub operator_auth_configured: bool,
     pub base_rpc_url_configured: bool,
     pub base_broadcast_enabled: bool,
 }
+
+pub use app::parse_stripe_webhook_livemode;
 
 pub fn live_money_readiness_config(
     network: &str,
@@ -262,6 +278,8 @@ pub fn live_money_readiness_config(
         stripe_payment_method_configuration_configured: settings
             .stripe_payment_method_configuration_configured,
         stripe_webhook_secret_configured: settings.stripe_webhook_secret_configured,
+        stripe_webhook_livemode: settings.stripe_webhook_livemode,
+        durable_store_configured: settings.durable_store_configured,
         allow_unsigned_stripe_webhooks: settings.allow_unsigned_stripe_webhooks,
         operator_auth_configured: settings.operator_auth_configured,
         base_rpc_url_configured: settings.base_rpc_url_configured,
@@ -274,8 +292,8 @@ pub fn operator_token_is_authorized(
     direct_header: Option<&str>,
     authorization_header: Option<&str>,
 ) -> bool {
-    let Some(expected) = expected else {
-        return true;
+    let Some(expected) = expected.filter(|value| !value.trim().is_empty()) else {
+        return false;
     };
     let provided = direct_header.and_then(non_empty).or_else(|| {
         authorization_header
@@ -1032,7 +1050,7 @@ mod tests {
     #[test]
     fn operator_auth_preserves_direct_and_bearer_rules() {
         let cases = [
-            ("disabled", None, None, None, true),
+            ("missing configuration denies", None, None, None, false),
             ("direct", Some("secret"), Some(" secret "), None, true),
             (
                 "bearer",

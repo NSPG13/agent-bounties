@@ -14,12 +14,18 @@ COPY migrations ./migrations
 COPY ops ./ops
 COPY schemas ./schemas
 COPY site ./site
+COPY deployments/base-mainnet.json ./deployments/base-mainnet.json
 
 ARG APP_PACKAGE=api
 ARG APP_BINARY=api
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/workspace/target,sharing=locked \
-    cargo build --locked --release -p "${APP_PACKAGE}" \
+    # A shared target cache can contain another checkout's newer artifacts. \
+    # Refresh copied source mtimes so Cargo rebuilds local crates and embedded \
+    # assets, while retaining the registry dependency cache. \
+    find crates bounties contracts fixtures migrations ops schemas site deployments \
+        -type f -exec touch {} + \
+    && cargo build --locked --release -p "${APP_PACKAGE}" \
     && cp "target/release/${APP_BINARY}" /tmp/agent-bounties-service
 
 FROM debian:bookworm-slim AS runtime

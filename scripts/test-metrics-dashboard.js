@@ -518,3 +518,40 @@ test("card coverage fails closed, matches the window, and never changes payout G
   }
   assert.deepEqual(metrics.mergeMetrics(p, github(), "7d", NOW).daily, metrics.mergeMetrics(platform(), github(), "7d", NOW).daily);
 });
+
+
+test("controlled card tests retain real payout rows and display the demand boundary", () => {
+  const policy = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "site", "generated", "public-metrics-policy.json"), "utf8"));
+  const canary = "0xae7be7e198e8ed52d6878ea2c111847565087b1f";
+  const customerPolicy = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "site", "generated", "customer-success-metrics-policy.json"), "utf8"));
+  assert.equal(customerPolicy.schema_version, "agent-bounties/customer-success-metrics-policy-v1");
+  assert.equal(customerPolicy.network, "base-mainnet");
+  assert.deepEqual(Object.keys(customerPolicy).sort(), ["controlled_test_bounty_contracts", "network", "schema_version"]);
+  assert.ok(customerPolicy.controlled_test_bounty_contracts.length <= 256);
+  const addresses = customerPolicy.controlled_test_bounty_contracts.map((address) => address.toLowerCase());
+  assert.equal(new Set(addresses).size, addresses.length);
+  for (const address of addresses) assert.ok(/^0x[0-9a-f]{40}$/.test(address) && !/^0x0{40}$/.test(address));
+  assert.deepEqual(customerPolicy.controlled_test_bounty_contracts, [canary]);
+  assert.equal(fs.readFileSync(path.join(__dirname, "..", "site", "generated", "customer-success-metrics-policy.json"), "utf8"),
+    fs.readFileSync(path.join(__dirname, "..", "crates", "api", "fixtures", "customer-success-metrics-policy.json"), "utf8"));
+  assert.ok(!policy.maintainer_wallets.includes("0x349fac043ede79adf18e9f9cfe29a23b883ca634"));
+  const row = { contract_address: canary, solver_reward: "183679", verifier_reward: "100000" };
+  assert.deepEqual(metrics.partitionCanonicalPayoutRows([row], policy), { included: [row], excluded: [] });
+  const status = metrics.demandGrowthStatus({
+    controlled_test_gmv_usdc_28d: { usdc_base_units: "283679", usdc: "0.283679" },
+    funding_attribution_complete_28d: true,
+  });
+  assert.match(status, /0\.283679 USDC of completed-work payments came from controlled tests/);
+  assert.match(status, /payments stay recorded/);
+  assert.match(status, /excluded from wallet growth and funding share/);
+  assert.match(status, /not verified customers/);
+});
+
+test("missing test coverage is unavailable, not an invented zero", () => {
+  assert.match(metrics.demandGrowthStatus({ funding_attribution_complete_28d: true }), /coverage is unavailable/);
+  assert.match(metrics.demandGrowthStatus({ controlled_test_gmv_usdc_28d: { usdc_base_units: "-1", usdc: "-0.000001" } }), /coverage is unavailable/);
+  assert.match(metrics.demandGrowthStatus({
+    controlled_test_gmv_usdc_28d: { usdc_base_units: "0", usdc: "0.000000" },
+    funding_attribution_complete_28d: false,
+  }), /some non-test settlements lack checked contributions/);
+});

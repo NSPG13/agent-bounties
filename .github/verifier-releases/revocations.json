@@ -1,0 +1,11 @@
+{
+  "schema": "agent-bounties/verifier-release-revocations-v1",
+  "releases": [
+    {
+      "release_id": "sha256:3a33c431838e0eee9503d102391c955e83bf1142a7f9727e722bfa75dbe45d6f",
+      "source_revision": "1ebe67e3e71799b795364f8f7725ef670f0f6c66",
+      "worker_binary_digest": "sha256:ba87a45936651471d79a4afeac6c40b474a2b41a67654f8fc92d42187e0b8d92",
+      "reason": "Solver-controlled traceback output can suppress a failing checker verdict. Historical approval is retained for audit; this artifact cannot run, sign or relay through the protected verifier workflows."
+    }
+  ]
+}

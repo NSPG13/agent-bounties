@@ -1,4 +1,28 @@
+mod projection_snapshot;
+pub use projection_snapshot::{
+    AutonomousProjectionSnapshot, OpenCompetitionProjectionSnapshot,
+    OpenCompetitionV2ProjectionSnapshot, ProjectionReaderSnapshot,
+};
+mod autonomous_canonicality;
+pub use autonomous_canonicality::AutonomousCanonicalCheckpoint;
+mod stripe_reconciliation;
+pub use stripe_reconciliation::{
+    StripeConnectSnapshotTransaction, StripeReconciliationSnapshot, StripeReconciliationTransaction,
+};
+
+mod claim_security;
+mod evidence_retention;
+pub mod managed_service_orders;
+mod owned_resources;
 mod platform_payouts;
+mod review_deadline_source;
+pub mod review_reminders;
+pub mod security_writes;
+pub mod terms_publication;
+#[doc(hidden)]
+pub mod test_support;
+pub mod verification;
+pub mod verifier_checkpoints;
 use chain_base::{
     AutonomousBountyEvent, AutonomousBountyEventKind, OpenCompetitionEvent,
     OpenCompetitionEventKind, OpenCompetitionV2Event, OpenCompetitionV2EventKind,
@@ -31,10 +55,41 @@ use std::collections::{BTreeMap, HashMap};
 use thiserror::Error;
 use uuid::Uuid;
 
-mod invoice_orders;
+pub mod auth;
+
+mod push_notifications;
+pub use push_notifications::{valid_push_subscription, PushDelivery};
+mod push_delivery_tests;
+pub use push_delivery_tests::{PushTestAdmission, PushTestDelivery};
+mod review_notifications;
+pub use review_notifications::{
+    LeasedReviewNotification, NewReviewNotification, ReviewNotificationAttempt,
+    ReviewNotificationError, ReviewNotificationOutcome, ReviewNotificationPreferences,
+    ReviewNotificationRound, ReviewNotificationSync,
+};
 mod site_posting_drafts;
-pub use invoice_orders::{InvoiceEventAppend, InvoiceOrderEventRecord, InvoiceOrderRecord};
+mod wallet_funding;
 pub use site_posting_drafts::{PostingDraftError, SitePostingDraft, SitePostingDraftSummary};
+pub use wallet_funding::WalletTopupAttempt;
+mod creator_open;
+mod gas_sponsorship;
+mod github_origin;
+mod nonce_retirement;
+mod relay_outbox;
+mod timeout_relay;
+mod timeout_revalidation;
+pub use nonce_retirement::{
+    SavedNonceRetirement, SavedNonceRetirementPlan, SavedRetainedNonceDispatch,
+};
+pub use timeout_relay::SavedTimeoutRelay;
+pub use timeout_revalidation::{TimeoutRevalidationAuthorization, TimeoutRevalidationRequest};
+mod sponsored_actions;
+pub use creator_open::CreatorOpenIndex;
+pub use gas_sponsorship::{
+    quote_gas_budget_micro_usdc, GasBudgetStatus, DEFAULT_GAS_BUDGET_MICRO_USDC,
+};
+pub use site_posting_drafts::draft_hash as site_posting_draft_hash;
+pub use sponsored_actions::SponsoredAction;
 
 pub const CORE_MIGRATION: &str = include_str!("../../../migrations/0001_core.sql");
 pub const AUTONOMOUS_PROTOCOL_MIGRATION: &str =
@@ -102,8 +157,18 @@ pub const SITE_POSTING_DRAFTS_MIGRATION: &str =
     include_str!("../../../migrations/0036_site_posting_drafts.sql");
 pub const SITE_WALLET_PROVIDER_MIGRATION: &str =
     include_str!("../../../migrations/0037_site_wallet_provider.sql");
-pub const INVOICE_ORDERS_MIGRATION: &str =
-    include_str!("../../../migrations/0038_invoice_orders.sql");
+pub const SECURITY_PRINCIPALS_MIGRATION: &str =
+    include_str!("../../../migrations/0038_security_principals.sql");
+pub const OWNED_MUTATIONS_MIGRATION: &str =
+    include_str!("../../../migrations/0039_owned_mutations_and_claim_maintenance.sql");
+pub const VERIFIER_REVIEW_NOTIFICATIONS_MIGRATION: &str =
+    include_str!("../../../migrations/0040_verifier_review_notifications.sql");
+pub const GUIDED_WALLET_FUNDING_MIGRATION: &str =
+    include_str!("../../../migrations/0041_guided_wallet_funding.sql");
+pub const BROAD_VERIFICATION_MIGRATION: &str =
+    include_str!("../../../migrations/0042_broad_verification.sql");
+pub const EVIDENCE_RETENTION_MIGRATION: &str =
+    include_str!("../../../migrations/0043_evidence_retention.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -186,8 +251,12 @@ const BOND_SPONSORSHIP_SELECT_BY_CANDIDATE_SQL: &str = r#"
 
 #[derive(Debug, Error)]
 pub enum DbError {
+    #[error("conflicting Stripe reconciliation evidence")]
+    StripeReconciliationConflict,
     #[error("historical payout projection exceeds its bounded snapshot capacity")]
     PayoutProofCapacity,
+    #[error("invalid push notification: {0}")]
+    InvalidPushNotification(String),
     #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
     #[error(transparent)]
@@ -227,6 +296,8 @@ pub enum DbError {
     ClaimCandidateConflict(String),
     #[error("claim waitlist is full")]
     ClaimWaitlistFull,
+    #[error("claim admission rate exceeded")]
+    ClaimAdmissionQuotaExceeded,
     #[error("trial bounty idempotency conflict")]
     TrialBountyConflict,
     #[error("unfunded bounty is unavailable for solutions")]
@@ -938,6 +1009,7 @@ pub struct PlatformDemandGrowthStats {
     pub gmv_7d_base_units: String,
     pub gmv_28d_base_units: String,
     pub lifetime_gmv_base_units: String,
+    pub controlled_test_gmv_28d_base_units: String,
     pub new_poster_funder_wallets_28d: u64,
     pub active_poster_funder_wallets_28d: u64,
     pub repeat_poster_funder_wallets_28d: u64,
@@ -1515,7 +1587,42 @@ impl PostgresStore {
                 DISTRIBUTION_COMPETITION_BINDINGS_MIGRATION,
                 SITE_POSTING_DRAFTS_MIGRATION,
                 SITE_WALLET_PROVIDER_MIGRATION,
-                INVOICE_ORDERS_MIGRATION,
+                include_str!("../../../migrations/0082_autonomous_canonical_checkpoints.sql"),
+                SECURITY_PRINCIPALS_MIGRATION,
+                OWNED_MUTATIONS_MIGRATION,
+                VERIFIER_REVIEW_NOTIFICATIONS_MIGRATION,
+                GUIDED_WALLET_FUNDING_MIGRATION,
+                BROAD_VERIFICATION_MIGRATION,
+                EVIDENCE_RETENTION_MIGRATION,
+                include_str!("../../../migrations/0044_gas_sponsorship_budget.sql"),
+                include_str!("../../../migrations/0045_sponsored_actions.sql"),
+                include_str!("../../../migrations/0046_posting_authorization_retirements.sql"),
+                include_str!("../../../migrations/0047_creator_claim_notifications.sql"),
+                include_str!("../../../migrations/0048_creator_push_notifications.sql"),
+                include_str!("../../../migrations/0049_creator_open_requests.sql"),
+                include_str!("../../../migrations/0050_creator_open_index.sql"),
+                include_str!("../../../migrations/0051_relay_transaction_outbox.sql"),
+                include_str!("../../../migrations/0052_creator_open_external_creations.sql"),
+                include_str!("../../../migrations/0053_creator_open_review_notifications.sql"),
+                include_str!("../../../migrations/0054_github_origin_inbox.sql"),
+                include_str!("../../../migrations/0055_verifier_runtime_checkpoints.sql"),
+                include_str!("../../../migrations/0056_review_deadline_push.sql"),
+                include_str!("../../../migrations/0057_push_delivery_tests.sql"),
+                include_str!("../../../migrations/0058_site_analytics_opportunity_ids.sql"),
+                include_str!("../../../migrations/0059_stripe_reconciled_objects.sql"),
+                include_str!("../../../migrations/0060_managed_service_orders.sql"),
+                include_str!("../../../migrations/0061_managed_stripe_checkout.sql"),
+                include_str!("../../../migrations/0062_managed_checkout_execution.sql"),
+                include_str!("../../../migrations/0063_managed_refunds.sql"),
+                include_str!("../../../migrations/0064_managed_bounty_funding.sql"),
+                include_str!("../../../migrations/0065_managed_customer_reviews.sql"),
+                include_str!("../../../migrations/0066_managed_stripe_disputes.sql"),
+                include_str!("../../../migrations/0067_managed_review_appeals.sql"),
+                include_str!("../../../migrations/0068_managed_review_deposits.sql"),
+                include_str!("../../../migrations/0069_managed_refund_observations.sql"),
+                include_str!("../../../migrations/0077_managed_review_scan_fairness.sql"),
+                include_str!("../../../migrations/0078_managed_recovered_refunds.sql"),
+                include_str!("../../../migrations/0079_timeout_revalidation.sql"),
             ] {
                 for statement in migration
                     .split(';')
@@ -1525,6 +1632,20 @@ impl PostgresStore {
                     sqlx::query(statement).execute(&mut *connection).await?;
                 }
             }
+            // Execute the trigger migration as SQL, not semicolon fragments: its
+            // dollar-quoted function bodies contain internal statement delimiters.
+            use sqlx::Acquire;
+            let mut migration_tx = connection.begin().await?;
+            for migration in [
+                include_str!("../../../migrations/0080_nonce_retirement.sql"),
+                include_str!("../../../migrations/0081_retained_nonce_dispatch.sql"),
+            ] {
+                if let Err(error) = sqlx::raw_sql(migration).execute(&mut *migration_tx).await {
+                    migration_tx.rollback().await?;
+                    return Err(error);
+                }
+            }
+            migration_tx.commit().await?;
             Ok::<(), sqlx::Error>(())
         }
         .await;
@@ -2507,42 +2628,18 @@ impl PostgresStore {
         creator_wallet: &str,
         bound_at: DateTime<Utc>,
     ) -> DbResult<DistributionHandoff> {
-        let terms_hash = terms_hash.trim().to_ascii_lowercase();
-        let creator_wallet = creator_wallet.trim().to_ascii_lowercase();
-        let row = sqlx::query(
-            r#"
-            UPDATE distribution_acquisition_handoffs AS handoff
-            SET terms_hash = COALESCE(handoff.terms_hash, $3),
-                creator_wallet = COALESCE(handoff.creator_wallet, $4),
-                terms_bound_at = COALESCE(handoff.terms_bound_at, $5)
-            WHERE handoff.id = $1
-              AND handoff.acquisition_id = (
-                SELECT acquisition.id
-                FROM distribution_acquisitions AS acquisition
-                WHERE acquisition.token_hash = $2
-              )
-              AND (handoff.terms_hash IS NULL OR handoff.terms_hash = $3)
-              AND (handoff.creator_wallet IS NULL OR handoff.creator_wallet = $4)
-            RETURNING id, acquisition_id, request_fingerprint, terms_hash,
-                      creator_wallet, prepared_at, wallet_reviewed_at,
-                      terms_bound_at
-            "#,
+        let mut tx = self.pool.begin().await?;
+        let result = terms_publication::bind_distribution_handoff_terms_in_transaction(
+            &mut tx,
+            token_hash,
+            handoff_id,
+            terms_hash,
+            creator_wallet,
+            bound_at,
         )
-        .bind(handoff_id)
-        .bind(token_hash)
-        .bind(&terms_hash)
-        .bind(&creator_wallet)
-        .bind(bound_at)
-        .fetch_optional(&self.pool)
         .await?;
-        row.map(distribution_handoff_from_row)
-            .transpose()?
-            .ok_or_else(|| {
-                DbError::DistributionAttributionConflict(
-                    "handoff, acquisition token, or immutable terms binding did not match"
-                        .to_string(),
-                )
-            })
+        tx.commit().await?;
+        Ok(result)
     }
 
     pub async fn upsert_distribution_wallet_exclusion(
@@ -3441,7 +3538,16 @@ impl PostgresStore {
         launch_at: DateTime<Utc>,
         excluded_wallets: &[String],
         excluded_bounty_contracts: &[String],
+        customer_success_excluded_contracts: &[String],
     ) -> DbResult<PlatformDemandGrowthStats> {
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *transaction)
+            .await?;
+        sqlx::query("SET LOCAL statement_timeout = '10s'")
+            .execute(&mut *transaction)
+            .await?;
+        autonomous_canonicality::require_certified_history(&mut transaction, network).await?;
         let row = sqlx::query(
             r#"
             WITH supply_actions AS (
@@ -3456,6 +3562,7 @@ impl PostgresStore {
               WHERE event.network = $1
                 AND event.block_time_verified = TRUE
                 AND event.occurred_at >= $3 AND event.occurred_at < $2
+                AND NOT lower(COALESCE(event.data->>'bounty_contract', event.contract_address)) = ANY($6)
                 AND NOT lower(COALESCE(event.data->>'bounty_contract', event.contract_address)) = ANY($5)
                 AND event.kind IN ('canonical_bounty_created', 'external_bounty_submitted', 'funding_added')
               UNION ALL
@@ -3467,6 +3574,7 @@ impl PostgresStore {
               WHERE event.network = $1
                 AND event.block_time_verified = TRUE
                 AND event.occurred_at >= $3 AND event.occurred_at < $2
+                AND NOT lower(COALESCE(event.data->>'bounty_contract', event.contract_address)) = ANY($6)
                 AND NOT lower(COALESCE(event.data->>'bounty_contract', event.contract_address)) = ANY($5)
                 AND event.kind IN ('canonical_competition_created', 'funding_added')
               UNION ALL
@@ -3477,6 +3585,7 @@ impl PostgresStore {
               FROM open_competition_v2_events AS event
               WHERE event.network = $1
                 AND event.occurred_at >= $3 AND event.occurred_at < $2
+                AND NOT lower(event.contract_address) = ANY($6)
                 AND NOT lower(event.contract_address) = ANY($5)
                 AND event.kind IN ('canonical_competition_created', 'funding_added')
             ), external_supply_actions AS (
@@ -3571,17 +3680,22 @@ impl PostgresStore {
               COALESCE((SELECT SUM(gmv) FROM attributed
                 WHERE occurred_at >= $2 - INTERVAL '28 days'), 0)::text AS gmv_28d,
               COALESCE((SELECT SUM(gmv) FROM attributed), 0)::text AS lifetime_gmv,
+              COALESCE((SELECT SUM(gmv) FROM attributed
+                WHERE occurred_at >= $2 - INTERVAL '28 days'
+                  AND lower(contract_address) = ANY($6)), 0)::text AS controlled_test_gmv_28d,
               (SELECT COUNT(*) FROM wallet_rollup
                 WHERE actions_28d > 0 AND first_action_at >= $2 - INTERVAL '28 days') AS new_wallets_28d,
               (SELECT COUNT(*) FROM wallet_rollup WHERE actions_28d > 0) AS active_wallets_28d,
               (SELECT COUNT(*) FROM wallet_rollup WHERE actions_28d >= 2) AS repeat_wallets_28d,
               TRUNC(COALESCE((SELECT SUM(gmv * non_operator_funding / total_funding)
                 FROM attributed
-                WHERE occurred_at >= $2 - INTERVAL '28 days' AND total_funding > 0), 0))::text
+                WHERE occurred_at >= $2 - INTERVAL '28 days' AND total_funding > 0
+                  AND NOT lower(contract_address) = ANY($6)), 0))::text
                 AS non_operator_attributed_gmv_28d,
               COALESCE((SELECT SUM(gmv)
                 FROM attributed
-                WHERE occurred_at >= $2 - INTERVAL '28 days' AND total_funding > 0), 0)::text
+                WHERE occurred_at >= $2 - INTERVAL '28 days' AND total_funding > 0
+                  AND NOT lower(contract_address) = ANY($6)), 0)::text
                 AS attributed_gmv_28d
             "#,
         )
@@ -3590,12 +3704,15 @@ impl PostgresStore {
         .bind(launch_at)
         .bind(excluded_wallets)
         .bind(excluded_bounty_contracts)
-        .fetch_one(&self.pool)
+        .bind(customer_success_excluded_contracts)
+        .fetch_one(&mut *transaction)
         .await?;
+        transaction.commit().await?;
         Ok(PlatformDemandGrowthStats {
             gmv_7d_base_units: row.try_get("gmv_7d")?,
             gmv_28d_base_units: row.try_get("gmv_28d")?,
             lifetime_gmv_base_units: row.try_get("lifetime_gmv")?,
+            controlled_test_gmv_28d_base_units: row.try_get("controlled_test_gmv_28d")?,
             new_poster_funder_wallets_28d: u64_from_i64(row.try_get("new_wallets_28d")?)?,
             active_poster_funder_wallets_28d: u64_from_i64(row.try_get("active_wallets_28d")?)?,
             repeat_poster_funder_wallets_28d: u64_from_i64(row.try_get("repeat_wallets_28d")?)?,
@@ -3625,6 +3742,7 @@ impl PostgresStore {
         sqlx::query("SET LOCAL statement_timeout = '10s'")
             .execute(&mut *transaction)
             .await?;
+        autonomous_canonicality::require_certified_history(&mut transaction, network).await?;
         let identity_row = sqlx::query(
             r#"
             WITH event_actors AS (
@@ -5138,6 +5256,9 @@ impl PostgresStore {
     }
 
     pub async fn get_x402_relay_attempt(&self, id: Uuid) -> DbResult<Option<X402RelayAttempt>> {
+        // A process can stop after persisting exact bytes but before publishing
+        // the hash. Repair metadata only; this read never broadcasts.
+        self.repair_x402_outbox_marker(id).await?;
         let row = sqlx::query(
             r#"
             SELECT id, idempotency_key, network, bounty_contract, contributor, amount,
@@ -5177,7 +5298,10 @@ impl PostgresStore {
         .bind(authorization_nonce.to_ascii_lowercase())
         .fetch_optional(&self.pool)
         .await?;
-        row.map(x402_relay_attempt_from_row).transpose()
+        match row.map(x402_relay_attempt_from_row).transpose()? {
+            Some(attempt) => self.get_x402_relay_attempt(attempt.id).await,
+            None => Ok(None),
+        }
     }
 
     pub async fn acquire_x402_relayer_lease(
@@ -5191,7 +5315,12 @@ impl PostgresStore {
             r#"
             INSERT INTO x402_relayer_leases
               (network, lease_token, lease_expires_at, updated_at)
-            VALUES ($1, $2, now() + make_interval(secs => $3), now())
+            SELECT $1, $2, now() + make_interval(secs => $3), now()
+            WHERE NOT EXISTS (SELECT 1 FROM nonce_retirement_fences WHERE network=$1) AND NOT EXISTS (
+                SELECT 1 FROM posting_relay_transactions t
+                JOIN x402_relay_attempts a ON a.id = t.relay_id
+                WHERE t.network = $1 AND a.status NOT IN ('confirmed','failed')
+            )
             ON CONFLICT (network) DO UPDATE SET
               lease_token = EXCLUDED.lease_token,
               lease_expires_at = EXCLUDED.lease_expires_at,
@@ -5247,6 +5376,7 @@ impl PostgresStore {
                 OR (status = 'failed' AND retryable)
                 OR (status = 'relaying' AND lease_expires_at <= now())
               )
+              AND (idempotency_key NOT LIKE 'create:%' OR attempt_count < 3)
             RETURNING id, idempotency_key, network, bounty_contract, contributor, amount,
                       authorization_nonce, authorization_valid_before, request_fingerprint,
                       relayer_address, status, retryable, attempt_count, tx_hash,
@@ -5852,8 +5982,8 @@ impl PostgresStore {
         let row = sqlx::query(
             r#"
             UPDATE claim_candidates
-            SET status = 'authorization_ready', authorization_nonce = $2,
-                authorization_valid_before = $3, updated_at = now()
+            SET status = 'authorization_ready', authorization_nonce = COALESCE(authorization_nonce, $2),
+                authorization_valid_before = COALESCE(authorization_valid_before, $3), updated_at = now()
             WHERE id = $1 AND status IN ('exclusive', 'sponsoring', 'authorization_ready')
               AND exclusive_until > now()
             RETURNING id, idempotency_key, network, bounty_contract, solver_wallet,
@@ -6313,10 +6443,12 @@ impl PostgresStore {
         let candidate = sqlx::query(
             r#"
             UPDATE claim_candidates
-            SET status = 'relaying', claim_transaction_hash = $2, updated_at = now()
+            SET status = 'relaying', claim_transaction_hash = $2,
+                failure_code = NULL, failure_message = NULL, updated_at = now()
             WHERE id = $1 AND (
               status IN ('exclusive', 'sponsoring', 'authorization_ready')
-              OR (status = 'relaying' AND claim_transaction_hash = $2)
+              OR (status = 'relaying' AND (claim_transaction_hash = $2
+                OR (claim_transaction_hash IS NULL AND failure_code = 'claim_broadcast_unknown')))
             )
             RETURNING id, idempotency_key, network, bounty_contract, solver_wallet,
                       agent_id, eligibility_evidence, eligibility_decision, status,
@@ -7828,6 +7960,24 @@ impl PostgresStore {
         factory_contract: &str,
         bounty_contract: &str,
     ) -> DbResult<Vec<OpenCompetitionEvent>> {
+        Self::list_open_competition_history_for_contract_on(
+            &self.pool,
+            network,
+            factory_contract,
+            bounty_contract,
+        )
+        .await
+    }
+
+    async fn list_open_competition_history_for_contract_on<
+        'e,
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    >(
+        executor: E,
+        network: &str,
+        factory_contract: &str,
+        bounty_contract: &str,
+    ) -> DbResult<Vec<OpenCompetitionEvent>> {
         let rows = sqlx::query(
             r#"
             SELECT id, protocol_version, log_key, tx_hash, block_number, log_index,
@@ -7847,7 +7997,7 @@ impl PostgresStore {
         .bind(network)
         .bind(normalize_key_address(factory_contract))
         .bind(normalize_key_address(bounty_contract))
-        .fetch_all(&self.pool)
+        .fetch_all(executor)
         .await?;
         rows.into_iter()
             .map(open_competition_event_from_row)
@@ -7856,6 +8006,17 @@ impl PostgresStore {
 
     pub async fn list_open_competition_events(
         &self,
+        network: &str,
+        factory_contract: &str,
+    ) -> DbResult<Vec<OpenCompetitionEvent>> {
+        Self::list_open_competition_events_on(&self.pool, network, factory_contract).await
+    }
+
+    async fn list_open_competition_events_on<
+        'e,
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    >(
+        executor: E,
         network: &str,
         factory_contract: &str,
     ) -> DbResult<Vec<OpenCompetitionEvent>> {
@@ -7870,7 +8031,7 @@ impl PostgresStore {
         )
         .bind(network)
         .bind(normalize_key_address(factory_contract))
-        .fetch_all(&self.pool)
+        .fetch_all(executor)
         .await?;
         rows.into_iter()
             .map(open_competition_event_from_row)
@@ -8007,6 +8168,24 @@ impl PostgresStore {
         factory_contract: &str,
         bounty_contract: &str,
     ) -> DbResult<Vec<OpenCompetitionV2Event>> {
+        Self::list_open_competition_v2_history_for_contract_on(
+            &self.pool,
+            network,
+            factory_contract,
+            bounty_contract,
+        )
+        .await
+    }
+
+    async fn list_open_competition_v2_history_for_contract_on<
+        'e,
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    >(
+        executor: E,
+        network: &str,
+        factory_contract: &str,
+        bounty_contract: &str,
+    ) -> DbResult<Vec<OpenCompetitionV2Event>> {
         let rows = sqlx::query(
             r#"
             SELECT id, protocol_version, log_key, tx_hash, block_number, log_index,
@@ -8026,7 +8205,7 @@ impl PostgresStore {
         .bind(network)
         .bind(normalize_key_address(factory_contract))
         .bind(normalize_key_address(bounty_contract))
-        .fetch_all(&self.pool)
+        .fetch_all(executor)
         .await?;
         rows.into_iter()
             .map(open_competition_v2_event_from_row)
@@ -8035,6 +8214,17 @@ impl PostgresStore {
 
     pub async fn list_open_competition_v2_events(
         &self,
+        network: &str,
+        factory_contract: &str,
+    ) -> DbResult<Vec<OpenCompetitionV2Event>> {
+        Self::list_open_competition_v2_events_on(&self.pool, network, factory_contract).await
+    }
+
+    async fn list_open_competition_v2_events_on<
+        'e,
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    >(
+        executor: E,
         network: &str,
         factory_contract: &str,
     ) -> DbResult<Vec<OpenCompetitionV2Event>> {
@@ -8049,7 +8239,7 @@ impl PostgresStore {
         )
         .bind(network)
         .bind(normalize_key_address(factory_contract))
-        .fetch_all(&self.pool)
+        .fetch_all(executor)
         .await?;
         rows.into_iter()
             .map(open_competition_v2_event_from_row)
@@ -8105,6 +8295,18 @@ impl PostgresStore {
         network: &str,
         factory_contract: &str,
     ) -> DbResult<Option<OpenCompetitionV2IndexerAgreement>> {
+        Self::get_open_competition_v2_indexer_agreement_on(&self.pool, network, factory_contract)
+            .await
+    }
+
+    async fn get_open_competition_v2_indexer_agreement_on<
+        'e,
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    >(
+        executor: E,
+        network: &str,
+        factory_contract: &str,
+    ) -> DbResult<Option<OpenCompetitionV2IndexerAgreement>> {
         let row = sqlx::query(
             r#"
             SELECT network, factory_contract, protocol_version, common_safe_block,
@@ -8117,7 +8319,7 @@ impl PostgresStore {
         )
         .bind(network)
         .bind(normalize_key_address(factory_contract))
-        .fetch_optional(&self.pool)
+        .fetch_optional(executor)
         .await?;
         row.map(|row| {
             Ok(OpenCompetitionV2IndexerAgreement {
@@ -8275,6 +8477,17 @@ impl PostgresStore {
         network: &str,
         factory_contract: &str,
     ) -> DbResult<Vec<OpenCompetitionV2StoredProjection>> {
+        Self::list_open_competition_v2_projections_on(&self.pool, network, factory_contract).await
+    }
+
+    async fn list_open_competition_v2_projections_on<
+        'e,
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    >(
+        executor: E,
+        network: &str,
+        factory_contract: &str,
+    ) -> DbResult<Vec<OpenCompetitionV2StoredProjection>> {
         let rows = sqlx::query(
             r#"
             SELECT network, factory_contract, bounty_id, competition_contract,
@@ -8294,7 +8507,7 @@ impl PostgresStore {
         )
         .bind(network)
         .bind(normalize_key_address(factory_contract))
-        .fetch_all(&self.pool)
+        .fetch_all(executor)
         .await?;
         rows.into_iter()
             .map(open_competition_v2_projection_from_row)
@@ -8303,6 +8516,24 @@ impl PostgresStore {
 
     pub async fn list_open_competition_v2_projections_for_contract(
         &self,
+        network: &str,
+        factory_contract: &str,
+        competition_contract: &str,
+    ) -> DbResult<Vec<OpenCompetitionV2StoredProjection>> {
+        Self::list_open_competition_v2_projections_for_contract_on(
+            &self.pool,
+            network,
+            factory_contract,
+            competition_contract,
+        )
+        .await
+    }
+
+    async fn list_open_competition_v2_projections_for_contract_on<
+        'e,
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    >(
+        executor: E,
         network: &str,
         factory_contract: &str,
         competition_contract: &str,
@@ -8327,7 +8558,7 @@ impl PostgresStore {
         .bind(network)
         .bind(normalize_key_address(factory_contract))
         .bind(normalize_key_address(competition_contract))
-        .fetch_all(&self.pool)
+        .fetch_all(executor)
         .await?;
         rows.into_iter()
             .map(open_competition_v2_projection_from_row)
@@ -8676,6 +8907,24 @@ impl PostgresStore {
         factory_contract: &str,
         bounty_contract: &str,
     ) -> DbResult<Vec<AutonomousBountyEvent>> {
+        Self::list_autonomous_bounty_history_for_contract_on(
+            &self.pool,
+            network,
+            factory_contract,
+            bounty_contract,
+        )
+        .await
+    }
+
+    async fn list_autonomous_bounty_history_for_contract_on<
+        'e,
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    >(
+        executor: E,
+        network: &str,
+        factory_contract: &str,
+        bounty_contract: &str,
+    ) -> DbResult<Vec<AutonomousBountyEvent>> {
         let rows = sqlx::query(
             r#"
             SELECT id, log_key, tx_hash, block_number, log_index,
@@ -8695,7 +8944,59 @@ impl PostgresStore {
         .bind(network)
         .bind(normalize_key_address(factory_contract))
         .bind(normalize_key_address(bounty_contract))
-        .fetch_all(&self.pool)
+        .fetch_all(executor)
+        .await?;
+        rows.into_iter().map(autonomous_event_from_row).collect()
+    }
+
+    /// Read only a factory's canonical creation records and the matching child
+    /// emitters. Bounty IDs alone are not unique across factories.
+    pub async fn list_autonomous_bounty_events_for_factory(
+        &self,
+        network: &str,
+        factory_contract: &str,
+        verified_only: bool,
+    ) -> DbResult<Vec<AutonomousBountyEvent>> {
+        Self::list_autonomous_bounty_events_for_factory_on(
+            &self.pool,
+            network,
+            factory_contract,
+            verified_only,
+        )
+        .await
+    }
+
+    async fn list_autonomous_bounty_events_for_factory_on<
+        'e,
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    >(
+        executor: E,
+        network: &str,
+        factory_contract: &str,
+        verified_only: bool,
+    ) -> DbResult<Vec<AutonomousBountyEvent>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT e.id, e.log_key, e.tx_hash, e.block_number, e.log_index,
+                   e.contract_address, e.bounty_id, e.kind, e.data, e.occurred_at
+            FROM autonomous_bounty_events e
+            WHERE e.network = $1 AND (NOT $3 OR e.block_time_verified)
+              AND EXISTS (
+                SELECT 1 FROM autonomous_bounty_events created
+                WHERE created.network = e.network
+                  AND created.contract_address = $2
+                  AND created.kind = 'canonical_bounty_created'
+                  AND created.bounty_id = e.bounty_id
+                  AND (e.contract_address = $2
+                       OR e.contract_address = lower(created.data->>'bounty_contract'))
+              )
+            ORDER BY e.block_number, e.log_index
+            "#,
+        )
+        .bind(network)
+        .bind(normalize_key_address(factory_contract))
+        .bind(verified_only)
+        .fetch_all(executor)
         .await?;
         rows.into_iter().map(autonomous_event_from_row).collect()
     }
@@ -8704,37 +9005,44 @@ impl PostgresStore {
         &self,
         network: &str,
     ) -> DbResult<Vec<AutonomousBountyEvent>> {
-        let rows = sqlx::query(
-            r#"
-            SELECT id, log_key, tx_hash, block_number, log_index, contract_address,
-                   bounty_id, kind, data, occurred_at
-            FROM autonomous_bounty_events
-            WHERE network = $1
-            ORDER BY block_number, log_index
-            "#,
-        )
-        .bind(network)
-        .fetch_all(&self.pool)
-        .await?;
-        rows.into_iter().map(autonomous_event_from_row).collect()
+        self.list_certified_autonomous_bounty_events(network, false)
+            .await
     }
 
     pub async fn list_verified_autonomous_bounty_events(
         &self,
         network: &str,
     ) -> DbResult<Vec<AutonomousBountyEvent>> {
+        self.list_certified_autonomous_bounty_events(network, true)
+            .await
+    }
+
+    async fn list_certified_autonomous_bounty_events(
+        &self,
+        network: &str,
+        verified_only: bool,
+    ) -> DbResult<Vec<AutonomousBountyEvent>> {
+        // Certification and rows must come from one snapshot. A concurrent
+        // indexer may insert new events before certifying its next cursor.
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *tx)
+            .await?;
+        autonomous_canonicality::require_certified_history(&mut tx, network).await?;
         let rows = sqlx::query(
             r#"
             SELECT id, log_key, tx_hash, block_number, log_index, contract_address,
                    bounty_id, kind, data, occurred_at
             FROM autonomous_bounty_events
-            WHERE network = $1 AND block_time_verified = TRUE
+            WHERE network = $1 AND (NOT $2 OR block_time_verified)
             ORDER BY block_number, log_index
             "#,
         )
         .bind(network)
-        .fetch_all(&self.pool)
+        .bind(verified_only)
+        .fetch_all(&mut *tx)
         .await?;
+        tx.commit().await?;
         rows.into_iter().map(autonomous_event_from_row).collect()
     }
 
@@ -8934,6 +9242,16 @@ impl PostgresStore {
         &self,
         terms_hash: &str,
     ) -> DbResult<Option<AutonomousBountyTermsRecord>> {
+        Self::get_autonomous_bounty_terms_on(&self.pool, terms_hash).await
+    }
+
+    async fn get_autonomous_bounty_terms_on<
+        'e,
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    >(
+        executor: E,
+        terms_hash: &str,
+    ) -> DbResult<Option<AutonomousBountyTermsRecord>> {
         let row = sqlx::query(
             r#"
             SELECT terms_hash, policy_hash, acceptance_criteria_hash, benchmark_hash,
@@ -8943,7 +9261,7 @@ impl PostgresStore {
             "#,
         )
         .bind(terms_hash.to_ascii_lowercase())
-        .fetch_optional(&self.pool)
+        .fetch_optional(executor)
         .await?;
         row.map(autonomous_terms_from_row).transpose()
     }
@@ -9068,6 +9386,14 @@ impl PostgresStore {
         network: &str,
         escrow_contract: &str,
     ) -> DbResult<Option<BaseLogScanCursor>> {
+        Self::get_base_log_cursor_on(&self.pool, network, escrow_contract).await
+    }
+
+    async fn get_base_log_cursor_on<'e, E: sqlx::Executor<'e, Database = sqlx::Postgres>>(
+        executor: E,
+        network: &str,
+        escrow_contract: &str,
+    ) -> DbResult<Option<BaseLogScanCursor>> {
         let row = sqlx::query(
             r#"
             SELECT network, escrow_contract, last_scanned_block, last_log_key, updated_at
@@ -9077,7 +9403,7 @@ impl PostgresStore {
         )
         .bind(network)
         .bind(normalize_key_address(escrow_contract))
-        .fetch_optional(&self.pool)
+        .fetch_optional(executor)
         .await?;
 
         row.map(|row| {
@@ -9124,6 +9450,14 @@ impl PostgresStore {
         network: &str,
         escrow_contract: &str,
     ) -> DbResult<Option<BaseIndexerHeartbeat>> {
+        Self::get_base_indexer_heartbeat_on(&self.pool, network, escrow_contract).await
+    }
+
+    async fn get_base_indexer_heartbeat_on<'e, E: sqlx::Executor<'e, Database = sqlx::Postgres>>(
+        executor: E,
+        network: &str,
+        escrow_contract: &str,
+    ) -> DbResult<Option<BaseIndexerHeartbeat>> {
         let row = sqlx::query(
             r#"
             SELECT network, escrow_contract, status, started_at, completed_at,
@@ -9136,7 +9470,7 @@ impl PostgresStore {
         )
         .bind(network)
         .bind(normalize_key_address(escrow_contract))
-        .fetch_optional(&self.pool)
+        .fetch_optional(executor)
         .await?;
 
         row.map(|row| {
@@ -10139,7 +10473,9 @@ async fn update_claim_candidate_status(
             failure_message = $6,
             updated_at = now()
         WHERE id = $1 AND (
-          ($2 = 'relaying' AND status IN ('exclusive', 'sponsoring', 'authorization_ready'))
+          ($2 = 'relaying' AND (status IN ('exclusive', 'sponsoring', 'authorization_ready')
+            OR (status = 'relaying' AND (claim_transaction_hash = $3
+              OR (claim_transaction_hash IS NULL AND failure_code = 'claim_broadcast_unknown')))))
           OR ($2 = 'claimed' AND status IN ('exclusive', 'sponsoring', 'authorization_ready', 'relaying', 'claimed'))
           OR ($2 = 'failed' AND status IN ('exclusive', 'sponsoring', 'authorization_ready', 'relaying'))
         )
@@ -11771,80 +12107,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
-    async fn invoice_order_events_are_sequenced_and_evidence_is_unique_postgres() {
-        let store =
-            PostgresStore::connect(&std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap())
-                .await
-                .unwrap();
-        store.migrate().await.unwrap();
-        let order = format!("ord_{}", Uuid::new_v4().simple());
-        let quoted = serde_json::json!({"kind": "quoted"});
-        assert!(store
-            .create_invoice_order(&order, "Acme", "ap@acme.example", &quoted)
-            .await
-            .unwrap());
-        assert!(!store
-            .create_invoice_order(&order, "Acme", "ap@acme.example", &quoted)
-            .await
-            .unwrap());
-        let evidence = format!("evt_{}", Uuid::new_v4().simple());
-        let paid = serde_json::json!({"kind": "invoice_paid"});
-        assert_eq!(
-            store
-                .append_invoice_order_event(&order, 1, "invoice_paid", &paid, Some(&evidence))
-                .await
-                .unwrap(),
-            InvoiceEventAppend::Appended
-        );
-        assert_eq!(
-            store
-                .append_invoice_order_event(&order, 1, "other", &paid, None)
-                .await
-                .unwrap(),
-            InvoiceEventAppend::SequenceConflict
-        );
-        assert_eq!(
-            store
-                .append_invoice_order_event(&order, 2, "invoice_paid", &paid, Some(&evidence))
-                .await
-                .unwrap(),
-            InvoiceEventAppend::DuplicateEvidence
-        );
-        let events = store.list_invoice_order_events(&order).await.unwrap();
-        assert_eq!(
-            events
-                .iter()
-                .map(|event| (event.sequence, event.kind.as_str()))
-                .collect::<Vec<_>>(),
-            [(0, "quoted"), (1, "invoice_paid")]
-        );
-        let invoice = format!("in_{}", Uuid::new_v4().simple());
-        store
-            .set_invoice_order_stripe_refs(&order, Some("cus_1"), Some(&invoice), None)
-            .await
-            .unwrap();
-        store
-            .set_invoice_order_stripe_refs(&order, Some("cus_other"), Some("in_other"), None)
-            .await
-            .unwrap();
-        let record = store.get_invoice_order(&order).await.unwrap().unwrap();
-        assert_eq!(
-            record.stripe_customer_id.as_deref(),
-            Some("cus_1"),
-            "ids are never overwritten"
-        );
-        assert_eq!(
-            store
-                .find_invoice_order_id_by_stripe_invoice(&invoice)
-                .await
-                .unwrap()
-                .as_deref(),
-            Some(order.as_str())
-        );
-    }
-
     /// Every autonomous-v2 event captured from the compiled contracts must survive a Postgres
     /// round trip with its kind intact, so the feed rebuilt from storage equals the in-memory feed.
     #[tokio::test]
@@ -11876,6 +12138,30 @@ mod tests {
                 .unwrap();
         }
 
+        let factories = events
+            .iter()
+            .filter(|event| {
+                event.kind == chain_base::AutonomousBountyEventKind::CanonicalBountyCreated
+            })
+            .map(|event| event.contract_address.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        for factory in factories {
+            store
+                .commit_autonomous_canonical_checkpoint(
+                    &network,
+                    &factory,
+                    None,
+                    None,
+                    &chain_base::BaseBlockIdentity {
+                        number: events.iter().map(|e| e.block_number).max().unwrap(),
+                        hash: format!("0x{}", "ab".repeat(32)),
+                        timestamp: 1,
+                    },
+                    None,
+                )
+                .await
+                .unwrap();
+        }
         let stored = store.list_autonomous_bounty_events(&network).await.unwrap();
         assert_eq!(stored.len(), events.len());
         let kinds = |events: &[AutonomousBountyEvent]| {
@@ -13249,6 +13535,131 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn site_analytics_accepts_protocol_ids_without_relaxing_private_data_bounds() {
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+        let event = NewSiteAnalyticsEvent {
+            event_id: Uuid::new_v4(),
+            visitor_id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            event_name: "funded_bounty_click".to_string(),
+            page_path: "/earn.html".to_string(),
+            source: Some("postgres-test".to_string()),
+            campaign: None,
+            referrer_host: None,
+            opportunity_id: Some("eip155:8453:agent-bounties/autonomous-v1:fixture".to_string()),
+            bounty_contract: None,
+            occurred_at: Utc::now(),
+        };
+        assert!(store.record_site_analytics_event(&event).await.unwrap());
+        assert!(!store.record_site_analytics_event(&event).await.unwrap());
+        for invalid in [
+            "id?private=value",
+            "id#private",
+            "id with spaces",
+            "",
+            &"x".repeat(201),
+        ] {
+            let invalid_event = NewSiteAnalyticsEvent {
+                event_id: Uuid::new_v4(),
+                opportunity_id: Some(invalid.to_string()),
+                ..event.clone()
+            };
+            assert!(store
+                .record_site_analytics_event(&invalid_event)
+                .await
+                .is_err());
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn site_analytics_constraint_replacement_is_atomic_and_restart_safe() {
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+        let event = NewSiteAnalyticsEvent {
+            event_id: Uuid::new_v4(),
+            visitor_id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            event_name: "funded_bounty_click".to_string(),
+            page_path: "/earn.html".to_string(),
+            source: Some("postgres-test".to_string()),
+            campaign: None,
+            referrer_host: None,
+            opportunity_id: Some("eip155:8453:agent-bounties/autonomous-v1:restart".to_string()),
+            bounty_contract: None,
+            occurred_at: Utc::now(),
+        };
+        assert!(store.record_site_analytics_event(&event).await.unwrap());
+
+        let constraint_query = "SELECT pg_get_constraintdef(oid) FROM pg_constraint \
+            WHERE conrelid = 'site_analytics_events'::regclass \
+              AND conname = 'site_analytics_opportunity_check' AND convalidated";
+        let before: String = sqlx::query_scalar(constraint_query)
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+        // Force validation of the replacement to fail after DROP is attempted.
+        // Use the same statement boundaries as migrate(), so separate DROP/ADD
+        // statements would leave the old constraint absent and fail this test.
+        let migration = include_str!("../../../migrations/0058_site_analytics_opportunity_ids.sql");
+        let failing_migration =
+            migration.replace("AND opportunity_id ~ '^[A-Za-z0-9:/._-]+$'", "AND FALSE");
+        assert_ne!(failing_migration, migration);
+        let mut replacement_error = None;
+        for statement in failing_migration
+            .split(';')
+            .map(str::trim)
+            .filter(|statement| !statement.is_empty())
+        {
+            if let Err(error) = sqlx::query(statement).execute(&store.pool).await {
+                replacement_error = Some(error);
+                break;
+            }
+        }
+        let error = replacement_error.expect("the existing non-null row must reject AND FALSE");
+        assert_eq!(
+            error.as_database_error().unwrap().code().as_deref(),
+            Some("23514")
+        );
+        let after: Option<String> = sqlx::query_scalar(constraint_query)
+            .fetch_optional(&store.pool)
+            .await
+            .unwrap();
+        assert_eq!(after.as_deref(), Some(before.as_str()));
+
+        let invalid_event = NewSiteAnalyticsEvent {
+            event_id: Uuid::new_v4(),
+            opportunity_id: Some("id?private=value".to_string()),
+            ..event.clone()
+        };
+        assert!(store
+            .record_site_analytics_event(&invalid_event)
+            .await
+            .is_err());
+
+        store.pool.close().await;
+        let restarted = PostgresStore::connect(&database_url).await.unwrap();
+        restarted.migrate().await.unwrap();
+        let preserved: String = sqlx::query_scalar(
+            "SELECT opportunity_id FROM site_analytics_events WHERE event_id = $1",
+        )
+        .bind(event.event_id)
+        .fetch_one(&restarted.pool)
+        .await
+        .unwrap();
+        assert_eq!(Some(preserved), event.opportunity_id);
+        assert!(!restarted.record_site_analytics_event(&event).await.unwrap());
+        assert!(restarted
+            .record_site_analytics_event(&invalid_event)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
     async fn site_analytics_round_trip_executes_against_migrated_postgres() {
         let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
         let store = PostgresStore::connect(&database_url).await.unwrap();
@@ -13369,10 +13780,191 @@ mod tests {
         }));
     }
 
+    // These historical reporting fixtures predate factory metadata. Materialize
+    // their synthetic creation records and canonical checkpoint explicitly; no
+    // public reader may infer certification merely from a settlement row.
+    async fn certify_metrics_fixture_history(store: &PostgresStore, network: &str) {
+        sqlx::query(r#"
+            INSERT INTO autonomous_bounty_events
+              (id,network,log_key,tx_hash,block_number,log_index,contract_address,bounty_id,kind,data,occurred_at,block_time_verified)
+            SELECT gen_random_uuid(),e.network,'fixture-creation:'||e.contract_address||':'||e.bounty_id,
+                   min(e.tx_hash),min(e.block_number),0,e.contract_address,e.bounty_id,
+                   'canonical_bounty_created','{}'::jsonb,min(e.occurred_at),true
+            FROM autonomous_bounty_events e
+            WHERE e.network=$1 AND NOT EXISTS (
+              SELECT 1 FROM autonomous_bounty_events created
+              WHERE created.network=e.network AND created.bounty_id=e.bounty_id
+                AND created.kind='canonical_bounty_created'
+                AND e.contract_address IN(created.contract_address,lower(created.data->>'bounty_contract')))
+            GROUP BY e.network,e.contract_address,e.bounty_id
+        "#).bind(network).execute(&store.pool).await.unwrap();
+        sqlx::query(r#"
+            INSERT INTO autonomous_canonical_checkpoints(network,factory_contract,block_number,block_hash)
+            SELECT DISTINCT network,contract_address,
+                (SELECT max(block_number) FROM autonomous_bounty_events WHERE network=$1),$2
+            FROM autonomous_bounty_events WHERE network=$1 AND kind='canonical_bounty_created'
+            ON CONFLICT(network,factory_contract) DO UPDATE SET block_number=EXCLUDED.block_number
+        "#).bind(network).bind(format!("0x{}", "11".repeat(32)))
+            .execute(&store.pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn controlled_card_test_exclusion_preserves_money_and_shared_wallet_customers() {
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+        let network = format!("controlled-card-metrics-{}", Uuid::new_v4());
+        let at = |value: &str| {
+            DateTime::parse_from_rfc3339(value)
+                .unwrap()
+                .with_timezone(&Utc)
+        };
+        let ended_at = at("2099-03-01T00:00:00Z");
+        let launch_at = at("2099-01-01T00:00:00Z");
+        let wallet = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let factory = "0xffffffffffffffffffffffffffffffffffffffff";
+        let controlled = "0x1111111111111111111111111111111111111111";
+        let customer = "0x2222222222222222222222222222222222222222";
+        let test_exclusions = vec![controlled.to_string()];
+        let mut block = 1_u64;
+
+        for (contract, bounty_id, amount, created_at, settled_at) in [
+            (
+                controlled,
+                "controlled",
+                2_000_000_u64,
+                at("2099-01-10T00:00:00Z"),
+                at("2099-02-25T00:00:00Z"),
+            ),
+            (
+                customer,
+                "customer",
+                3_000_000_u64,
+                at("2099-02-26T00:00:00Z"),
+                at("2099-02-27T00:00:00Z"),
+            ),
+        ] {
+            for (kind, address, data, occurred_at) in [
+                (
+                    AutonomousBountyEventKind::CanonicalBountyCreated,
+                    factory,
+                    serde_json::json!({"creator":wallet,"bounty_contract":contract}),
+                    created_at,
+                ),
+                (
+                    AutonomousBountyEventKind::FundingAdded,
+                    contract,
+                    serde_json::json!({"contributor":wallet,"amount":amount}),
+                    created_at,
+                ),
+                (
+                    AutonomousBountyEventKind::BountySettled,
+                    contract,
+                    serde_json::json!({"solver":"0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                     "solver_reward":amount-100_000,"verifier_reward":100_000,
+                     "claim_bond_returned":100_000,"timeout_bond_bonus":0}),
+                    settled_at,
+                ),
+            ] {
+                store
+                    .upsert_autonomous_bounty_event(
+                        &network,
+                        &AutonomousBountyEvent {
+                            id: Uuid::new_v4(),
+                            log_key: format!("{network}:{block}:0"),
+                            tx_hash: format!("0x{block:064x}"),
+                            block_number: block,
+                            log_index: 0,
+                            contract_address: address.to_string(),
+                            bounty_id: bounty_id.to_string(),
+                            kind,
+                            data,
+                            occurred_at,
+                        },
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    store
+                        .confirm_autonomous_event_block_time(&network, block, occurred_at)
+                        .await
+                        .unwrap(),
+                    1
+                );
+                block += 1;
+            }
+            certify_metrics_fixture_history(&store, &network).await;
+            let growth = store
+                .platform_demand_growth_stats(
+                    &network,
+                    ended_at,
+                    launch_at,
+                    &[],
+                    &[],
+                    &test_exclusions,
+                )
+                .await
+                .unwrap();
+            let proof = store
+                .platform_payout_proof_rows(
+                    &network,
+                    ended_at - chrono::Duration::days(28),
+                    ended_at,
+                    &[],
+                )
+                .await
+                .unwrap();
+            assert_eq!(growth.controlled_test_gmv_28d_base_units, "2000000");
+            assert!(proof.iter().any(|row| row.contract_address == controlled));
+            if contract == controlled {
+                assert_eq!(growth.gmv_28d_base_units, "2000000");
+                assert_eq!(growth.new_poster_funder_wallets_28d, 0);
+                assert_eq!(growth.active_poster_funder_wallets_28d, 0);
+                assert_eq!(growth.repeat_poster_funder_wallets_28d, 0);
+                assert_eq!(growth.attributed_gmv_28d_base_units, "0");
+                assert_eq!(growth.non_operator_attributed_gmv_28d_base_units, "0");
+                assert_eq!(proof.len(), 1);
+                assert_eq!(proof[0].total_base_units, "2000000");
+            } else {
+                assert_eq!(growth.gmv_7d_base_units, "5000000");
+                assert_eq!(growth.gmv_28d_base_units, "5000000");
+                assert_eq!(growth.lifetime_gmv_base_units, "5000000");
+                assert_eq!(
+                    growth.new_poster_funder_wallets_28d, 1,
+                    "old test actions cannot make a real new customer wallet look old"
+                );
+                assert_eq!(growth.active_poster_funder_wallets_28d, 1);
+                assert_eq!(growth.repeat_poster_funder_wallets_28d, 1);
+                assert_eq!(growth.attributed_gmv_28d_base_units, "3000000");
+                assert_eq!(growth.non_operator_attributed_gmv_28d_base_units, "3000000");
+                assert_eq!(proof.len(), 2);
+                assert_eq!(
+                    proof
+                        .iter()
+                        .map(|r| r.total_base_units.parse::<u64>().unwrap())
+                        .sum::<u64>(),
+                    5_000_000
+                );
+                let baseline = store
+                    .platform_demand_growth_stats(&network, ended_at, launch_at, &[], &[], &[])
+                    .await
+                    .unwrap();
+                assert_eq!(baseline.new_poster_funder_wallets_28d, 0);
+                assert_eq!(baseline.controlled_test_gmv_28d_base_units, "0");
+                assert_eq!(baseline.gmv_28d_base_units, growth.gmv_28d_base_units);
+            }
+        }
+        sqlx::query("DELETE FROM autonomous_bounty_events WHERE network = $1")
+            .bind(&network)
+            .execute(&store.pool)
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
     async fn platform_metrics_query_separates_history_from_identity_and_cohort_boundaries() {
-        #[allow(clippy::too_many_arguments)]
         async fn add_event(
             store: &PostgresStore,
             network: &str,
@@ -13413,7 +14005,6 @@ mod tests {
             }
         }
 
-        #[allow(clippy::too_many_arguments)]
         async fn add_competition_event(
             store: &PostgresStore,
             network: &str,
@@ -14011,6 +14602,7 @@ mod tests {
             .unwrap();
         }
 
+        certify_metrics_fixture_history(&store, &network).await;
         let stats = store
             .platform_metrics_stats(
                 &network,
@@ -14149,6 +14741,7 @@ mod tests {
                 launch_at,
                 &[maintainer_wallet.to_string()],
                 &[policy_excluded_contract.to_string()],
+                &[],
             )
             .await
             .unwrap();
@@ -14422,6 +15015,98 @@ mod tests {
             .unwrap();
         assert_eq!(confirmed.status, X402RelayStatus::Confirmed);
         assert!(!confirmed.retryable);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn sponsored_creation_retries_share_quota_and_stop_at_three_attempts() {
+        let store =
+            PostgresStore::connect(&std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap())
+                .await
+                .unwrap();
+        store.migrate().await.unwrap();
+        let network = format!("creation-test-{}", Uuid::new_v4());
+        let request = NewX402RelayAttempt {
+            id: Uuid::new_v4(),
+            idempotency_key: format!("create:{}", Uuid::new_v4()),
+            network: network.clone(),
+            bounty_contract: "0x1111111111111111111111111111111111111111".into(),
+            contributor: "0x2222222222222222222222222222222222222222".into(),
+            amount: 21_300_000,
+            authorization_nonce: format!("0x{:064x}", Uuid::new_v4().as_u128()),
+            authorization_valid_before: 2_000_000_000,
+            request_fingerprint: "exact-create-and-expiry".into(),
+            relayer_address: "0x3333333333333333333333333333333333333333".into(),
+        };
+        // Simultaneous clients consume one reservation, even when the wallet quota is one.
+        let (a, b) = tokio::join!(
+            store.reserve_x402_relay_attempt(&request, 1, 1),
+            store.reserve_x402_relay_attempt(&request, 1, 1)
+        );
+        let id = a.unwrap().id;
+        assert_eq!(id, b.unwrap().id);
+        for count in 1..=3 {
+            let lease = store
+                .acquire_x402_relayer_lease(&network, 30)
+                .await
+                .unwrap()
+                .unwrap();
+            let attempt = store
+                .claim_x402_relay_attempt(id, lease, 30)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(attempt.attempt_count, count);
+            assert!(store
+                .claim_x402_relay_attempt(id, Uuid::new_v4(), 30)
+                .await
+                .unwrap()
+                .is_none());
+            store
+                .mark_x402_relay_failed(
+                    id,
+                    Some(lease),
+                    true,
+                    "rpc_unavailable",
+                    "retry exact authorization",
+                )
+                .await
+                .unwrap();
+            store
+                .release_x402_relayer_lease(&network, lease)
+                .await
+                .unwrap();
+            assert_eq!(
+                store
+                    .reserve_x402_relay_attempt(&request, 1, 1)
+                    .await
+                    .unwrap()
+                    .id,
+                id
+            );
+        }
+        let lease = store
+            .acquire_x402_relayer_lease(&network, 30)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(store
+            .claim_x402_relay_attempt(id, lease, 30)
+            .await
+            .unwrap()
+            .is_none());
+        // A crashed third attempt also cannot acquire a fourth broadcast lease.
+        sqlx::query("UPDATE x402_relay_attempts SET status = 'relaying', lease_expires_at = now() - interval '1 second' WHERE id = $1")
+            .bind(id).execute(&store.pool).await.unwrap();
+        assert!(store
+            .claim_x402_relay_attempt(id, lease, 30)
+            .await
+            .unwrap()
+            .is_none());
+        store
+            .release_x402_relayer_lease(&network, lease)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

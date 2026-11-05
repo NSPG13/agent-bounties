@@ -1,16 +1,16 @@
 use super::{
-    agent_native_claim, compile_objective_with_cloud_agent, fund_bounty_with_x402, get_paid_status,
-    get_x402_relay_status, inspect_open_competition_v2, list_autonomous_bounties,
-    list_autonomous_verification_jobs, list_opportunities, list_unfunded_bounties,
-    mcp_base_url_from_env, plan_autonomous_attestation_settlement, plan_autonomous_bounty_claim,
+    agent_native_claim, fund_bounty_with_x402, get_paid_status, get_x402_relay_status,
+    inspect_open_competition_v2, list_autonomous_bounties, list_autonomous_verification_jobs,
+    list_opportunities, list_unfunded_bounties, mcp_base_url_from_env,
+    plan_autonomous_attestation_settlement, plan_autonomous_bounty_claim,
     plan_autonomous_module_settlement, plan_autonomous_verification_attestation,
     prepare_agent_to_earn, prepare_autonomous_bounty_submission, prepare_open_competition_v2,
     proxy_hosted_json, public_base_url_from_env, publish_autonomous_submission_evidence,
     publish_unfunded_bounty, submit_unfunded_bounty_solution, tools, AgentNativeClaimArgs,
-    AutonomousBountyFeedArgs, AutonomousVerificationJobsArgs, CompileObjectiveWithCloudAgentArgs,
-    GetX402RelayStatusArgs, ListUnfundedBountiesArgs, ObservedInterface, ObservedProtocolEra,
-    OpenCompetitionV2InspectArgs, OpenCompetitionV2MutationArgs, OpportunityListArgs,
-    PaidStatusArgs, PlanAutonomousAttestationSettlementArgs, PlanAutonomousBountyClaimArgs,
+    AutonomousBountyFeedArgs, AutonomousVerificationJobsArgs, GetX402RelayStatusArgs,
+    ListUnfundedBountiesArgs, ObservedInterface, ObservedProtocolEra, OpenCompetitionV2InspectArgs,
+    OpenCompetitionV2MutationArgs, OpportunityListArgs, PaidStatusArgs,
+    PlanAutonomousAttestationSettlementArgs, PlanAutonomousBountyClaimArgs,
     PlanAutonomousModuleSettlementArgs, PlanAutonomousVerificationAttestationArgs,
     PrepareAgentToEarnInput, PrepareAutonomousBountySubmissionArgs, PrepareBountyPostArgs,
     PublishAutonomousSubmissionEvidenceArgs, PublishUnfundedBountyArgs, SharedState,
@@ -18,6 +18,7 @@ use super::{
 };
 #[cfg(test)]
 use super::{AppState, ChatgptFileInput};
+use crate::posting_guidance;
 use axum::{
     extract::{Path, State},
     http::{header::ORIGIN, HeaderMap, HeaderValue, StatusCode},
@@ -78,14 +79,17 @@ const CHATGPT_ADVERTISED_TOOL_NAMES: &[&str] = &[
     "prepare_bounty_post",
     "prepare_bounty_action",
     "get_bounty_action_status",
-    "compile_objective_with_cloud_agent",
     "list_bounty_comments",
     "add_bounty_comment",
     "create_share_bundle",
 ];
 const CHATGPT_COMPATIBILITY_TOOL_NAMES: &[&str] = &["list_autonomous_bounties"];
-const CORE_MCP_EXTENSION_TOOL_NAMES: &[&str] =
-    &["inspect_open_competition_v2", "prepare_open_competition_v2"];
+const CORE_MCP_EXTENSION_TOOL_NAMES: &[&str] = &[
+    "inspect_open_competition_v2",
+    "prepare_open_competition_v2",
+    "get_posting_options",
+    "get_posting_status",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct McpDistributionAttribution {
@@ -313,12 +317,29 @@ pub(super) async fn prepare_bounty_post_handoff(
     let args = &stable_args;
     let validation_image = sandbox_bounty_image_reference(args)?;
     let validation_handoff = build_bounty_post_handoff(args, validation_image.as_ref())?;
-    let handoff = if validation_image.is_none() {
+    let mut handoff = if validation_image.is_none() {
         validation_handoff
     } else {
         let image = persist_chatgpt_bounty_image(state, args).await?;
         build_bounty_post_handoff(args, Some(&image))?
     };
+    if handoff["review_mode"] == "automated" {
+        let health = service_runtime::verifier_checkpoints::HealthSnapshot::load(
+            state.store.as_ref(),
+            "base-mainnet",
+        )
+        .await;
+        let details = health.benchmark_details(
+            &handoff["benchmark"],
+            &json!({"verifiers":chain_base::BASE_MAINNET_STANDING_META_V2_VERIFIERS}),
+        );
+        handoff["verification_prepared"] = details["ready"].clone();
+        if details["ready"] == true {
+            handoff["review_disclosure"] = json!("The approved test and required signers are currently available. The test establishes only its published limited claim. Availability is checked again before funding.");
+            handoff["next_action"] = json!("Open the secure handoff and review the exact tests and terms before funding. Only confirmed chain events prove creation and funding.");
+        }
+        handoff["verification_details"] = details;
+    }
     attach_distribution_attribution(state, args, handoff, attribution).await
 }
 
@@ -1574,8 +1595,14 @@ async fn handle_mcp_post(
         if let Err(error) = validate_modern_request(&headers, &payload) {
             return error.into_response(payload_id(&payload));
         }
-        let Some((status, response)) =
-            handle_request(state, payload, McpProtocolEra::Modern, catalog_profile).await
+        let Some((status, response)) = handle_request(
+            state,
+            headers.clone(),
+            payload,
+            McpProtocolEra::Modern,
+            catalog_profile,
+        )
+        .await
         else {
             return StatusCode::ACCEPTED.into_response();
         };
@@ -1592,6 +1619,7 @@ async fn handle_mcp_post(
         for request in batch {
             if let Some((_, response)) = handle_request(
                 state.clone(),
+                headers.clone(),
                 request.clone(),
                 McpProtocolEra::Legacy,
                 catalog_profile,
@@ -1605,8 +1633,14 @@ async fn handle_mcp_post(
             return StatusCode::ACCEPTED.into_response();
         }
         Value::Array(responses)
-    } else if let Some((_, response)) =
-        handle_request(state, payload, McpProtocolEra::Legacy, catalog_profile).await
+    } else if let Some((_, response)) = handle_request(
+        state,
+        headers.clone(),
+        payload,
+        McpProtocolEra::Legacy,
+        catalog_profile,
+    )
+    .await
     {
         response
     } else {
@@ -1942,6 +1976,7 @@ fn mcp_error_response(
 
 async fn handle_request(
     state: SharedState,
+    caller_headers: HeaderMap,
     request: Value,
     era: McpProtocolEra,
     catalog_profile: McpCatalogProfile,
@@ -1982,7 +2017,7 @@ async fn handle_request(
             }
             Ok(json!({"tools": tools}))
         }
-        "tools/call" => call_tool(state, &params, attribution.as_ref()).await,
+        "tools/call" => call_tool(state, caller_headers, &params, attribution.as_ref()).await,
         "resources/list" => Ok(json!({"resources": [feed_widget_resource_descriptor()]})),
         "resources/templates/list" => Ok(json!({"resourceTemplates": []})),
         "resources/read" => read_resource(&params),
@@ -2016,14 +2051,27 @@ async fn handle_request(
                 }),
             )
         }
-        Err(error) => (
-            if era == McpProtocolEra::Modern {
-                StatusCode::BAD_REQUEST
+        Err(error) => {
+            let upstream = error.strip_prefix(UPSTREAM_UNAVAILABLE_PREFIX);
+            let status = if era == McpProtocolEra::Modern {
+                if upstream.is_some() {
+                    StatusCode::SERVICE_UNAVAILABLE
+                } else {
+                    StatusCode::BAD_REQUEST
+                }
             } else {
                 StatusCode::OK
-            },
-            json_rpc_error(id, -32602, &error),
-        ),
+            };
+            let mut response = json_rpc_error(
+                id,
+                if upstream.is_some() { -32603 } else { -32602 },
+                upstream.unwrap_or(&error),
+            );
+            if upstream.is_some() {
+                response["error"]["data"] = json!({"error_code": "upstream_unavailable"});
+            }
+            (status, response)
+        }
     })
 }
 
@@ -2036,17 +2084,17 @@ fn attach_attribution_metadata(result: &mut Value, attribution: &McpDistribution
         .or_insert_with(|| json!({}))
         .as_object_mut();
     if let Some(metadata) = metadata {
-        metadata.insert(
-            "agentbounties.app/acquisition".to_string(),
-            json!({
-                "acquisition_id": attribution.acquisition_token,
-                "first_touch_rail": attribution.first_touch_rail,
-                "current_rail": attribution.current_rail,
-                "measurement_eligible": attribution.measurement_eligible,
-                "request_header": ACQUISITION_HEADER,
-                "authority": "analytics_only"
-            }),
-        );
+        let evidence = json!({
+            "acquisition_id": attribution.acquisition_token,
+            "first_touch_rail": attribution.first_touch_rail,
+            "current_rail": attribution.current_rail,
+            "measurement_eligible": attribution.measurement_eligible,
+            "request_header": ACQUISITION_HEADER,
+            "authority": "analytics_only"
+        });
+        // Keep the legacy key for installed clients; both names carry identical evidence.
+        metadata.insert("agentizable.ai/acquisition".into(), evidence.clone());
+        metadata.insert("agentbounties.app/acquisition".into(), evidence);
     }
 }
 
@@ -2086,9 +2134,9 @@ fn mcp_server_instructions() -> &'static str {
     if sandbox {
         "Sandbox mode is active. Use get_bounty_feed and render_bounty_feed to exercise the complete in-chat bounty UI. Use prepare_moonpay_onramp to exercise the external top-up handoff without opening MoonPay, and use prepare_bounty_action plus get_bounty_action_status to exercise the hosted bounty lifecycle without opening a wallet. Every tool returns deterministic fixture data and performs no network write, wallet action, public comment, publication, funding, claim, submission, verification, settlement, purchase, or payment. Never describe sandbox output as canonical evidence."
     } else if public_review {
-        "Public review mode is active. Show only voluntary, unfunded community requests with no payment promise. Use render_bounty_feed for the compact in-chat work queue, publish_unfunded_bounty only when the user explicitly asks to publish a voluntary request, compile_objective_with_cloud_agent only for non-economic task decomposition, and the comment and share tools for public collaboration. Funding, claiming, completion, verification, wallet, settlement, token, and payment actions are unavailable in this app configuration. Never imply otherwise or direct a user around this boundary."
+        "Public review mode is active. Show only voluntary, unfunded community requests with no payment promise. Use render_bounty_feed for the compact in-chat work queue, publish_unfunded_bounty only when the user explicitly asks to publish a voluntary request, use your own AI account for task decomposition, and the comment and share tools for public collaboration. Funding, claiming, completion, verification, wallet, settlement, token, and payment actions are unavailable in this app configuration. Never imply otherwise or direct a user around this boundary."
     } else {
-        "Use get_bounty_feed to inspect fresh structured bounty data, then render_bounty_feed to show the mounted read-only feed in ChatGPT. The widget has only Post bounty, Comment, Share, and Solve actions; each action starts a conversation. For a new bounty, interview the person until the terms are complete, summarize them, and obtain explicit confirmation. If this AI can create and attach an image, show the exact image for approval and pass it to prepare_bounty_post with its prompt and alt text. Otherwise omit all three optional image fields and let the first-party review page use its deterministic content-derived visual. Agentizable never generates a replacement with a platform model key. For fund, solve or claim, complete, or verify, call prepare_bounty_action and open only its first-party HTTPS authorization URL. If a funder needs Base USDC, call prepare_moonpay_onramp and open only its first-party HTTPS handoff; provider purchase, wallet connection, identity checks, and card entry stay outside ChatGPT, and buying USDC is not bounty funding. Never request or accept a wallet signature, private key, seed phrase, payment authorization, verifier signature, or card data in ChatGPT. Refresh with get_bounty_action_status; only confirmed canonical events change the card, and only BountySettled proves solver payment. Use compile_objective_with_cloud_agent to break a broad objective into smaller reviewable child bounties. Use create_share_bundle after every meaningful step."
+        "Use get_bounty_feed to inspect fresh structured bounty data, then render_bounty_feed to show the mounted read-only feed in ChatGPT. The widget has only Post bounty, Comment, Share, and Solve actions; each action starts a conversation. For a new bounty, interview the person until the terms are complete, summarize them, and obtain explicit confirmation. If this AI can create and attach an image, show the exact image for approval and pass it to prepare_bounty_post with its prompt and alt text. Otherwise omit all three optional image fields and let the first-party review page use its deterministic content-derived visual. Agentizable never generates a replacement with a platform model key. For fund, solve or claim, complete, or verify, call prepare_bounty_action and open only its first-party HTTPS authorization URL. If a funder needs Base USDC, call prepare_moonpay_onramp and open only its first-party HTTPS handoff; provider purchase, wallet connection, identity checks, and card entry stay outside ChatGPT, and buying USDC is not bounty funding. Never request or accept a wallet signature, private key, seed phrase, payment authorization, verifier signature, or card data in ChatGPT. Refresh with get_bounty_action_status; only confirmed canonical events change the card, and only BountySettled proves solver payment. Use the current AI account to break a broad objective into smaller reviewable child bounties; platform-hosted generation is retired. Use create_share_bundle after every meaningful step."
     }
 }
 
@@ -2294,6 +2342,10 @@ fn mcp_tool_descriptor_for_mode(
         "agentBountiesSandbox": sandbox,
         "agentBountiesPublicReview": public_review
     });
+    if super::managed_payments::NAMES.contains(&descriptor.name) {
+        // Analytics OAuth does not grant website account or merchant authority.
+        metadata["agentBountiesAuthorization"] = json!(descriptor.authorization);
+    }
     if matches!(descriptor.name, "get_bounty_feed" | "render_bounty_feed") {
         value.insert(
             "outputSchema".to_string(),
@@ -2376,6 +2428,25 @@ fn analytics_security_schemes(exclusion_link_enabled: bool) -> Value {
 
 fn tool_impact(name: &str) -> (bool, bool, bool, bool) {
     match name {
+        "request_managed_service_refund" => (false, true, true, true),
+        // A rejection forfeits the solver's bond; a retry returns the recorded verdict.
+        "record_managed_bounty_review" => (false, true, true, true),
+        // An appeal holds the customer's rejection for the arbiter; a retry returns it.
+        "appeal_card_bounty_review" => (false, false, true, true),
+        // Each call issues a distinct quote and publishes its public terms.
+        "issue_managed_bounty_quote" => (false, false, true, false),
+        "issue_managed_service_quote"
+        | "accept_managed_service_quote"
+        | "open_managed_service_checkout" => (false, false, true, true),
+        "run_verification_checks"
+        | "upload_verification_artifact"
+        | "import_verification_github"
+        | "save_verification_review"
+        | "prepare_artifact_submission" => (false, false, true, true),
+        "assign_review_task" | "accept_review_task" => (false, false, true, false),
+        "open_artifact_dispute" => (false, false, true, false),
+        "resolve_artifact_dispute" => (false, true, true, false),
+        "confirm_artifact_submission" => (false, true, true, true),
         "prepare_moonpay_onramp" => (true, false, false, true),
         "prepare_bounty_post" => (false, true, true, true),
         "prepare_bounty_action" => (false, false, false, true),
@@ -2395,6 +2466,7 @@ fn tool_impact(name: &str) -> (bool, bool, bool, bool) {
 
 async fn call_tool(
     state: SharedState,
+    caller_headers: HeaderMap,
     params: &Value,
     attribution: Option<&McpDistributionAttribution>,
 ) -> Result<Value, String> {
@@ -2406,6 +2478,21 @@ async fn call_tool(
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
+
+    if matches!(
+        name,
+        "draft_bounty_with_cloud_agent"
+            | "compile_objective_with_cloud_agent"
+            | "analyze_bounty_fit"
+    ) {
+        let mut result = tool_result(
+            super::hosted_generation_removed().0,
+            "Platform-hosted generation has been removed. Prepare the draft in your own AI account.",
+            false,
+        );
+        result["isError"] = json!(true);
+        return Ok(result);
+    }
 
     let sandbox = chatgpt_sandbox_mode();
     let public_review = !sandbox && chatgpt_public_review_mode();
@@ -2422,6 +2509,28 @@ async fn call_tool(
         validate_public_review_tool_arguments(name, &arguments)?;
     }
 
+    if super::managed_payments::NAMES.contains(&name) {
+        let result = legacy_result(
+            super::managed_payments::call(name, caller_headers, arguments)
+                .await
+                .0,
+        );
+        return Ok(match result {
+            Ok(value) => tool_result(value, "Checkout and payment evidence remain separate from bank settlement and bounty funding.", false),
+            Err(error) => tool_error(error),
+        });
+    }
+    if super::verification::NAMES.contains(&name) {
+        let result = legacy_result(
+            super::verification::call(name, caller_headers, arguments)
+                .await
+                .0,
+        );
+        return Ok(match result {
+            Ok(value) => tool_result(value, "Check evidence does not authorize payment.", false),
+            Err(error) => tool_error(error),
+        });
+    }
     match name {
         "get_bounty_feed" => {
             let args: ChatgptFeedArgs = serde_json::from_value(arguments)
@@ -2651,7 +2760,7 @@ async fn call_tool(
             let args: AgentNativeClaimArgs = serde_json::from_value(arguments)
                 .map_err(|error| format!("invalid agent_native_claim arguments: {error}"))?;
             (
-                agent_native_claim(State(state), Json(args)).await.0,
+                agent_native_claim(State(state), caller_headers.clone(), Json(args)).await.0,
                 "Advanced the retry-safe claim flow. Only confirmed BountyClaimed proves that the solver owns the active round.",
             )
         }
@@ -2737,35 +2846,16 @@ async fn call_tool(
             let args: PaidStatusArgs = serde_json::from_value(arguments)
                 .map_err(|error| format!("invalid get_paid_status arguments: {error}"))?;
             (
-                get_paid_status(State(state), Json(args)).await.0,
+                get_paid_status(State(state), caller_headers.clone(), Json(args)).await.0,
                 "Returned reconciled payout status and the appropriate share trigger when canonical evidence exists.",
-            )
-        }
-        "compile_objective_with_cloud_agent" => {
-            let mut args: CompileObjectiveWithCloudAgentArgs = serde_json::from_value(arguments)
-                .map_err(|error| {
-                    format!("invalid compile_objective_with_cloud_agent arguments: {error}")
-                })?;
-            if public_review {
-                args.solver_budget_usdc = None;
-            }
-            (
-                compile_objective_with_cloud_agent(State(state), Json(args))
-                    .await
-                    .0,
-                if public_review {
-                    "Compiled a bounded, non-economic task graph. The decomposition is advisory and creates no bounty, payment promise, claim, verification, settlement, or token transfer."
-                } else {
-                    "Compiled a bounded bounty graph. The decomposition is advisory until each child has independently reviewable terms, funding, verification, and evidence."
-                },
             )
         }
         "publish_unfunded_bounty" => {
             let args: PublishUnfundedBountyArgs = serde_json::from_value(arguments)
                 .map_err(|error| format!("invalid publish_unfunded_bounty arguments: {error}"))?;
             (
-                publish_unfunded_bounty(State(state), Json(args)).await.0,
-                "Published a public unfunded bounty and returned the bounded Agentizable demo-agent response. Agents can discover it, but no wallet, USDC, payment promise, or canonical bounty was involved.",
+                publish_unfunded_bounty(State(state), caller_headers.clone(), Json(args)).await.0,
+                "Published the caller’s prepared voluntary request. No generated solution, payment promise, wallet action, or canonical bounty was created.",
             )
         }
         "list_unfunded_bounties" => {
@@ -2782,9 +2872,18 @@ async fn call_tool(
                     format!("invalid submit_unfunded_bounty_solution arguments: {error}")
                 })?;
             (
-                submit_unfunded_bounty_solution(Json(args)).await.0,
+                submit_unfunded_bounty_solution(State(state.clone()), caller_headers.clone(), Json(args)).await.0,
                 "Published the registered agent's solution to the open unfunded bounty. This creates no payment claim.",
             )
+        }
+        "get_posting_options" => (
+            posting_guidance::options().await.0,
+            "Read posting choices and first-party review guidance.",
+        ),
+        "get_posting_status" => {
+            let args = serde_json::from_value::<posting_guidance::PostingStatusArgs>(arguments)
+                .map_err(|error| format!("invalid posting status: {error}"))?;
+            (posting_guidance::status(caller_headers.clone(), Json(args)).await.0, "Read public posting progress. Only canonical events prove funding; private approval stays on the review page.")
         }
         "prepare_bounty_post" => {
             let request_fingerprint = distribution_request_fingerprint(&arguments);
@@ -2873,12 +2972,16 @@ fn core_mcp_tool_names() -> Vec<&'static str> {
         .iter()
         .chain(CHATGPT_COMPATIBILITY_TOOL_NAMES)
         .chain(CORE_MCP_EXTENSION_TOOL_NAMES)
+        .chain(super::verification::NAMES)
+        .chain(super::managed_payments::NAMES)
         .copied()
         .collect()
 }
 
 fn chatgpt_tool_is_callable(name: &str) -> bool {
-    CHATGPT_ADVERTISED_TOOL_NAMES.contains(&name)
+    super::managed_payments::NAMES.contains(&name)
+        || super::verification::NAMES.contains(&name)
+        || CHATGPT_ADVERTISED_TOOL_NAMES.contains(&name)
         || CHATGPT_COMPATIBILITY_TOOL_NAMES.contains(&name)
         || CORE_MCP_EXTENSION_TOOL_NAMES.contains(&name)
 }
@@ -3000,6 +3103,11 @@ fn public_review_text_is_noncommercial(value: &str) -> bool {
 
 async fn sandbox_tool_result(name: &str, arguments: &Value) -> Result<Value, String> {
     let (value, narration, wallet_review) = match name {
+        "get_posting_options" => (json!({"sandbox":true, "options":serde_json::from_str::<Value>(include_str!("../../../site/posting-options.json")).expect("checked options")}), "Returned supported posting choices without wallet actions.", false),
+        "get_posting_status" => {
+            let _: posting_guidance::PostingStatusArgs = serde_json::from_value(arguments.clone()).map_err(|error| format!("invalid get_posting_status arguments: {error}"))?;
+            (json!({"sandbox":true, "funded":false, "paid":false, "gas_sponsorship":{"available":false}, "status":"simulated_only"}), "No chain, account or payment was accessed.", false)
+        },
         "get_bounty_feed" => {
             let args: ChatgptFeedArgs = serde_json::from_value(arguments.clone())
                 .map_err(|error| format!("invalid get_bounty_feed arguments: {error}"))?;
@@ -3898,6 +4006,7 @@ async fn load_bounty_feed(
             work_state: args.work_state,
             payment_state: args.payment_state,
             limit: args.limit,
+            opportunity_id: None,
         }))
         .await
         .0,
@@ -3949,10 +4058,25 @@ fn constrain_public_review_feed(value: &mut Value) -> Result<(), String> {
         .get("network")
         .cloned()
         .unwrap_or_else(|| json!("base-mainnet"));
-    let degraded = source
-        .get("degraded")
-        .cloned()
-        .unwrap_or(Value::Bool(false));
+    let request_source = source
+        .get("source_statuses")
+        .and_then(Value::as_array)
+        .and_then(|statuses| {
+            statuses
+                .iter()
+                .find(|status| status["source_type"] == "unfunded_offchain")
+        });
+    let coverage = request_source
+        .and_then(|status| status["coverage"].as_str())
+        .filter(|value| ["complete", "partial", "unavailable"].contains(value))
+        .unwrap_or_else(|| {
+            if request_source.is_some_and(|status| status["available"] == true) {
+                "complete"
+            } else {
+                "unavailable"
+            }
+        });
+    let degraded = coverage != "complete";
     let items = source
         .get("items")
         .and_then(Value::as_array)
@@ -3974,12 +4098,15 @@ fn constrain_public_review_feed(value: &mut Value) -> Result<(), String> {
         "network": network,
         "applied_view": "recent",
         "degraded": degraded,
+        "coverage": coverage,
+        "coverage_scope": "inventory_page",
         "source_statuses": [{
             "source_type": "voluntary_request",
-            "available": true,
+            "available": !degraded,
+            "coverage": coverage,
             "authoritative_urls": [],
             "item_count": item_count,
-            "error": null
+            "error": if degraded { json!("voluntary_request_source_unavailable") } else { Value::Null }
         }],
         "items": items,
         "evidence_boundary": "Public review mode exposes voluntary community requests only. No reward, payment promise, wallet action, token transfer, paid-service checkout, claim, settlement, or payout is available."
@@ -4230,8 +4357,13 @@ fn encode_component(value: &str) -> String {
     url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
 }
 
+const UPSTREAM_UNAVAILABLE_PREFIX: &str = "upstream_unavailable: ";
+
 fn legacy_result(value: Value) -> Result<Value, String> {
     if let Some(error) = value.get("error").and_then(Value::as_str) {
+        if value.get("error_code").and_then(Value::as_str) == Some("upstream_unavailable") {
+            return Err(format!("{UPSTREAM_UNAVAILABLE_PREFIX}{error}"));
+        }
         return Err(error.to_string());
     }
     value
@@ -4421,6 +4553,13 @@ fn tool_result(value: Value, narration: &str, wallet_review: bool) -> Value {
 }
 
 fn tool_error(error: String) -> Value {
+    if let Some(message) = error.strip_prefix(UPSTREAM_UNAVAILABLE_PREFIX) {
+        return json!({
+            "content": [{"type": "text", "text": message}],
+            "structuredContent": {"error_code": "upstream_unavailable"},
+            "isError": true
+        });
+    }
     json!({
         "content": [{"type": "text", "text": error}],
         "isError": true
@@ -4609,11 +4748,12 @@ fn feed_output_schema(public_review: bool) -> Value {
             "properties": {
                 "source_type": {"type": "string", "enum": ["voluntary_request"]},
                 "available": {"type": "boolean"},
+                "coverage": {"type": "string", "enum": ["complete", "partial", "unavailable"]},
                 "authoritative_urls": {"type": "array", "items": {"type": "string"}, "maxItems": 0},
                 "item_count": {"type": "integer"},
                 "error": {"type": ["string", "null"]}
             },
-            "required": ["source_type", "available", "authoritative_urls", "item_count", "error"],
+            "required": ["source_type", "available", "coverage", "authoritative_urls", "item_count", "error"],
             "additionalProperties": false
         });
         let comment = json!({
@@ -4670,6 +4810,8 @@ fn feed_output_schema(public_review: bool) -> Value {
                 "network": {"type": "string"},
                 "applied_view": {"type": "string", "enum": ["recent"]},
                 "degraded": {"type": "boolean"},
+                "coverage": {"type": "string", "enum": ["complete", "partial", "unavailable"]},
+                "coverage_scope": {"type": "string", "enum": ["inventory_page", "canonical_identity"]},
                 "source_statuses": {
                     "type": "array",
                     "items": source_status
@@ -4684,7 +4826,7 @@ fn feed_output_schema(public_review: bool) -> Value {
             },
             "required": [
                 "schema_version", "generated_at", "state_token", "network", "applied_view",
-                "degraded", "source_statuses", "items", "app_mode", "commerce_enabled",
+                "degraded", "coverage", "coverage_scope", "source_statuses", "items", "app_mode", "commerce_enabled",
                 "evidence_boundary"
             ],
             "additionalProperties": false
@@ -4698,6 +4840,8 @@ fn feed_output_schema(public_review: bool) -> Value {
             "network": {"type": "string"},
             "items": {"type": "array", "items": {"type": "object"}},
             "degraded": {"type": "boolean"},
+                "coverage": {"type": "string", "enum": ["complete", "partial", "unavailable"]},
+                "coverage_scope": {"type": "string", "enum": ["inventory_page", "canonical_identity"]},
             "app_mode": {"type": "string", "enum": ["full", "sandbox"]},
             "commerce_enabled": {"type": "boolean"},
             "evidence_boundary": {"type": "string"}
@@ -4758,7 +4902,8 @@ fn autonomous_bounty_feed_output_schema() -> Value {
                         "gross_cash_margin": {"type": "string"},
                         "terms_hash": {"type": "string"},
                         "verification_ready": {"type": "boolean"},
-                        "verification_readiness_reason": {"type": "string"}
+                        "verification_readiness_reason": {"type": "string"},
+                        "verification_details": {"type": "object", "additionalProperties": true}
                     },
                     "required": [
                         "bounty_id", "bounty_contract", "status", "solver_reward",
@@ -5055,8 +5200,8 @@ fn public_review_tool_description<'a>(name: &str, fallback: &'a str) -> &'a str 
     match name {
         "get_bounty_feed" => "Use this when the user needs fresh structured data for voluntary, unfunded community requests. It returns no funded inventory, payment promise, claim, token action, or settlement action.",
         "render_bounty_feed" => "Use this when the user wants the interactive voluntary-request work queue rendered inside ChatGPT. This public configuration contains comments, sharing, and non-economic planning only.",
-        "compile_objective_with_cloud_agent" => "Use this when the user wants a broad objective broken into smaller, independently reviewable non-economic task drafts. It creates and funds nothing and allocates no token budget.",
-        "publish_unfunded_bounty" => "Use this when the user explicitly asks to publish a voluntary public digital-work request with no wallet and no payment promise. This public write expires from active discovery after seven days and creates no canonical or funded bounty.",
+        "compile_objective_with_cloud_agent" => "Retired compatibility tool: returns hosted_generation_removed. Prepare the task plan in your own AI account.",
+        "publish_unfunded_bounty" => "Use this when an authenticated user explicitly asks to publish their prepared voluntary request. A website account, wallet session, or operator credential is required. No model is called and no solution or payment is promised. The request expires from active discovery after seven days.",
         "list_bounty_comments" => "Use this when the user wants to read public comments on one voluntary community request. Comments are conversation context only.",
         "add_bounty_comment" => "Use this when the user explicitly wants to publish one bounded public comment on a voluntary community request. Do not include secrets or restricted personal data.",
         "create_share_bundle" => "Use this when the user wants a factual social caption and share image for a voluntary community request. Sharing is optional and creates no payment promise.",
@@ -5093,20 +5238,20 @@ fn chatgpt_tool_description(name: &str, fallback: &'static str) -> &'static str 
         "prepare_agent_to_earn" => "Use this when the person has selected one funded claimable bounty and supplied a public Base wallet. Check wallet policy, bond, claimability, and verification readiness without requesting a secret or changing state.",
         "agent_native_claim" => "Use this when the person explicitly wants to solve one funded verification-ready bounty. Reuse one idempotency key, request at most the exact bounded wallet signature returned by the tool, and replay until BountyClaimed is confirmed.",
         "plan_autonomous_bounty_claim" => "Use this when the hosted claim relay is unavailable and the person wants the direct wallet fallback. It prepares bond-and-claim calls only; it does not claim the bounty.",
-        "prepare_autonomous_bounty_submission" => "Use this when the active solver has completed a claimed bounty and wants to commit a public artifact and evidence. Preparation is not SubmissionAdded, verification, settlement, or payment.",
+        "prepare_autonomous_bounty_submission" => "Use this when the active solver has completed a claimed bounty. For regression work, inspect the exact public GitHub commit and source_subdirectory before signing. Returns checked_artifact and the calculated source_snapshot_digest; supplied mismatches are rejected. File checks are not a verdict, SubmissionAdded, settlement or payment.",
         "publish_autonomous_submission_evidence" => "Use this when confirmed SubmissionAdded exists and the solver wants to publish the exact artifact and evidence preimages matching the canonical commitments. This public write is not verification or payout proof.",
         "list_autonomous_verification_jobs" => "Use this when the person wants to verify submitted work. Return only indexed jobs whose committed verifier path is ready; do not invent a verifier mode or verdict.",
         "plan_autonomous_verification_attestation" => "Use this when a committed quorum verifier has evaluated the current indexed submission and needs the exact EIP-712 attestation payload. The plan and signature are not settlement evidence.",
         "plan_autonomous_module_settlement" => "Use this when the loaded verification job commits a deterministic module and the person wants its permissionless verifier transaction. A plan, broadcast, or transaction hash is not settlement or payment evidence.",
         "plan_autonomous_attestation_settlement" => "Use this when enough matching signatures from the precommitted verifier quorum are available and the person wants the permissionless settlement transaction. Only confirmed BountySettled proves solver payment.",
         "get_paid_status" => "Use this when the person asks whether a bounty solver was paid. Report paid language only for reconciled rail evidence; for autonomous-v1 this requires a matching confirmed BountySettled event.",
-        "compile_objective_with_cloud_agent" => "Use this when the person has a broad digital objective that should be broken into smaller independently reviewable bounty drafts. The model output is advisory and creates, funds, claims, verifies, or settles nothing.",
+        "compile_objective_with_cloud_agent" => "Retired compatibility tool: returns hosted_generation_removed. Prepare the task plan in your own AI account.",
         "list_bounty_comments" => "Use this when the person or mounted feed needs recent public comments for one bounty. Comments are conversation context and never funding, verification, settlement, or payment evidence.",
         "add_bounty_comment" => "Use this when the person explicitly wants to publish a bounded public comment on one bounty. Do not include secrets or restricted personal data; a comment changes no canonical lifecycle state.",
         "create_share_bundle" => "Use this when the person wants a factual social-ready caption and card intent after a bounty step. Pass the selected projection's first-party bounty_image_url when available so the original approved image remains attached to the share package. Sharing is optional and changes no funding, claim, verification, settlement, or payment state.",
-        "publish_unfunded_bounty" => "Use this when the person explicitly wants to publish a public voluntary request with no wallet and zero committed USDC. It is not canonical, funded, claimable, or guaranteed to pay.",
+        "publish_unfunded_bounty" => "Use this when an authenticated person explicitly wants to publish their prepared voluntary request. Require their website account, wallet session, or operator credential and reuse one idempotency key. No model is called, no solution is generated, and no payment is promised.",
         "list_unfunded_bounties" => "Use this when the person explicitly asks for voluntary or unpaid Agentizable work. Keep these records separate from funded earning opportunities and never promise payment.",
-        "submit_unfunded_bounty_solution" => "Use this when a registered agent explicitly wants to publish or replace its public solution to an open unfunded request. This public write creates no payment claim.",
+        "submit_unfunded_bounty_solution" => "Use this when the authenticated caller owns the registered solver agent, controls its verified payout wallet, and explicitly wants to publish or replace its public solution to an open unfunded request. This public write creates no payment claim.",
         "prepare_bounty_post" => "Use this when the person's AI has gathered complete bounty terms and received explicit approval. Reuse posting_operation_id when resuming. For creator review, set review_mode=creator and the exact agreed delivery_deadline with timezone offset, omit automated benchmark/evidence fields, and explain that the creator confirms the verdict. Preserve parent bindings, the approved reference_attachment, and any approved bounty_image with its exact prompt and alt text; omit all three image fields together to use the deterministic review-page visual. This prepares a reviewable handoff; it does not publish, move funds, request a secret, or prove that a bounty exists.",
         "list_autonomous_bounties" => "Use this when the person wants funded Agentizable work or canonical lifecycle inventory. Set claimable_only=true for work that is currently funded and open to solve.",
         "inspect_open_competition_v2" => "New users start with operation=guide. Read exact mutation arguments using operation=schema and for_operation set to the desired mutation operation. Inspect the V2 Beta3 release, reviewed profiles, inventory, events, or proof-job state in the guide's order. Treat only CompetitionSettledV2 as payment evidence.",
@@ -5117,6 +5262,8 @@ fn chatgpt_tool_description(name: &str, fallback: &'static str) -> &'static str 
 
 fn tool_title(name: &str) -> &'static str {
     match name {
+        "get_posting_options" => "Explain posting choices and costs",
+        "get_posting_status" => "Check posting and gas sponsorship",
         "get_bounty_feed" => "Refresh bounty feed data",
         "render_bounty_feed" => "Open live bounty feed",
         "prepare_moonpay_onramp" => "Prepare MoonPay top-up",
@@ -5138,7 +5285,7 @@ fn tool_title(name: &str) -> &'static str {
         "list_bounty_comments" => "Read bounty comments",
         "add_bounty_comment" => "Comment on bounty",
         "create_share_bundle" => "Prepare share card",
-        "publish_unfunded_bounty" => "Publish no-wallet bounty",
+        "publish_unfunded_bounty" => "Publish voluntary request",
         "list_unfunded_bounties" => "List unfunded bounties",
         "submit_unfunded_bounty_solution" => "Submit unfunded bounty solution",
         "prepare_bounty_post" => "Prepare bounty for wallet review",
@@ -5442,7 +5589,11 @@ mod tests {
         };
         let mut result = json!({"tools": []});
         attach_attribution_metadata(&mut result, &attribution);
-        let metadata = &result["_meta"]["agentbounties.app/acquisition"];
+        assert_eq!(
+            result["_meta"]["agentizable.ai/acquisition"],
+            result["_meta"]["agentbounties.app/acquisition"]
+        );
+        let metadata = &result["_meta"]["agentizable.ai/acquisition"];
         assert_eq!(metadata["authority"], "analytics_only");
         assert_eq!(metadata["request_header"], ACQUISITION_HEADER);
         assert_eq!(metadata["measurement_eligible"], true);
@@ -5934,7 +6085,7 @@ mod tests {
             CHATGPT_ADVERTISED_TOOL_NAMES,
             "the removed public-review flag cannot reduce the product"
         );
-        assert_eq!(CHATGPT_ADVERTISED_TOOL_NAMES.len(), 10);
+        assert_eq!(CHATGPT_ADVERTISED_TOOL_NAMES.len(), 9);
         assert_eq!(
             CHATGPT_ADVERTISED_TOOL_NAMES,
             [
@@ -5944,7 +6095,6 @@ mod tests {
                 "prepare_bounty_post",
                 "prepare_bounty_action",
                 "get_bounty_action_status",
-                "compile_objective_with_cloud_agent",
                 "list_bounty_comments",
                 "add_bounty_comment",
                 "create_share_bundle",
@@ -6161,7 +6311,6 @@ mod tests {
         for name in [
             "prepare_bounty_action",
             "get_bounty_action_status",
-            "compile_objective_with_cloud_agent",
             "list_bounty_comments",
             "add_bounty_comment",
             "create_share_bundle",
@@ -6230,6 +6379,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn diagnostics_upstream_classification_survives_legacy_tool_results() {
+        let failure =
+            legacy_result(super::super::mcp_upstream_error("safe fixture failure".to_string()).0)
+                .unwrap_err();
+        let result = tool_error(failure);
+        assert_eq!(result["isError"], true);
+        assert_eq!(
+            result["structuredContent"]["error_code"],
+            "upstream_unavailable"
+        );
+        assert_eq!(result["content"][0]["text"], "safe fixture failure");
+        let ordinary = tool_error("invalid fixture argument".to_string());
+        assert!(ordinary.get("structuredContent").is_none());
+    }
+
     fn public_tool_test_state() -> SharedState {
         Arc::new(AppState {
             network: Mutex::new(BountyNetwork::default()),
@@ -6238,6 +6403,7 @@ mod tests {
             base_broadcast_enabled: false,
             stripe_secret_key: None,
             stripe_live_execution_enabled: false,
+            stripe_reconciliation_gate: tokio::sync::Mutex::new(()),
             stripe_api_base_url: "https://api.stripe.com".to_string(),
             stripe_payment_method_configuration: None,
             operator_api_token: None,
@@ -6249,6 +6415,31 @@ mod tests {
             store: None,
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })
+    }
+
+    #[tokio::test]
+    async fn retired_generation_tools_return_permanent_errors_before_argument_validation() {
+        for name in [
+            "draft_bounty_with_cloud_agent",
+            "compile_objective_with_cloud_agent",
+            "analyze_bounty_fit",
+        ] {
+            let result = call_tool(
+                public_tool_test_state(),
+                HeaderMap::new(),
+                &json!({"name": name, "arguments": "invalid legacy arguments"}),
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(result["isError"], true);
+            assert_eq!(result["structuredContent"]["http_status"], 410);
+            assert_eq!(
+                result["structuredContent"]["error_code"],
+                "hosted_generation_removed"
+            );
+            assert_eq!(result["structuredContent"]["retryable"], false);
+        }
     }
 
     fn modern_request(
@@ -6292,6 +6483,7 @@ mod tests {
 
         let (status, response) = handle_request(
             public_tool_test_state(),
+            HeaderMap::new(),
             request,
             McpProtocolEra::Modern,
             McpCatalogProfile::Core,
@@ -6319,6 +6511,7 @@ mod tests {
         validate_modern_request(&headers, &request).unwrap();
         let (_, response) = handle_request(
             public_tool_test_state(),
+            HeaderMap::new(),
             request,
             McpProtocolEra::Modern,
             McpCatalogProfile::Core,
@@ -6706,6 +6899,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn managed_catalog_declares_mutations_and_separate_account_authority() {
+        let descriptors = mcp_tools_for_catalog(McpCatalogProfile::Core).await;
+        for name in super::super::managed_payments::NAMES {
+            let tool = descriptors
+                .iter()
+                .find(|item| item["name"] == *name)
+                .unwrap();
+            let read_only = matches!(
+                *name,
+                "get_managed_service_order"
+                    | "read_managed_service_quote"
+                    | "get_managed_bounty_review"
+                    | "get_card_bounty_review"
+            );
+            assert_eq!(tool["annotations"]["readOnlyHint"], read_only);
+            assert_eq!(
+                tool["annotations"]["idempotentHint"],
+                *name != "issue_managed_bounty_quote"
+            );
+            assert_eq!(
+                tool["annotations"]["destructiveHint"],
+                matches!(
+                    *name,
+                    "request_managed_service_refund" | "record_managed_bounty_review"
+                )
+            );
+            assert_eq!(
+                tool["_meta"]["agentBountiesAuthorization"]["kind"],
+                match *name {
+                    "issue_managed_service_quote" => json!("operator"),
+                    "get_card_bounty_review" | "appeal_card_bounty_review" => Value::Null,
+                    _ => json!("website_account"),
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn published_mcp_catalogs_match_the_reviewed_contract() {
         let fixture: Value =
             serde_json::from_str(include_str!("../fixtures/public-mcp-contract-v1.json"))
@@ -6753,10 +6984,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn chatgpt_catalog_is_exactly_ten_while_core_eras_keep_compatibility() {
+    async fn chatgpt_catalog_is_exactly_nine_while_core_eras_keep_compatibility() {
         let (_, modern_request) = modern_request("tools/list", json!({}), None);
         let (_, modern_chatgpt) = handle_request(
             public_tool_test_state(),
+            HeaderMap::new(),
             modern_request.clone(),
             McpProtocolEra::Modern,
             McpCatalogProfile::Chatgpt,
@@ -6769,7 +7001,7 @@ mod tests {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect::<Vec<_>>();
-        assert_eq!(chatgpt_names.len(), 10);
+        assert_eq!(chatgpt_names.len(), 9);
         assert!(chatgpt_names
             .iter()
             .all(|name| CHATGPT_ADVERTISED_TOOL_NAMES.contains(name)));
@@ -6778,6 +7010,7 @@ mod tests {
         for era in [McpProtocolEra::Modern, McpProtocolEra::Legacy] {
             let (_, response) = handle_request(
                 public_tool_test_state(),
+                HeaderMap::new(),
                 modern_request.clone(),
                 era,
                 McpCatalogProfile::Core,
@@ -6880,6 +7113,7 @@ mod tests {
         );
         let (status, response) = handle_request(
             public_tool_test_state(),
+            HeaderMap::new(),
             request,
             McpProtocolEra::Legacy,
             McpCatalogProfile::Core,
@@ -6927,6 +7161,7 @@ mod tests {
             });
             let (status, response) = handle_request(
                 public_tool_test_state(),
+                HeaderMap::new(),
                 request,
                 McpProtocolEra::Legacy,
                 McpCatalogProfile::Core,
@@ -6957,6 +7192,7 @@ mod tests {
             });
             let (status, response) = handle_request(
                 public_tool_test_state(),
+                HeaderMap::new(),
                 request,
                 McpProtocolEra::Legacy,
                 McpCatalogProfile::Core,
@@ -6978,6 +7214,7 @@ mod tests {
         validate_modern_request(&headers, &request).unwrap();
         let (status, response) = handle_request(
             public_tool_test_state(),
+            HeaderMap::new(),
             request,
             McpProtocolEra::Modern,
             McpCatalogProfile::Core,
@@ -7025,12 +7262,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn terms_publication_is_not_callable_through_remote_chatgpt_surface() {
+        for name in [
+            "publish_autonomous_bounty_terms",
+            "prepare_standing_meta_v2_child",
+        ] {
+            let error = call_tool(
+                public_tool_test_state(),
+                HeaderMap::new(),
+                &json!({"name":name,"arguments":{}}),
+                None,
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                error.contains("unknown or unavailable public ChatGPT app tool"),
+                "{name}: {error}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn mounted_public_inventory_tool_is_callable_and_fails_closed() {
+        // Raw history still needs its durable store. Earning-only discovery is
+        // separately tested against the API's current-reader boundary.
         let params = json!({
             "name": "list_autonomous_bounties",
-            "arguments": {"network": "base-mainnet", "claimable_only": true}
+            "arguments": {"network": "base-mainnet", "claimable_only": false}
         });
-        let result = call_tool(public_tool_test_state(), &params, None)
+        let result = call_tool(public_tool_test_state(), HeaderMap::new(), &params, None)
             .await
             .unwrap();
         let encoded = serde_json::to_string(&result).unwrap();
@@ -7040,6 +7300,7 @@ mod tests {
 
         let error = call_tool(
             public_tool_test_state(),
+            HeaderMap::new(),
             &json!({"name": "not_a_real_tool", "arguments": {}}),
             None,
         )
@@ -7281,19 +7542,9 @@ mod tests {
             .is_some());
         assert_eq!(feed["_meta"]["agentBountiesPublicReview"], false);
 
-        let compiler = public_tools
+        assert!(!public_tools
             .iter()
-            .find(|tool| tool["name"] == "compile_objective_with_cloud_agent")
-            .unwrap();
-        assert!(compiler["inputSchema"]["properties"]
-            .get("solver_budget_usdc")
-            .is_some());
-        assert!(compiler["inputSchema"]["properties"]
-            .get("source_url")
-            .is_some());
-        assert_eq!(compiler["annotations"]["readOnlyHint"], false);
-        assert_eq!(compiler["annotations"]["openWorldHint"], true);
-        assert_eq!(compiler["annotations"]["idempotentHint"], false);
+            .any(|tool| tool["name"] == "compile_objective_with_cloud_agent"));
 
         let share = public_tools
             .iter()
@@ -7626,13 +7877,6 @@ mod tests {
             ),
             ("prepare_bounty_action", action_arguments),
             ("get_bounty_action_status", json!({"intent_id": intent_id})),
-            (
-                "compile_objective_with_cloud_agent",
-                json!({
-                    "objective": "Consolidate the ChatGPT registration catalog",
-                    "constraints": ["No external writes"]
-                }),
-            ),
             ("list_bounty_comments", json!({"bounty_id": bounty_id})),
             (
                 "add_bounty_comment",
@@ -7748,6 +7992,32 @@ mod tests {
         assert_eq!(items[0]["payment_state"], "escrowed");
         assert_eq!(items[0]["verification_ready"], true);
         assert_eq!(feed, result["structuredContent"]);
+    }
+
+    #[test]
+    fn opportunity_remote_result_preserves_partial_protocol_coverage() {
+        let payload = json!({"coverage":"partial", "coverage_scope":"inventory_page", "degraded":true,
+            "source_statuses":[{"source_type":"canonical_base", "available":false,"protocol_statuses":[
+                {"protocol":"autonomous-v1","coverage":"complete","item_count":1},
+                {"protocol":"open-competition-v2-beta3","coverage":"unavailable","item_count":null}]}],
+            "items":[{"title":"Checked public work"}]});
+        let result = tool_result(
+            payload.clone(),
+            "Checked listings with incomplete coverage",
+            false,
+        );
+        let text: Value =
+            serde_json::from_str(result["content"][1]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(text, payload);
+        assert_eq!(result["structuredContent"], payload);
+        let mut voluntary = json!({"degraded":true,"items":[],"source_statuses":[{"source_type":"unfunded_offchain","available":false,"coverage":"unavailable"}]});
+        constrain_public_review_feed(&mut voluntary).unwrap();
+        assert_eq!(voluntary["coverage"], "unavailable");
+        assert_eq!(voluntary["source_statuses"][0]["available"], false);
+        assert_eq!(
+            voluntary["source_statuses"][0]["error"],
+            "voluntary_request_source_unavailable"
+        );
     }
 
     #[test]

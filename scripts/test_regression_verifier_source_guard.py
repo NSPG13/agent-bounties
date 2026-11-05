@@ -6,9 +6,11 @@ from __future__ import annotations
 import fnmatch
 import importlib.util
 import re
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+import yaml
 
 
 SCRIPT = Path(__file__).with_name("regression_verifier_source_guard.py")
@@ -144,9 +146,16 @@ class RegressionVerifierSourceGuardTests(unittest.TestCase):
         for block in reusable.split("      - name: ")[1:]:
             if secret in block:
                 self.assertTrue(block.startswith("Check this isolated signer") or block.startswith("Re-fetch state and sign one exact candidate set"))
+        # Workflow path coverage concerns committed build inputs. SDK smoke
+        # tests install ignored node_modules (including executable symlinks);
+        # those are absent from the clean release checkout used by the actual
+        # source guard. Do not relax that guard to accommodate local fixtures.
+        tracked = subprocess.check_output(
+            ["git", "ls-files", "-z", "--", *GUARD.BUILD_ROOTS, *GUARD.OPTIONAL_BUILD_ROOTS],
+            cwd=REPOSITORY,
+        ).decode().split("\0")
         compile_time_inputs = GUARD._compile_time_inputs(
-            REPOSITORY,
-            set(GUARD._guarded_files(REPOSITORY, "worker-build")),
+            REPOSITORY, {REPOSITORY / relative for relative in tracked if relative},
         )
         root_prefixes = tuple(
             f"{relative}/" for relative in GUARD.BUILD_ROOTS if (REPOSITORY / relative).is_dir()
@@ -162,11 +171,11 @@ class RegressionVerifierSourceGuardTests(unittest.TestCase):
             ".github/workflows/regression-verifier-signer.yml",
         ):
             workflow = (REPOSITORY / relative).read_text(encoding="utf-8")
-            if "pull_request:" in workflow:
-                self.assertIn('      - "rust-toolchain"', workflow)
-                self.assertIn('      - "rust-toolchain.toml"', workflow)
-                paths_block = workflow.split("    paths:\n", 1)[1].split("  schedule:", 1)[0]
-                watched = re.findall(r'^\s+- "([^"]+)"$', paths_block, re.MULTILINE)
+            triggers = yaml.load(workflow, Loader=yaml.BaseLoader).get("on", {})
+            if "pull_request" in triggers:
+                watched = triggers["pull_request"]["paths"]
+                self.assertIn("rust-toolchain", watched)
+                self.assertIn("rust-toolchain.toml", watched)
                 for included in external_inputs:
                     self.assertTrue(
                         any(fnmatch.fnmatchcase(included, pattern) for pattern in watched),

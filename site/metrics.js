@@ -318,6 +318,23 @@
     });
   }
 
+  function demandGrowthStatus(growth) {
+    if (!growth) return "Demand-growth evidence is unavailable.";
+    const controlled = growth.controlled_test_gmv_usdc_28d;
+    if (!controlled || !/^\d{1,39}$/.test(String(controlled.usdc_base_units ?? ""))) {
+      return "Controlled-test coverage is unavailable. Wallet growth may include launch tests.";
+    }
+    const baseUnits = BigInt(controlled.usdc_base_units);
+    const exactUsdc = `${baseUnits / 1000000n}.${String(baseUnits % 1000000n).padStart(6, "0")}`;
+    const money = baseUnits > 0n
+      ? `${formatUsdc(exactUsdc, { maximumFractionDigits: 6 })} of completed-work payments came from controlled tests. Their payments stay recorded; these exact tests are excluded from wallet growth and funding share.`
+      : "No controlled-test payments in this window. Declared test bounties are excluded from wallet growth and funding share.";
+    const funding = growth.funding_attribution_complete_28d
+      ? "Funding share uses non-test settlements with checked contributions. Wallets are not verified customers."
+      : "The funding share is unavailable because some non-test settlements lack checked contributions.";
+    return `${money} ${funding}`;
+  }
+
   function normalizedPublicMetricsPolicy(policy) {
     if (!policy || policy.schema_version !== "agent-bounties/public-metrics-policy-v1") return null;
     const listFields = [
@@ -943,14 +960,7 @@
           ? "—"
           : formatPercent(demandGrowth.repeat_poster_funder_rate_28d),
       );
-      setText(
-        "[data-demand-growth-status]",
-        !demandGrowth
-          ? "Demand-growth evidence is unavailable."
-          : demandGrowth.funding_attribution_complete_28d
-            ? "GMV uses confirmed canonical settlements; funding share uses canonically attributed contribution amounts."
-            : "GMV is available, but the externally funded share is withheld because funding attribution is incomplete.",
-      );
+      setText("[data-demand-growth-status]", demandGrowthStatus(demandGrowth));
 
       setText("[data-first-month-identities]", identitiesAvailable ? formatInteger(merged.first_month_identities) : "—");
       setText("[data-lifetime-identities]", identitiesAvailable ? formatInteger(merged.lifetime_identities) : "—");
@@ -1120,6 +1130,7 @@
     cardPaymentsSummary,
     mergeDaily,
     mergeMetrics,
+    demandGrowthStatus,
     normalizedPublicMetricsPolicy,
     partitionCanonicalPayoutRows,
     payoutAuditSnapshot,

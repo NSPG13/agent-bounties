@@ -4,6 +4,7 @@
     "schema": "agent-bounties/operations-snapshot-v1",
     "observed_at": "2026-07-13T00:00:00Z",
     "expected_revision": "1111111111111111111111111111111111111111",
+    "marketplace_verified_revision": "1111111111111111111111111111111111111111",
     "components": {
       "api": {
         "state": "healthy",

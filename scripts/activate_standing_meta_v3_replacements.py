@@ -4,7 +4,12 @@
 from __future__ import annotations
 
 import argparse
-import terms_publication_client
+try:
+    import terms_publication_client
+except ModuleNotFoundError as error:
+    if error.name != "terms_publication_client":
+        raise
+    from scripts import terms_publication_client
 import json
 import os
 from pathlib import Path

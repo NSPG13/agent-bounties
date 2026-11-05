@@ -5,7 +5,6 @@ members = [
   "crates/broad-verification",
   "crates/app",
   "crates/ledger",
-  "crates/invoicing",
   "crates/risk",
   "crates/bounty-router",
   "crates/verifier-sdk",
@@ -13,6 +12,8 @@ members = [
   "crates/competition-metric-core",
   "crates/eval-harness",
   "crates/payments-stripe",
+  "crates/invoicing",
+  "crates/managed-orders",
   "crates/payments-x402",
   "crates/cloud-agent",
   "crates/chain-base",
@@ -30,7 +31,7 @@ members = [
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/agent-bounties/agent-bounties"
-rust-version = "1.88"
+rust-version = "1.90"
 
 [workspace.dependencies]
 alloy = { version = "=1.6.3", default-features = false, features = ["std", "provider-http", "reqwest-rustls-tls", "rpc-types", "signer-local", "sol-types"] }

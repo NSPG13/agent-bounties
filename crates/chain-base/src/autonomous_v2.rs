@@ -1,7 +1,7 @@
 //! `agent-bounties/autonomous-v2`: an explicit platform fee on the solver reward and an optional
-//! claim-eligibility gate (ADR 0006). The bounty contract surface is otherwise identical to v1,
-//! so contribution, claim, settlement and refund planners are shared; only factory creation, the
-//! EIP-712 domain version, the platform-fee forward call, and feed economics differ.
+//! claim-eligibility gate (ADR 0006). V2 uses receive authorizations, round-bound claim nonces,
+//! domain version 2, deferred cancellation and permissionless refund withdrawals. Shared
+//! encoders are reused only where their contract semantics match.
 
 use super::*;
 
@@ -25,6 +25,32 @@ const V2_ONLY_TERMS_KEYS: [&str; 5] = [
 
 pub fn autonomous_v2_create_bounty_function() -> String {
     format!("createBounty({V2_CREATE_PARAMS},address[],uint256,bytes32)")
+}
+
+/// `BoundedV2FundingWallet.createBounty`: the wallet funds the factory's exact target itself.
+pub fn bounded_v2_funding_wallet_create_function() -> String {
+    format!("createBounty({V2_CREATE_PARAMS},address[],bytes32)")
+}
+
+/// Calldata for `BoundedV2FundingWallet.createBounty`. The wallet must be `create.base.creator`;
+/// it funds `factory.quote(...).target` on-chain, so `initial_funding` is not encoded here.
+pub fn encode_bounded_v2_funding_wallet_create_call(
+    create: &AutonomousBountyV2Create,
+) -> Result<String, ChainBaseError> {
+    let params = create.param_words()?;
+    require_v2_params(&params)?;
+    let verifiers = normalized_verifiers(&create.base)?;
+    let creation_nonce = parse_bytes32(&create.base.creation_nonce)?;
+    let mut bytes = selector(&bounded_v2_funding_wallet_create_function()).to_vec();
+    params.iter().for_each(|word| bytes.extend_from_slice(word));
+    // Head: 16 tuple words + verifiers offset + creationNonce.
+    bytes.extend_from_slice(&encode_uint256(((V2_PARAM_WORDS + 2) * 32) as u128)?);
+    bytes.extend_from_slice(&creation_nonce);
+    bytes.extend_from_slice(&encode_uint256(verifiers.len() as u128)?);
+    verifiers
+        .iter()
+        .for_each(|word| bytes.extend_from_slice(word));
+    Ok(format!("0x{}", hex::encode(bytes)))
 }
 
 pub fn autonomous_v2_create_bounty_with_authorization_function() -> String {
@@ -108,7 +134,7 @@ pub fn quote_autonomous_v2_bounty(
 }
 
 /// v2 creation request: the v1 fields plus the optional claim-eligibility gate.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AutonomousBountyV2Create {
     #[serde(flatten)]
     pub base: AutonomousBountyCreate,
@@ -622,47 +648,6 @@ pub fn validate_autonomous_v2_creation_against_terms(
         return Err(ChainBaseError::InvalidTermsDocument(error));
     }
     Ok(platform_fee)
-}
-
-/// Derives the exact v2 creation request, including any claim gate, from published v2 terms and
-/// checks it against the factory's immutable fee terms.
-pub fn autonomous_v2_create_from_terms(
-    terms: &AutonomousBountyTermsRecord,
-    factory_fee: &AutonomousV2FactoryFee,
-) -> Result<AutonomousBountyV2Create, ChainBaseError> {
-    let (base, network) = create_fields_from_terms(terms)?;
-    let contract_terms = terms.document.contract_terms.as_object().ok_or_else(|| {
-        ChainBaseError::InvalidTermsDocument("published contract_terms are unavailable".to_string())
-    })?;
-    let (claim_eligibility_registry, claim_eligibility_source) = match (
-        contract_terms.get("claim_eligibility_registry"),
-        contract_terms.get("claim_eligibility_source"),
-    ) {
-        (None, None) => (None, None),
-        (Some(_), Some(_)) => (
-            Some(normalize_address(contract_terms_string(
-                contract_terms,
-                "claim_eligibility_registry",
-            )?)?),
-            Some(word_hex(parse_bytes32(contract_terms_string(
-                contract_terms,
-                "claim_eligibility_source",
-            )?)?)),
-        ),
-        _ => {
-            return Err(ChainBaseError::InvalidTermsDocument(
-                "contract_terms claim eligibility registry and source must be set together"
-                    .to_string(),
-            ))
-        }
-    };
-    let create = AutonomousBountyV2Create {
-        base,
-        claim_eligibility_registry,
-        claim_eligibility_source,
-    };
-    validate_autonomous_v2_creation_against_terms(&network, &create, terms, factory_fee)?;
-    Ok(create)
 }
 
 /// v2 public-earning gate: exact v2 terms plus the shared policy, with the fee in the target.
@@ -1429,6 +1414,21 @@ pub(crate) fn validate_contract_terms_fee_commitment(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn claim_authorization_nonce_matches_the_website_vector() {
+        // site/participate.js recomputes this nonce before a solver signs a v2 bond;
+        // scripts/test-solver-v2.cjs asserts the same vector.
+        assert_eq!(
+            autonomous_v2_claim_authorization_nonce(
+                &format!("0x{}", "ab".repeat(20)),
+                &format!("0x{}", "5e".repeat(20)),
+                3
+            )
+            .unwrap(),
+            "0x4ced809acc3f3db6699c71a7e2e2e30a534fb7dc81a9b1a968dcf464a76a1b06"
+        );
+    }
 
     const FIXTURE: &str = include_str!("../tests/fixtures/autonomous-v2-loop.json");
 
@@ -2318,5 +2318,68 @@ mod tests {
         }
         create.verification_mode = AutonomousVerificationMode::SignedQuorum;
         assert!(validate_v2_deterministic_module(&create).is_ok());
+    }
+
+    #[test]
+    fn funding_wallet_create_call_matches_solidity_abi_encoding() {
+        let word = |byte: &str| format!("0x{}", byte.repeat(32));
+        let usdc = |amount| Money {
+            amount,
+            currency: "usdc".to_string(),
+        };
+        let create = AutonomousBountyV2Create {
+            base: AutonomousBountyCreate {
+                creator: "0x1111111111111111111111111111111111111111".to_string(),
+                solver_reward: usdc(1_000_000),
+                verifier_reward: usdc(100_000),
+                terms_hash: word("11"),
+                policy_hash: word("22"),
+                acceptance_criteria_hash: word("33"),
+                benchmark_hash: word("44"),
+                evidence_schema_hash: word("55"),
+                funding_deadline: 2_000_000_000,
+                claim_window_seconds: 86_400,
+                verification_window_seconds: 172_800,
+                verification_mode: AutonomousVerificationMode::SignedQuorum,
+                verifier_module: None,
+                verifier_reward_recipient: None,
+                verifiers: vec!["0xa0ee7a142d267c1f36714e4a8f75612f20a79720".to_string()],
+                threshold: 1,
+                initial_funding: usdc(1_175_000),
+                creation_nonce: word("66"),
+            },
+            claim_eligibility_registry: None,
+            claim_eligibility_source: None,
+        };
+        // `cast calldata "createBounty((uint256,uint256,bytes32,bytes32,bytes32,bytes32,bytes32,
+        // uint64,uint64,uint64,uint8,address,address,uint8,address,bytes32),address[],bytes32)"`
+        // with the same values, from Foundry 1.5.1.
+        let expected = concat!(
+            "0x261fef32",
+            "00000000000000000000000000000000000000000000000000000000000f4240",
+            "00000000000000000000000000000000000000000000000000000000000186a0",
+            "1111111111111111111111111111111111111111111111111111111111111111",
+            "2222222222222222222222222222222222222222222222222222222222222222",
+            "3333333333333333333333333333333333333333333333333333333333333333",
+            "4444444444444444444444444444444444444444444444444444444444444444",
+            "5555555555555555555555555555555555555555555555555555555555555555",
+            "0000000000000000000000000000000000000000000000000000000077359400",
+            "0000000000000000000000000000000000000000000000000000000000015180",
+            "000000000000000000000000000000000000000000000000000000000002a300",
+            "0000000000000000000000000000000000000000000000000000000000000001",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "0000000000000000000000000000000000000000000000000000000000000001",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "0000000000000000000000000000000000000000000000000000000000000240",
+            "6666666666666666666666666666666666666666666666666666666666666666",
+            "0000000000000000000000000000000000000000000000000000000000000001",
+            "000000000000000000000000a0ee7a142d267c1f36714e4a8f75612f20a79720",
+        );
+        assert_eq!(
+            encode_bounded_v2_funding_wallet_create_call(&create).unwrap(),
+            expected
+        );
     }
 }

@@ -7,6 +7,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+utoipa.workspace = true
 bounty-router = { path = "../bounty-router" }
 chain-base = { path = "../chain-base" }
 chrono.workspace = true

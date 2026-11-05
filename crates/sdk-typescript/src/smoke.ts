@@ -1,4 +1,5 @@
 import { AgentBountiesClient, hashArtifact } from "./index.js";
+import { localFixtureClient } from "./smoke-fixture.js";
 
 declare const process: {
   argv: string[];
@@ -36,7 +37,7 @@ function baseUrlFromArgs(): string {
     : "http://127.0.0.1:8080";
 }
 
-async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject> {
+async function exerciseSurface(client: AgentBountiesClient, solverClient: AgentBountiesClient): Promise<JsonObject> {
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const discovery = asObject(await client.getDiscoveryManifest(), "discovery");
   requireCondition(
@@ -57,7 +58,6 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
     "get_discovery_subscription",
     "delete_discovery_subscription",
     "get_opportunity_conversion_funnel",
-    "analyze_bounty_fit",
     "list_autonomous_bounties",
     "get_solver_leaderboard",
     "plan_autonomous_canonical_child_terms",
@@ -81,6 +81,11 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
     ),
     "discovery manifest leaked retired V1 tools",
   );
+  requireCondition(
+    ["analyze_bounty_fit", "draft_bounty_with_cloud_agent", "compile_objective_with_cloud_agent"]
+      .every((tool) => !tools.includes(tool)),
+    "discovery manifest advertises retired hosted generation",
+  );
 
   const endpoints = asObject(discovery.endpoints, "discovery.endpoints");
   for (const endpoint of [
@@ -88,7 +93,6 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
     "discovery_subscriptions",
     "discovery_subscription",
     "opportunity_conversion_funnel",
-    "autonomous_bounty_analysis",
     "autonomous_creation_plan",
     "autonomous_bounty_feed",
     "autonomous_verification_jobs",
@@ -97,6 +101,7 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
   ]) {
     requireCondition(typeof endpoints[endpoint] === "string", `missing endpoint ${endpoint}`);
   }
+  requireCondition(!("autonomous_bounty_analysis" in endpoints), "discovery manifest advertises retired hosted analysis");
   const schema = asObject(await client.getDiscoveryManifestSchema(), "schema");
   requireCondition(schema.$id === discovery.schema, "schema id mismatch");
   const endpointRequired = asArray(
@@ -165,7 +170,7 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
   }
 
   const solver = asObject(
-    await client.registerAgent(
+    await solverClient.registerAgent(
       `typescript-autonomous-smoke-solver-${suffix}`,
       "0x2222222222222222222222222222222222222222",
     ),
@@ -197,13 +202,13 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
     "funding did not reach target",
   );
   const claimed = asObject(
-    await client.claimBounty(bountyId, { solver_agent_id: stringField(solver, "id") }),
+    await solverClient.claimBounty(bountyId, { solver_agent_id: stringField(solver, "id") }),
     "claimed",
   );
   requireCondition(claimed.status === "Claimed", "claim did not become active");
   const artifact = JSON.stringify({ sdk: "typescript", autonomous: true });
   const submission = asObject(
-    await client.submitResult(bountyId, {
+    await solverClient.submitResult(bountyId, {
       solver_agent_id: stringField(solver, "id"),
       artifact_uri: "memory://typescript-autonomous-smoke.json",
       artifact_body: artifact,
@@ -236,10 +241,8 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
 console.log(
   JSON.stringify(
     await exerciseSurface(
-      new AgentBountiesClient({
-        baseUrl: baseUrlFromArgs(),
-        operatorApiToken: process.env.OPERATOR_API_TOKEN,
-      }),
+      localFixtureClient(baseUrlFromArgs(), process.env.OPERATOR_API_TOKEN),
+      localFixtureClient(baseUrlFromArgs(), process.env.AGENT_BOUNTIES_SMOKE_WALLET_SESSION, "wallet"),
     ),
     null,
     2,

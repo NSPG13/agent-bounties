@@ -41,6 +41,12 @@ try {
             & $python.Source @pythonArgs scripts/run-required-postgres-test.py -p db tests::platform_metrics_query_separates_history_from_identity_and_cohort_boundaries --exact
         }
         Invoke-Checked {
+            & $python.Source @pythonArgs scripts/run-required-postgres-test.py -p db tests::controlled_card_test_exclusion_preserves_money_and_shared_wallet_customers --exact
+        }
+        Invoke-Checked {
+            & $python.Source @pythonArgs scripts/run-required-postgres-test.py -p db managed_service_orders::metrics::postgres_tests:: --test-threads=1
+        }
+        Invoke-Checked {
             & $python.Source @pythonArgs scripts/run-required-postgres-test.py -p api platform_payouts::tests::platform_payout_http_replays_real_database_selection --exact
         }
         Invoke-Checked {
@@ -65,10 +71,10 @@ try {
             & $python.Source @pythonArgs scripts/run-required-postgres-test.py -p db tests::autonomous_v2_events_round_trip_through_postgres --exact
         }
         Invoke-Checked {
-            & $python.Source @pythonArgs scripts/run-required-postgres-test.py -p db tests::invoice_order_events_are_sequenced_and_evidence_is_unique_postgres --exact
+            & $python.Source @pythonArgs scripts/run-required-postgres-test.py -p db managed_service_orders::tests:: --test-threads=1
         }
         Invoke-Checked {
-            & $python.Source @pythonArgs scripts/run-required-postgres-test.py -p api tests::invoiced_seller_of_record_path_runs_end_to_end_postgres --exact
+            & $python.Source @pythonArgs scripts/run-required-postgres-test.py -p api managed_payments::tests:: --test-threads=1
         }
         Invoke-Checked {
             & $python.Source @pythonArgs scripts/run-required-postgres-test.py -p db tests::discoverability_snapshot_idempotency_and_restart_hydration_are_durable --exact
@@ -97,6 +103,13 @@ try {
     }
     finally {
         $env:AGENT_BOUNTIES_TEST_DATABASE_URL = $previousTestDatabaseUrl
+    }
+    # Security regressions always use their own explicit local fixture.
+    Invoke-Checked {
+        & $python.Source @pythonArgs scripts/run-with-test-postgres.py -- $python.Source @pythonArgs scripts/run-required-postgres-test.py -p db projection_snapshot::tests::projection_snapshot_cannot_mix_new_rows_with_old_certification_postgres --exact --test-threads=1
+    }
+    Invoke-Checked {
+        & $python.Source @pythonArgs scripts/run-with-test-postgres.py -- $python.Source @pythonArgs scripts/run-required-postgres-test.py -p api marketplace_readiness::progress_tests::progress_shared_observation_uses_four_rpc_calls_with_real_db_progress_postgres --exact --test-threads=1
     }
     Invoke-Checked {
         cargo run -p cli -- service-smoke-spawn `

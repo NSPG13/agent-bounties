@@ -68,7 +68,7 @@ impl LedgerEntry {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Ledger {
     entries: Vec<LedgerEntry>,
     applied_external_events: HashSet<String>,

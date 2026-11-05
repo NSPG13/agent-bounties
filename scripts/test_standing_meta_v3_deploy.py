@@ -34,7 +34,7 @@ def job_admits(name: str, event: str, *, user="NSPG13", issue=527,
     assert match, f"missing folded job condition: {name}"
     expression = " ".join(match.group(1).splitlines()).strip()
     expression = expression.replace("&&", " and ").replace("||", " or ")
-    context = {"github": {"event_name": event, "event": {
+    context = {"github": {"repository": "NSPG13/agent-bounties", "ref": "refs/heads/main", "event_name": event, "event": {
         "issue": {"number": issue, "pull_request": pull_request},
         "comment": {"user": {"login": user}, "body": body},
     }}, "null": None}

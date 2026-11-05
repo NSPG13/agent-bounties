@@ -17,7 +17,7 @@ jobs:
     runs-on: [self-hosted, linux, x64, ram-256gb, open-competition-v2-prover]
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Verify diagnostic code
         run: |

@@ -785,7 +785,7 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
             self.assertLess(authorize, selected)
         self.assertNotIn("cargo build --release -p worker", workflow)
         self.assertEqual(
-            workflow.count("if: needs.authorize-run.outputs.authorized == 'true'"),
+            " ".join(workflow.split()).count("needs.authorize-run.outputs.authorized == 'true'"),
             3,
         )
         self.assertNotIn("Refusing to sign a candidate from stale main", workflow)

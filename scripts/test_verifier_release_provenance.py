@@ -30,6 +30,9 @@ class ProvenanceTests(unittest.TestCase):
             **{k: 'sha256:' + 'a' * 64 for k in ['worker_build_digest', 'worker_binary_digest', 'signing_runtime_digest', 'profile_registry_digest']},
             'signers': ['0x' + '1' * 40, '0x' + '2' * 40]})
         self.approve(self.value)
+        self.revocations = self.root / '.github/verifier-releases/revocations.json'
+        self.revocations.write_text(json.dumps({
+            'schema': 'agent-bounties/verifier-release-revocations-v1', 'releases': []}))
         self.trusted = self.commit('protected approval')
         self.run_git('update-ref', 'refs/remotes/origin/main', self.trusted)
 
@@ -52,6 +55,40 @@ class ProvenanceTests(unittest.TestCase):
 
     def test_exact_approved_ancestor_is_accepted_without_executing_source(self):
         self.assertEqual(self.check(), self.value)
+
+    def test_protected_revocation_overrides_historical_approval_and_rewrapped_binary(self):
+        policy = {'schema': 'agent-bounties/verifier-release-revocations-v1', 'releases': [{
+            **{key: self.value[key] for key in ('release_id', 'source_revision', 'worker_binary_digest')},
+            'reason': 'known vulnerable runner',
+        }]}
+        self.revocations.write_text(json.dumps(policy))
+        self.trusted = self.commit('revoke vulnerable release without erasing approval')
+        self.run_git('update-ref', 'refs/remotes/origin/main', self.trusted)
+        # A working-tree edit or selecting a pre-revocation source cannot clear
+        # a record in the current protected workflow's exact Git object.
+        self.revocations.write_text(json.dumps({**policy, 'releases': []}))
+        with self.assertRaisesRegex(ValueError, 'revoked'):
+            self.check()
+        changed = identity(dict(self.value, source_revision='f' * 40))
+        with self.assertRaisesRegex(ValueError, 'revoked'):
+            self.check(changed)
+
+    def test_missing_malformed_or_symlinked_revocations_fail_closed(self):
+        for kind in ('missing', 'malformed', 'symlink'):
+            with self.subTest(kind=kind):
+                self.run_git('reset', '--hard', self.trusted)
+                self.revocations.unlink()
+                if kind == 'malformed':self.revocations.write_text('{"releases": []}')
+                if kind == 'symlink':self.revocations.symlink_to('../../../worker-source')
+                protected = self.commit('invalid revocation policy ' + kind)
+                self.run_git('update-ref', 'refs/remotes/origin/main', protected)
+                with self.assertRaises(ValueError):
+                    guard.authorize(self.root, protected, json.dumps(self.value))
+
+    def test_known_traceback_release_is_explicitly_revoked(self):
+        policy = json.loads((ROOT / '.github/verifier-releases/revocations.json').read_text())
+        self.assertIn('1ebe67e3e71799b795364f8f7725ef670f0f6c66',
+                      [row['source_revision'] for row in policy['releases']])
 
     def test_self_hashed_unmerged_source_rejected_even_with_approval_record(self):
         self.run_git('checkout', '-b', 'unreviewed')

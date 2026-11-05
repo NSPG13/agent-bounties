@@ -1,3 +1,6 @@
+mod managed_payments;
+mod terms_publication;
+mod verification;
 use app::{
     build_live_money_readiness_report, build_objective_canonical_evidence,
     AddFundingContributionRequest, ApproveRiskBountyRequest, ApproveRiskPayoutRequest,
@@ -7,7 +10,7 @@ use app::{
     RejectRiskEventRequest, RiskEventFilter, SubmitResultRequest, VerifySubmissionRequest,
 };
 use axum::{
-    extract::{Form, Path, Query, Request, State},
+    extract::{Form, MatchedPath, Path, Query, Request, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Redirect, Response},
@@ -19,15 +22,13 @@ use bounty_router::BountyRouter;
 use chain_base::{
     autonomous_bounty_is_earning_ready, autonomous_v2_claim_authorization_nonce,
     autonomous_v2_next_claim_round, base_network_descriptor, broadcast_signed_transaction,
-    build_autonomous_bounty_feed, build_autonomous_bounty_terms_record,
-    build_autonomous_submission_evidence_record, build_autonomous_submission_preparation,
-    build_autonomous_verification_jobs, decode_autonomous_bounty_logs,
-    eth_get_transaction_receipt_request, eth_send_raw_transaction_request,
-    fetch_transaction_receipt, normalize_evm_address,
+    build_autonomous_bounty_feed, build_autonomous_submission_evidence_record,
+    build_autonomous_submission_preparation, build_autonomous_verification_jobs,
+    decode_autonomous_bounty_logs, eth_get_transaction_receipt_request,
+    eth_send_raw_transaction_request, fetch_transaction_receipt, normalize_evm_address,
     plan_canonical_child_bounty_terms as build_canonical_child_bounty_terms_plan,
-    quote_autonomous_v2_bounty, standing_meta_v2_parent_context,
-    validate_attestation_request_against_feed, validate_autonomous_cancel_authority,
-    validate_autonomous_creation_for_public_earning,
+    quote_autonomous_v2_bounty, validate_attestation_request_against_feed,
+    validate_autonomous_cancel_authority, validate_autonomous_creation_for_public_earning,
     validate_autonomous_v2_creation_for_public_earning, AutonomousBountyAuthorizationSignature,
     AutonomousBountyContribution, AutonomousBountyCreate, AutonomousBountyFeedItem,
     AutonomousBountyRecoveryReservations, AutonomousBountySubmissionAuthorizationRequest,
@@ -64,6 +65,7 @@ use payments_stripe::{
 use risk::RiskPolicy;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use service_runtime::http_observability::{record_failure_stage, FailureStage};
 #[cfg(test)]
 use service_runtime::{
     canonical_mainnet_factory, CANONICAL_BASE_MAINNET_BOUNTY_FACTORY,
@@ -82,6 +84,7 @@ use uuid::Uuid;
 
 mod chatgpt_app;
 mod moonpay;
+mod posting_guidance;
 
 #[derive(Debug)]
 struct AppState {
@@ -91,6 +94,7 @@ struct AppState {
     base_broadcast_enabled: bool,
     stripe_secret_key: Option<String>,
     stripe_live_execution_enabled: bool,
+    stripe_reconciliation_gate: tokio::sync::Mutex<()>,
     stripe_api_base_url: String,
     stripe_payment_method_configuration: Option<String>,
     operator_api_token: Option<String>,
@@ -190,6 +194,22 @@ fn chatgpt_bounty_card_preview_response() -> (HeaderMap, String) {
         HeaderValue::from_static("nosniff"),
     );
     (headers, chatgpt_app::bounty_card_preview_html())
+}
+
+async fn observe_http_errors(request: Request, next: Next) -> Response {
+    let method = request.method().clone();
+    let route = request.extensions().get::<MatchedPath>().cloned();
+    let response = next.run(request).await;
+    if response.status().is_server_error() {
+        service_runtime::http_observability::record_http_error(
+            service_runtime::http_observability::HttpService::Mcp,
+            method.as_str(),
+            route.as_ref().map(MatchedPath::as_str),
+            &deployment_revision(),
+            response.status().as_u16(),
+        );
+    }
+    response
 }
 
 fn deployment_revision() -> String {
@@ -468,57 +488,6 @@ tool_args! {
     );
 }
 
-tool_args! {
-    struct DraftBountyWithCloudAgentArgs {
-        objective: String,
-        context: Option<String>,
-        #[serde(default)]
-        constraints: Vec<String>,
-        source_url: Option<String>,
-        idempotency_key: Option<String>,
-    }
-    schema object_tool_schema(
-        json!({
-            "objective": string_property("The digital-work outcome the bounty should produce."),
-            "context": nullable_string_property("Optional repository, workflow, constraints, prior attempts, or other task context."),
-            "constraints": {"type": "array", "maxItems": 20, "items": {"type": "string"}, "description": "Optional bounded task constraints."},
-            "source_url": nullable_string_property("Optional public HTTPS source URL."),
-            "idempotency_key": nullable_string_property("Optional stable key for retry-safe drafting."),
-        }),
-        &["objective"],
-    );
-}
-
-tool_args! {
-    struct CompileObjectiveWithCloudAgentArgs {
-        objective: String,
-        context: Option<String>,
-        #[serde(default)]
-        constraints: Vec<String>,
-        #[serde(default = "default_objective_task_limit")]
-        max_tasks: u8,
-        solver_budget_usdc: Option<String>,
-        source_url: Option<String>,
-        idempotency_key: Option<String>,
-    }
-    schema object_tool_schema(
-        json!({
-            "objective": string_property("The larger digital objective to coordinate."),
-            "context": nullable_string_property("Optional repository, workflow, prior attempts, or other objective context."),
-            "constraints": {"type": "array", "maxItems": 20, "items": {"type": "string"}, "description": "Optional bounded objective constraints."},
-            "max_tasks": {"type": ["integer", "null"], "minimum": 2, "maximum": 8, "description": "Maximum graph size; defaults to 5."},
-            "solver_budget_usdc": nullable_string_property("Optional advisory solver-only budget allocated deterministically after graph validation."),
-            "source_url": nullable_string_property("Optional public HTTPS source URL."),
-            "idempotency_key": nullable_string_property("Optional stable key for retry-safe compilation."),
-        }),
-        &["objective"],
-    );
-}
-
-fn default_objective_task_limit() -> u8 {
-    5
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ChatgptFileInput {
     download_url: String,
@@ -608,13 +577,13 @@ tool_args! {
     schema object_tool_schema(
         json!({
             "title": {"type": "string", "minLength": 1, "maxLength": 200, "description": "Concise public unfunded bounty title."},
-            "goal": {"type": "string", "minLength": 1, "maxLength": 12000, "description": "Public digital outcome requested from the demo agent."},
+            "goal": {"type": "string", "minLength": 1, "maxLength": 12000, "description": "Public digital outcome prepared by the caller."},
             "acceptance_criteria": {
                 "type": "array", "minItems": 1, "maxItems": 20,
                 "items": {"type": "string", "minLength": 1, "maxLength": 1000},
                 "description": "Measurable criteria for agent solutions."
             },
-            "source_url": nullable_string_property("Optional public HTTPS source URL. The demo agent will not claim it opened the URL."),
+            "source_url": nullable_string_property("Optional public HTTPS source URL supplied by the caller."),
             "idempotency_key": {"type": "string", "pattern": "^[A-Za-z0-9:_-]{1,128}$", "description": "Stable unique key for this ChatGPT publication attempt."}
         }),
         &["title", "goal", "acceptance_criteria", "idempotency_key"],
@@ -1527,7 +1496,7 @@ tool_args! {
     struct ListAutonomousBountyEventsArgs { network: Option<String>, bounty_id: Option<String> }
     schema object_tool_schema(
         json!({
-            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "network": nullable_string_property("Base network, case-insensitive: base-mainnet (aliases base, mainnet, 8453) or base-sepolia (aliases sepolia, 84532). Defaults to base-mainnet."),
             "bounty_id": nullable_string_property("Optional 0x-prefixed bytes32 autonomous bounty id filter.")
         }),
         &[],
@@ -1599,7 +1568,7 @@ tool_args! {
     struct AutonomousBountyFeedArgs { network: Option<String>, claimable_only: Option<bool> }
     schema object_tool_schema(
         json!({
-            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "network": nullable_string_property("Base network, case-insensitive: base-mainnet (aliases base, mainnet, 8453) or base-sepolia (aliases sepolia, 84532). Defaults to base-mainnet."),
             "claimable_only": nullable_boolean_property("When true, return only fully funded unclaimed bounties.")
         }),
         &[],
@@ -1610,7 +1579,7 @@ tool_args! {
     #[derive(Default)]
     struct OpportunityListArgs {
         network: Option<String>, view: Option<String>, source_type: Option<String>,
-        work_state: Option<String>, payment_state: Option<String>, limit: Option<u32>,
+        work_state: Option<String>, payment_state: Option<String>, limit: Option<u32>, opportunity_id: Option<String>,
     }
     schema object_tool_schema(
         json!({
@@ -1619,20 +1588,10 @@ tool_args! {
             "source_type": nullable_enum_property(&["unfunded_offchain", "legacy_bounty", "canonical_base"], "Optional authoritative-source filter."),
             "work_state": nullable_enum_property(&["open", "claimable", "in_progress", "submitted", "completed"], "Optional work-lifecycle filter."),
             "payment_state": nullable_enum_property(&["none", "seeking_funding", "escrowed", "paid"], "Optional payment-state filter."),
+            "opportunity_id": nullable_string_property("Optional exact canonical identity; coverage then applies only to this identity."),
             "limit": nullable_integer_property("Optional combined result limit from 1 to 300.")
         }),
         &[],
-    );
-}
-
-tool_args! {
-    struct AnalyzeBountyFitArgs { bounty_contract: String, network: Option<String> }
-    schema object_tool_schema(
-        json!({
-            "bounty_contract": string_property("Indexed canonical autonomous-v1 bounty contract."),
-            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet.")
-        }),
-        &["bounty_contract"],
     );
 }
 
@@ -1758,6 +1717,7 @@ async fn main() -> anyhow::Result<()> {
             .map(|value| value.eq_ignore_ascii_case("true"))
             .unwrap_or(false),
         stripe_secret_key: env::var("STRIPE_SECRET_KEY").ok(),
+        stripe_reconciliation_gate: tokio::sync::Mutex::new(()),
         stripe_live_execution_enabled: env::var("ENABLE_STRIPE_LIVE_EXECUTION")
             .map(|value| value.eq_ignore_ascii_case("true"))
             .unwrap_or(false),
@@ -1785,6 +1745,10 @@ async fn main() -> anyhow::Result<()> {
     });
     let app = Router::new()
         .route("/health", get(health))
+        .route(
+            "/internal/verifier-checkpoints",
+            post(verifier_checkpoint).layer(axum::extract::DefaultBodyLimit::max(8192)),
+        )
         .route(
             "/chatgpt/bounty-card-preview",
             get(chatgpt_bounty_card_preview),
@@ -1838,7 +1802,6 @@ async fn main() -> anyhow::Result<()> {
             "/v1/onramps/moonpay/checkout",
             post(moonpay::prepare_checkout),
         )
-        .route("/v1/offramps/moonpay/sell", post(moonpay::prepare_sell))
         .route("/tools", get(tools))
         .route("/tools/route_blocked_goal", post(route_blocked_goal))
         .route(
@@ -1856,6 +1819,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/tools/reconcile_objective", post(reconcile_objective))
         .route("/tools/prepare_bounty_post", post(prepare_bounty_post))
         .route(
+            "/tools/get_posting_options",
+            post(posting_guidance::options),
+        )
+        .route("/tools/get_posting_status", post(posting_guidance::status))
+        .route(
             "/tools/publish_unfunded_bounty",
             post(publish_unfunded_bounty),
         )
@@ -1869,11 +1837,11 @@ async fn main() -> anyhow::Result<()> {
         )
         .route(
             "/tools/draft_bounty_with_cloud_agent",
-            post(draft_bounty_with_cloud_agent),
+            post(retired_generation_http),
         )
         .route(
             "/tools/compile_objective_with_cloud_agent",
-            post(compile_objective_with_cloud_agent),
+            post(retired_generation_http),
         )
         .route(
             "/tools/get_autonomous_inventory_summary",
@@ -2178,6 +2146,191 @@ async fn main() -> anyhow::Result<()> {
             "/tools/list_autonomous_bounties",
             post(list_autonomous_bounties),
         )
+        .route(
+            "/tools/issue_managed_service_quote",
+            post(|headers: HeaderMap, Json(args): Json<Value>| async move {
+                let response =
+                    managed_payments::call("issue_managed_service_quote", headers, args).await;
+                ([(header::CACHE_CONTROL, "no-store, private")], response)
+            }),
+        )
+        .route(
+            "/tools/issue_managed_bounty_quote",
+            post(|headers: HeaderMap, Json(args): Json<Value>| async move {
+                let response =
+                    managed_payments::call("issue_managed_bounty_quote", headers, args).await;
+                ([(header::CACHE_CONTROL, "no-store, private")], response)
+            }),
+        )
+        .route(
+            "/tools/read_managed_service_quote",
+            post(|headers: HeaderMap, Json(args): Json<Value>| async move {
+                let response =
+                    managed_payments::call("read_managed_service_quote", headers, args).await;
+                ([(header::CACHE_CONTROL, "no-store, private")], response)
+            }),
+        )
+        .route(
+            "/tools/accept_managed_service_quote",
+            post(|headers: HeaderMap, Json(args): Json<Value>| async move {
+                let response =
+                    managed_payments::call("accept_managed_service_quote", headers, args).await;
+                ([(header::CACHE_CONTROL, "no-store, private")], response)
+            }),
+        )
+        .route(
+            "/tools/get_managed_service_order",
+            post(|headers: HeaderMap, Json(args): Json<Value>| async move {
+                let response =
+                    managed_payments::call("get_managed_service_order", headers, args).await;
+                ([(header::CACHE_CONTROL, "no-store, private")], response)
+            }),
+        )
+        .route(
+            "/tools/open_managed_service_checkout",
+            post(|headers: HeaderMap, Json(args): Json<Value>| async move {
+                let response =
+                    managed_payments::call("open_managed_service_checkout", headers, args).await;
+                ([(header::CACHE_CONTROL, "no-store, private")], response)
+            }),
+        )
+        .route(
+            "/tools/request_managed_service_refund",
+            post(|headers: HeaderMap, Json(args): Json<Value>| async move {
+                let response =
+                    managed_payments::call("request_managed_service_refund", headers, args).await;
+                ([(header::CACHE_CONTROL, "no-store, private")], response)
+            }),
+        )
+        .route(
+            "/tools/get_managed_bounty_review",
+            post(|headers: HeaderMap, Json(args): Json<Value>| async move {
+                let response =
+                    managed_payments::call("get_managed_bounty_review", headers, args).await;
+                ([(header::CACHE_CONTROL, "no-store, private")], response)
+            }),
+        )
+        .route(
+            "/tools/record_managed_bounty_review",
+            post(|headers: HeaderMap, Json(args): Json<Value>| async move {
+                let response =
+                    managed_payments::call("record_managed_bounty_review", headers, args).await;
+                ([(header::CACHE_CONTROL, "no-store, private")], response)
+            }),
+        )
+        .route(
+            "/tools/get_card_bounty_review",
+            post(|headers: HeaderMap, Json(args): Json<Value>| async move {
+                let response =
+                    managed_payments::call("get_card_bounty_review", headers, args).await;
+                ([(header::CACHE_CONTROL, "no-store, private")], response)
+            }),
+        )
+        .route(
+            "/tools/appeal_card_bounty_review",
+            post(|headers: HeaderMap, Json(args): Json<Value>| async move {
+                let response =
+                    managed_payments::call("appeal_card_bounty_review", headers, args).await;
+                ([(header::CACHE_CONTROL, "no-store, private")], response)
+            }),
+        )
+        .route(
+            "/tools/find_verification_checks",
+            post(|headers: HeaderMap, Json(args): Json<Value>| async move {
+                verification::call("find_verification_checks", headers, args).await
+            }),
+        )
+        .route(
+            "/tools/validate_verification_plan",
+            post(|headers: HeaderMap, Json(args): Json<Value>| async move {
+                verification::call("validate_verification_plan", headers, args).await
+            }),
+        )
+        .route(
+            "/tools/run_verification_checks",
+            post(|headers: HeaderMap, Json(args): Json<Value>| async move {
+                verification::call("run_verification_checks", headers, args).await
+            }),
+        )
+        .route(
+            "/tools/get_verification_run",
+            post(|headers: HeaderMap, Json(args): Json<Value>| async move {
+                verification::call("get_verification_run", headers, args).await
+            }),
+        )
+        .route(
+            "/tools/get_verification_artifact",
+            post(|headers: HeaderMap, Json(args): Json<Value>| async move {
+                verification::call("get_verification_artifact", headers, args).await
+            }),
+        )
+        .route(
+            "/tools/upload_verification_artifact",
+            post(|headers: HeaderMap, Json(args): Json<Value>| async move {
+                verification::call("upload_verification_artifact", headers, args).await
+            })
+            .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024)),
+        )
+        .route(
+            "/tools/import_verification_github",
+            post(|headers: HeaderMap, Json(args): Json<Value>| async move {
+                verification::call("import_verification_github", headers, args).await
+            }),
+        )
+        .route(
+            "/tools/list_review_tasks",
+            post(|headers: HeaderMap, Json(args): Json<Value>| async move {
+                verification::call("list_review_tasks", headers, args).await
+            }),
+        )
+        .route(
+            "/tools/assign_review_task",
+            post(|headers: HeaderMap, Json(args): Json<Value>| async move {
+                verification::call("assign_review_task", headers, args).await
+            }),
+        )
+        .route(
+            "/tools/accept_review_task",
+            post(|headers: HeaderMap, Json(args): Json<Value>| async move {
+                verification::call("accept_review_task", headers, args).await
+            }),
+        )
+        .route(
+            "/tools/save_verification_review",
+            post(|headers: HeaderMap, Json(args): Json<Value>| async move {
+                verification::call("save_verification_review", headers, args).await
+            }),
+        )
+        .route(
+            "/tools/get_verification_review",
+            post(|headers: HeaderMap, Json(args): Json<Value>| async move {
+                verification::call("get_verification_review", headers, args).await
+            }),
+        )
+        .route(
+            "/tools/prepare_artifact_submission",
+            post(|headers: HeaderMap, Json(args): Json<Value>| async move {
+                verification::call("prepare_artifact_submission", headers, args).await
+            }),
+        )
+        .route(
+            "/tools/confirm_artifact_submission",
+            post(|headers: HeaderMap, Json(args): Json<Value>| async move {
+                verification::call("confirm_artifact_submission", headers, args).await
+            }),
+        )
+        .route(
+            "/tools/open_artifact_dispute",
+            post(|headers: HeaderMap, Json(args): Json<Value>| async move {
+                verification::call("open_artifact_dispute", headers, args).await
+            }),
+        )
+        .route(
+            "/tools/resolve_artifact_dispute",
+            post(|headers: HeaderMap, Json(args): Json<Value>| async move {
+                verification::call("resolve_artifact_dispute", headers, args).await
+            }),
+        )
         .route("/tools/list_opportunities", post(list_opportunities))
         .route(
             "/tools/create_discovery_subscription",
@@ -2196,7 +2349,7 @@ async fn main() -> anyhow::Result<()> {
             post(get_opportunity_conversion_funnel),
         )
         .route("/tools/get_site_analytics", post(get_site_analytics))
-        .route("/tools/analyze_bounty_fit", post(analyze_bounty_fit))
+        .route("/tools/analyze_bounty_fit", post(retired_generation_http))
         .route(
             "/tools/list_autonomous_verification_jobs",
             post(list_autonomous_verification_jobs),
@@ -2221,6 +2374,8 @@ async fn main() -> anyhow::Result<()> {
             observe_mcp_http_adapter,
         ))
         .layer(CorsLayer::permissive())
+        .layer(middleware::from_fn(protect_mcp_responses))
+        .layer(middleware::from_fn(observe_http_errors))
         .with_state(state);
 
     let bind_addr = service_bind_addr(
@@ -2246,6 +2401,29 @@ fn service_bind_addr(configured: Option<&str>, port: Option<&str>, default_addr:
 
 fn is_mcp_http_adapter_path(path: &str) -> bool {
     path == "/tools" || path.starts_with("/tools/")
+}
+
+async fn protect_mcp_responses(request: Request, next: Next) -> Response {
+    let path = request.uri().path();
+    let private = path == "/mcp"
+        || path.starts_with("/mcp/")
+        || (path.starts_with("/r/") && path.ends_with("/mcp"))
+        || is_mcp_http_adapter_path(path)
+        || ["authorization", "cookie", "x-operator-token"]
+            .iter()
+            .any(|name| request.headers().contains_key(*name));
+    let mut response = next.run(request).await;
+    if private {
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store, private"),
+        );
+        response.headers_mut().append(
+            header::VARY,
+            HeaderValue::from_static("Authorization, Cookie, X-Operator-Token"),
+        );
+    }
+    response
 }
 
 fn mcp_discovery_route_family(path: &str) -> Option<DiscoveryRouteFamily> {
@@ -2871,6 +3049,14 @@ fn public_base_url_from_env() -> String {
     env::var("PUBLIC_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
 }
 
+// An operator-configured service URL; never accept an upstream from tool arguments.
+fn api_upstream_base_url_from_env() -> String {
+    env::var("API_UPSTREAM_BASE_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(public_base_url_from_env)
+}
+
 fn mcp_base_url_from_env() -> String {
     env::var("MCP_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8090".to_string())
 }
@@ -2883,7 +3069,7 @@ async fn discovery_manifest_schema() -> impl IntoResponse {
 }
 
 async fn tools() -> Json<Vec<ToolDescriptor>> {
-    Json(tool_registry![
+    let mut descriptors=tool_registry![
         tool(
             "route_blocked_goal",
             "Route a blocked agent goal into a template, quote, bounty, or verification step.",
@@ -2930,6 +3116,8 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
             "Permissionlessly refresh paid contribution and final completion states from indexed canonical BountySettled events. Plans, signatures, submissions, hosted rows, and raw verifier responses cannot prove payment.",
             ObjectiveIdArgs::input_schema(),
         ),
+        tool("get_posting_options", "Read the supported review choices, costs, wallet requirements and first-party posting journey. No draft approval or signature.", json!({"type":"object", "properties":{}, "required":[], "additionalProperties":false})),
+        tool("get_posting_status", "Read canonical posting progress and gas sponsorship; return the existing first-party continuation URL. Never infer a failed transaction from an empty index or restart payment.", posting_guidance::status_schema()),
         tool(
             "prepare_bounty_post",
             "Use this when a person wants their current AI assistant to prepare a reviewable Agentizable draft. It returns a portable card and secure review URL, moves no funds, and requests no wallet signature.",
@@ -2937,7 +3125,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "publish_unfunded_bounty",
-            "Publish a seven-day voluntary request with no wallet. It is not claimable and promises no payment.",
+            "Publish caller-prepared voluntary work with an authenticated website account, wallet session, or operator credential. Reuse one idempotency key. No model is called, no solution is generated, and no payment is promised.",
             PublishUnfundedBountyArgs::input_schema(),
         ),
         tool(
@@ -2947,18 +3135,8 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "submit_unfunded_bounty_solution",
-            "Submit public voluntary work. This creates no payment claim.",
+            "Submit public voluntary work using the authenticated principal that owns the registered solver agent and controls its verified payout wallet. This creates no payment claim.",
             SubmitUnfundedBountySolutionArgs::input_schema(),
-        ),
-        tool(
-            "draft_bounty_with_cloud_agent",
-            "Turn an unstructured digital-work objective into measurable draft terms using the hosted cloud model. The output is advisory and cannot sign, fund, verify, settle, or prove payment.",
-            DraftBountyWithCloudAgentArgs::input_schema(),
-        ),
-        tool(
-            "compile_objective_with_cloud_agent",
-            "Use GPT-5.6 to decompose one digital objective into a validated acyclic graph of verifier-ready bounty drafts. The model is advisory; deterministic validation and canonical contracts retain authority.",
-            CompileObjectiveWithCloudAgentArgs::input_schema(),
         ),
         tool(
             "get_autonomous_inventory_summary",
@@ -2972,11 +3150,11 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "register_agent",
-            "Register an agent and optional payout wallet.",
+            "Register an agent owned by the authenticated website account, wallet session, or operator. An optional payout wallet requires verified control. Use a stable Idempotency-Key header when retrying.",
             object_tool_schema(
                 json!({
                     "handle": string_property("Public or local agent handle."),
-                    "payout_wallet": nullable_string_property("Optional EVM payout wallet for Base USDC settlements.")
+                    "payout_wallet": nullable_string_property("Optional EVM payout wallet whose control has been verified for the authenticated principal.")
                 }),
                 &["handle"],
             ),
@@ -3140,7 +3318,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "get_bounty_status",
-            "Read bounty lifecycle and verification status.",
+            "Read public bounty lifecycle and verification status. Private details require the resource owner or an explicitly granted participant session.",
             BountyIdArgs::input_schema(),
         ),
         tool(
@@ -3150,7 +3328,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "register_capability",
-            "Publish agent capability and price bands.",
+            "Publish capability and price bands for an agent owned by the authenticated caller.",
             object_tool_schema(
                 json!({
                     "agent_id": uuid_property("Agent UUID."),
@@ -3255,7 +3433,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         operator_tool(
             "reconcile_stripe_transfer_event",
-            "Apply a Stripe transfer.created event as fiat payout evidence for a payout intent.",
+            "Exercise normalized transfer evidence in an ephemeral sandbox only; persistent deployments require the API signed webhook.",
             object_tool_schema(
                 json!({
                     "id": string_property("Stripe transfer event ID."),
@@ -3268,7 +3446,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         operator_tool(
             "reconcile_stripe_checkout_webhook",
-            "Apply a paid Stripe Checkout top-up webhook to the platform ledger.",
+            "Exercise normalized Checkout evidence in an ephemeral sandbox only; persistent deployments require the API signed webhook.",
             object_tool_schema(
                 json!({
                     "id": string_property("Stripe event ID."),
@@ -3351,7 +3529,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "prepare_standing_meta_v2_child",
-            "Prepare the exact fully funded 1 USDC regression child for a claimable routed-V3 parent. The legacy tool name is retained so existing agents do not break. It publishes immutable terms first and returns ordered wallet calls; recovery-reserved V2 and already-claimed parents fail closed.",
+            "Prepare the exact 1 USDC regression child for a claimable routed-V3 parent using verified parent-solver wallet authority and one stable Idempotency-Key header. Publication shares the daily limit. It stores immutable terms before returning ordered creation and funding calls; it does not send them. Every retry rechecks the current parent and deadlines; old terms remain readable but stale calls are never returned. Recovery-reserved V2 and already-claimed parents fail closed.",
             object_tool_schema(
                 json!({
                     "network": nullable_enum_property(&["base-mainnet"], "Optional network; routed standing-meta currently requires Base mainnet."),
@@ -3369,7 +3547,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     },
                     "benchmark_source": {
                         "type": "object",
-                        "description": "Immutable public benchmark snapshot fetched by the verifier before execution.",
+                        "description": "Exact immutable public benchmark source selected by the reviewed parent lane; another approved profile is not a substitute.",
                         "properties": {
                             "kind": enum_property(&["github_commit"], "Exact supported source kind."),
                             "repository": string_property("GitHub owner/repository without a URL or .git suffix."),
@@ -3406,7 +3584,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                     },
                     "evidence_schema": nullable_object_property("Optional submission schema; defaults to a required sha256 source_snapshot_digest."),
                     "verifier_reward": nullable_object_property("Optional USDC money object; defaults to 100000 base units and is paid to the precommitted verifier path."),
-                    "funding_deadline": nullable_integer_property("Optional child funding deadline; defaults to the immutable parent deadline."),
+                    "funding_deadline": nullable_integer_property("Optional new-child funding deadline. Uses the parent funding cutoff only while it is future; otherwise provide an agreed future Unix timestamp. Never extends parent terms."),
                     "claim_window_seconds": nullable_integer_property("Optional child claim window; defaults to 259200 seconds."),
                     "verification_window_seconds": nullable_integer_property("Optional child verification window; defaults to 259200 seconds."),
                     "creation_nonce": nullable_string_property("Optional bytes32 creation nonce; otherwise derived deterministically from the parent and task."),
@@ -3627,7 +3805,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "prepare_autonomous_bounty_submission",
-            "Prepare one claimed bounty submission. Sign the returned payload, relay it, then publish the returned evidence after SubmissionAdded.",
+            "Inspect the exact public GitHub commit and source_subdirectory for a regression submission before preparing a signature. Returns the calculated source_snapshot_digest and checked_artifact; rejects mismatched supplied hashes. Sign only the returned payload, relay it, then publish the returned evidence after SubmissionAdded. A file check is not a passing verdict.",
             PrepareAutonomousBountySubmissionArgs::input_schema(),
         ),
         tool(
@@ -3687,7 +3865,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "publish_autonomous_bounty_terms",
-            "Publish a bounded public task document and receive deterministic Keccak commitments for the factory call. Publication is not funding or canonical listing; only a matching canonical factory event creates the bounty.",
+            "Publish a bounded public task document using a verified creator-wallet session or a website account linked to that wallet and one stable Idempotency-Key header. Exact retries return the original receipt; a different key for existing terms returns publication_already_exists and its canonical read URL. Publication shares the daily account/wallet limit and is not funding or canonical listing. Only a matching canonical factory event creates the bounty.",
             PublishAutonomousBountyTermsArgs::input_schema(),
         ),
         tool(
@@ -3712,7 +3890,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "list_opportunities",
-            "Discover open, claimable, in-progress, submitted, and completed opportunities across the existing unfunded, funding-needed, legacy, and canonical sources. Work state and payment state are separate; follow each item's authoritative URL and exact next action.",
+            "Discover open, claimable, in-progress, submitted, and completed opportunities across the existing unfunded, funding-needed, legacy, and canonical sources. Work state and payment state are separate; follow each item's authoritative URL and exact next action. Preserve healthy items during partial coverage. Inspect coverage_scope and source_statuses[].protocol_statuses: unavailable means unknown, never zero; complete covers only this page or identity.",
             OpportunityListArgs::input_schema(),
         ),
         tool(
@@ -3739,11 +3917,6 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
             "get_site_analytics",
             "Measure privacy-minimized first-party visitors, sessions, acquisition channels, and observed site conversion actions. Browser-local IDs are not people or wallets; canonical lifecycle and settlement endpoints remain authoritative for payment claims.",
             SiteAnalyticsArgs::input_schema(),
-        ),
-        tool(
-            "analyze_bounty_fit",
-            "Analyze one indexed canonical bounty's immutable published terms for solver skills, hard requirements, deliverable/evidence checklists, ambiguity, and verification risks. The terms-hash cache is advisory only; live economics and payment state are refreshed from the authoritative record and no score can verify work or predict profit.",
-            AnalyzeBountyFitArgs::input_schema(),
         ),
         tool(
             "list_autonomous_verification_jobs",
@@ -3780,7 +3953,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
             "Return deterministic risk and settlement policy limits before posting, claiming, or releasing paid work.",
             empty_tool_schema(),
         ),
-        tool(
+        operator_tool(
             "list_risk_events",
             "List deterministic risk events that need operator review or explain blocked automatic flows.",
             object_tool_schema(
@@ -3793,11 +3966,13 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                 }),
                 &[],
             ),
+            OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
         ),
-        tool(
+        operator_tool(
             "list_risk_reviews",
             "List operator review decisions recorded against deterministic risk events.",
             empty_tool_schema(),
+            OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
         ),
         operator_tool(
             "approve_risk_bounty",
@@ -3854,10 +4029,23 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
             ),
             OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED,
         ),
-    ])
+    ];
+    for descriptor in &mut descriptors {
+        if matches!(
+            descriptor.name,
+            "publish_autonomous_bounty_terms" | "prepare_standing_meta_v2_child"
+        ) {
+            descriptor.authorization = Some(ToolAuthorization { kind:"verified_principal", header:"Authorization", bearer:true,
+                required_when:"Always; verified creator wallet authority and one stable Idempotency-Key are required. Authenticate on the first-party website or use a wallet session. Operator credentials are insufficient." });
+        }
+    }
+    descriptors.extend(verification::descriptors());
+    descriptors.extend(managed_payments::descriptors());
+    Json(descriptors)
 }
 
-const OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED: &str = "OPERATOR_API_TOKEN is configured.";
+const OPERATOR_TOKEN_REQUIRED_WHEN_CONFIGURED: &str =
+    "Always; OPERATOR_API_TOKEN must be configured and supplied by the caller.";
 
 fn tool(name: &'static str, description: &'static str, input_schema: Value) -> ToolDescriptor {
     ToolDescriptor {
@@ -4824,18 +5012,16 @@ async fn prepare_bounty_post(
 }
 
 async fn publish_unfunded_bounty(
-    State(state): State<SharedState>,
+    State(_state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<PublishUnfundedBountyArgs>,
 ) -> Json<serde_json::Value> {
-    let url = format!(
-        "{}/v1/unfunded-bounties",
-        public_base_url_from_env().trim_end_matches('/')
-    );
-    let mut request = reqwest::Client::new().post(url).json(&args);
-    if let Some(token) = state.operator_api_token.as_deref() {
-        request = request.header(OPERATOR_TOKEN_HEADER, token);
-    }
-    proxy_hosted_json(request).await
+    secured_api_tool(
+        &headers,
+        "/v1/unfunded-bounties",
+        Some(serde_json::to_value(&args).expect("serializable tool arguments")),
+    )
+    .await
 }
 
 async fn list_unfunded_bounties(
@@ -4843,7 +5029,7 @@ async fn list_unfunded_bounties(
 ) -> Json<serde_json::Value> {
     let url = format!(
         "{}/v1/unfunded-bounties",
-        public_base_url_from_env().trim_end_matches('/')
+        api_upstream_base_url_from_env().trim_end_matches('/')
     );
     proxy_hosted_json(
         reqwest::Client::new()
@@ -4854,50 +5040,28 @@ async fn list_unfunded_bounties(
 }
 
 async fn submit_unfunded_bounty_solution(
+    State(_state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<SubmitUnfundedBountySolutionArgs>,
 ) -> Json<serde_json::Value> {
-    let url = format!(
-        "{}/v1/unfunded-bounties/{}/solutions",
-        public_base_url_from_env().trim_end_matches('/'),
-        args.bounty_id
-    );
-    proxy_hosted_json(reqwest::Client::new().post(url).json(&json!({
-        "agent_id": args.agent_id,
-        "summary": args.summary,
-        "deliverable_markdown": args.deliverable_markdown,
-        "evidence": args.evidence
-    })))
-    .await
+    secured_api_tool(&headers, &format!("/v1/unfunded-bounties/{}/solutions", args.bounty_id), Some(json!({
+        "agent_id":args.agent_id,"summary":args.summary,"deliverable_markdown":args.deliverable_markdown,"evidence":args.evidence
+    }))).await
 }
 
-async fn draft_bounty_with_cloud_agent(
-    State(state): State<SharedState>,
-    Json(args): Json<DraftBountyWithCloudAgentArgs>,
-) -> Json<serde_json::Value> {
-    let url = format!(
-        "{}/v1/cloud-agent/bounty-drafts",
-        public_base_url_from_env().trim_end_matches('/')
-    );
-    let mut request = reqwest::Client::new().post(url).json(&args);
-    if let Some(token) = state.operator_api_token.as_deref() {
-        request = request.header(OPERATOR_TOKEN_HEADER, token);
-    }
-    proxy_hosted_json(request).await
+fn hosted_generation_removed() -> Json<serde_json::Value> {
+    Json(json!({
+        "error": "hosted_generation_removed",
+        "error_code": "hosted_generation_removed",
+        "retryable": false,
+        "http_status": 410,
+        "message": "Platform-hosted AI generation has been removed.",
+        "next_action": "Use your own AI account to prepare or analyze the draft, then review it at https://agentizable.ai/post.html."
+    }))
 }
 
-async fn compile_objective_with_cloud_agent(
-    State(state): State<SharedState>,
-    Json(args): Json<CompileObjectiveWithCloudAgentArgs>,
-) -> Json<serde_json::Value> {
-    let url = format!(
-        "{}/v1/cloud-agent/objective-plans",
-        public_base_url_from_env().trim_end_matches('/')
-    );
-    let mut request = reqwest::Client::new().post(url).json(&args);
-    if let Some(token) = state.operator_api_token.as_deref() {
-        request = request.header(OPERATOR_TOKEN_HEADER, token);
-    }
-    proxy_hosted_json(request).await
+async fn retired_generation_http() -> (StatusCode, Json<serde_json::Value>) {
+    (StatusCode::GONE, hosted_generation_removed())
 }
 
 async fn get_autonomous_inventory_summary(
@@ -4905,7 +5069,7 @@ async fn get_autonomous_inventory_summary(
 ) -> Json<serde_json::Value> {
     let url = format!(
         "{}/v1/base/autonomous-bounties/inventory-summary",
-        public_base_url_from_env().trim_end_matches('/')
+        api_upstream_base_url_from_env().trim_end_matches('/')
     );
     proxy_hosted_json(reqwest::Client::new().get(url).query(&[
         (
@@ -4925,7 +5089,7 @@ async fn get_solver_leaderboard(
 ) -> Json<serde_json::Value> {
     let url = format!(
         "{}/v1/base/autonomous-bounties/leaderboard",
-        public_base_url_from_env().trim_end_matches('/')
+        api_upstream_base_url_from_env().trim_end_matches('/')
     );
     let mut query = vec![(
         "network",
@@ -4948,34 +5112,131 @@ async fn proxy_hosted_json(request: reqwest::RequestBuilder) -> Json<serde_json:
                 })),
                 Ok(body) => match serde_json::from_slice::<serde_json::Value>(&body) {
                     Ok(body) if status.is_success() => mcp_json(body),
-                    Ok(body) => mcp_error(format!("hosted API returned {status}: {body}")),
-                    Err(error) => mcp_error(format!(
-                        "hosted API returned {status} with invalid JSON: {error}"
-                    )),
+                    Ok(body) => {
+                        if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS {
+                            record_failure_stage(
+                                FailureStage::UpstreamHttpUnavailable,
+                                &deployment_revision(),
+                            );
+                        }
+                        hosted_response_error(
+                            status,
+                            format!("hosted API returned {status}: {body}"),
+                        )
+                    }
+                    Err(_) => {
+                        record_failure_stage(
+                            FailureStage::ResponseJsonInvalid,
+                            &deployment_revision(),
+                        );
+                        hosted_response_error(
+                            status,
+                            format!("hosted API returned {status}: response_json_invalid"),
+                        )
+                    }
                 },
-                Err(error) => mcp_error(format!(
-                    "hosted API returned {status} with unreadable body: {error}"
-                )),
+                Err(_) => {
+                    record_failure_stage(
+                        FailureStage::ResponseBodyUnavailable,
+                        &deployment_revision(),
+                    );
+                    hosted_response_error(
+                        status,
+                        format!("hosted API returned {status}: response_body_unavailable"),
+                    )
+                }
             }
         }
-        Err(error) => mcp_error(format!("hosted API request failed: {error}")),
+        Err(error) => {
+            // reqwest Display can include the configured upstream URL and query.
+            // Publish only bounded failure classes; keep API-authored JSON errors intact.
+            let (code, stage) = if error.is_timeout() {
+                ("request_timeout", FailureStage::RequestTimeout)
+            } else {
+                (
+                    "request_transport_unavailable",
+                    FailureStage::RequestTransportUnavailable,
+                )
+            };
+            record_failure_stage(stage, &deployment_revision());
+            mcp_upstream_error(format!("hosted API request failed: {code}"))
+        }
     }
+}
+
+fn mcp_upstream_error(message: String) -> Json<serde_json::Value> {
+    Json(json!({"error": message, "error_code": "upstream_unavailable"}))
+}
+
+fn hosted_response_error(status: StatusCode, message: String) -> Json<serde_json::Value> {
+    if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS || status.is_success() {
+        mcp_upstream_error(message)
+    } else {
+        mcp_error(message)
+    }
+}
+
+fn with_caller_authorization(
+    mut request: reqwest::RequestBuilder,
+    headers: &HeaderMap,
+) -> reqwest::RequestBuilder {
+    for name in [
+        "authorization",
+        "cookie",
+        "origin",
+        "idempotency-key",
+        "x-operator-token",
+    ] {
+        if let Some(value) = headers.get(name) {
+            request = request.header(name, value);
+        }
+    }
+    request
+}
+
+async fn secured_api_tool(headers: &HeaderMap, path: &str, body: Option<Value>) -> Json<Value> {
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("HTTP client");
+    let url = format!(
+        "{}{}",
+        api_upstream_base_url_from_env().trim_end_matches('/'),
+        path
+    );
+    let request = match body {
+        Some(body) => client.post(url).json(&body),
+        None => client.get(url),
+    };
+    proxy_hosted_json(with_caller_authorization(request, headers)).await
 }
 
 async fn register_agent(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<RegisterAgentRequest>,
 ) -> Json<serde_json::Value> {
-    mcp_mutation(service_runtime::register_agent(state.store.as_ref(), &state.network, args).await)
+    let _ = state;
+    secured_api_tool(
+        &headers,
+        "/v1/agents",
+        Some(serde_json::to_value(&args).expect("serializable tool arguments")),
+    )
+    .await
 }
 
 async fn register_capability(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<RegisterCapabilityRequest>,
 ) -> Json<serde_json::Value> {
-    mcp_mutation(
-        service_runtime::register_capability(state.store.as_ref(), &state.network, args).await,
+    let _ = state;
+    secured_api_tool(
+        &headers,
+        "/v1/capabilities",
+        Some(serde_json::to_value(&args).expect("serializable tool arguments")),
     )
+    .await
 }
 
 async fn search_capabilities(
@@ -4983,7 +5244,8 @@ async fn search_capabilities(
     Json(args): Json<SearchCapabilitiesArgs>,
 ) -> Json<serde_json::Value> {
     let (capabilities, agents, reputation_events, settlements) = {
-        let network = state.network.lock().expect("state poisoned");
+        let guard = state.network.lock().expect("state poisoned");
+        let network = service_runtime::privacy::public_network(&guard);
         (
             network.capabilities.values().cloned().collect::<Vec<_>>(),
             network.agents.values().cloned().collect::<Vec<_>>(),
@@ -5030,69 +5292,103 @@ async fn search_capabilities(
 
 async fn request_quotes(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<CreateHelpRequestRequest>,
 ) -> Json<serde_json::Value> {
-    mcp_mutation(
-        service_runtime::create_help_and_request_quotes(state.store.as_ref(), &state.network, args)
-            .await,
+    let _ = state;
+    let result = secured_api_tool(
+        &headers,
+        "/v1/help-requests",
+        Some(serde_json::to_value(&args).expect("serializable request")),
     )
+    .await;
+    let Some(id) = result
+        .0
+        .pointer("/content/0/json/id")
+        .and_then(Value::as_str)
+    else {
+        return result;
+    };
+    secured_api_tool(
+        &headers,
+        &format!("/v1/help-requests/{id}/quotes"),
+        Some(json!({})),
+    )
+    .await
 }
 
 async fn fund_quote_as_bounty(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<FundQuoteRequest>,
 ) -> Json<serde_json::Value> {
-    mcp_mutation(
-        service_runtime::fund_quote_as_bounty(state.store.as_ref(), &state.network, args).await,
+    let _ = state;
+    secured_api_tool(
+        &headers,
+        &format!("/v1/quotes/{}/fund-bounty", args.quote_id),
+        Some(serde_json::to_value(&args).expect("serializable tool arguments")),
     )
+    .await
 }
 
 async fn post_bounty(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<PostBountyRequest>,
 ) -> Json<serde_json::Value> {
-    mcp_mutation(service_runtime::post_bounty(state.store.as_ref(), &state.network, args).await)
+    let _ = state;
+    secured_api_tool(
+        &headers,
+        "/v1/bounties",
+        Some(serde_json::to_value(&args).expect("serializable tool arguments")),
+    )
+    .await
 }
 
 async fn open_pooled_bounty(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<OpenPooledBountyRequest>,
 ) -> Json<serde_json::Value> {
-    mcp_mutation(
-        service_runtime::open_pooled_bounty(state.store.as_ref(), &state.network, args).await,
+    let _ = state;
+    secured_api_tool(
+        &headers,
+        "/v1/bounties/pooled",
+        Some(serde_json::to_value(&args).expect("serializable tool arguments")),
     )
+    .await
 }
 
 async fn add_bounty_funding(
-    State(state): State<SharedState>,
+    State(_state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<AddFundingContributionRequest>,
 ) -> Json<serde_json::Value> {
-    mcp_mutation(
-        service_runtime::add_funding_contribution(state.store.as_ref(), &state.network, args).await,
+    secured_api_tool(
+        &headers,
+        &format!("/v1/bounties/{}/funding-contributions", args.bounty_id),
+        Some(serde_json::to_value(&args).expect("serializable tool arguments")),
     )
+    .await
 }
 
 async fn create_funding_intent(
-    State(state): State<SharedState>,
+    State(_state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<CreateFundingIntentRequest>,
 ) -> Json<serde_json::Value> {
-    let platform_base_url =
-        env::var("PUBLIC_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
-    mcp_mutation(
-        service_runtime::create_funding_intent(
-            state.store.as_ref(),
-            &state.network,
-            args,
-            platform_base_url,
-        )
-        .await,
+    secured_api_tool(
+        &headers,
+        &format!("/v1/bounties/{}/funding-intents", args.bounty_id),
+        Some(serde_json::to_value(&args).expect("serializable tool arguments")),
     )
+    .await
 }
 
 async fn list_claimable_bounties(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let bounties = {
         let network = state.network.lock().expect("state poisoned");
-        network.list_claimable_bounties()
+        service_runtime::privacy::public_claimable_bounties(&network)
     };
     let api_base_url =
         env::var("PUBLIC_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
@@ -5101,42 +5397,44 @@ async fn list_claimable_bounties(State(state): State<SharedState>) -> Json<serde
 
 async fn claim_bounty(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<ClaimBountyRequest>,
 ) -> Json<serde_json::Value> {
-    mcp_mutation(service_runtime::claim_bounty(state.store.as_ref(), &state.network, args).await)
+    let _ = state;
+    secured_api_tool(
+        &headers,
+        &format!("/v1/bounties/{}/claim", args.bounty_id),
+        Some(serde_json::to_value(&args).expect("serializable tool arguments")),
+    )
+    .await
 }
 
 async fn submit_result(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<SubmitResultRequest>,
 ) -> Json<serde_json::Value> {
-    mcp_mutation(service_runtime::submit_result(state.store.as_ref(), &state.network, args).await)
+    let _ = state;
+    secured_api_tool(
+        &headers,
+        &format!("/v1/bounties/{}/submit", args.bounty_id),
+        Some(serde_json::to_value(&args).expect("serializable tool arguments")),
+    )
+    .await
 }
 
 async fn request_verification(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<VerifySubmissionRequest>,
 ) -> Json<serde_json::Value> {
-    let network = {
-        let mut guard = state.network.lock().expect("state poisoned");
-        std::mem::take(&mut *guard)
-    };
-    let (network, result) = service_runtime::execute_verification(network, args).await;
-    *state.network.lock().expect("state poisoned") = network;
-    let outcome = match result {
-        Ok(outcome) => outcome,
-        Err(error) => {
-            if let Err(persist_error) = persist_all_risk_events(&state).await {
-                return mcp_error(persist_error);
-            }
-            return mcp_error(error);
-        }
-    };
-    if let Err(error) = service_runtime::persist_verification(state.store.as_ref(), &outcome).await
-    {
-        return mcp_error(error);
-    }
-    mcp_json(outcome.proof)
+    let _ = state;
+    secured_api_tool(
+        &headers,
+        &format!("/v1/bounties/{}/verify", args.bounty_id),
+        Some(serde_json::to_value(&args).expect("serializable tool arguments")),
+    )
+    .await
 }
 
 tool_args! {
@@ -5161,8 +5459,15 @@ tool_args! {
 
 async fn get_bounty_status(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<BountyIdArgs>,
 ) -> Json<serde_json::Value> {
+    if headers.contains_key("authorization")
+        || headers.contains_key("cookie")
+        || headers.contains_key("x-operator-token")
+    {
+        return secured_api_tool(&headers, &format!("/v1/bounties/{}", args.bounty_id), None).await;
+    }
     match bounty_status_snapshot(&state, args.bounty_id).await {
         Ok(status) => mcp_json(status),
         Err(error) => mcp_error(error),
@@ -5173,52 +5478,41 @@ async fn bounty_status_snapshot(
     state: &SharedState,
     bounty_id: Uuid,
 ) -> Result<BountyStatusResponse, String> {
-    service_runtime::bounty_status(state.store.as_ref(), &state.network, bounty_id)
-        .await
-        .map_err(|error| error.to_string())
+    service_runtime::privacy::bounty_status_for_principal(
+        state.store.as_ref(),
+        &state.network,
+        bounty_id,
+        &service_runtime::auth::Principal::Anonymous,
+    )
+    .await
+    .map_err(|error| error.to_string())
 }
 
 async fn get_paid_status(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<PaidStatusArgs>,
 ) -> Json<serde_json::Value> {
+    if headers.contains_key("authorization")
+        || headers.contains_key("cookie")
+        || headers.contains_key("x-operator-token")
+    {
+        let path = match (args.bounty_id, args.agent_id) {
+            (Some(id), None) => format!("/v1/bounties/{id}"),
+            (None, Some(id)) => format!("/v1/agents/{id}/paid-status"),
+            _ => return mcp_error("get_paid_status accepts either bounty_id or agent_id"),
+        };
+        let response = secured_api_tool(&headers, &path, None).await.0;
+        return authorized_paid_status_response(args, response);
+    }
     match (args.bounty_id, args.agent_id) {
         (Some(bounty_id), None) => match bounty_status_snapshot(&state, bounty_id).await {
-            Ok(status) => {
-                let api = public_base_url_from_env();
-                let proof_url = status.proofs.first().map(|proof| {
-                    format!("{}/public/proofs/{}", api.trim_end_matches('/'), proof.id)
-                });
-                let trigger = if status.bounty.status == BountyStatus::Paid
-                    && status.bounty.funding_mode != domain::FundingMode::Simulated
-                {
-                    Some(web_public::PostValueTrigger::ReconciledPayout)
-                } else if !status.proofs.is_empty() {
-                    Some(web_public::PostValueTrigger::VerifiedCompletion)
-                } else if status.funding_summary.claimable {
-                    Some(web_public::PostValueTrigger::FundedBounty)
-                } else {
-                    None
-                };
-                let share_url = proof_url.unwrap_or_else(|| {
-                    format!("{}/public/bounties/{bounty_id}", api.trim_end_matches('/'))
-                });
-                let post_value_loop = trigger
-                    .map(|trigger| web_public::post_value_loop(Some(trigger), Some(&share_url)));
-                mcp_json(serde_json::json!({
-                    "scope": "bounty",
-                    "bounty_id": bounty_id,
-                    "bounty_status": status.bounty.status,
-                    "settlements": status.settlements,
-                    "template_signals": status.template_signals,
-                    "risk_events": status.risk_events,
-                    "post_value_loop": post_value_loop
-                }))
-            }
+            Ok(status) => paid_bounty_status_response(bounty_id, status),
             Err(error) => mcp_error(error),
         },
         (None, Some(agent_id)) => {
-            let network = state.network.lock().expect("state poisoned");
+            let guard = state.network.lock().expect("state poisoned");
+            let network = service_runtime::privacy::public_network(&guard);
             match network.agent_payout_status(agent_id) {
                 Ok(status) => {
                     let paid = status.payouts.iter().find(|payout| {
@@ -5264,6 +5558,63 @@ async fn get_paid_status(
         (Some(_), Some(_)) => {
             mcp_error("get_paid_status accepts either bounty_id or agent_id, not both")
         }
+    }
+}
+
+fn paid_bounty_status_response(bounty_id: Uuid, status: BountyStatusResponse) -> Json<Value> {
+    let api = public_base_url_from_env();
+    let proof_url = status
+        .proofs
+        .first()
+        .map(|proof| format!("{}/public/proofs/{}", api.trim_end_matches('/'), proof.id));
+    let trigger = if status.bounty.status == BountyStatus::Paid
+        && status.bounty.funding_mode != domain::FundingMode::Simulated
+    {
+        Some(web_public::PostValueTrigger::ReconciledPayout)
+    } else if !status.proofs.is_empty() {
+        Some(web_public::PostValueTrigger::VerifiedCompletion)
+    } else if status.funding_summary.claimable {
+        Some(web_public::PostValueTrigger::FundedBounty)
+    } else {
+        None
+    };
+    let share_url = proof_url
+        .unwrap_or_else(|| format!("{}/public/bounties/{bounty_id}", api.trim_end_matches('/')));
+    let post_value_loop =
+        trigger.map(|trigger| web_public::post_value_loop(Some(trigger), Some(&share_url)));
+    mcp_json(serde_json::json!({
+        "scope": "bounty",
+        "bounty_id": bounty_id,
+        "bounty_status": status.bounty.status,
+        "settlements": status.settlements,
+        "template_signals": status.template_signals,
+        "risk_events": status.risk_events,
+        "post_value_loop": post_value_loop
+    }))
+}
+
+fn authorized_paid_status_response(args: PaidStatusArgs, response: Value) -> Json<Value> {
+    if response.get("error").is_some() {
+        return Json(response);
+    }
+    let Some(mut value) = response.pointer("/content/0/json").cloned() else {
+        return mcp_error("authorized API returned an invalid payout response");
+    };
+    match (args.bounty_id, args.agent_id) {
+        (Some(id), None) => match serde_json::from_value::<BountyStatusResponse>(value) {
+            Ok(status) if status.bounty.id == id => paid_bounty_status_response(id, status),
+            _ => mcp_error("authorized API returned an invalid bounty status"),
+        },
+        (None, Some(id)) => {
+            match serde_json::from_value::<app::AgentPayoutStatusResponse>(value.clone()) {
+                Ok(status) if status.agent.id == id => {}
+                _ => return mcp_error("authorized API returned an invalid agent payout status"),
+            }
+            value["scope"] = json!("agent");
+            value["agent_id"] = json!(id);
+            mcp_json(value)
+        }
+        _ => mcp_error("get_paid_status accepts either bounty_id or agent_id"),
     }
 }
 
@@ -5327,13 +5678,16 @@ fn stripe_connect_account_intent(
 }
 
 async fn plan_stripe_connect_transfer(
-    State(state): State<SharedState>,
+    State(_state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<PlanStripeConnectTransferArgs>,
 ) -> Json<serde_json::Value> {
-    match stripe_connect_transfer_plan(&state, args) {
-        Ok(plan) => mcp_json(plan),
-        Err(error) => mcp_error(error),
-    }
+    secured_api_tool(
+        &headers,
+        "/v1/stripe/connect-transfers",
+        Some(serde_json::to_value(&args).expect("serializable tool arguments")),
+    )
+    .await
 }
 
 fn stripe_connect_transfer_plan(
@@ -5426,28 +5780,18 @@ async fn reconcile_stripe_connect_snapshot(
     if let Err(error) = require_operator(&state, &headers) {
         return error;
     }
-    let reconciliation = {
-        let mut network = state.network.lock().expect("state poisoned");
-        match network.apply_stripe_connect_snapshot(args) {
-            Ok(reconciliation) => reconciliation,
+    let _transition = state.stripe_reconciliation_gate.lock().await;
+    let reconciliation =
+        match service_runtime::stripe_reconciliation::reconcile_stripe_connect_snapshot(
+            state.store.as_ref(),
+            &state.network,
+            args,
+        )
+        .await
+        {
+            Ok(result) => result,
             Err(error) => return mcp_error(error),
-        }
-    };
-    if let Some(store) = &state.store {
-        for bounty in &reconciliation.bounties {
-            if let Err(error) = store.upsert_bounty(bounty).await {
-                return mcp_error(error);
-            }
-        }
-        for settlement in &reconciliation.settlements {
-            if let Err(error) = store.upsert_settlement(settlement).await {
-                return mcp_error(error);
-            }
-        }
-        if let Err(error) = persist_ledger_entries(store, &reconciliation.ledger_entries).await {
-            return mcp_error(error);
-        }
-    }
+        };
     mcp_json(reconciliation)
 }
 
@@ -5458,6 +5802,9 @@ async fn reconcile_stripe_transfer_event(
 ) -> Json<serde_json::Value> {
     if let Err(error) = require_operator(&state, &headers) {
         return error;
+    }
+    if state.store.is_some() || state.stripe_live_execution_enabled {
+        return mcp_error("Unsigned Stripe reconciliation is only available in an ephemeral sandbox. Submit the original signed event to the API webhook endpoint.");
     }
     let evidence = match StripeEventDeduper::default().apply_connect_transfer(&args) {
         Ok(evidence) => evidence,
@@ -5470,29 +5817,6 @@ async fn reconcile_stripe_transfer_event(
             Err(error) => return mcp_error(error),
         }
     };
-    if let Some(store) = &state.store {
-        if !reconciliation.duplicate {
-            if let Err(error) = store
-                .upsert_payment_event(&reconciliation.evidence.payment_event)
-                .await
-            {
-                return mcp_error(error);
-            }
-        }
-        if let Some(settlement) = &reconciliation.settlement {
-            if let Err(error) = store.upsert_settlement(settlement).await {
-                return mcp_error(error);
-            }
-        }
-        if let Some(bounty) = &reconciliation.bounty {
-            if let Err(error) = store.upsert_bounty(bounty).await {
-                return mcp_error(error);
-            }
-        }
-        if let Err(error) = persist_ledger_entries(store, &reconciliation.ledger_entries).await {
-            return mcp_error(error);
-        }
-    }
     mcp_json(reconciliation)
 }
 
@@ -5503,6 +5827,9 @@ async fn reconcile_stripe_checkout_webhook(
 ) -> Json<serde_json::Value> {
     if let Err(error) = require_operator(&state, &headers) {
         return error;
+    }
+    if state.store.is_some() || state.stripe_live_execution_enabled {
+        return mcp_error("Unsigned Stripe reconciliation is only available in an ephemeral sandbox. Submit the original signed event to the API webhook endpoint.");
     }
     let funding_credit = match StripeEventDeduper::default().apply_checkout_top_up(&args) {
         Ok(funding_credit) => funding_credit,
@@ -5515,35 +5842,6 @@ async fn reconcile_stripe_checkout_webhook(
             Err(error) => return mcp_error(error),
         }
     };
-    if let Some(store) = &state.store {
-        if !reconciliation.duplicate {
-            if let Err(error) = store
-                .upsert_payment_event(&reconciliation.funding_credit.payment_event)
-                .await
-            {
-                return mcp_error(error);
-            }
-        }
-        if let Some(intent) = &reconciliation.funding_intent {
-            if let Err(error) = store.upsert_funding_intent(intent).await {
-                return mcp_error(error);
-            }
-        }
-        if let Some(report) = &reconciliation.funding_report {
-            if let Err(error) = store.upsert_bounty(&report.bounty).await {
-                return mcp_error(error);
-            }
-            if let Err(error) = store
-                .upsert_funding_contribution(&report.contribution)
-                .await
-            {
-                return mcp_error(error);
-            }
-        }
-        if let Err(error) = persist_ledger_entries(store, &reconciliation.ledger_entries).await {
-            return mcp_error(error);
-        }
-    }
     mcp_json(reconciliation)
 }
 
@@ -5610,7 +5908,7 @@ async fn plan_social_mention_draft(
 ) -> Json<serde_json::Value> {
     let url = format!(
         "{}/v1/social/mention-draft-plan",
-        public_base_url_from_env().trim_end_matches('/')
+        api_upstream_base_url_from_env().trim_end_matches('/')
     );
     proxy_hosted_json(reqwest::Client::new().post(url).json(&args)).await
 }
@@ -5650,14 +5948,10 @@ async fn plan_github_proof_comment_for_proof(
 ) -> Json<serde_json::Value> {
     let public_base_url = public_base_url_from_env();
     let network = state.network.lock().expect("state poisoned");
-    let Some(proof) = network.proofs.get(&args.proof_id) else {
+    let Some((proof, verifier)) =
+        service_runtime::privacy::public_proof_details(&network, args.proof_id)
+    else {
         return mcp_error("proof not found");
-    };
-    if proof.privacy == PrivacyLevel::Private {
-        return mcp_error("proof not found");
-    }
-    let Some(verifier) = network.verifier_results.get(&proof.verifier_result_id) else {
-        return mcp_error("proof verifier result not found");
     };
     let verifier_summary = if verifier.summary.trim().is_empty() {
         format!("{:?} verifier accepted", verifier.kind)
@@ -5765,6 +6059,21 @@ async fn get_base_transaction_receipt(
         "log_count": log_count,
         "receipt": receipt
     }))
+}
+
+/// Mainnet v1 is immutable and vulnerable. Historical readers and recovery retain
+/// the original planner, but hosted entry points must not create new exposure.
+fn configured_autonomous_new_risk_planner(
+    network: &str,
+) -> Result<AutonomousBountyTxPlanner, String> {
+    if base_network_descriptor(network)
+        .map_err(|_| "unsupported Base network".to_string())?
+        .chain_id
+        == 8_453
+    {
+        return Err("autonomous-v1 on Base mainnet is recovery-only; use autonomous-v2 for new creation, funding and claims".to_string());
+    }
+    configured_autonomous_planner(network)
 }
 
 fn configured_autonomous_planner(network: &str) -> Result<AutonomousBountyTxPlanner, String> {
@@ -5918,7 +6227,8 @@ async fn indexed_autonomous_bounty(
         .map_err(|error| error.to_string())?;
     let mut feed =
         build_autonomous_bounty_feed(events, terms, false).map_err(|error| error.to_string())?;
-    service_runtime::verifier_readiness::apply(&mut feed);
+    service_runtime::verifier_checkpoints::apply_current(state.store.as_ref(), network, &mut feed)
+        .await;
     state.recovery_reservations.apply(&mut feed, false);
     feed.into_iter()
         .find(|item| item.bounty_contract.eq_ignore_ascii_case(bounty_contract))
@@ -5934,47 +6244,30 @@ async fn plan_autonomous_canonical_child_terms(
     }
 }
 
+#[cfg(test)]
+fn standing_meta_child_preparation_error(
+    error: chain_base::ChainBaseError,
+) -> Json<serde_json::Value> {
+    let (code, next_action) = error.standing_meta_child_preparation_problem();
+    Json(json!({
+        "error": error.to_string(),
+        "error_code": code,
+        "retryable": false,
+        "next_action": next_action,
+    }))
+}
+
 async fn prepare_standing_meta_v2_child(
-    State(state): State<SharedState>,
+    State(_state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<StandingMetaV2ChildPreparationRequest>,
 ) -> Json<serde_json::Value> {
-    let network = args.network.as_deref().unwrap_or("base-mainnet");
-    if network != "base-mainnet" {
-        return mcp_error("standing-meta child preparation is deployed only on Base mainnet");
-    }
-    let parent =
-        match indexed_autonomous_bounty(&state, network, &args.parent_bounty_contract).await {
-            Ok(parent) => parent,
-            Err(error) => return mcp_error(error),
-        };
-    let context = match standing_meta_v2_parent_context(&parent) {
-        Ok(context) => context,
-        Err(error) => return mcp_error(error),
-    };
-    if args.parent_solver.eq_ignore_ascii_case(&parent.creator) {
-        return mcp_error("the parent bounty creator cannot be its solver");
-    }
-    let planner = match configured_autonomous_planner(network) {
-        Ok(planner) => planner,
-        Err(error) => return mcp_error(error),
-    };
-    let mut plan = match planner.plan_standing_meta_v2_child(&args, &context, Utc::now()) {
-        Ok(plan) => plan,
-        Err(error) => return mcp_error(error),
-    };
-    let Some(store) = &state.store else {
-        return mcp_error(
-            "DATABASE_URL is required to publish child terms; do not send on-chain calls first",
-        );
-    };
-    if let Err(error) = store.upsert_autonomous_bounty_terms(&plan.terms).await {
-        return mcp_error(format!(
-            "hosted child terms publication failed: {error}; retry the identical request and do not send the on-chain calls"
-        ));
-    }
-    plan.hosted_terms_published = true;
-    plan.current_state = "hosted_routed_v3_child_terms_published_parent_unclaimed".to_string();
-    mcp_json(plan)
+    terms_publication::proxy(
+        headers,
+        "/v1/base/autonomous-bounties/standing-meta-v2-child-preparation",
+        serde_json::to_value(args).expect("serializable child request"),
+    )
+    .await
 }
 
 async fn plan_autonomous_bounty_creation(
@@ -5985,7 +6278,7 @@ async fn plan_autonomous_bounty_creation(
     if let Err(error) = require_autonomous_creation_terms(&state, network, &args.create).await {
         return mcp_error(error);
     }
-    match configured_autonomous_planner(network).and_then(|planner| {
+    match configured_autonomous_new_risk_planner(network).and_then(|planner| {
         planner
             .plan_creation(network, &args.create)
             .map_err(|e| e.to_string())
@@ -6003,7 +6296,7 @@ async fn plan_autonomous_bounty_authorized_creation(
     if let Err(error) = require_autonomous_creation_terms(&state, network, &args.create).await {
         return mcp_error(error);
     }
-    match configured_autonomous_planner(network).and_then(|planner| {
+    match configured_autonomous_new_risk_planner(network).and_then(|planner| {
         planner
             .plan_authorized_creation(
                 network,
@@ -6130,7 +6423,9 @@ async fn require_autonomous_creation_terms(
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "published autonomous bounty terms are unavailable".to_string())?;
-    service_runtime::verifier_readiness::require_available(&terms).map_err(str::to_owned)?;
+    service_runtime::verifier_checkpoints::require_available(state.store.as_ref(), network, &terms)
+        .await
+        .map_err(str::to_owned)?;
     validate_autonomous_creation_for_public_earning(network, create, &terms)
         .map_err(|error| error.to_string())
 }
@@ -6152,7 +6447,7 @@ async fn plan_autonomous_bounty_contribution(
                 .map_err(|error| error.to_string())
         })
     } else {
-        configured_autonomous_planner(network).and_then(|planner| {
+        configured_autonomous_new_risk_planner(network).and_then(|planner| {
             planner
                 .plan_contribution(network, &args.contribution)
                 .map_err(|error| error.to_string())
@@ -6186,7 +6481,7 @@ async fn plan_autonomous_bounty_authorized_contribution(
                 .map_err(|error| error.to_string())
         })
     } else {
-        configured_autonomous_planner(network).and_then(|planner| {
+        configured_autonomous_new_risk_planner(network).and_then(|planner| {
             planner
                 .plan_authorized_contribution(
                     network,
@@ -6217,7 +6512,7 @@ async fn fund_bounty_with_x402(
     }
     let url = format!(
         "{}/v1/x402/base/bounties/{}/funding",
-        public_base_url_from_env().trim_end_matches('/'),
+        api_upstream_base_url_from_env().trim_end_matches('/'),
         bounty_contract
     );
     let mut query = vec![("network", network)];
@@ -6240,7 +6535,7 @@ async fn get_x402_relay_status(
 ) -> Json<serde_json::Value> {
     let url = format!(
         "{}/v1/x402/base/relays/{}",
-        public_base_url_from_env().trim_end_matches('/'),
+        api_upstream_base_url_from_env().trim_end_matches('/'),
         args.relay_id
     );
     proxy_x402_response(reqwest::Client::new().get(url)).await
@@ -6252,7 +6547,7 @@ async fn prepare_agent_to_earn(
 ) -> Json<serde_json::Value> {
     let url = format!(
         "{}/v1/base/agent-wallet/readiness",
-        public_base_url_from_env().trim_end_matches('/')
+        api_upstream_base_url_from_env().trim_end_matches('/')
     );
     proxy_public_json_response(
         reqwest::Client::new().post(url).json(&args),
@@ -6268,7 +6563,7 @@ async fn list_open_competition_verifiers(
     let network = args.network.as_deref().unwrap_or("base-mainnet");
     let url = format!(
         "{}/v1/base/open-competition-v1/verifiers",
-        public_base_url_from_env().trim_end_matches('/')
+        api_upstream_base_url_from_env().trim_end_matches('/')
     );
     proxy_public_json_response(
         reqwest::Client::new()
@@ -6298,7 +6593,7 @@ async fn get_open_competition_readiness(
     let network = args.network.as_deref().unwrap_or("base-mainnet");
     let url = format!(
         "{}/v1/base/open-competition-v1/readiness",
-        public_base_url_from_env().trim_end_matches('/')
+        api_upstream_base_url_from_env().trim_end_matches('/')
     );
     let mut query = vec![
         ("network", network.to_string()),
@@ -6369,7 +6664,7 @@ async fn get_open_competition_entrant_relay(
     };
     let url = format!(
         "{}/v1/base/open-competition-v1/entrant-action-relays/{relay_id}",
-        public_base_url_from_env().trim_end_matches('/')
+        api_upstream_base_url_from_env().trim_end_matches('/')
     );
     proxy_public_json_response_with_timeout(
         reqwest::Client::new().get(url),
@@ -6477,7 +6772,7 @@ async fn inspect_open_competition_v2(
     if args.operation == "guide" {
         return mcp_json(open_competition_v2_mcp_guide());
     }
-    let api = public_base_url_from_env();
+    let api = api_upstream_base_url_from_env();
     let root = format!(
         "{}/v1/base/open-competition-v2-beta3",
         api.trim_end_matches('/')
@@ -6576,7 +6871,7 @@ async fn prepare_open_competition_v2(
         }
         let url = format!(
             "{}/v1/base/open-competition-v2-beta3/proof-jobs/{job_id}/payment",
-            public_base_url_from_env().trim_end_matches('/')
+            api_upstream_base_url_from_env().trim_end_matches('/')
         );
         let mut request = reqwest::Client::new().post(url);
         if let Some(signature) = payment_signature {
@@ -6611,7 +6906,7 @@ async fn prepare_open_competition_v2(
     };
     let url = format!(
         "{}/v1/base/open-competition-v2-beta3/{path}",
-        public_base_url_from_env().trim_end_matches('/')
+        api_upstream_base_url_from_env().trim_end_matches('/')
     );
     proxy_public_json_response_with_timeout(
         reqwest::Client::new().post(url).json(&arguments),
@@ -6803,7 +7098,7 @@ async fn proxy_open_competition_action(
 ) -> Json<serde_json::Value> {
     let url = format!(
         "{}/v1/base/open-competition-v1/{path}",
-        public_base_url_from_env().trim_end_matches('/')
+        api_upstream_base_url_from_env().trim_end_matches('/')
     );
     proxy_public_json_response(
         reqwest::Client::new().post(url).json(&args),
@@ -6829,7 +7124,7 @@ where
 {
     let url = format!(
         "{}/v1/base/open-competition-v1/{path}",
-        public_base_url_from_env().trim_end_matches('/')
+        api_upstream_base_url_from_env().trim_end_matches('/')
     );
     proxy_public_json_response_with_timeout(
         reqwest::Client::new().post(url).json(args),
@@ -6846,7 +7141,7 @@ async fn get_standing_meta_v4_readiness(
     let network = args.network.as_deref().unwrap_or("base-mainnet");
     let url = format!(
         "{}/v1/base/standing-meta-v4/readiness?network={network}",
-        public_base_url_from_env().trim_end_matches('/')
+        api_upstream_base_url_from_env().trim_end_matches('/')
     );
     proxy_public_json_response(
         reqwest::Client::new().get(url),
@@ -6924,7 +7219,7 @@ async fn proxy_standing_meta_v4_action(
 ) -> Json<serde_json::Value> {
     let url = format!(
         "{}/v1/base/standing-meta-v4/{path}",
-        public_base_url_from_env().trim_end_matches('/')
+        api_upstream_base_url_from_env().trim_end_matches('/')
     );
     proxy_public_json_response(
         reqwest::Client::new().post(url).json(&args),
@@ -6968,6 +7263,7 @@ async fn proxy_public_json_response_with_timeout(
 
 async fn agent_native_claim(
     State(_state): State<SharedState>,
+    headers: HeaderMap,
     Json(mut args): Json<AgentNativeClaimArgs>,
 ) -> Json<serde_json::Value> {
     if args.source.as_deref().is_none_or(str::is_empty) {
@@ -6975,9 +7271,18 @@ async fn agent_native_claim(
     }
     let url = format!(
         "{}/v1/base/autonomous-bounties/claims",
-        public_base_url_from_env().trim_end_matches('/')
+        api_upstream_base_url_from_env().trim_end_matches('/')
     );
-    proxy_agent_claim_response(reqwest::Client::new().post(url).json(&args)).await
+    proxy_agent_claim_response(with_caller_authorization(
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("valid HTTP client")
+            .post(url)
+            .json(&args),
+        &headers,
+    ))
+    .await
 }
 
 async fn proxy_agent_claim_response(request: reqwest::RequestBuilder) -> Json<serde_json::Value> {
@@ -7095,7 +7400,7 @@ async fn plan_autonomous_bounty_claim(
             })
         })
     } else {
-        configured_autonomous_planner(network).and_then(|planner| {
+        configured_autonomous_new_risk_planner(network).and_then(|planner| {
             planner
                 .plan_claim(
                     network,
@@ -7151,7 +7456,7 @@ async fn plan_autonomous_bounty_authorized_claim(
             })
         })
     } else {
-        configured_autonomous_planner(network).and_then(|planner| {
+        configured_autonomous_new_risk_planner(network).and_then(|planner| {
             planner
                 .plan_authorized_claim(
                     network,
@@ -7215,36 +7520,90 @@ async fn plan_autonomous_bounty_submission(
 
 async fn prepare_autonomous_bounty_submission(
     State(state): State<SharedState>,
-    Json(args): Json<PrepareAutonomousBountySubmissionArgs>,
+    Json(mut args): Json<PrepareAutonomousBountySubmissionArgs>,
 ) -> Json<serde_json::Value> {
     let network = args.network.as_deref().unwrap_or("base-mainnet");
     let item = match indexed_autonomous_bounty(&state, network, &args.bounty_contract).await {
         Ok(item) => item,
         Err(error) => return mcp_error(error),
     };
-    let observed_at_unix = match u64::try_from(Utc::now().timestamp()) {
-        Ok(value) => value,
-        Err(_) => return mcp_error("system clock is before Unix epoch"),
-    };
-    let planner = if is_autonomous_v2_item(&item) {
+    let planner = match if is_autonomous_v2_item(&item) {
         configured_autonomous_v2_planner(network)
     } else {
         configured_autonomous_planner(network)
+    } {
+        Ok(value) => value,
+        Err(error) => return mcp_error(error),
     };
-    match planner.and_then(|planner| {
-        build_autonomous_submission_preparation(
-            &planner,
+    let now = || Utc::now().timestamp().max(0) as u64;
+    if let Err(error) = build_autonomous_submission_preparation(
+        &planner,
+        network,
+        &item,
+        &args.solver_wallet,
+        &args.artifact_reference,
+        args.evidence.clone(),
+        now(),
+    ) {
+        return mcp_error(error.to_string());
+    }
+    let Some(terms) = item.terms.as_ref() else {
+        return mcp_error("content-addressed terms unavailable");
+    };
+    let parent_eligibility = if chain_base::requires_parent_submission_preflight(&item) {
+        let (_, rpc) = match state.base_rpc_urls.resolve(network) {
+            Ok(value) => value,
+            Err(_) => return mcp_error("parent_eligibility_check_unavailable"),
+        };
+        match chain_base::preflight_parent_submission(
+            &rpc,
             network,
             &item,
             &args.solver_wallet,
-            &args.artifact_reference,
-            args.evidence,
-            observed_at_unix,
+            &args.evidence,
+            now(),
         )
-        .map_err(|error| error.to_string())
-    }) {
-        Ok(preparation) => mcp_json(preparation),
-        Err(error) => mcp_error(error),
+        .await
+        {
+            Ok(value) => Some(value),
+            Err(error) => return mcp_error(error.to_string()),
+        }
+    } else {
+        None
+    };
+    let checked = match worker::github_snapshot::preflight_regression_artifact(
+        &terms.document.benchmark,
+        &args.artifact_reference,
+        &mut args.evidence,
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(error) => {
+            let (code, message, retryable) =
+                worker::github_snapshot::public_preflight_error(&error);
+            return Json(json!({"error":code,"message":message,"retryable":retryable}));
+        }
+    };
+    let current = match indexed_autonomous_bounty(&state, network, &args.bounty_contract).await {
+        Ok(item) => item,
+        Err(error) => return mcp_error(error),
+    };
+    match build_autonomous_submission_preparation(
+        &planner,
+        network,
+        &current,
+        &args.solver_wallet,
+        &args.artifact_reference,
+        args.evidence,
+        now(),
+    ) {
+        Ok(mut preparation) => {
+            preparation.checked_artifact = checked;
+            preparation.parent_eligibility = parent_eligibility;
+            mcp_json(preparation)
+        }
+        Err(error) => mcp_error(error.to_string()),
     }
 }
 
@@ -7575,38 +7934,46 @@ async fn list_autonomous_bounty_events(
     State(state): State<SharedState>,
     Json(args): Json<ListAutonomousBountyEventsArgs>,
 ) -> Json<serde_json::Value> {
-    let Some(store) = &state.store else {
-        return mcp_json(Vec::<serde_json::Value>::new());
+    let network = match service_runtime::bounty_read_inputs::network_key(
+        args.network.as_deref().unwrap_or("base-mainnet"),
+    ) {
+        Ok(network) => network,
+        Err(error) => return mcp_error(error),
     };
-    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    let bounty_id = match args
+        .bounty_id
+        .as_deref()
+        .map(service_runtime::bounty_read_inputs::bounty_id)
+        .transpose()
+    {
+        Ok(bounty_id) => bounty_id,
+        Err(error) => return mcp_error(error),
+    };
+    let Some(store) = &state.store else {
+        return mcp_error("Indexed bounty events are temporarily unavailable; retry later.");
+    };
     match store.list_autonomous_bounty_events(network).await {
         Ok(mut events) => {
-            if let Some(bounty_id) = args.bounty_id {
+            if let Some(bounty_id) = bounty_id {
                 events.retain(|event| event.bounty_id.eq_ignore_ascii_case(&bounty_id));
             }
             mcp_json(events)
         }
-        Err(error) => mcp_error(error),
+        Err(_) => mcp_error("Indexed bounty events are temporarily unavailable; retry later."),
     }
 }
 
 async fn publish_autonomous_bounty_terms(
-    State(state): State<SharedState>,
+    State(_state): State<SharedState>,
+    headers: HeaderMap,
     Json(args): Json<PublishAutonomousBountyTermsArgs>,
 ) -> Json<serde_json::Value> {
-    let record =
-        match build_autonomous_bounty_terms_record(&args.creator_wallet, args.document, Utc::now())
-        {
-            Ok(record) => record,
-            Err(error) => return mcp_error(error),
-        };
-    let Some(store) = &state.store else {
-        return mcp_error("DATABASE_URL is required to publish public bounty terms");
-    };
-    match store.upsert_autonomous_bounty_terms(&record).await {
-        Ok(()) => mcp_json(record),
-        Err(error) => mcp_error(error),
-    }
+    terms_publication::proxy(
+        headers,
+        "/v1/base/autonomous-bounties/terms",
+        serde_json::to_value(args).expect("serializable terms request"),
+    )
+    .await
 }
 
 async fn get_autonomous_bounty_terms(
@@ -7678,14 +8045,37 @@ async fn get_autonomous_submission_evidence(
     }
 }
 
+async fn load_current_autonomous_discovery(api: &str, network: &str) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/base/autonomous-bounties/feed",
+        api.trim_end_matches('/')
+    );
+    proxy_hosted_json(
+        reqwest::Client::new()
+            .get(url)
+            .query(&[("network", network), ("claimable_only", "true")]),
+    )
+    .await
+}
+
 async fn list_autonomous_bounties(
     State(state): State<SharedState>,
     Json(args): Json<AutonomousBountyFeedArgs>,
 ) -> Json<serde_json::Value> {
+    let network = match service_runtime::bounty_read_inputs::network_key(
+        args.network.as_deref().unwrap_or("base-mainnet"),
+    ) {
+        Ok(network) => network,
+        Err(error) => return mcp_error(error),
+    };
+    if args.claimable_only.unwrap_or(false) {
+        // The API's earning-only route applies the same per-protocol reader
+        // boundary as unified discovery. Raw history below stays available.
+        return load_current_autonomous_discovery(&api_upstream_base_url_from_env(), network).await;
+    }
     let Some(store) = &state.store else {
         return mcp_error("DATABASE_URL is required to discover indexed autonomous bounties");
     };
-    let network = args.network.as_deref().unwrap_or("base-mainnet");
     let events = match store.list_autonomous_bounty_events(network).await {
         Ok(events) => events,
         Err(error) => return mcp_error(error),
@@ -7698,7 +8088,8 @@ async fn list_autonomous_bounties(
         Ok(feed) => feed,
         Err(error) => return mcp_error(error),
     };
-    service_runtime::verifier_readiness::apply(&mut feed);
+    service_runtime::verifier_checkpoints::apply_current(state.store.as_ref(), network, &mut feed)
+        .await;
     state
         .recovery_reservations
         .apply(&mut feed, args.claimable_only.unwrap_or(false));
@@ -7708,7 +8099,7 @@ async fn list_autonomous_bounties(
 async fn list_opportunities(Json(args): Json<OpportunityListArgs>) -> Json<serde_json::Value> {
     let url = format!(
         "{}/v1/opportunities",
-        public_base_url_from_env().trim_end_matches('/')
+        api_upstream_base_url_from_env().trim_end_matches('/')
     );
     let response = proxy_hosted_json(reqwest::Client::new().get(url).query(&args)).await;
     attach_mcp_discovery_links(response, "opportunity_list")
@@ -7766,7 +8157,7 @@ async fn create_discovery_subscription(
 ) -> Json<serde_json::Value> {
     let url = format!(
         "{}/v1/discovery/subscriptions",
-        public_base_url_from_env().trim_end_matches('/')
+        api_upstream_base_url_from_env().trim_end_matches('/')
     );
     proxy_hosted_json(reqwest::Client::new().post(url).json(&args)).await
 }
@@ -7776,7 +8167,7 @@ async fn get_discovery_subscription(
 ) -> Json<serde_json::Value> {
     let url = format!(
         "{}/v1/discovery/subscriptions/{}",
-        public_base_url_from_env().trim_end_matches('/'),
+        api_upstream_base_url_from_env().trim_end_matches('/'),
         args.subscription_id
     );
     proxy_hosted_json(
@@ -7792,7 +8183,7 @@ async fn delete_discovery_subscription(
 ) -> Json<serde_json::Value> {
     let url = format!(
         "{}/v1/discovery/subscriptions/{}",
-        public_base_url_from_env().trim_end_matches('/'),
+        api_upstream_base_url_from_env().trim_end_matches('/'),
         args.subscription_id
     );
     proxy_hosted_json(
@@ -7808,7 +8199,7 @@ async fn get_opportunity_conversion_funnel(
 ) -> Json<serde_json::Value> {
     let url = format!(
         "{}/v1/opportunities/conversion-funnel",
-        public_base_url_from_env().trim_end_matches('/')
+        api_upstream_base_url_from_env().trim_end_matches('/')
     );
     proxy_hosted_json(reqwest::Client::new().get(url).query(&args)).await
 }
@@ -7816,28 +8207,9 @@ async fn get_opportunity_conversion_funnel(
 async fn get_site_analytics(Json(args): Json<SiteAnalyticsArgs>) -> Json<serde_json::Value> {
     let url = format!(
         "{}/v1/analytics/site",
-        public_base_url_from_env().trim_end_matches('/')
+        api_upstream_base_url_from_env().trim_end_matches('/')
     );
     proxy_hosted_json(reqwest::Client::new().get(url).query(&args)).await
-}
-
-async fn analyze_bounty_fit(
-    State(state): State<SharedState>,
-    Json(args): Json<AnalyzeBountyFitArgs>,
-) -> Json<serde_json::Value> {
-    let url = format!(
-        "{}/v1/base/autonomous-bounties/{}/analysis",
-        public_base_url_from_env().trim_end_matches('/'),
-        args.bounty_contract
-    );
-    let mut request = reqwest::Client::new().get(url).query(&[(
-        "network",
-        args.network.unwrap_or_else(|| "base-mainnet".to_string()),
-    )]);
-    if let Some(token) = state.operator_api_token.as_deref() {
-        request = request.header(OPERATOR_TOKEN_HEADER, token);
-    }
-    proxy_hosted_json(request).await
 }
 
 async fn list_autonomous_verification_jobs(
@@ -7968,6 +8340,10 @@ fn live_money_readiness_config(state: &SharedState, network: &str) -> LiveMoneyR
                 .ok()
                 .and_then(non_empty_secret)
                 .is_some(),
+            stripe_webhook_livemode: env::var("STRIPE_WEBHOOK_LIVEMODE")
+                .ok()
+                .and_then(|value| service_runtime::parse_stripe_webhook_livemode(&value)),
+            durable_store_configured: state.store.is_some(),
             allow_unsigned_stripe_webhooks: env::var("ALLOW_UNSIGNED_STRIPE_WEBHOOKS")
                 .ok()
                 .is_some_and(|value| value.eq_ignore_ascii_case("true") || value == "1"),
@@ -7980,13 +8356,23 @@ fn live_money_readiness_config(state: &SharedState, network: &str) -> LiveMoneyR
 
 async fn list_risk_events(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(filter): Json<RiskEventFilter>,
 ) -> Json<serde_json::Value> {
+    if let Err(error) = require_operator(&state, &headers) {
+        return error;
+    }
     let network = state.network.lock().expect("state poisoned");
     mcp_json(network.list_risk_events(filter))
 }
 
-async fn list_risk_reviews(State(state): State<SharedState>) -> Json<serde_json::Value> {
+async fn list_risk_reviews(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Json<serde_json::Value> {
+    if let Err(error) = require_operator(&state, &headers) {
+        return error;
+    }
     let network = state.network.lock().expect("state poisoned");
     mcp_json(network.list_risk_reviews())
 }
@@ -8039,8 +8425,109 @@ async fn record_eval_run(state: &SharedState, run: EvalRun) -> Result<(), String
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
+    include!("diagnostics_tests.rs");
     include!("postgres_status_tests.rs");
+    mod bounty_discovery_regressions;
     use super::*;
+
+    #[tokio::test]
+    async fn retired_generation_adapters_return_permanent_error() {
+        let (status, Json(value)) = retired_generation_http().await;
+        assert_eq!(status, StatusCode::GONE);
+        assert_eq!(value["http_status"], 410);
+        assert_eq!(value["error"], "hosted_generation_removed");
+        assert!(value["next_action"]
+            .as_str()
+            .unwrap()
+            .contains("your own AI"));
+        for removed in [
+            "draft_bounty_with_cloud_agent",
+            "compile_objective_with_cloud_agent",
+            "analyze_bounty_fit",
+        ] {
+            assert!(!tools()
+                .await
+                .0
+                .iter()
+                .any(|descriptor| descriptor.name == removed));
+        }
+    }
+
+    #[test]
+    fn routed_child_preparation_errors_preserve_shared_action_codes() {
+        for error in [
+            chain_base::ChainBaseError::RoutedChildProfileUnavailable,
+            chain_base::ChainBaseError::RoutedChildProfileMismatch,
+            chain_base::ChainBaseError::ChildFundingDeadlineRequired,
+            chain_base::ChainBaseError::ChildFundingDeadlineExpired,
+        ] {
+            let (code, next_action) = error.standing_meta_child_preparation_problem();
+            let Json(body) = standing_meta_child_preparation_error(error);
+            assert_eq!(body["error_code"], code);
+            assert_eq!(body["next_action"], next_action);
+            assert_eq!(body["retryable"], false);
+            assert!(body["error"]
+                .as_str()
+                .is_some_and(|message| !message.is_empty()));
+        }
+    }
+
+    #[test]
+    fn authorized_paid_status_keeps_the_mcp_contract_and_authorization_errors() {
+        let mut network = BountyNetwork::default();
+        let mut bounty = domain::Bounty::new(
+            "Private owned record",
+            "patch-with-tests",
+            domain::Money::new(100, "usdc").unwrap(),
+            domain::FundingMode::Simulated,
+            PrivacyLevel::Private,
+        );
+        bounty.status = BountyStatus::Paid;
+        let id = bounty.id;
+        network.bounties.insert(id, bounty);
+        let response = authorized_paid_status_response(
+            PaidStatusArgs {
+                bounty_id: Some(id),
+                agent_id: None,
+            },
+            mcp_json(network.status(id).unwrap()).0,
+        )
+        .0;
+        assert_eq!(response["content"][0]["json"]["scope"], "bounty");
+        assert_eq!(response["content"][0]["json"]["bounty_status"], "Paid");
+        let agent = network.register_agent(RegisterAgentRequest {
+            handle: "owned-agent".into(),
+            payout_wallet: None,
+        });
+        let mut source =
+            serde_json::to_value(network.agent_payout_status(agent.id).unwrap()).unwrap();
+        source["post_value_loop"] = Value::Null;
+        let response = authorized_paid_status_response(
+            PaidStatusArgs {
+                bounty_id: None,
+                agent_id: Some(agent.id),
+            },
+            mcp_json(source).0,
+        )
+        .0;
+        assert_eq!(response["content"][0]["json"]["scope"], "agent");
+        assert_eq!(
+            response["content"][0]["json"]["agent_id"],
+            agent.id.to_string()
+        );
+        let error = mcp_error("hosted API returned 404 Not Found").0;
+        assert_eq!(
+            authorized_paid_status_response(
+                PaidStatusArgs {
+                    bounty_id: Some(id),
+                    agent_id: None
+                },
+                error.clone()
+            )
+            .0,
+            error
+        );
+    }
 
     #[test]
     fn health_identifies_protocol_and_deployed_revision() {
@@ -8253,8 +8740,6 @@ mod tests {
     }
 
     #[tokio::test]
-    // ENV_LOCK is held across awaits on purpose; this test's runtime has no other task to block.
-    #[allow(clippy::await_holding_lock)]
     async fn v2_quote_tool_prices_the_fee_only_on_a_configured_v2_factory() {
         let prefix = "BASE_SEPOLIA_BOUNTY_V2";
         let names = [
@@ -8270,10 +8755,8 @@ mod tests {
         };
         // The process environment is shared by parallel tests: serialize, and restore the prior
         // values even if an assertion fails.
-        static ENV_LOCK: Mutex<()> = Mutex::new(());
-        let _lock = ENV_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+        let _lock = ENV_LOCK.lock().await;
         struct RestoreEnv(Vec<(String, Option<String>)>);
         impl Drop for RestoreEnv {
             fn drop(&mut self) {
@@ -8336,6 +8819,14 @@ mod tests {
     #[tokio::test]
     async fn tool_descriptors_publish_machine_readable_input_schemas() {
         let descriptors = tools().await.0;
+        if let Ok(path) = std::env::var("AGENT_BOUNTIES_MCP_REGISTRY_EXPORT_PATH") {
+            let registry = json!({
+                "schema_version": "agent-bounties/mcp-tool-registry-v1",
+                "normalized_descriptors_sha256": app::hash_artifact(&serde_json::to_string(&descriptors).unwrap()),
+                "tools": descriptors.iter().map(|descriptor| descriptor.name).collect::<Vec<_>>(),
+            });
+            std::fs::write(path, serde_json::to_string_pretty(&registry).unwrap()).unwrap();
+        }
         let registry: Value = serde_json::from_str(include_str!("../fixtures/tool-registry.json"))
             .expect("tool registry fixture is valid JSON");
         assert_eq!(
@@ -8350,7 +8841,7 @@ mod tests {
             .as_array()
             .expect("tool registry contains tools");
 
-        assert_eq!(descriptors.len(), 124);
+        assert_eq!(descriptors.len(), 150);
         assert_eq!(
             descriptors
                 .iter()
@@ -8408,16 +8899,15 @@ mod tests {
             .iter()
             .any(|value| value == "Private"));
 
-        let objective_compiler = descriptors
-            .iter()
-            .find(|descriptor| descriptor.name == "compile_objective_with_cloud_agent")
-            .expect("objective compiler descriptor exists");
-        assert_eq!(
-            objective_compiler.input_schema["properties"]["max_tasks"]["maximum"],
-            8
-        );
-        assert!(objective_compiler.description.contains("GPT-5.6"));
-        assert!(objective_compiler.description.contains("advisory"));
+        for removed in [
+            "draft_bounty_with_cloud_agent",
+            "compile_objective_with_cloud_agent",
+            "analyze_bounty_fit",
+        ] {
+            assert!(!descriptors
+                .iter()
+                .any(|descriptor| descriptor.name == removed));
+        }
 
         let operator_tools = [
             "execute_stripe_checkout_top_up",
@@ -8427,6 +8917,8 @@ mod tests {
             "reconcile_stripe_transfer_event",
             "reconcile_stripe_checkout_webhook",
             "broadcast_base_signed_transaction",
+            "list_risk_events",
+            "list_risk_reviews",
             "approve_risk_bounty",
             "approve_risk_payout",
             "reject_risk_event",
@@ -8447,11 +8939,33 @@ mod tests {
         assert_eq!(
             descriptors
                 .iter()
-                .filter(|descriptor| descriptor.authorization.is_some())
+                .filter(|descriptor| descriptor
+                    .authorization
+                    .as_ref()
+                    .is_some_and(|auth| auth.kind == "operator_api_token"))
                 .map(|descriptor| descriptor.name)
                 .collect::<Vec<_>>(),
             operator_tools
         );
+        for descriptor in descriptors
+            .iter()
+            .filter(|d| verification::NAMES.contains(&d.name))
+        {
+            if matches!(
+                descriptor.name,
+                "find_verification_checks" | "validate_verification_plan"
+            ) {
+                assert!(descriptor.authorization.is_none());
+            } else {
+                let auth = descriptor
+                    .authorization
+                    .as_ref()
+                    .expect("verification requires caller authority");
+                assert_eq!(auth.kind, "verified_principal");
+                assert_eq!(auth.header, "Authorization");
+                assert!(auth.bearer);
+            }
+        }
 
         let stripe_checkout = descriptors
             .iter()
@@ -8741,7 +9255,6 @@ mod tests {
             "delete_discovery_subscription",
             "get_opportunity_conversion_funnel",
             "get_site_analytics",
-            "analyze_bounty_fit",
         ] {
             assert!(
                 descriptors
@@ -9041,6 +9554,7 @@ mod tests {
 
         let paid_status = get_paid_status(
             State(state),
+            HeaderMap::new(),
             Json(PaidStatusArgs {
                 bounty_id: None,
                 agent_id: Some(solver.id),
@@ -9173,14 +9687,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stripe_unsigned_operator_reconciliation_is_disabled_for_live_execution() {
+        let mut state = test_state_with_operator_token("local-test-operator");
+        Arc::get_mut(&mut state)
+            .unwrap()
+            .stripe_live_execution_enabled = true;
+        let event = stripe_checkout_event("evt_mcp_live", "cs_mcp_live", Uuid::new_v4());
+        let response = reconcile_stripe_checkout_webhook(
+            State(state.clone()),
+            test_operator_headers(),
+            Json(event.clone()),
+        )
+        .await
+        .0;
+        assert!(response["error"]
+            .as_str()
+            .unwrap()
+            .contains("ephemeral sandbox"));
+        let response = reconcile_stripe_transfer_event(
+            State(state.clone()),
+            test_operator_headers(),
+            Json(event),
+        )
+        .await
+        .0;
+        assert!(response["error"]
+            .as_str()
+            .unwrap()
+            .contains("ephemeral sandbox"));
+        let network = state.network.lock().unwrap();
+        assert!(network.payment_events.is_empty());
+        assert!(network.ledger.entries().is_empty());
+    }
+
+    #[tokio::test]
     async fn stripe_checkout_webhook_replay_preserves_applied_event() {
-        let state = test_state();
+        let state = test_state_with_operator_token("local-test-operator");
         let organization_id = Uuid::new_v4();
         let event = stripe_checkout_event("evt_mcp_paid", "cs_mcp_paid", organization_id);
 
         let first = reconcile_stripe_checkout_webhook(
             State(state.clone()),
-            HeaderMap::new(),
+            test_operator_headers(),
             Json(event.clone()),
         )
         .await
@@ -9194,10 +9742,13 @@ mod tests {
             "Applied"
         );
 
-        let replay =
-            reconcile_stripe_checkout_webhook(State(state.clone()), HeaderMap::new(), Json(event))
-                .await
-                .0;
+        let replay = reconcile_stripe_checkout_webhook(
+            State(state.clone()),
+            test_operator_headers(),
+            Json(event),
+        )
+        .await
+        .0;
         let replay_body = &replay["content"][0]["json"];
 
         assert_eq!(replay_body["duplicate"], true);
@@ -9217,8 +9768,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn risk_read_tools_require_explicit_operator_authority() {
+        let mut unrelated = HeaderMap::new();
+        unrelated.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer abws_unrelated"),
+        );
+        for (state, headers) in [
+            (test_state(), HeaderMap::new()),
+            (test_state(), test_operator_headers()),
+            (
+                test_state_with_operator_token("local-test-operator"),
+                HeaderMap::new(),
+            ),
+            (
+                test_state_with_operator_token("local-test-operator"),
+                unrelated,
+            ),
+        ] {
+            let events = list_risk_events(
+                State(state.clone()),
+                headers.clone(),
+                Json(RiskEventFilter::default()),
+            )
+            .await
+            .0;
+            let reviews = list_risk_reviews(State(state), headers).await.0;
+            assert_eq!(events["error"], "operator authorization required");
+            assert_eq!(reviews["error"], "operator authorization required");
+            assert!(events.get("content").is_none() && reviews.get("content").is_none());
+        }
+        let state = test_state_with_operator_token("local-test-operator");
+        assert!(list_risk_events(
+            State(state.clone()),
+            test_operator_headers(),
+            Json(RiskEventFilter::default())
+        )
+        .await
+        .0
+        .get("content")
+        .is_some());
+        assert!(list_risk_reviews(State(state), test_operator_headers())
+            .await
+            .0
+            .get("content")
+            .is_some());
+    }
+
+    #[tokio::test]
     async fn risk_events_tool_lists_review_queue() {
-        let state = test_state();
+        let state = test_state_with_operator_token("local-test-operator");
         {
             let mut network = state.network.lock().expect("state poisoned");
             let result = network.post_funded_bounty(PostBountyRequest {
@@ -9234,6 +9833,7 @@ mod tests {
 
         let response = list_risk_events(
             State(state),
+            test_operator_headers(),
             Json(RiskEventFilter {
                 action: Some(domain::RiskAction::NeedsReview),
                 surface: Some(domain::RiskSurface::Bounty),
@@ -9255,7 +9855,7 @@ mod tests {
 
     #[tokio::test]
     async fn risk_review_tools_approve_and_list_review_records() {
-        let state = test_state();
+        let state = test_state_with_operator_token("local-test-operator");
         let risk_event_id = {
             let mut network = state.network.lock().expect("state poisoned");
             let result = network.post_funded_bounty(PostBountyRequest {
@@ -9272,7 +9872,7 @@ mod tests {
 
         let approval = approve_risk_bounty(
             State(state.clone()),
-            HeaderMap::new(),
+            test_operator_headers(),
             Json(ApproveRiskBountyRequest {
                 risk_event_id,
                 title: "Fix deterministic payout reconciliation failure".to_string(),
@@ -9296,7 +9896,9 @@ mod tests {
             approval["content"][0]["json"]["review"]["outcome"],
             "Approved"
         );
-        let reviews = list_risk_reviews(State(state)).await.0;
+        let reviews = list_risk_reviews(State(state), test_operator_headers())
+            .await
+            .0;
         let review_items = reviews["content"][0]["json"].as_array().unwrap();
         assert_eq!(review_items.len(), 1);
         assert_eq!(review_items[0]["outcome"], "Approved");
@@ -9304,7 +9906,7 @@ mod tests {
 
     #[tokio::test]
     async fn reject_risk_event_tool_records_rejection_without_bounty() {
-        let state = test_state();
+        let state = test_state_with_operator_token("local-test-operator");
         let risk_event_id = {
             let mut network = state.network.lock().expect("state poisoned");
             let result = network.post_funded_bounty(PostBountyRequest {
@@ -9321,7 +9923,7 @@ mod tests {
 
         let response = reject_risk_event(
             State(state.clone()),
-            HeaderMap::new(),
+            test_operator_headers(),
             Json(RejectRiskEventRequest {
                 risk_event_id,
                 operator_id: "operator-1".to_string(),
@@ -9431,8 +10033,85 @@ mod tests {
         assert!(body.get("payment_method_types").is_none());
     }
 
+    fn test_operator_headers() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            OPERATOR_TOKEN_HEADER,
+            "local-test-operator".parse().unwrap(),
+        );
+        headers
+    }
+
     fn test_state() -> SharedState {
         test_state_with_network(BountyNetwork::default())
+    }
+
+    #[tokio::test]
+    async fn earning_discovery_uses_current_api_boundary_without_forwarded_authority() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let checked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed = checked.clone();
+        let app = Router::new().route(
+            "/v1/base/autonomous-bounties/feed",
+            axum::routing::get(
+                move |headers: HeaderMap,
+                      axum::extract::Query(query): axum::extract::Query<
+                    std::collections::HashMap<String, String>,
+                >| {
+                    let observed = observed.clone();
+                    async move {
+                        assert!(headers.get("authorization").is_none());
+                        assert!(headers.get("cookie").is_none());
+                        assert_eq!(
+                            query.get("claimable_only").map(String::as_str),
+                            Some("true")
+                        );
+                        assert_eq!(
+                            query.get("network").map(String::as_str),
+                            Some("base-mainnet")
+                        );
+                        observed.store(true, std::sync::atomic::Ordering::Relaxed);
+                        (
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            Json(json!({"error":"reader_unavailable"})),
+                        )
+                    }
+                },
+            ),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let response =
+            load_current_autonomous_discovery(&format!("http://{address}"), "base-mainnet").await;
+        assert!(checked.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(response.0.get("error").is_some());
+        assert!(response.0.get("content").is_none());
+        server.abort();
+    }
+
+    #[test]
+    fn opportunity_http_adapter_preserves_protocol_coverage_and_unknown_counts() {
+        let payload = json!({
+            "coverage": "partial", "coverage_scope": "inventory_page", "degraded": true,
+            "source_statuses": [{"source_type":"canonical_base", "available":false, "coverage":"partial", "protocol_statuses":[
+                {"protocol":"autonomous-v1", "coverage":"complete", "item_count":1},
+                {"protocol":"open-competition-v2-beta3", "coverage":"unavailable", "item_count":null}]}],
+            "items":[{"opportunity_id":"canonical:base-mainnet:0x123", "public_url":"https://api.example/public/work"}]
+        });
+        let response = attach_mcp_discovery_links(mcp_json(payload.clone()), "opportunity_list");
+        let value = &response.0["content"][0]["json"];
+        assert_eq!(value["coverage"], payload["coverage"]);
+        assert_eq!(value["coverage_scope"], payload["coverage_scope"]);
+        assert_eq!(value["source_statuses"], payload["source_statuses"]);
+        assert_eq!(value["items"].as_array().unwrap().len(), 1);
+        assert!(value["items"][0]["discovery_links"].is_object());
+        let args: OpportunityListArgs =
+            serde_json::from_value(json!({"opportunity_id":"canonical:base-mainnet:0x123"}))
+                .unwrap();
+        assert_eq!(
+            serde_json::to_value(args).unwrap()["opportunity_id"],
+            "canonical:base-mainnet:0x123"
+        );
     }
 
     #[test]
@@ -9519,6 +10198,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             stripe_secret_key: None,
+            stripe_reconciliation_gate: tokio::sync::Mutex::new(()),
             stripe_live_execution_enabled: false,
             stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
             stripe_payment_method_configuration: None,
@@ -9542,6 +10222,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             stripe_secret_key: None,
+            stripe_reconciliation_gate: tokio::sync::Mutex::new(()),
             stripe_live_execution_enabled: false,
             stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
             stripe_payment_method_configuration: Some(payment_method_configuration.to_string()),
@@ -9563,6 +10244,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             stripe_secret_key: None,
+            stripe_reconciliation_gate: tokio::sync::Mutex::new(()),
             stripe_live_execution_enabled: false,
             stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
             stripe_payment_method_configuration: None,
@@ -9584,6 +10266,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             stripe_secret_key: None,
+            stripe_reconciliation_gate: tokio::sync::Mutex::new(()),
             stripe_live_execution_enabled: false,
             stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
             stripe_payment_method_configuration: None,
@@ -9616,7 +10299,13 @@ mod tests {
                 "amount_total": 5_000,
                 "currency": "usd",
                 "payment_status": "paid",
-                "payment_intent": "pi_mcp_paid"
+                "payment_intent": "pi_mcp_paid",
+                "mode": "payment",
+                "metadata": {
+                    "organization_id": organization_id.to_string(),
+                    "rail": "stripe_fiat_ledger",
+                    "purpose": "platform_balance_top_up"
+                }
             }),
         }
     }
@@ -9782,7 +10471,12 @@ async fn load_objective_canonical_evidence(
             .map_err(|error| error.to_string())?;
         let mut feed = build_autonomous_bounty_feed(events, terms.clone(), false)
             .map_err(|error| error.to_string())?;
-        service_runtime::verifier_readiness::apply(&mut feed);
+        service_runtime::verifier_checkpoints::apply_current(
+            state.store.as_ref(),
+            &network,
+            &mut feed,
+        )
+        .await;
         state.recovery_reservations.apply(&mut feed, false);
         state
             .recovery_reservations
@@ -9794,21 +10488,6 @@ async fn load_objective_canonical_evidence(
             .append(&mut network_evidence.settlements);
     }
     Ok(evidence)
-}
-
-async fn persist_ledger_entries(
-    store: &PostgresStore,
-    entries: &[ledger::LedgerEntry],
-) -> Result<(), String> {
-    service_runtime::persist_ledger_entries(store, entries)
-        .await
-        .map_err(|error| error.to_string())
-}
-
-async fn persist_all_risk_events(state: &SharedState) -> Result<(), String> {
-    service_runtime::persist_all_risk_events(state.store.as_ref(), &state.network)
-        .await
-        .map_err(|error| error.to_string())
 }
 
 fn mcp_json(value: impl Serialize) -> Json<serde_json::Value> {
@@ -9834,4 +10513,37 @@ fn _register_agent(network: &mut BountyNetwork, handle: &str) -> domain::Agent {
         handle: handle.to_string(),
         payout_wallet: None,
     })
+}
+
+// Per-service scoped checkpoint authentication does not inherit operator/wallet authority.
+async fn verifier_checkpoint(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(request): Json<service_runtime::verifier_checkpoints::CheckpointRequest>,
+) -> axum::response::Response {
+    let token = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+    let result =
+        service_runtime::verifier_checkpoints::record(state.store.as_ref(), token, &request).await;
+    let (status, body) = match result {
+        Ok(()) => (
+            StatusCode::OK,
+            serde_json::json!({"accepted":true,"release_id":request.release.release_id,"component":request.component}),
+        ),
+        Err(code) => (
+            match code {
+                "verification_checkpoint_unauthorized" => StatusCode::UNAUTHORIZED,
+                "verification_checkpoint_replayed" => StatusCode::CONFLICT,
+                "verification_checkpoint_stale"
+                | "verification_release_mismatch"
+                | "verification_release_invalid" => StatusCode::UNPROCESSABLE_ENTITY,
+                _ => StatusCode::SERVICE_UNAVAILABLE,
+            },
+            serde_json::json!({"error":code,"accepted":false}),
+        ),
+    };
+    (status, [("Cache-Control", "no-store, private")], Json(body)).into_response()
 }

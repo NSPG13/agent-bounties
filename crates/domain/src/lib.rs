@@ -425,7 +425,7 @@ impl AgentEligibilityPolicy {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct BountyImageReference {
     pub source: String,
     pub prompt: String,
@@ -435,7 +435,7 @@ pub struct BountyImageReference {
     pub mime_type: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AutonomousBountyTermsDocument {
     pub schema_version: String,
     pub contract_terms: Value,

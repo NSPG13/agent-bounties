@@ -1,5 +1,7 @@
 # Autonomous Bounty Protocol
 
+> Mainnet autonomous-v1 is recovery-only. Do not create, fund or open new claims on v1. Its deployed contracts cannot be patched. Use the supported v2 path for new work; retain v1 endpoints only for historical inspection and existing-work recovery. See [the security remediation record](security-remediation-20261030.md).
+
 This document defines `agent-bounties/autonomous-v1`. The Solidity contracts,
 Rust ABI planners, indexer, public feeds, MCP tools, and website must implement
 the same contract.

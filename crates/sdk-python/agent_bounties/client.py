@@ -1,7 +1,7 @@
 import hashlib
 import json as json_module
-import re
 import os
+import re
 import secrets
 import time
 import uuid
@@ -295,6 +295,122 @@ def _x402_response_body(response: httpx.Response) -> dict:
 
 
 class AgentBountiesClient:
+    def issue_managed_service_quote(self, quote: dict):
+        """Merchant operator only. The API enforces its configured price/merchant limits."""
+        return self._request("POST", "/v1/managed-service/quotes", quote)
+
+    def issue_managed_bounty_quote(self, document: dict, solver_reward_micro_usdc: int):
+        """Card quote for a posting draft, bound to one exact autonomous-v2 bounty.
+
+        Requires the buyer's website account session. The server owns terms, fee and funding call.
+        """
+        if isinstance(solver_reward_micro_usdc, bool) or not isinstance(solver_reward_micro_usdc, int) \
+                or solver_reward_micro_usdc <= 0:
+            raise ValueError("solver_reward_micro_usdc must be a positive integer")
+        return self._request("POST", "/v1/managed-service/bounty-quotes",
+                             {"document": document, "solver_reward_micro_usdc": solver_reward_micro_usdc})
+
+    def read_managed_service_quote(self, quote_id: str):
+        """Requires the buyer's verified website account session, not a wallet token."""
+        return self._request("GET", f"/v1/managed-service/quotes/{uuid.UUID(quote_id)}")
+
+    def accept_managed_service_quote(self, quote_id: str, quote_digest: str, idempotency_key: str):
+        return self._request("POST", f"/v1/managed-service/quotes/{uuid.UUID(quote_id)}/accept",
+                             {"quote_digest": quote_digest, "idempotency_key": idempotency_key})
+
+    def get_managed_service_order(self, order_id: str):
+        return self._request("GET", f"/v1/managed-service/orders/{uuid.UUID(order_id)}")
+
+    def open_managed_service_checkout(self, order_id: str):
+        """Session creation/readback is not payment or bounty-funding evidence."""
+        return self._request("POST", f"/v1/managed-service/orders/{uuid.UUID(order_id)}/checkout", {})
+
+    def request_managed_service_refund(self, order_id: str):
+        """Explicit full pre-funding refund request, not proof of customer bank credit."""
+        return self._request("POST", f"/v1/managed-service/orders/{uuid.UUID(order_id)}/refund", {})
+
+    def get_managed_bounty_review(self, order_id: str):
+        """A funded card bounty's submission awaiting review, its public evidence and verdicts."""
+        return self._request("GET", f"/v1/managed-service/orders/{uuid.UUID(order_id)}/review")
+
+    def record_managed_bounty_review(self, order_id: str, review_round: int, submission_hash: str,
+                                     evidence_hash: str, passed: bool, reason: str = ""):
+        """Buyer's verdict on the exact canonical submission, before its decide_by time.
+
+        An acceptance is signed at once. A rejection waits 48 hours for the solver's appeal
+        before it is signed. A signed verdict is not settlement.
+        """
+        if isinstance(review_round, bool) or not isinstance(review_round, int) or review_round <= 0 \
+                or not isinstance(passed, bool) \
+                or not all(re.fullmatch(r"0x[0-9a-f]{64}", value or "")
+                           for value in (submission_hash, evidence_hash)):
+            raise ValueError("verdict must name a positive round, lowercase hashes and a decision")
+        if reason != reason.strip() or len(reason) > 2000 or (not passed and len(reason) < 20):
+            raise ValueError("a rejection needs a trimmed reason of 20 to 2000 characters")
+        return self._request("POST", f"/v1/managed-service/orders/{uuid.UUID(order_id)}/review",
+                             {"round": review_round, "submission_hash": submission_hash,
+                              "evidence_hash": evidence_hash, "passed": passed, "reason": reason})
+
+    @staticmethod
+    def _card_bounty_path(network: str, bounty_contract: str) -> str:
+        if network not in ("base-mainnet", "base-sepolia") \
+                or not re.fullmatch(r"0x[0-9a-fA-F]{40}", bounty_contract or ""):
+            raise ValueError("card bounty must name base-mainnet or base-sepolia and a contract address")
+        return f"/v1/managed-service/bounties/{network}/{bounty_contract.lower()}"
+
+    @staticmethod
+    def _public_reason(reason: str) -> str:
+        if not isinstance(reason, str) or reason != reason.strip() or not 20 <= len(reason) <= 2000:
+            raise ValueError("reason must be a trimmed public reason of 20 to 2000 characters")
+        return reason
+
+    def get_card_bounty_review(self, network: str, bounty_contract: str):
+        """Public review state of a card bounty, with appeal_typed_data while a rejection can be appealed."""
+        return self._request("GET", f"{self._card_bounty_path(network, bounty_contract)}/review")
+
+    def appeal_card_bounty_review(self, network: str, bounty_contract: str, review_round: int,
+                                  solver: str, reason: str, signature: str):
+        """The rejected solver's appeal, signed by its wallet over appeal_typed_data with this reason.
+
+        It keeps the rejection unsigned until Agentizable rules. A reversal pays the solver and
+        the customer's review deposit.
+        """
+        if isinstance(review_round, bool) or not isinstance(review_round, int) or review_round <= 0 \
+                or not re.fullmatch(r"0x[0-9a-fA-F]{40}", solver or "") \
+                or not re.fullmatch(r"0x(?:[0-9a-fA-F]{2})+", signature or ""):
+            raise ValueError("appeal must name a positive round, the solver address and its signature")
+        return self._request("POST", f"{self._card_bounty_path(network, bounty_contract)}/appeal",
+                             {"round": review_round, "solver": solver.lower(),
+                              "reason": self._public_reason(reason), "signature": signature})
+
+    def list_card_bounty_appeals(self):
+        """Operator only: appealed rejections awaiting a ruling, earliest deadline first."""
+        return self._request("GET", "/v1/managed-service/appeals")
+
+    def rule_card_bounty_appeal(self, network: str, bounty_contract: str, review_round: int,
+                                reversed: bool, reason: str):
+        """Operator only: uphold or reverse an appealed rejection; the review key signs the ruling."""
+        if isinstance(review_round, bool) or not isinstance(review_round, int) or review_round <= 0 \
+                or not isinstance(reversed, bool):
+            raise ValueError("ruling must name a positive round and whether it reverses the rejection")
+        path = self._card_bounty_path(network, bounty_contract).replace("/bounties/", "/appeals/")
+        return self._request("POST", f"{path}/{review_round}/ruling",
+                             {"reversed": reversed, "reason": self._public_reason(reason)})
+
+    def list_card_bounty_deposit_payouts(self):
+        """Operator only: review deposits owed to solvers after reversals, with amount and token."""
+        return self._request("GET", "/v1/managed-service/deposit-payouts")
+
+    def record_card_bounty_deposit_payout(self, network: str, bounty_contract: str, tx_hash: str):
+        """Operator only: record the USDC transfer that paid a forfeited deposit.
+
+        Accepted only after a successful receipt with that transfer to the solver and 3 confirmations.
+        """
+        if not re.fullmatch(r"0x[0-9a-fA-F]{64}", tx_hash or ""):
+            raise ValueError("tx_hash must be a 0x-prefixed 32-byte transaction hash")
+        path = self._card_bounty_path(network, bounty_contract).replace("/bounties/", "/deposit-payouts/")
+        return self._request("POST", path, {"tx_hash": tx_hash.lower()})
+
     def open_artifact_dispute(self, artifact_id: str, reason: str):
         return self._request("POST", f"/v1/verification/artifacts/{uuid.UUID(artifact_id)}/disputes", {"reason": reason})
 
@@ -384,6 +500,7 @@ class AgentBountiesClient:
         path: str,
         *,
         json: dict | None = None,
+        content: str | bytes | None = None,
         params: dict | None = None,
         headers: dict[str, str] | None = None,
     ) -> httpx.Response:
@@ -392,7 +509,7 @@ class AgentBountiesClient:
         return httpx.request(
             method,
             f"{self.base_url}{path}",
-            json=json,
+            **({"content": content} if content is not None else {"json": json}),
             params={key: value for key, value in params.items() if value is not None} if params else None,
             headers=request_headers or None,
             timeout=30,
@@ -436,9 +553,15 @@ class AgentBountiesClient:
             "body": _x402_response_body(response),
         }
 
-    def _stripe_event(self, path: str, event: dict, signature: str | None) -> dict:
-        headers = {"stripe-signature": signature} if signature else None
-        response = self._http("POST", path, json=event, headers=headers)
+    def _stripe_event(self, path: str, event: dict | str | bytes, signature: str | None) -> dict:
+        raw = isinstance(event, (str, bytes))
+        if signature and not raw:
+            raise ValueError("Signed Stripe events require the original raw body; do not parse or reserialize it.")
+        headers = {"content-type": "application/json"}
+        if signature:
+            headers["stripe-signature"] = signature
+        payload = {"content": event} if raw else {"json": event}
+        response = self._http("POST", path, headers=headers, **payload)
         response.raise_for_status()
         return response.json()
 
@@ -2201,7 +2324,7 @@ class AgentBountiesClient:
 
     def reconcile_stripe_checkout_webhook(
         self,
-        event: dict,
+        event: dict | str | bytes,
         stripe_signature: str | None = None,
     ):
         return self._stripe_event(
@@ -2210,7 +2333,7 @@ class AgentBountiesClient:
 
     def reconcile_stripe_transfer_event(
         self,
-        event: dict,
+        event: dict | str | bytes,
         stripe_signature: str | None = None,
     ):
         return self._stripe_event("/v1/stripe/transfer-events", event, stripe_signature)

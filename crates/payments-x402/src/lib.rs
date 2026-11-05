@@ -493,14 +493,47 @@ pub fn validate_funding_payload(
     required: &PaymentRequired,
     now_unix_seconds: u64,
 ) -> Result<ValidatedFundingAuthorization, X402Error> {
-    validate_funding_payload_as(payload, required, now_unix_seconds, Eip3009Kind::Transfer)
+    validate_funding_payload_inner(
+        payload,
+        required,
+        Some(now_unix_seconds),
+        Eip3009Kind::Transfer,
+    )
 }
 
-/// `validate_funding_payload` for a signature over the given EIP-3009 primary type.
+/// Verify the exact signature of an already persisted authorization for recovery.
+/// This does not authorize a new broadcast: callers must separately enforce the
+/// current broadcast window, as `validate_funding_payload` does, before sending.
+pub fn validate_persisted_funding_payload_signature(
+    payload: &PaymentPayload,
+    required: &PaymentRequired,
+) -> Result<ValidatedFundingAuthorization, X402Error> {
+    validate_persisted_funding_payload_signature_as(payload, required, Eip3009Kind::Transfer)
+}
+
+/// Validate a fresh authorization over the protocol's exact EIP-3009 type.
 pub fn validate_funding_payload_as(
     payload: &PaymentPayload,
     required: &PaymentRequired,
     now_unix_seconds: u64,
+    kind: Eip3009Kind,
+) -> Result<ValidatedFundingAuthorization, X402Error> {
+    validate_funding_payload_inner(payload, required, Some(now_unix_seconds), kind)
+}
+
+/// Signature-only recovery validation; this never authorizes a new broadcast.
+pub fn validate_persisted_funding_payload_signature_as(
+    payload: &PaymentPayload,
+    required: &PaymentRequired,
+    kind: Eip3009Kind,
+) -> Result<ValidatedFundingAuthorization, X402Error> {
+    validate_funding_payload_inner(payload, required, None, kind)
+}
+
+fn validate_funding_payload_inner(
+    payload: &PaymentPayload,
+    required: &PaymentRequired,
+    now_unix_seconds: Option<u64>,
     kind: Eip3009Kind,
 ) -> Result<ValidatedFundingAuthorization, X402Error> {
     if payload.x402_version != X402_VERSION {
@@ -556,15 +589,17 @@ pub fn validate_funding_payload_as(
         .valid_before
         .parse::<u64>()
         .map_err(|_| X402Error::AuthorizationExpired)?;
-    if valid_before < now_unix_seconds.saturating_add(MIN_SETTLEMENT_BUFFER_SECONDS) {
-        return Err(X402Error::AuthorizationExpired);
-    }
-    if valid_before
-        > now_unix_seconds
-            .saturating_add(expected.max_timeout_seconds)
-            .saturating_add(MAX_CLOCK_SKEW_SECONDS)
-    {
-        return Err(X402Error::AuthorizationTooLong);
+    if let Some(now) = now_unix_seconds {
+        if valid_before < now.saturating_add(MIN_SETTLEMENT_BUFFER_SECONDS) {
+            return Err(X402Error::AuthorizationExpired);
+        }
+        if valid_before
+            > now
+                .saturating_add(expected.max_timeout_seconds)
+                .saturating_add(MAX_CLOCK_SKEW_SECONDS)
+        {
+            return Err(X402Error::AuthorizationTooLong);
+        }
     }
     let nonce = normalize_word(&authorization_payload.authorization.nonce)
         .map_err(|_| X402Error::InvalidNonce)?;
