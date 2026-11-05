@@ -2,9 +2,11 @@ import copy
 import datetime as dt
 import io
 import json
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
-from deploy_public_runtime import PUBLIC,ReleaseError,prepare,prepare_release,reader_readiness,validate_deploy,public_ci_revision,verify_live_readers
+from deploy_public_runtime import PUBLIC,ReleaseError,prepare,prepare_release,reader_readiness,validate_deploy,public_ci_revision,verify_live_readers,main
 class Client:
     def __init__(self,services):self.services=copy.deepcopy(services);self.calls=[]
     def request(self,method,path,body=None):
@@ -35,6 +37,67 @@ class PublicReleaseTests(unittest.TestCase):
         client=Client({'srv-one':self.service,'srv-two':{**self.service,'id':'srv-two','ownerId':'wrong'}})
         with self.assertRaises(ReleaseError):prepare(client,manifest,True)
         self.assertTrue(all(call[0]=='GET' for call in client.calls))
+    def bootstrap_fixture(self):
+        manifest=copy.deepcopy(self.manifest)
+        reader={'id':'srv-reader','name':'reader','type':'background_worker','dockerfile':'./Dockerfile.posting-indexers'}
+        manifest['services'].append(reader)
+        manifest['autonomous_bootstrap_service_id']=reader['id']
+        service={**self.service,**reader,'serviceDetails':{'envSpecificDetails':{
+            'dockerfilePath':reader['dockerfile'],'dockerContext':'.','dockerCommand':''}}}
+        return manifest,Client({'srv-one':self.service,'srv-reader':service})
+    def test_bootstrap_only_migrates_and_selects_the_reviewed_reader(self):
+        manifest,client=self.bootstrap_fixture()
+        selected=prepare(client,manifest,True,bootstrap=True)
+        self.assertEqual([expected['id'] for expected,_ in selected],['srv-reader'])
+        self.assertEqual([call for call in client.calls if call[0]!='GET'],[
+            ('PATCH','services/srv-reader',{'repo':PUBLIC,'branch':'main','autoDeployTrigger':'off'})])
+        self.assertEqual(client.services['srv-one']['repo'],self.manifest['migration_from_repository'])
+    def test_bootstrap_cannot_hide_an_invalid_unselected_service(self):
+        manifest,client=self.bootstrap_fixture()
+        client.services['srv-one']['ownerId']='wrong'
+        with self.assertRaises(ReleaseError):prepare(client,manifest,True,bootstrap=True)
+        self.assertTrue(all(call[0]=='GET' for call in client.calls))
+    def test_bootstrap_requires_explicit_migration_and_exact_reader_inventory(self):
+        for mutation in ('implicit','unknown','web','duplicate'):
+            manifest,client=self.bootstrap_fixture()
+            if mutation=='unknown':manifest['autonomous_bootstrap_service_id']='srv-other'
+            elif mutation=='web':manifest['autonomous_bootstrap_service_id']='srv-one'
+            elif mutation=='duplicate':manifest['services'].append(manifest['services'][-1])
+            with self.subTest(mutation=mutation),self.assertRaises(ReleaseError):
+                prepare(client,manifest,mutation!='implicit',bootstrap=True)
+            self.assertEqual(client.calls,[])
+    def test_bootstrap_deploys_only_reader_and_does_not_claim_release_acceptance(self):
+        manifest,client=self.bootstrap_fixture()
+        revision='a'*40
+        metadata_request=client.request
+        deployments=[]
+        def request(method,path,body=None):
+            if '/deploys' not in path:return metadata_request(method,path,body)
+            deployments.append((method,path,body))
+            if method=='POST':return {'id':'dep-bootstrap','status':'build_in_progress'}
+            if path.endswith('limit=20'):return []
+            return {'id':'dep-bootstrap','status':'live','commit':{'id':revision}}
+        client.request=request
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);(root/'ops').mkdir()
+            (root/'ops/public-runtime-services.json').write_text(json.dumps(manifest))
+            evidence=root/'evidence'
+            arguments=['release','--revision',revision,'--migrate-source','--bootstrap-autonomous-readers','--evidence-dir',str(evidence)]
+            with patch('deploy_public_runtime.ROOT',root),patch('sys.argv',arguments), \
+                    patch('deploy_public_runtime.public_ci_revision') as ci, \
+                    patch('deploy_public_runtime.Render',return_value=client), \
+                    patch('deploy_public_runtime.reader_readiness',return_value={}), \
+                    patch('deploy_public_runtime.verify_live_readers',side_effect=AssertionError('not a full release')), \
+                    patch('deploy_public_runtime.time.sleep'):
+                main()
+            ci.assert_called_once_with(revision)
+            record=json.loads((evidence/'release.json').read_text())
+            self.assertEqual(record['status'],'bootstrap_deployed_pending_acceptance')
+            self.assertEqual(record['phase'],'autonomous-bootstrap')
+            self.assertEqual([row['id'] for row in record['services']],['srv-reader'])
+            self.assertNotIn('marketplace_readiness',record)
+            self.assertEqual([call for call in deployments if call[0]=='POST'],[
+                ('POST','services/srv-reader/deploys',{'commitId':revision,'clearCache':'do_not_clear'})])
     def test_only_exact_live_revision_is_success(self):
         self.assertTrue(validate_deploy({'status':'live','commit':{'id':'a'*40}},'a'*40))
         self.assertFalse(validate_deploy({'status':'build_in_progress'},'a'*40))

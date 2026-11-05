@@ -4,6 +4,7 @@
   "repository": "https://github.com/NSPG13/agent-bounties",
   "branch": "main",
   "migration_from_repository": "https://github.com/NSPG13/AB-PRIVATE",
+  "autonomous_bootstrap_service_id": "srv-d982ftu7r5hc73ar4st0",
   "marketplace_readiness": {
     "url": "https://api.agentizable.ai/readiness/marketplace",
     "protocols": [

@@ -67,13 +67,20 @@ def public_ci_revision(revision):
         if not eligible or max(eligible,key=lambda run:run['id']).get('conclusion')!='success':
             raise ReleaseError(f'latest public main {workflow} attempt must have succeeded for this exact revision')
 
-def prepare(client, manifest, migrate):
+def prepare(client, manifest, migrate, bootstrap=False):
     if manifest.get('repository')!=PUBLIC or manifest.get('branch')!='main':raise ReleaseError('invalid public source policy')
+    bootstrap_id=manifest.get('autonomous_bootstrap_service_id')
+    if bootstrap and (not migrate or sum(row.get('id')==bootstrap_id and row.get('type')=='background_worker'
+            and row.get('dockerfile')=='./Dockerfile.posting-indexers' for row in manifest['services'])!=1):
+        raise ReleaseError('bootstrap requires explicit migration and the reviewed autonomous reader service')
     services=[]
     for expected in manifest['services']:
         service=client.request('GET','services/'+expected['id'])
         validate_service(service,expected,manifest,migrate)
         services.append((expected,service))
+    # Validate the entire inventory before narrowing the mutation boundary.
+    # Bootstrap is not a full release: its checkpoint acceptance is independent.
+    if bootstrap:services=[pair for pair in services if pair[0]['id']==bootstrap_id]
     for expected,service in services:
         if service['repo'].removesuffix('.git')!=PUBLIC:
             client.request('PATCH','services/'+expected['id'],{'repo':PUBLIC,'branch':'main','autoDeployTrigger':'off'})
@@ -108,11 +115,11 @@ def reader_readiness(manifest, revision=None):
     except (urllib.error.URLError, TimeoutError, KeyError, TypeError, ValueError):
         raise ReleaseError('marketplace readiness is unavailable; investigate before restarting readers') from None
 
-def prepare_release(client, manifest, migrate):
+def prepare_release(client, manifest, migrate, bootstrap=False):
     # Deploying a worker also restarts it. Never use a routine source release to
     # bypass a reader's integrity halt or an unresolved lag/health incident.
     reader_readiness(manifest)
-    return prepare(client, manifest, migrate)
+    return prepare(client, manifest, migrate, bootstrap)
 
 def verify_live_readers(manifest, revision):
     deadline = time.monotonic() + 300
@@ -140,18 +147,22 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--revision',required=True)
     parser.add_argument('--migrate-source',action='store_true')
+    parser.add_argument('--bootstrap-autonomous-readers',action='store_true',
+        help='Deploy only the reviewed autonomous reader service; independent checkpoint acceptance is required before the full release')
     parser.add_argument('--evidence-dir',type=Path,required=True)
     args=parser.parse_args()
     public_ci_revision(args.revision)
     manifest=json.loads((ROOT/'ops/public-runtime-services.json').read_text())
     client=Render(os.environ.get('RENDER_API_KEY'))
     directory=args.evidence_dir;directory.mkdir(parents=True,exist_ok=False)
-    record={'revision':args.revision,'repository':PUBLIC,'workspace_id':manifest['workspace_id'],'status':'running','services':[]}
+    record={'revision':args.revision,'repository':PUBLIC,'workspace_id':manifest['workspace_id'],
+            'phase':'autonomous-bootstrap' if args.bootstrap_autonomous_readers else 'full-release',
+            'status':'running','services':[]}
     def save():
         temporary=directory/'release.tmp';temporary.write_text(json.dumps(record,indent=2)+'\n');temporary.replace(directory/'release.json')
     save()
     try:
-        services=prepare_release(client,manifest,args.migrate_source)
+        services=prepare_release(client,manifest,args.migrate_source,args.bootstrap_autonomous_readers)
         for expected,previous in services:
             deploys=client.request('GET',f"services/{expected['id']}/deploys?limit=20")
             live=[v.get('deploy',v) for v in deploys if v.get('deploy',v).get('status')=='live']
@@ -170,6 +181,10 @@ def main():
             if all_live:break
             if time.monotonic()>deadline:raise ReleaseError('deployment deadline exceeded')
             time.sleep(15)
+        if args.bootstrap_autonomous_readers:
+            record['status']='bootstrap_deployed_pending_acceptance';save()
+            print('Autonomous readers deployed; historical checkpoint acceptance and full public release are still required: '+args.revision)
+            return
         for _ in range(8):
             for row in record['services']:
                 if not row.get('health_url'):continue

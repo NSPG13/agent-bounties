@@ -11,6 +11,11 @@ on:
         required: false
         default: false
         type: boolean
+      bootstrap_autonomous_readers:
+        description: 'Stage only autonomous readers; requires migrate_source and independent checkpoint acceptance before the full release'
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: read
   actions: read
@@ -42,6 +47,7 @@ jobs:
         env:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
           MIGRATE_SOURCE: ${{ inputs.migrate_source || false }}
+          BOOTSTRAP_AUTONOMOUS_READERS: ${{ inputs.bootstrap_autonomous_readers || false }}
           TARGET_REVISION: ${{ github.event.workflow_run.head_sha || github.sha }}
           PRODUCTION_EXPECTED_REVISION: ${{ vars.PRODUCTION_EXPECTED_REVISION }}
         run: |
@@ -54,6 +60,15 @@ jobs:
           if [[ "${MIGRATE_SOURCE}" == 'true' ]]; then
             migration_args+=(--migrate-source)
           elif [[ "${MIGRATE_SOURCE}" != 'false' ]]; then
+            exit 1
+          fi
+          if [[ "${BOOTSTRAP_AUTONOMOUS_READERS}" == 'true' ]]; then
+            if [[ "${MIGRATE_SOURCE}" != 'true' ]]; then
+              echo 'Reader bootstrap requires the explicit source migration operation.' >&2
+              exit 1
+            fi
+            migration_args+=(--bootstrap-autonomous-readers)
+          elif [[ "${BOOTSTRAP_AUTONOMOUS_READERS}" != 'false' ]]; then
             exit 1
           fi
           python3 scripts/deploy_public_runtime.py --revision "$TARGET_REVISION" \
