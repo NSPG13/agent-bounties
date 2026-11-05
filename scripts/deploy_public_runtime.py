@@ -152,7 +152,9 @@ def verify_live_readers(manifest, revision):
             time.sleep(3 if successes else 15)
     return observation
 
-def validate_deploy(value, revision):
+def validate_deploy(value, revision, expected_id=None):
+    if expected_id is not None and value.get('id')!=expected_id:
+        raise ReleaseError('deployment response does not match the requested artifact ID')
     if value.get('status') in TERMINAL_FAILURE:raise ReleaseError('deploy failed: '+value['status'])
     if value.get('status')=='live':
         if value.get('commit',{}).get('id')!=revision:raise ReleaseError('live artifact has the wrong source revision')
@@ -212,7 +214,7 @@ def main():
             for row in record['services']:
                 if row.get('status')=='live':continue
                 deploy=client.request('GET',f"services/{row['id']}/deploys/{row['deploy_id']}")
-                done=validate_deploy(deploy,args.revision);row['status']=deploy['status'];all_live &= done
+                done=validate_deploy(deploy,args.revision,row['deploy_id']);row['status']=deploy['status'];all_live &= done
             save()
             if all_live:break
             if time.monotonic()>deadline:raise ReleaseError('deployment deadline exceeded')

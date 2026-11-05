@@ -148,7 +148,7 @@ class PublicReleaseTests(unittest.TestCase):
                     patch('deploy_public_runtime.reader_readiness',return_value={}),self.assertRaises(ReleaseError):
                 main()
             self.assertEqual(json.loads((evidence/'release.json').read_text())['status'],'failed')
-    def test_full_promotion_reuses_only_the_bound_accepted_reader(self):
+    def exercise_full_promotion(self, reader_poll_id):
         manifest,client=self.bootstrap_fixture();revision='a'*40
         client.services['srv-reader'].update(repo=PUBLIC,branch='main')
         metadata_request=client.request;deployments=[]
@@ -158,7 +158,8 @@ class PublicReleaseTests(unittest.TestCase):
             if method=='POST':return {'id':'dep-api','status':'build_in_progress'}
             if path.endswith('limit=20'):
                 return [{'deploy':{'id':'dep-accepted','status':'live','commit':{'id':revision}}}] if 'srv-reader' in path else []
-            return {'id':path.split('/')[-1],'status':'live','commit':{'id':revision}}
+            return {'id':reader_poll_id if 'srv-reader' in path else path.split('/')[-1],
+                    'status':'live','commit':{'id':revision}}
         client.request=request
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary);(root/'ops').mkdir()
@@ -172,13 +173,27 @@ class PublicReleaseTests(unittest.TestCase):
                     patch('deploy_public_runtime.reader_readiness',return_value={}), \
                     patch('deploy_public_runtime.verify_live_readers',return_value={'revision':revision}) as readiness, \
                     patch('deploy_public_runtime.time.sleep'):
-                main()
+                if reader_poll_id=='dep-accepted':main()
+                else:
+                    with self.assertRaises(ReleaseError):main()
             record=json.loads((evidence/'release.json').read_text())
+            if reader_poll_id!='dep-accepted':
+                self.assertEqual(record['status'],'failed')
+                readiness.assert_not_called()
+                return
             self.assertEqual(record['status'],'passed')
             self.assertEqual([call for call in deployments if call[0]=='POST'],[
                 ('POST','services/srv-one/deploys',{'commitId':revision,'clearCache':'do_not_clear'})])
             self.assertTrue(record['services'][1]['reused_accepted_deployment'])
             readiness.assert_called_once_with(manifest,revision)
+    def test_full_promotion_reuses_only_the_bound_accepted_reader(self):
+        for reader_poll_id in ('dep-accepted','dep-other',None):
+            with self.subTest(reader_poll_id=reader_poll_id):self.exercise_full_promotion(reader_poll_id)
+    def test_deployment_detail_response_must_identify_the_requested_artifact(self):
+        for status in ('live','build_in_progress'):
+            for response_id in ('dep-other',None):
+                with self.subTest(status=status,response_id=response_id),self.assertRaises(ReleaseError):
+                    validate_deploy({'id':response_id,'status':status,'commit':{'id':'a'*40}},'a'*40,'dep-requested')
     def test_only_exact_live_revision_is_success(self):
         self.assertTrue(validate_deploy({'status':'live','commit':{'id':'a'*40}},'a'*40))
         self.assertFalse(validate_deploy({'status':'build_in_progress'},'a'*40))
