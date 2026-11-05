@@ -5,10 +5,11 @@ import os
 import re
 import subprocess
 
-from deploy_public_runtime import ROOT, PUBLIC, Render, ReleaseError, validate_service
+from deploy_public_runtime import ROOT, PUBLIC, Render, ReleaseError, validate_service, validate_blueprints
 
 
 def audit(client, manifest, public_ancestor):
+    validate_blueprints(client, manifest)
     rows = []
     for expected in manifest['services']:
         service = client.request('GET', 'services/' + expected['id'])

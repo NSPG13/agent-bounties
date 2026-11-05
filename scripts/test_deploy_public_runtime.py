@@ -17,7 +17,7 @@ class Client:
 class PublicReleaseTests(unittest.TestCase):
     def setUp(self):
         self.expected={'id':'srv-one','name':'api','type':'web_service'}
-        self.manifest={'repository':PUBLIC,'branch':'main','migration_from_repository':'https://github.com/NSPG13/AB-PRIVATE','workspace_id':'tea-reviewed','services':[self.expected]}
+        self.manifest={'repository':PUBLIC,'branch':'main','migration_from_repository':'https://github.com/NSPG13/AB-PRIVATE','workspace_id':'tea-reviewed','services':[self.expected],'blueprints':[]}
         self.service={**self.expected,'ownerId':'tea-reviewed','repo':self.manifest['migration_from_repository'],'branch':'reviewed-private','autoDeploy':'no'}
     def test_manual_approval_is_exact_and_separate_from_live_expectation(self):
         validate_release_approval('a'*40,'b'*40,'a'*40,'workflow_dispatch')
@@ -47,6 +47,39 @@ class PublicReleaseTests(unittest.TestCase):
         client=Client({'srv-one':self.service,'srv-two':{**self.service,'id':'srv-two','ownerId':'wrong'}})
         with self.assertRaises(ReleaseError):prepare(client,manifest,True)
         self.assertTrue(all(call[0]=='GET' for call in client.calls))
+    def test_blueprint_drift_blocks_all_source_mutations(self):
+        expected={'id':'exs-reviewed','name':'marketplace','path':'render.yaml',
+            'resource_ids':['srv-one','dpg-database','evg-shared']}
+        manifest={**self.manifest,'blueprints':[expected]}
+        blueprint={key:expected[key] for key in ('id','name','path')}
+        blueprint.update(ownerId='tea-reviewed',repo=PUBLIC,branch='main',autoSync=False,
+            status='paused',resources=[{'id':value} for value in expected['resource_ids']])
+        for mutation in ('id','name','path','ownerId','repo','branch','autoSync','status',
+                'missing_sync','string_false','missing_resource','extra_resource','duplicate_resource'):
+            value=copy.deepcopy(blueprint)
+            if mutation=='missing_sync':del value['autoSync']
+            elif mutation=='string_false':value['autoSync']='false'
+            elif mutation=='missing_resource':value['resources'].pop()
+            elif mutation=='extra_resource':value['resources'].append({'id':'srv-unreviewed'})
+            elif mutation=='duplicate_resource':value['resources'][-1]=value['resources'][0]
+            else:value[mutation]=True if mutation=='autoSync' else 'other'
+            client=Client({'srv-one':self.service,'exs-reviewed':value})
+            with self.subTest(mutation=mutation),self.assertRaises(ReleaseError):
+                prepare(client,manifest,True)
+            self.assertTrue(all(call[0]=='GET' for call in client.calls))
+        client=Client({'srv-one':self.service,'exs-reviewed':blueprint})
+        prepare(client,manifest,True)
+        self.assertIn(('GET','blueprints/exs-reviewed',None),client.calls)
+        self.assertEqual([call[1] for call in client.calls if call[0]!='GET'],['services/srv-one'])
+    def test_missing_blueprint_inventory_cannot_silently_skip_control(self):
+        manifest=copy.deepcopy(self.manifest);del manifest['blueprints']
+        client=Client({'srv-one':self.service})
+        with self.assertRaises(ReleaseError):prepare(client,manifest,True)
+        self.assertTrue(all(call[0]=='GET' for call in client.calls))
+    def test_production_inventory_keeps_the_reviewed_blueprint_dependency(self):
+        manifest=json.loads((Path(__file__).resolve().parents[1]/'ops/public-runtime-services.json').read_text())
+        self.assertEqual([row['id'] for row in manifest['blueprints']],['exs-d97too57vvec73ctvmh0'])
+        self.assertIn(manifest['autonomous_bootstrap_service_id'],manifest['blueprints'][0]['resource_ids'])
     def bootstrap_fixture(self):
         manifest=copy.deepcopy(self.manifest)
         reader={'id':'srv-reader','name':'reader','type':'background_worker','dockerfile':'./Dockerfile.posting-indexers'}

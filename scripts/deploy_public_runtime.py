@@ -83,6 +83,30 @@ def public_ci_revision(revision):
         if not eligible or max(eligible,key=lambda run:run['id']).get('conclusion')!='success':
             raise ReleaseError(f'latest public main {workflow} attempt must have succeeded for this exact revision')
 
+def validate_blueprints(client, manifest):
+    policies=manifest.get('blueprints')
+    if not isinstance(policies,list):
+        raise ReleaseError('reviewed Blueprint inventory is required')
+    seen=set()
+    for expected in policies:
+        identity=expected.get('id','')
+        if not re.fullmatch(r'exs-[a-z0-9]+',identity) or identity in seen:
+            raise ReleaseError('invalid or duplicate Blueprint identity')
+        seen.add(identity)
+        value=client.request('GET','blueprints/'+identity)
+        resources=value.get('resources')
+        expected_ids=expected.get('resource_ids')
+        if (any(value.get(key)!=expected.get(key) for key in ('id','name','path'))
+                or value.get('ownerId')!=manifest['workspace_id']
+                or value.get('repo','').removesuffix('.git')!=PUBLIC
+                or value.get('branch')!='main' or value.get('autoSync') is not False
+                or value.get('status')!='paused'
+                or not isinstance(resources,list) or not isinstance(expected_ids,list)
+                or not expected_ids or len(set(expected_ids))!=len(expected_ids)
+                or len(resources)!=len(expected_ids)
+                or {row.get('id') for row in resources}!=set(expected_ids)):
+            raise ReleaseError('Blueprint identity, ownership or automatic-sync policy changed')
+
 def prepare(client, manifest, migrate, bootstrap=False):
     if manifest.get('repository')!=PUBLIC or manifest.get('branch')!='main':raise ReleaseError('invalid public source policy')
     bootstrap_id=manifest.get('autonomous_bootstrap_service_id')
@@ -94,6 +118,7 @@ def prepare(client, manifest, migrate, bootstrap=False):
         service=client.request('GET','services/'+expected['id'])
         validate_service(service,expected,manifest,migrate)
         services.append((expected,service))
+    validate_blueprints(client,manifest)
     # Validate the entire inventory before narrowing the mutation boundary.
     # Bootstrap is not a full release: its checkpoint acceptance is independent.
     if bootstrap:services=[pair for pair in services if pair[0]['id']==bootstrap_id]

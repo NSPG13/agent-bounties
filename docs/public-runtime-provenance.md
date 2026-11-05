@@ -29,6 +29,15 @@ reader blocks promotion; do not rewind cursors or clear quarantine to proceed.
 Keep the old expected-live pins throughout bootstrap and promotion. The explicit
 manual approval names the deployment target separately from observed live state.
 
+The reviewed marketplace Blueprint must keep automatic sync disabled. Service
+auto-deploy settings do not disable Blueprint synchronization: a sync can
+overwrite the reader's Dockerfile and RPC settings, and also manages the shared
+database and environment groups. The controller and hourly inventory observer
+read the Blueprint's exact identity, source, resource ownership and paused
+automatic-sync state. They fail on drift without modifying the Blueprint.
+Any manual Blueprint sync requires a separately reviewed resource plan; a paused
+automatic-sync setting does not prevent an administrator from requesting one.
+
 Legacy history requires an RPC with historical log coverage. Qualify the oldest
 stored events and current cursor before setting the optional service-local
 `BASE_INDEXER_BOOTSTRAP_ARCHIVE_RPC_URL` through a separately reviewed configuration
