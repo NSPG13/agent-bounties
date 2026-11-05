@@ -936,6 +936,10 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         }),
         protocol: serde_json::json!({
             "version": "agent-bounties/autonomous-v1",
+            "status": "recovery_only",
+            "new_creation_enabled": false,
+            "new_funding_enabled": false,
+            "new_claims_enabled": false,
             "status_url": endpoints.protocol_status,
             "network": "base-mainnet",
             "chain_id": 8453,
@@ -944,7 +948,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "canonical_instances": "deterministic EIP-1167 minimal proxies created by the configured factory",
             "operator_settlement_signer": false,
             "funded_on_creation_by_default": true,
-            "crowdfunding_allowed": true,
+            "crowdfunding_allowed": false,
             "external_contract_policy": "discoverable as untrusted but never canonical",
             "payout_authority": "confirmed canonical BountySettled event",
             "additive_modes": [{
@@ -4010,6 +4014,15 @@ mod tests {
             .contains("inventory-summary"));
         assert_eq!(manifest.protocol["version"], "agent-bounties/autonomous-v1");
         assert_eq!(manifest.protocol["operator_settlement_signer"], false);
+        assert_eq!(manifest.protocol["status"], "recovery_only");
+        for permission in [
+            "new_creation_enabled",
+            "new_funding_enabled",
+            "new_claims_enabled",
+            "crowdfunding_allowed",
+        ] {
+            assert_eq!(manifest.protocol[permission], false);
+        }
         assert_eq!(
             manifest.protocol["payout_authority"],
             "confirmed canonical BountySettled event"
