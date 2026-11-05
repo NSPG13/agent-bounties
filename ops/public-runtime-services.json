@@ -4,6 +4,15 @@
   "repository": "https://github.com/NSPG13/agent-bounties",
   "branch": "main",
   "migration_from_repository": "https://github.com/NSPG13/AB-PRIVATE",
+  "marketplace_readiness": {
+    "url": "https://api.agentizable.ai/readiness/marketplace",
+    "protocols": [
+      "agent-bounties/autonomous-v1",
+      "agent-bounties/open-competition-v1",
+      "agent-bounties/open-competition-v2-beta3",
+      "agent-bounties/autonomous-v2"
+    ]
+  },
   "services": [
     {
       "name": "agent-bounties-api",

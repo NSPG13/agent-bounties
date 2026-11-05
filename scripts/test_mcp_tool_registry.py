@@ -25,7 +25,16 @@ class McpToolRegistryTests(unittest.TestCase):
             source.index("async fn tools()") : source.index("const OPERATOR_TOKEN_REQUIRED")
         ]
         names = re.findall(r'\b(?:operator_)?tool\(\s*"([a-z0-9_]+)"', descriptor_source)
-        self.assertEqual(len(names), 124)
+        # Production appends the verification and managed-payment registries.
+        # Keep the same order as tools(), including their public NAMES arrays.
+        modules = re.findall(r"descriptors\.extend\((\w+)::descriptors\(\)\)", descriptor_source)
+        self.assertEqual(modules, ["verification", "managed_payments"])
+        for module in modules:
+            module_source = (ROOT / f"crates/mcp-server/src/{module}.rs").read_text(encoding="utf-8")
+            declared = re.search(r"pub const NAMES: &\[&str\] = &\[(.*?)\];", module_source, re.S)
+            self.assertIsNotNone(declared, f"{module} must declare its ordered tool names")
+            names.extend(re.findall(r'"([a-z0-9_]+)"', declared.group(1)))
+        self.assertEqual(len(names), 150)
         self.assertEqual(len(names), len(set(names)))
         self.assertEqual(names, registry["tools"])
         self.assertIn("list_open_competition_verifiers", names)

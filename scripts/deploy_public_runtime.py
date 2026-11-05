@@ -7,6 +7,7 @@ environment, database, secret, or payment endpoint is used by this controller.
 """
 from __future__ import annotations
 import argparse
+import datetime as dt
 import json
 import os
 from pathlib import Path
@@ -81,6 +82,53 @@ def prepare(client, manifest, migrate):
         validate_service(client.request('GET','services/'+expected['id']),expected,manifest,False)
     return services
 
+def reader_readiness(manifest, revision=None):
+    policy = manifest['marketplace_readiness']
+    request = urllib.request.Request(policy['url'], headers={'Cache-Control': 'no-cache'})
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            observed_revision = response.headers.get('x-agent-bounties-revision', '')
+            if response.status != 200 or not re.fullmatch(r'[0-9a-f]{40}', observed_revision):
+                raise ReleaseError('marketplace readiness or revision is unavailable')
+            if revision is not None and observed_revision != revision:
+                raise ReleaseError('marketplace readiness has the wrong source revision')
+            value = json.load(response)
+        readers = value['readers']
+        checked = dt.datetime.fromisoformat(value['checked_at'].replace('Z', '+00:00'))
+        age = (dt.datetime.now(dt.timezone.utc) - checked).total_seconds()
+        expected = policy['protocols']
+        if (value.get('schema') != 'agent-bounties/marketplace-readiness-v1'
+                or value.get('ready') is not True or not -5 <= age <= 30
+                or not expected or len(readers) != len(expected)
+                or {row['protocol'] for row in readers} != set(expected)
+                or any(row.get('ready') is not True or row.get('blocker') is not None for row in readers)):
+            raise ReleaseError('marketplace readers are not all current and ready')
+        return {'revision': observed_revision, 'checked_at': value['checked_at'],
+                'protocols': [row['protocol'] for row in readers]}
+    except (urllib.error.URLError, TimeoutError, KeyError, TypeError, ValueError):
+        raise ReleaseError('marketplace readiness is unavailable; investigate before restarting readers') from None
+
+def prepare_release(client, manifest, migrate):
+    # Deploying a worker also restarts it. Never use a routine source release to
+    # bypass a reader's integrity halt or an unresolved lag/health incident.
+    reader_readiness(manifest)
+    return prepare(client, manifest, migrate)
+
+def verify_live_readers(manifest, revision):
+    deadline = time.monotonic() + 300
+    successes = 0
+    while successes < 8:
+        try:
+            observation = reader_readiness(manifest, revision)
+            successes += 1
+        except ReleaseError:
+            successes = 0
+        if time.monotonic() >= deadline:
+            raise ReleaseError('marketplace readers did not recover after the release')
+        if successes < 8:
+            time.sleep(3 if successes else 15)
+    return observation
+
 def validate_deploy(value, revision):
     if value.get('status') in TERMINAL_FAILURE:raise ReleaseError('deploy failed: '+value['status'])
     if value.get('status')=='live':
@@ -103,7 +151,7 @@ def main():
         temporary=directory/'release.tmp';temporary.write_text(json.dumps(record,indent=2)+'\n');temporary.replace(directory/'release.json')
     save()
     try:
-        services=prepare(client,manifest,args.migrate_source)
+        services=prepare_release(client,manifest,args.migrate_source)
         for expected,previous in services:
             deploys=client.request('GET',f"services/{expected['id']}/deploys?limit=20")
             live=[v.get('deploy',v) for v in deploys if v.get('deploy',v).get('status')=='live']
@@ -130,6 +178,7 @@ def main():
                     if response.status!=200 or response.headers.get('x-agent-bounties-revision')!=args.revision:
                         raise ReleaseError('production health or public source revision mismatch')
             time.sleep(3)
+        record['marketplace_readiness']=verify_live_readers(manifest,args.revision)
         record['status']='passed';save()
         print('Public runtime release verified: '+args.revision)
     except Exception:
