@@ -1,8 +1,29 @@
 //! Safe-block admission and reconciliation of pre-checkpoint legacy history.
 use super::*;
+use chain_base::JsonRpcTransport;
 use std::collections::{BTreeMap, BTreeSet};
 mod bootstrap_reads;
 use bootstrap_reads::{BootstrapReadPolicy, BootstrapReads};
+
+fn parse_bootstrap_logs(
+    value: serde_json::Value,
+    request_id: u64,
+) -> Result<chain_base::EthGetLogsResponse, ChainBaseError> {
+    let object = value.as_object().ok_or_else(|| {
+        ChainBaseError::InvalidRpcResponse("legacy replay log response is not an object".into())
+    })?;
+    // Validate provenance and shape BEFORE the generic parser classifies a
+    // provider error. A mismatched throttling error is still malformed data.
+    if object.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0")
+        || object.get("id").and_then(serde_json::Value::as_u64) != Some(request_id)
+        || object.contains_key("result") == object.contains_key("error")
+    {
+        return Err(ChainBaseError::InvalidRpcResponse(
+            "legacy replay log response has invalid version, id or result/error fields".into(),
+        ));
+    }
+    chain_base::parse_eth_get_logs_response(value)
+}
 
 fn same_events(stored: &[AutonomousBountyEvent], canonical: &[AutonomousBountyEvent]) -> bool {
     // Ignore database IDs and observation timestamps, never the actual event payload.
@@ -158,19 +179,14 @@ async fn bootstrap_previous(
         )?;
         let logs = reads
             .run(|| async {
-                let logs = chain_base::fetch_base_multi_contract_logs_with_transport(
-                    archive_rpc.unwrap_or(&config.rpc_url),
-                    &query,
-                    config.request_id + 30_003,
-                    &transport,
-                )
-                .await?;
-                if logs.id != config.request_id + 30_003 || logs.jsonrpc != "2.0" {
-                    return Err(ChainBaseError::InvalidRpcResponse(
-                        "legacy replay log response does not match request".into(),
-                    ));
-                }
-                Ok(logs)
+                let request_id = config.request_id + 30_003;
+                let value = transport
+                    .post_json_value(
+                        archive_rpc.unwrap_or(&config.rpc_url),
+                        &serde_json::json!(query.rpc_request(request_id)),
+                    )
+                    .await?;
+                parse_bootstrap_logs(value, request_id)
             })
             .await?;
         let mut canonical = decode_autonomous_bounty_logs(rpc_logs_to_evm_logs(logs.result)?)?;
@@ -236,6 +252,40 @@ async fn bootstrap_previous(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn bootstrap_log_envelope_is_validated_before_throttling_retry() {
+        use serde_json::json;
+        let throttle = json!({"code":-32016,"message":"slow down"});
+        for value in [
+            json!({"jsonrpc":"2.0","id":8,"error":throttle}),
+            json!({"jsonrpc":"1.0","id":7,"error":throttle}),
+            json!({"jsonrpc":"2.0","error":throttle}),
+            json!({"jsonrpc":"2.0","id":7,"result":[],"error":throttle}),
+            json!({"jsonrpc":"2.0","id":7}),
+        ] {
+            assert!(matches!(
+                parse_bootstrap_logs(value.clone(), 7),
+                Err(ChainBaseError::InvalidRpcResponse(_))
+            ));
+            let mut reads = BootstrapReads::new(BootstrapReadPolicy::default());
+            let mut calls = 0;
+            let error = reads
+                .run(|| {
+                    calls += 1;
+                    std::future::ready(parse_bootstrap_logs(value.clone(), 7))
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(calls, 1);
+            assert!(!indexer_error_is_retryable(&error));
+        }
+        assert!(matches!(
+            parse_bootstrap_logs(json!({"jsonrpc":"2.0","id":7,"error":throttle}), 7),
+            Err(ChainBaseError::RpcProviderError { code: -32016, .. })
+        ));
+        assert!(parse_bootstrap_logs(json!({"jsonrpc":"2.0","id":7,"result":[]}), 7).is_ok());
+    }
 
     async fn test_rpc(
         reply: impl Fn(&serde_json::Value) -> serde_json::Value + Send + 'static,
@@ -421,6 +471,9 @@ mod tests {
                     if mode == 9 {
                         return json!({"result":[value], "_version":"1.0"});
                     }
+                    if mode == 10 { return json!({"error":{"code":-32016,"message":"slow down"}, "_response_id":0}); }
+                    if mode == 11 { return json!({"error":{"code":-32016,"message":"slow down"}, "_version":"1.0"}); }
+                    if mode == 12 { return json!({"result":[value],"error":{"code":-32016,"message":"slow down"}}); }
                     json!({"result":[value]})
                 }
                 other => panic!("archive must never supply live heads: {other}"),
@@ -442,17 +495,24 @@ mod tests {
         };
         // Before/after anchor disagreement, missing/changed payload, provider
         // outage and malformed logs cannot certify or mutate historical rows.
-        for failure in [1, 2, 3, 4, 5, 6, 8, 9] {
+        for failure in [1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12] {
             mode.store(failure, Ordering::SeqCst);
             anchors.store(0, Ordering::SeqCst);
+            log_reads.lock().unwrap().clear();
             let error = verify_previous(&store, &config, Some(100), &safe)
                 .await
                 .unwrap_err();
-            assert_eq!(
-                indexer_error_is_retryable(&error),
-                false,
+            assert!(
+                !indexer_error_is_retryable(&error),
                 "bootstrap case {failure} must hold without automatic restart"
             );
+            if failure >= 8 {
+                assert_eq!(
+                    log_reads.lock().unwrap().len(),
+                    1,
+                    "malformed envelope must not retry"
+                );
+            }
             assert!(store
                 .autonomous_canonical_checkpoint(&config.network, &factory)
                 .await
