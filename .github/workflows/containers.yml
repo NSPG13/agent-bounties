@@ -42,7 +42,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: "1.94.0"
       - uses: Swatinem/rust-cache@v2
 
       - run: bash scripts/check-production-compose.sh
+
+  production-worker-images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        dockerfile: [Dockerfile.posting-indexers, Dockerfile.posting-spenders]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Build the deployed worker recipe
+        env:
+          WORKER_DOCKERFILE: ${{ matrix.dockerfile }}
+        run: docker build --file "$WORKER_DOCKERFILE" --tag public-runtime-worker .

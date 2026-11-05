@@ -34,6 +34,8 @@ Before release, run `bash scripts/check.sh`, the portable PostgreSQL release inv
 
 The canonicality migration is additive. During first startup, old history is unavailable until the worker certifies it. A changed block hash leaves a persistent quarantine. Investigate against independent RPC readers and prepare an explicit reviewed reconciliation; restarting the worker does not clear it. No generic self-heal rule may delete event rows, rewind the cursor or clear quarantine. Snapshot database/evidence before any operator reconciliation.
 
+The existing regression worker release `3a33c431838e0eee9503d102391c955e83bf1142a7f9727e722bfa75dbe45d6f`, built from `1ebe67e3e71799b795364f8f7725ef670f0f6c66`, contains the traceback classifier. The protected-history revocation policy denies its release ID, source revision and binary digest before historical release code or credentials can be used. Its old approval remains as audit evidence. A newly qualified artifact is required to resume these regression workflows; routine application deployment does not approve it. Preserve pending claims and their historical terms and recovery paths. Healthy runner diagnostics alone do not establish safe verification or absence of pending work.
+
 The standalone invoice projection remains tested for historical evidence and should not be mistaken for an enabled checkout service. Do not expose its old HTTP handlers without separately restoring their durable storage integration and reviewing authentication. Existing invoice records and migration files remain intact.
 
 ## Remaining immutable/liquidity work
