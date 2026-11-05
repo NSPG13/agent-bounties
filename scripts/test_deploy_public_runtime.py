@@ -6,6 +6,9 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+import email.message
+import urllib.request
+import urllib.response
 from unittest.mock import patch
 from deploy_public_runtime import PUBLIC,ReleaseError,prepare,prepare_release,reader_readiness,validate_deploy,public_ci_revision,verify_live_readers,main,validate_release_approval,validate_accepted_reader
 class Client:
@@ -274,21 +277,21 @@ class PublicReleaseTests(unittest.TestCase):
                     minutes=-2 if mutation == 'stale' else 2)).isoformat()
             elif mutation == 'schema':value['schema'] = 'other'
             else:value['ready'] = False
-            with self.subTest(mutation=mutation), patch('deploy_public_runtime.urllib.request.urlopen',
+            with self.subTest(mutation=mutation), patch('deploy_public_runtime.public_provenance_open',
                     return_value=self.readiness_response(value)), self.assertRaises(ReleaseError):
                 reader_readiness(manifest)
 
     def test_readiness_requires_the_exact_deployed_revision(self):
         manifest, value = self.readiness_fixture()
-        with patch('deploy_public_runtime.urllib.request.urlopen', return_value=self.readiness_response(value)):
+        with patch('deploy_public_runtime.public_provenance_open', return_value=self.readiness_response(value)):
             self.assertEqual(reader_readiness(manifest, 'a'*40)['revision'], 'a'*40)
-        with patch('deploy_public_runtime.urllib.request.urlopen', return_value=self.readiness_response(value)), self.assertRaises(ReleaseError):
+        with patch('deploy_public_runtime.public_provenance_open', return_value=self.readiness_response(value)), self.assertRaises(ReleaseError):
             reader_readiness(manifest, 'b'*40)
 
     def test_legacy_header_fallback_is_explicit_preflight_only(self):
         manifest,value=self.readiness_fixture()
         responses=[self.readiness_response({}),self.readiness_response(value,revision=''),self.readiness_response({})]
-        with patch('deploy_public_runtime.urllib.request.urlopen',side_effect=responses) as request:
+        with patch('deploy_public_runtime.public_provenance_open',side_effect=responses) as request:
             result=reader_readiness(manifest,allow_legacy_revision=True)
             self.assertEqual(result['revision'],'a'*40)
             self.assertEqual(result['revision_source'],'legacy_health_bracket')
@@ -297,7 +300,7 @@ class PublicReleaseTests(unittest.TestCase):
                 'https://api.agentizable.ai/health'])
         for revision,allow in [(None,False),('a'*40,False),('a'*40,True)]:
             with self.subTest(revision=revision,allow=allow), \
-                    patch('deploy_public_runtime.urllib.request.urlopen',return_value=self.readiness_response(value,revision='')) as request, \
+                    patch('deploy_public_runtime.public_provenance_open',return_value=self.readiness_response(value,revision='')) as request, \
                     self.assertRaises(ReleaseError):
                 reader_readiness(manifest,revision,allow_legacy_revision=allow)
             self.assertEqual(request.call_count,1)
@@ -320,7 +323,7 @@ class PublicReleaseTests(unittest.TestCase):
                 elif failure=='missing':value['readers'].pop()
                 else:value['checked_at']=(dt.datetime.now(dt.timezone.utc)+dt.timedelta(minutes=-2 if failure=='stale' else 2)).isoformat()
                 ready=self.readiness_response(value,revision='')
-            with self.subTest(failure=failure),patch('deploy_public_runtime.urllib.request.urlopen',side_effect=[before,ready,after]),self.assertRaises(ReleaseError):
+            with self.subTest(failure=failure),patch('deploy_public_runtime.public_provenance_open',side_effect=[before,ready,after]),self.assertRaises(ReleaseError):
                 reader_readiness(manifest,allow_legacy_revision=True)
 
     def test_only_explicit_migration_enables_legacy_preflight(self):
@@ -331,6 +334,40 @@ class PublicReleaseTests(unittest.TestCase):
                 prepare_release(client,self.manifest,migrate,preflight_record=record)
             observe.assert_called_once_with(self.manifest,allow_legacy_revision=migrate)
             self.assertEqual(record,{'revision':'a'*40})
+
+    def test_public_revision_reads_reject_cross_origin_redirects(self):
+        real_build=urllib.request.build_opener
+        for route in ('health','readiness/marketplace'):
+            manifest,value=self.readiness_fixture()
+            calls=[]
+            source='https://api.agentizable.ai/'+route
+            foreign='https://unrelated.invalid/'+route
+            class MemoryHttps(urllib.request.HTTPSHandler):
+                def https_open(self,request):
+                    calls.append(request.full_url)
+                    headers=email.message.Message()
+                    if request.full_url==source:
+                        headers['Location']=foreign;status=302;body=b''
+                    else:
+                        status=200
+                        body=b'ok' if request.full_url.endswith('/health') else json.dumps(value).encode()
+                        if request.full_url.endswith('/health'):headers['x-agent-bounties-revision']='a'*40
+                    response=urllib.response.addinfourl(io.BytesIO(body),headers,request.full_url,status)
+                    response.msg='Found' if status==302 else 'OK'
+                    return response
+            # The former default redirect policy accepts foreign source proof.
+            with patch('socket.create_connection',side_effect=AssertionError('external network forbidden')), \
+                    patch('deploy_public_runtime.urllib.request.build_opener',side_effect=lambda *handlers:real_build(MemoryHttps())):
+                self.assertEqual(reader_readiness(manifest,allow_legacy_revision=True)['revision'],'a'*40)
+            self.assertIn(foreign,calls)
+            calls.clear()
+            # Exercise actual urllib redirect processing, preserving our handler.
+            with self.subTest(route=route),patch('socket.create_connection',side_effect=AssertionError('external network forbidden')), \
+                    patch('deploy_public_runtime.urllib.request.build_opener',side_effect=lambda *handlers:real_build(*handlers,MemoryHttps())), \
+                    self.assertRaises(ReleaseError):
+                reader_readiness(manifest,allow_legacy_revision=True)
+            self.assertNotIn(foreign,calls)
+            self.assertEqual(calls[-1],source)
 
     def test_reader_incident_blocks_all_source_changes_and_deploys(self):
         client = Client({'srv-one': self.service})

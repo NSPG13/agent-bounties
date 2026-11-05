@@ -23,6 +23,16 @@ TERMINAL_FAILURE={'build_failed','update_failed','pre_deploy_failed','canceled',
 
 class ReleaseError(RuntimeError):pass
 
+class NoPublicRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self,*args,**kwargs):return None
+
+def public_provenance_open(request,timeout=15):
+    try:
+        return urllib.request.build_opener(NoPublicRedirect()).open(request,timeout=timeout)
+    except urllib.error.HTTPError as error:
+        error.close()
+        raise
+
 def validate_release_approval(revision, expected, approved, event):
     if not re.fullmatch(r'[0-9a-f]{40}',revision):raise ReleaseError('exact Git revision required')
     if approved:
@@ -137,7 +147,7 @@ def reader_readiness(manifest, revision=None, allow_legacy_revision=False):
         if policy['url']!='https://api.agentizable.ai/readiness/marketplace':
             raise ReleaseError('legacy readiness must use the canonical API origin')
         health=urllib.request.Request('https://api.agentizable.ai/health',headers={'Cache-Control':'no-cache'})
-        with urllib.request.urlopen(health,timeout=15) as response:
+        with public_provenance_open(health,timeout=15) as response:
             value=response.headers.get('x-agent-bounties-revision','')
             if response.status!=200 or not re.fullmatch(r'[0-9a-f]{40}',value):
                 raise ReleaseError('legacy API health revision is unavailable')
@@ -147,7 +157,7 @@ def reader_readiness(manifest, revision=None, allow_legacy_revision=False):
         # not identify readiness responses. Bracket it with stable health reads.
         legacy_before=legacy_health_revision() if allow_legacy_revision and revision is None else None
         revision_source='readiness_header'
-        with urllib.request.urlopen(request, timeout=15) as response:
+        with public_provenance_open(request, timeout=15) as response:
             observed_revision = response.headers.get('x-agent-bounties-revision', '')
             if response.status != 200:
                 raise ReleaseError('marketplace readiness or revision is unavailable')
@@ -274,7 +284,7 @@ def main():
             for row in record['services']:
                 if not row.get('health_url'):continue
                 request=urllib.request.Request(row['health_url'],headers={'Cache-Control':'no-cache'})
-                with urllib.request.urlopen(request,timeout=15) as response:
+                with public_provenance_open(request,timeout=15) as response:
                     if response.status!=200 or response.headers.get('x-agent-bounties-revision')!=args.revision:
                         raise ReleaseError('production health or public source revision mismatch')
             time.sleep(3)
