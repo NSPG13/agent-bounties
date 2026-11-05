@@ -5,24 +5,61 @@ use std::collections::{BTreeMap, BTreeSet};
 mod bootstrap_reads;
 use bootstrap_reads::{BootstrapReadPolicy, BootstrapReads};
 
-fn parse_bootstrap_logs(
+// Only bootstrap uses this wrapper. Normal polling and global RPC parsers keep
+// their existing behavior. Every delegated operation remains one wire attempt.
+struct BootstrapTransport<T>(T);
+
+#[async_trait::async_trait]
+impl<T: JsonRpcTransport> JsonRpcTransport for BootstrapTransport<T> {
+    async fn post_json_value(
+        &self,
+        rpc_url: &str,
+        request: &serde_json::Value,
+    ) -> Result<serde_json::Value, ChainBaseError> {
+        let request_id = request
+            .get("id")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| {
+                ChainBaseError::InvalidRpcResponse("bootstrap request id missing".into())
+            })?;
+        let value = self.0.post_json_value(rpc_url, request).await?;
+        checked_bootstrap_response(value, request_id)
+    }
+}
+
+fn checked_bootstrap_response(
     value: serde_json::Value,
     request_id: u64,
-) -> Result<chain_base::EthGetLogsResponse, ChainBaseError> {
-    let object = value.as_object().ok_or_else(|| {
-        ChainBaseError::InvalidRpcResponse("legacy replay log response is not an object".into())
-    })?;
-    // Validate provenance and shape BEFORE the generic parser classifies a
-    // provider error. A mismatched throttling error is still malformed data.
+) -> Result<serde_json::Value, ChainBaseError> {
+    let invalid = || {
+        ChainBaseError::InvalidRpcResponse(
+            "legacy bootstrap response has invalid version, id or result/error fields".into(),
+        )
+    };
+    let object = value.as_object().ok_or_else(invalid)?;
+    // Validate BOTH headers and logs before any typed parser can classify a
+    // throttling error. A malformed error never authorizes another request.
     if object.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0")
         || object.get("id").and_then(serde_json::Value::as_u64) != Some(request_id)
         || object.contains_key("result") == object.contains_key("error")
     {
-        return Err(ChainBaseError::InvalidRpcResponse(
-            "legacy replay log response has invalid version, id or result/error fields".into(),
-        ));
+        return Err(invalid());
     }
-    chain_base::parse_eth_get_logs_response(value)
+    if let Some(error) = object.get("error") {
+        if !error.is_object()
+            || error
+                .get("code")
+                .and_then(serde_json::Value::as_i64)
+                .is_none()
+            || error
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .is_none()
+        {
+            return Err(invalid());
+        }
+    }
+    Ok(value)
 }
 
 fn same_events(stored: &[AutonomousBountyEvent], canonical: &[AutonomousBountyEvent]) -> bool {
@@ -121,10 +158,12 @@ async fn bootstrap_previous(
     reads: &mut BootstrapReads,
 ) -> anyhow::Result<db::AutonomousCanonicalCheckpoint> {
     let tag = format!("0x{cursor:x}");
-    let transport = chain_base::ReqwestJsonRpcTransport::single_attempt_without_redirects(
-        Duration::from_secs(30),
-    )?
-    .with_read_observation_deadline(reads.deadline());
+    let transport = BootstrapTransport(
+        chain_base::ReqwestJsonRpcTransport::single_attempt_without_redirects(
+            Duration::from_secs(30),
+        )?
+        .with_read_observation_deadline(reads.deadline()),
+    );
     let before = reads
         .run(|| {
             chain_base::fetch_block_identity_with_transport(
@@ -178,15 +217,13 @@ async fn bootstrap_previous(
             autonomous_bounty_event_topics(),
         )?;
         let logs = reads
-            .run(|| async {
-                let request_id = config.request_id + 30_003;
-                let value = transport
-                    .post_json_value(
-                        archive_rpc.unwrap_or(&config.rpc_url),
-                        &serde_json::json!(query.rpc_request(request_id)),
-                    )
-                    .await?;
-                parse_bootstrap_logs(value, request_id)
+            .run(|| {
+                chain_base::fetch_base_multi_contract_logs_with_transport(
+                    archive_rpc.unwrap_or(&config.rpc_url),
+                    &query,
+                    config.request_id + 30_003,
+                    &transport,
+                )
             })
             .await?;
         let mut canonical = decode_autonomous_bounty_logs(rpc_logs_to_evm_logs(logs.result)?)?;
@@ -254,37 +291,116 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn bootstrap_log_envelope_is_validated_before_throttling_retry() {
+    async fn bootstrap_envelopes_are_validated_before_header_or_log_throttling_retry() {
         use serde_json::json;
-        let throttle = json!({"code":-32016,"message":"slow down"});
-        for value in [
-            json!({"jsonrpc":"2.0","id":8,"error":throttle}),
-            json!({"jsonrpc":"1.0","id":7,"error":throttle}),
-            json!({"jsonrpc":"2.0","error":throttle}),
-            json!({"jsonrpc":"2.0","id":7,"result":[],"error":throttle}),
-            json!({"jsonrpc":"2.0","id":7}),
-        ] {
-            assert!(matches!(
-                parse_bootstrap_logs(value.clone(), 7),
-                Err(ChainBaseError::InvalidRpcResponse(_))
-            ));
-            let mut reads = BootstrapReads::new(BootstrapReadPolicy::default());
-            let mut calls = 0;
-            let error = reads
-                .run(|| {
-                    calls += 1;
-                    std::future::ready(parse_bootstrap_logs(value.clone(), 7))
-                })
-                .await
-                .unwrap_err();
-            assert_eq!(calls, 1);
-            assert!(!indexer_error_is_retryable(&error));
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct FixedResponse {
+            value: serde_json::Value,
+            calls: AtomicUsize,
         }
-        assert!(matches!(
-            parse_bootstrap_logs(json!({"jsonrpc":"2.0","id":7,"error":throttle}), 7),
-            Err(ChainBaseError::RpcProviderError { code: -32016, .. })
-        ));
-        assert!(parse_bootstrap_logs(json!({"jsonrpc":"2.0","id":7,"result":[]}), 7).is_ok());
+        #[async_trait::async_trait]
+        impl JsonRpcTransport for FixedResponse {
+            async fn post_json_value(
+                &self,
+                _: &str,
+                _: &serde_json::Value,
+            ) -> Result<serde_json::Value, ChainBaseError> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Ok(self.value.clone())
+            }
+        }
+        let throttle = json!({"code":-32016,"message":"slow down"});
+        let query = BaseMultiContractLogQuery::new(
+            [format!("0x{}", "11".repeat(20))],
+            100,
+            Some(100),
+            autonomous_bounty_event_topics(),
+        )
+        .unwrap();
+        for header in [true, false] {
+            for value in [
+                json!({"jsonrpc":"2.0","id":8,"error":throttle}),
+                json!({"jsonrpc":"1.0","id":7,"error":throttle}),
+                json!({"jsonrpc":"2.0","error":throttle}),
+                json!({"jsonrpc":"2.0","id":7,"result":[],"error":throttle}),
+                json!({"jsonrpc":"2.0","id":7}),
+                json!({"jsonrpc":"2.0","id":7,"error":{"code":-32016}}),
+                json!({"jsonrpc":"2.0","id":7,"error":{"code":-32016,"message":42}}),
+                json!({"jsonrpc":"2.0","id":7,"error":{"code":"-32016","message":"slow down"}}),
+            ] {
+                assert!(matches!(
+                    checked_bootstrap_response(value.clone(), 7),
+                    Err(ChainBaseError::InvalidRpcResponse(_))
+                ));
+                let transport = BootstrapTransport(FixedResponse {
+                    value,
+                    calls: AtomicUsize::new(0),
+                });
+                let mut reads = BootstrapReads::new(BootstrapReadPolicy::default());
+                let error = reads
+                    .run(|| async {
+                        if header {
+                            chain_base::fetch_block_identity_with_transport(
+                                "unused", "0x64", 7, &transport,
+                            )
+                            .await
+                            .map(|_| ())
+                        } else {
+                            chain_base::fetch_base_multi_contract_logs_with_transport(
+                                "unused", &query, 7, &transport,
+                            )
+                            .await
+                            .map(|_| ())
+                        }
+                    })
+                    .await
+                    .unwrap_err();
+                assert_eq!(transport.0.calls.load(Ordering::SeqCst), 1);
+                assert!(!indexer_error_is_retryable(&error));
+            }
+            let transport = BootstrapTransport(FixedResponse {
+                value: json!({"jsonrpc":"2.0","id":7,"error":throttle}),
+                calls: AtomicUsize::new(0),
+            });
+            let error = if header {
+                chain_base::fetch_block_identity_with_transport("unused", "0x64", 7, &transport)
+                    .await
+                    .map(|_| ())
+            } else {
+                chain_base::fetch_base_multi_contract_logs_with_transport(
+                    "unused", &query, 7, &transport,
+                )
+                .await
+                .map(|_| ())
+            }
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                ChainBaseError::RpcProviderError { code: -32016, .. }
+            ));
+        }
+        let transport = BootstrapTransport(FixedResponse {
+            value: json!({"jsonrpc":"2.0","id":7,"result":{"number":"0x64","hash":format!("0x{}","11".repeat(32)),"timestamp":"0x1"}}),
+            calls: AtomicUsize::new(0),
+        });
+        assert_eq!(
+            chain_base::fetch_block_identity_with_transport("unused", "0x64", 7, &transport)
+                .await
+                .unwrap()
+                .number,
+            100
+        );
+        let transport = BootstrapTransport(FixedResponse {
+            value: json!({"jsonrpc":"2.0","id":7,"result":[]}),
+            calls: AtomicUsize::new(0),
+        });
+        assert!(chain_base::fetch_base_multi_contract_logs_with_transport(
+            "unused", &query, 7, &transport
+        )
+        .await
+        .unwrap()
+        .result
+        .is_empty());
     }
 
     async fn test_rpc(
