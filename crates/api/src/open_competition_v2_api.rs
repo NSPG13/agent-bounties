@@ -198,11 +198,14 @@ pub(crate) struct FundingBody {
     acknowledged_risk_hash: String,
 }
 
+// Explicit schema references use the API-only mirrors registered in ApiDoc;
+// deriving schemas inside metric-core would change its approved proof identity.
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct StructuredArtifactProfileBody {
     network: Option<String>,
     threshold: String,
+    #[schema(value_type = Vec<ArtifactRequirement>)]
     requirements: Vec<ArtifactRequirement>,
 }
 
@@ -228,8 +231,10 @@ pub(crate) struct ProofAttributionQuery {
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PublicVectorMetricBody {
+    #[schema(value_type = PublicVectorMode)]
     mode: PublicVectorMode,
     threshold: String,
+    #[schema(value_type = Vec<PublicVectorCase>)]
     vectors: Vec<PublicVectorCase>,
 }
 
@@ -239,6 +244,7 @@ pub(crate) struct StructuredArtifactMetricBody {
     profile_id: String,
     threshold: String,
     artifact_utf8: String,
+    #[schema(value_type = Vec<ArtifactRequirement>)]
     requirements: Vec<ArtifactRequirement>,
 }
 
@@ -246,7 +252,9 @@ pub(crate) struct StructuredArtifactMetricBody {
 #[serde(deny_unknown_fields)]
 pub(crate) struct ForwardCanonicalGmvMetricBody {
     profile_id: String,
+    #[schema(value_type = ForwardCanonicalGmvCampaign)]
     campaign: ForwardCanonicalGmvCampaign,
+    #[schema(value_type = ForwardCanonicalGmvSnapshot)]
     snapshot: ForwardCanonicalGmvSnapshot,
 }
 

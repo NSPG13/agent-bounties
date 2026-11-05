@@ -89,7 +89,6 @@ const FORWARD_GMV_ATTESTATION_DOMAIN: [u8; 32] =
 const FORWARD_GMV_ATTESTERS_DOMAIN: [u8; 32] =
     hex!("5d74cd7806a10862ef069bd28f20646c4018c7f8a5c07357c5ca2fbc40e4ca69");
 
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PublicVectorMode {
@@ -108,7 +107,6 @@ impl PublicVectorMode {
     }
 }
 
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PublicVectorCase {
     pub expected: i64,
@@ -150,7 +148,6 @@ pub struct PublicVectorProgramOutput {
     pub journal: [u8; JOURNAL_ABI_LENGTH],
 }
 
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ArtifactRequirement {
@@ -373,7 +370,6 @@ pub struct StructuredArtifactProgramOutput {
     pub journal: [u8; JOURNAL_ABI_LENGTH],
 }
 
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CanonicalGmvProtocol {
@@ -392,14 +388,12 @@ impl CanonicalGmvProtocol {
     }
 }
 
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CanonicalGmvFunding {
     pub contributor: [u8; 20],
     pub amount_base_units: u128,
 }
 
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CanonicalGmvSettlement {
     pub protocol: CanonicalGmvProtocol,
@@ -437,7 +431,6 @@ pub struct CanonicalGmvProgramInput {
     pub settlements: Vec<CanonicalGmvSettlement>,
 }
 
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ForwardCanonicalGmvCampaign {
     pub epoch_id: [u8; 32],
@@ -450,14 +443,12 @@ pub struct ForwardCanonicalGmvCampaign {
     pub snapshot_attestation_threshold: u8,
 }
 
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CanonicalGmvSnapshotAttestation {
     pub signer: [u8; 20],
     pub signature: Vec<u8>,
 }
 
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ForwardCanonicalGmvSnapshot {
     pub start_block: u64,
@@ -1857,7 +1848,7 @@ mod tests {
         StructuredArtifactProgramInput {
             scope: fixture().scope,
             threshold: 7,
-            artifact: br#"{"schema":"agent-bounties/agent-guide-v1","canonical_url":"https://agentizable.ai/tasks/","steps":["discover","inspect","solve","prove","get_paid"]}"#.to_vec(),
+            artifact: br#"{"schema":"agent-bounties/agent-guide-v1","canonical_url":"https://agentbounties.app/tasks/","steps":["discover","inspect","solve","prove","get_paid"]}"#.to_vec(),
             requirements: alloc::vec![
                 ArtifactRequirement::JsonValid { weight: 1 },
                 ArtifactRequirement::JsonPointerStringEquals {
@@ -1867,7 +1858,7 @@ mod tests {
                 },
                 ArtifactRequirement::JsonPointerStringEquals {
                     pointer: "/canonical_url".into(),
-                    expected: "https://agentizable.ai/tasks/".into(),
+                    expected: "https://agentbounties.app/tasks/".into(),
                     weight: 2,
                 },
                 ArtifactRequirement::JsonArrayMinimumLength {

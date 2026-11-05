@@ -22,6 +22,7 @@ mod managed_bounty_reviews;
 mod managed_payments;
 mod marketplace_head_rpc;
 mod marketplace_readiness;
+mod metric_schemas;
 mod open_competition_v2_api;
 mod opportunities;
 #[cfg(test)]
@@ -504,12 +505,12 @@ use worker::{
         eval_harness::EvalCaseResult,
         domain::FinalSubmission,
         open_competition_v2_api::ForwardCanonicalGmvMetricBody,
-        competition_metric_core::ForwardCanonicalGmvCampaign,
-        competition_metric_core::ForwardCanonicalGmvSnapshot,
-        competition_metric_core::CanonicalGmvSettlement,
-        competition_metric_core::CanonicalGmvFunding,
-        competition_metric_core::CanonicalGmvProtocol,
-        competition_metric_core::CanonicalGmvSnapshotAttestation,
+        metric_schemas::ForwardCanonicalGmvCampaign,
+        metric_schemas::ForwardCanonicalGmvSnapshot,
+        metric_schemas::CanonicalGmvSettlement,
+        metric_schemas::CanonicalGmvFunding,
+        metric_schemas::CanonicalGmvProtocol,
+        metric_schemas::CanonicalGmvSnapshotAttestation,
         domain::FundingMode,
         domain::LeaderboardPeriod,
         domain::LeaderboardPeriodKind,
@@ -582,8 +583,8 @@ use worker::{
         domain::OutreachStatus,
         domain::PrivacyLevel,
         open_competition_v2_api::PublicVectorMetricBody,
-        competition_metric_core::PublicVectorMode,
-        competition_metric_core::PublicVectorCase,
+        metric_schemas::PublicVectorMode,
+        metric_schemas::PublicVectorCase,
         RelayAutonomousTimeoutRequest,
         AutonomousTimeoutAction,
         RelayAutonomousTimeoutResponse,
@@ -683,7 +684,7 @@ use worker::{
         wallet_funding::TopupInput,
         wallet_funding::TopupAction,
         open_competition_v2_api::StructuredArtifactProfileBody,
-        competition_metric_core::ArtifactRequirement,
+        metric_schemas::ArtifactRequirement,
         open_competition_v2_api::CreationBody,
         open_competition_v2_api::CreateParamsBody,
         chain_base::OpenCompetitionV2WinnerMode,

@@ -77,9 +77,13 @@ The application release does not reconcile or replace service environment values
 Existing signed claims remain recoverable after v1 retirement: a stale caller
 snapshot first reloads the durable broadcast result; new v1 exposure stays denied.
 
-API schema derivation is an optional metric-core feature, excluded from proving
-programs. Their pinned SP1 dependencies, lockfiles and verifier identities remain
-subject to the existing independent build and comparison gates.
+API schema mirrors live at the API boundary. The metric-core source, proving
+programs, dependencies, lockfiles and verifier identities keep their exact
+previously approved bytes and remain subject to the existing independent build
+and comparison gates. The two historical test-fixture URLs in metric-core are
+restored to their approved pre-rebrand bytes; even test-only edits changed the
+committed source hashes. A local gate now checks all three source identities
+before the isolated proof builds. Public API schema output remains unchanged.
 
 The historical watchdog rehearsal preserves two distinct records: the exact
 `1998b4e` source archive and the benchmark files already published by PR #1573 at
