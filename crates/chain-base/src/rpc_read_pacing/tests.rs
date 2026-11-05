@@ -88,6 +88,7 @@ fn transport(pacer: Pacer) -> ReqwestJsonRpcTransport {
         client: reqwest::Client::new(),
         read_pacing: pacer,
         read_observation_deadline: None,
+        retry_transient_reads: true,
     }
 }
 fn read(id: u64) -> Value {

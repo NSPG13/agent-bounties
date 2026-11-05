@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 SUITES = (
-    ("db", "autonomous_canonicality::tests::", 1),
+    ("db", "autonomous_canonicality::tests::", 2),
     ("worker", "autonomous_canonicality::tests::", 3),
     ("api", "nonce_retirement::tests::", 5),
     ("api", "nonce_retirement::retained_dispatch::tests::", 5),

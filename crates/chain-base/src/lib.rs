@@ -3144,6 +3144,7 @@ pub struct ReqwestJsonRpcTransport {
     client: reqwest::Client,
     read_pacing: rpc_read_pacing::Pacer,
     read_observation_deadline: Option<tokio::time::Instant>,
+    retry_transient_reads: bool,
 }
 
 impl Default for ReqwestJsonRpcTransport {
@@ -3152,11 +3153,19 @@ impl Default for ReqwestJsonRpcTransport {
             client: reqwest::Client::new(),
             read_pacing: rpc_read_pacing::Pacer::process(),
             read_observation_deadline: None,
+            retry_transient_reads: true,
         }
     }
 }
 
 impl ReqwestJsonRpcTransport {
+    /// Explicit bounded reader: one wire attempt, including no reqwest protocol
+    /// retries. Shared admission remains active; the caller owns retry timing.
+    pub fn single_attempt_without_redirects(
+        timeout: std::time::Duration,
+    ) -> Result<Self, ChainBaseError> {
+        Self::explicit_transport(timeout, false)
+    }
     /// Read-only transport for an observation already bounded by this absolute
     /// caller deadline. Admission consumes the remaining observation budget;
     /// it does not restart a per-read timer or change wire spacing. The caller
@@ -3168,20 +3177,34 @@ impl ReqwestJsonRpcTransport {
     /// Explicit endpoint transport for recovery: no redirects, failover or unbounded waits.
     /// The existing admission policy still applies; mutation requests are never retried.
     pub fn without_redirects(timeout: std::time::Duration) -> Result<Self, ChainBaseError> {
+        Self::explicit_transport(timeout, true)
+    }
+
+    fn explicit_transport(
+        timeout: std::time::Duration,
+        retry_transient_reads: bool,
+    ) -> Result<Self, ChainBaseError> {
         if timeout.is_zero() {
             return Err(ChainBaseError::RpcTransport(
                 "RPC timeout must be positive".into(),
             ));
         }
-        let client = reqwest::Client::builder()
+        let builder = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
-            .timeout(timeout)
+            .timeout(timeout);
+        let builder = if retry_transient_reads {
+            builder
+        } else {
+            builder.retry(reqwest::retry::never())
+        };
+        let client = builder
             .build()
             .map_err(|_| ChainBaseError::RpcTransport("RPC client unavailable".into()))?;
         Ok(Self {
             client,
             read_pacing: rpc_read_pacing::Pacer::process(),
             read_observation_deadline: None,
+            retry_transient_reads,
         })
     }
     async fn post_with_read_retry<T: Serialize + ?Sized>(
@@ -3256,7 +3279,7 @@ impl ReqwestJsonRpcTransport {
             // 502/503/504 read retries remain bounded, consulting admission again.
             match result {
                 Err(ChainBaseError::RpcHttpStatus(502..=504))
-                    if read_only && !probe && attempt < 2 =>
+                    if read_only && self.retry_transient_reads && !probe && attempt < 2 =>
                 {
                     tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
                 }
@@ -3318,6 +3341,36 @@ impl ReqwestJsonRpcTransport {
 mod explicit_rpc_transport_tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    #[tokio::test]
+    async fn single_attempt_reads_have_no_hidden_wire_retries() {
+        for status in [502, 503, 504] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut bytes = vec![0; 4096];
+                stream.read(&mut bytes).await.unwrap();
+                stream.write_all(format!("HTTP/1.1 {status} Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+                // Drop the listener after exactly one response. An internal
+                // retry would fail to connect and change the returned error.
+            });
+            let transport = ReqwestJsonRpcTransport::single_attempt_without_redirects(
+                std::time::Duration::from_secs(1),
+            )
+            .unwrap();
+            let error = transport
+                .post_json_value(
+                    &endpoint,
+                    &json!({"jsonrpc":"2.0", "id":1,
+                "method":"eth_getBlockByNumber", "params":["0x1",false]}),
+                )
+                .await
+                .unwrap_err();
+            assert!(matches!(error, ChainBaseError::RpcHttpStatus(actual) if actual == status));
+            server.await.unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn explicit_recovery_transport_never_redirects_or_retries_a_mutation() {
         assert!(ReqwestJsonRpcTransport::without_redirects(std::time::Duration::ZERO).is_err());

@@ -1,6 +1,8 @@
 //! Safe-block admission and reconciliation of pre-checkpoint legacy history.
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
+mod bootstrap_reads;
+use bootstrap_reads::{BootstrapReadPolicy, BootstrapReads};
 
 fn same_events(stored: &[AutonomousBountyEvent], canonical: &[AutonomousBountyEvent]) -> bool {
     // Ignore database IDs and observation timestamps, never the actual event payload.
@@ -69,92 +71,166 @@ pub(super) async fn verify_previous(
                 provider_delay_seconds: None,
             }));
         }
-        let before =
-            fetch_exact_block_identity(&config.rpc_url, cursor, config.request_id + 30_002).await?;
-        let archive_rpc = config.bootstrap_archive_rpc_url.as_deref();
-        if let Some(archive) = archive_rpc {
-            let anchor =
-                fetch_exact_block_identity(archive, cursor, config.request_id + 30_005).await?;
-            if anchor != before {
-                return Err(anyhow!(
-                    "bootstrap archive disagrees with primary canonical cursor"
-                ));
-            }
-        }
-        let events = store
-            .list_autonomous_bounty_events_for_factory(
-                &config.network,
-                &config.factory_contract,
-                false,
-            )
-            .await?;
-        let mut blocks = BTreeMap::<u64, Vec<AutonomousBountyEvent>>::new();
-        for event in events {
-            if event.block_number > cursor {
-                return Err(anyhow!("uncertified events extend beyond legacy cursor"));
-            }
-            blocks.entry(event.block_number).or_default().push(event);
-        }
-        for (number, stored) in blocks {
-            let emitters = stored
-                .iter()
-                .map(|e| e.contract_address.clone())
-                .collect::<BTreeSet<_>>();
-            let query = BaseMultiContractLogQuery::new(
-                emitters,
-                number,
-                Some(number),
-                autonomous_bounty_event_topics(),
-            )?;
-            let logs = fetch_base_multi_contract_logs(
-                archive_rpc.unwrap_or(&config.rpc_url),
-                &query,
-                config.request_id + 30_003,
-            )
-            .await?;
-            let mut canonical = decode_autonomous_bounty_logs(rpc_logs_to_evm_logs(logs.result)?)?;
-            let observed_keys = stored
-                .iter()
-                .map(|event| event.log_key.as_str())
-                .collect::<BTreeSet<_>>();
-            canonical.retain(|event| observed_keys.contains(event.log_key.as_str()));
-            if !same_events(&stored, &canonical) {
-                return Err(anyhow!("legacy event history disagrees with safe canonical logs; reconciliation required"));
-            }
-        }
-        let after =
-            fetch_exact_block_identity(&config.rpc_url, cursor, config.request_id + 30_004).await?;
-        if before != after || before.number != cursor {
-            return Err(anyhow!(
-                "canonical chain changed during legacy reconciliation"
-            ));
-        }
-        if let Some(archive) = archive_rpc {
-            let anchor =
-                fetch_exact_block_identity(archive, cursor, config.request_id + 30_006).await?;
-            if anchor != after {
-                return Err(anyhow!(
-                    "bootstrap archive changed during legacy reconciliation"
-                ));
-            }
-        }
-        store
-            .commit_autonomous_canonical_checkpoint(
-                &config.network,
-                &config.factory_contract,
-                Some(cursor),
-                None,
-                &after,
-                None,
-            )
-            .await?;
-        return Ok(Some(db::AutonomousCanonicalCheckpoint {
-            block_number: after.number,
-            block_hash: after.hash,
-            invalidated: false,
-        }));
+        let mut reads = BootstrapReads::new(BootstrapReadPolicy::default());
+        // One observation deadline includes SQL and all RPC retries. Exhaustion
+        // enters the existing non-exiting operator hold, rather than resetting
+        // this budget through the polling/supervisor restart loop.
+        let result = tokio::time::timeout_at(
+            reads.deadline(),
+            bootstrap_previous(store, config, cursor, &mut reads),
+        )
+        .await;
+        return match result {
+            Ok(Ok(checkpoint)) => Ok(Some(checkpoint)),
+            Ok(Err(error)) => Err(bootstrap_reads::stopped(&redact_operational_error(
+                &error.to_string(),
+            ))),
+            Err(_) => Err(bootstrap_reads::stopped(
+                "absolute observation deadline exhausted",
+            )),
+        };
     }
     Ok(checkpoint)
+}
+
+async fn bootstrap_previous(
+    store: &PostgresStore,
+    config: &AutonomousIndexerConfig,
+    cursor: u64,
+    reads: &mut BootstrapReads,
+) -> anyhow::Result<db::AutonomousCanonicalCheckpoint> {
+    let tag = format!("0x{cursor:x}");
+    let transport = chain_base::ReqwestJsonRpcTransport::single_attempt_without_redirects(
+        Duration::from_secs(30),
+    )?
+    .with_read_observation_deadline(reads.deadline());
+    let before = reads
+        .run(|| {
+            chain_base::fetch_block_identity_with_transport(
+                &config.rpc_url,
+                &tag,
+                config.request_id + 30_002,
+                &transport,
+            )
+        })
+        .await?;
+    let archive_rpc = config.bootstrap_archive_rpc_url.as_deref();
+    if let Some(archive) = archive_rpc {
+        let anchor = reads
+            .run(|| {
+                chain_base::fetch_block_identity_with_transport(
+                    archive,
+                    &tag,
+                    config.request_id + 30_005,
+                    &transport,
+                )
+            })
+            .await?;
+        if anchor != before {
+            return Err(anyhow!(
+                "bootstrap archive disagrees with primary canonical cursor"
+            ));
+        }
+    }
+    let events = store
+        .list_autonomous_bounty_events_for_factory(&config.network, &config.factory_contract, false)
+        .await?;
+    let mut blocks = BTreeMap::<u64, Vec<AutonomousBountyEvent>>::new();
+    for event in &events {
+        if event.block_number > cursor {
+            return Err(anyhow!("uncertified events extend beyond legacy cursor"));
+        }
+        blocks
+            .entry(event.block_number)
+            .or_default()
+            .push(event.clone());
+    }
+    for (number, stored) in blocks {
+        let emitters = stored
+            .iter()
+            .map(|e| e.contract_address.clone())
+            .collect::<BTreeSet<_>>();
+        let query = BaseMultiContractLogQuery::new(
+            emitters,
+            number,
+            Some(number),
+            autonomous_bounty_event_topics(),
+        )?;
+        let logs = reads
+            .run(|| async {
+                let logs = chain_base::fetch_base_multi_contract_logs_with_transport(
+                    archive_rpc.unwrap_or(&config.rpc_url),
+                    &query,
+                    config.request_id + 30_003,
+                    &transport,
+                )
+                .await?;
+                if logs.id != config.request_id + 30_003 || logs.jsonrpc != "2.0" {
+                    return Err(ChainBaseError::InvalidRpcResponse(
+                        "legacy replay log response does not match request".into(),
+                    ));
+                }
+                Ok(logs)
+            })
+            .await?;
+        let mut canonical = decode_autonomous_bounty_logs(rpc_logs_to_evm_logs(logs.result)?)?;
+        let observed_keys = stored
+            .iter()
+            .map(|event| event.log_key.as_str())
+            .collect::<BTreeSet<_>>();
+        canonical.retain(|event| observed_keys.contains(event.log_key.as_str()));
+        if !same_events(&stored, &canonical) {
+            return Err(anyhow!(
+                "legacy event history disagrees with safe canonical logs; reconciliation required"
+            ));
+        }
+    }
+    let after = reads
+        .run(|| {
+            chain_base::fetch_block_identity_with_transport(
+                &config.rpc_url,
+                &tag,
+                config.request_id + 30_004,
+                &transport,
+            )
+        })
+        .await?;
+    if before != after || before.number != cursor {
+        return Err(anyhow!(
+            "canonical chain changed during legacy reconciliation"
+        ));
+    }
+    if let Some(archive) = archive_rpc {
+        let anchor = reads
+            .run(|| {
+                chain_base::fetch_block_identity_with_transport(
+                    archive,
+                    &tag,
+                    config.request_id + 30_006,
+                    &transport,
+                )
+            })
+            .await?;
+        if anchor != after {
+            return Err(anyhow!(
+                "bootstrap archive changed during legacy reconciliation"
+            ));
+        }
+    }
+    store
+        .commit_autonomous_bootstrap_checkpoint(
+            &config.network,
+            &config.factory_contract,
+            cursor,
+            &after,
+            &events,
+        )
+        .await?;
+    Ok(db::AutonomousCanonicalCheckpoint {
+        block_number: after.number,
+        block_hash: after.hash,
+        invalidated: false,
+    })
 }
 
 #[cfg(test)]
@@ -186,10 +262,20 @@ mod tests {
                 reader.read_exact(&mut body).await.unwrap();
                 let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
                 let mut response = reply(&request);
-                response["jsonrpc"] = "2.0".into();
-                response["id"] = request["id"].clone();
+                let status = response
+                    .get("_http_status")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(200);
+                response["jsonrpc"] = response
+                    .get("_version")
+                    .cloned()
+                    .unwrap_or_else(|| "2.0".into());
+                response["id"] = response
+                    .get("_response_id")
+                    .cloned()
+                    .unwrap_or_else(|| request["id"].clone());
                 let body = response.to_string();
-                reader.get_mut().write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).as_bytes()).await.unwrap();
+                reader.get_mut().write_all(format!("HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).as_bytes()).await.unwrap();
             }
         });
         (format!("http://{address}"), task)
@@ -239,6 +325,23 @@ mod tests {
             .upsert_autonomous_bounty_event("base-sepolia", &event)
             .await
             .unwrap();
+        let mut later_log = log.clone();
+        later_log["blockNumber"] = "0x33".into();
+        later_log["transactionHash"] = format!("0x{}", "ee".repeat(32)).into();
+        later_log["topics"][1] = format!("0x{}", "ef".repeat(32)).into();
+        let later_event = decode_autonomous_bounty_logs(
+            rpc_logs_to_evm_logs([serde_json::from_value::<chain_base::RpcEvmLog>(
+                later_log.clone(),
+            )
+            .unwrap()])
+            .unwrap(),
+        )
+        .unwrap()
+        .remove(0);
+        store
+            .upsert_autonomous_bounty_event("base-sepolia", &later_event)
+            .await
+            .unwrap();
         store
             .upsert_base_log_cursor("base-sepolia", &factory, 100, Some(&event.log_key))
             .await
@@ -250,7 +353,7 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(original_events.as_array().unwrap().len(), 1);
+        assert_eq!(original_events.as_array().unwrap().len(), 2);
         let original_cursor = store
             .get_base_log_cursor("base-sepolia", &factory)
             .await
@@ -267,6 +370,8 @@ mod tests {
         .await;
         let mode = Arc::new(AtomicUsize::new(0));
         let anchors = Arc::new(AtomicUsize::new(0));
+        let log_reads = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let archive_log_reads = log_reads.clone();
         let archive_mode = mode.clone();
         let archive_anchors = anchors.clone();
         let (archive, archive_task) = test_rpc(move |request| {
@@ -282,20 +387,39 @@ mod tests {
                     json!({"result":value})
                 }
                 "eth_getLogs" => {
-                    assert_eq!(request["params"][0]["fromBlock"], "0x32");
-                    assert_eq!(request["params"][0]["toBlock"], "0x32");
+                    let block = request["params"][0]["fromBlock"].as_str().unwrap();
+                    assert!(matches!(block, "0x32" | "0x33"));
+                    assert_eq!(request["params"][0]["toBlock"], block);
+                    let mut reads = archive_log_reads.lock().unwrap();
+                    reads.push(block.to_string());
+                    if mode == 7
+                        && block == "0x33"
+                        && reads.iter().filter(|b| *b == "0x33").count() == 1
+                    {
+                        return json!({"_http_status":503});
+                    }
                     if mode == 3 {
                         return json!({"result":[]});
                     }
                     if mode == 5 {
                         return json!({"error":{"code":-32000,"message":"archive unavailable"}});
                     }
-                    let mut value = log.clone();
+                    let mut value = if block == "0x32" {
+                        log.clone()
+                    } else {
+                        later_log.clone()
+                    };
                     if mode == 4 {
                         value["data"] = format!("0x{}", "44".repeat(96)).into();
                     }
                     if mode == 6 {
                         value["data"] = "0x01".into();
+                    }
+                    if mode == 8 {
+                        return json!({"result":[value], "_response_id":0});
+                    }
+                    if mode == 9 {
+                        return json!({"result":[value], "_version":"1.0"});
                     }
                     json!({"result":[value]})
                 }
@@ -318,7 +442,7 @@ mod tests {
         };
         // Before/after anchor disagreement, missing/changed payload, provider
         // outage and malformed logs cannot certify or mutate historical rows.
-        for failure in 1..=6 {
+        for failure in [1, 2, 3, 4, 5, 6, 8, 9] {
             mode.store(failure, Ordering::SeqCst);
             anchors.store(0, Ordering::SeqCst);
             let error = verify_previous(&store, &config, Some(100), &safe)
@@ -326,8 +450,8 @@ mod tests {
                 .unwrap_err();
             assert_eq!(
                 indexer_error_is_retryable(&error),
-                failure == 5,
-                "case {failure}"
+                false,
+                "bootstrap case {failure} must hold without automatic restart"
             );
             assert!(store
                 .autonomous_canonical_checkpoint(&config.network, &factory)
@@ -353,7 +477,10 @@ mod tests {
                 original_events
             );
         }
-        mode.store(0, Ordering::SeqCst);
+        // A temporary middle-block failure must retry that block without
+        // re-reading the successful prefix or persisting partial authority.
+        mode.store(7, Ordering::SeqCst);
+        log_reads.lock().unwrap().clear();
         anchors.store(0, Ordering::SeqCst);
         let checkpoint = verify_previous(&store, &config, Some(100), &safe)
             .await
@@ -361,6 +488,7 @@ mod tests {
             .unwrap();
         assert_eq!(checkpoint.block_hash, safe.hash);
         assert_eq!(anchors.load(Ordering::SeqCst), 2);
+        assert_eq!(*log_reads.lock().unwrap(), vec!["0x32", "0x33", "0x33"]);
         archive_task.abort();
         assert!(verify_previous(&store, &config, Some(100), &safe)
             .await
