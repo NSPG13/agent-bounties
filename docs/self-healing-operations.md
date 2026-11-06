@@ -416,3 +416,33 @@ Deploy and verify the API's additive `latest_block` response before updating the
 public probe. The probe deliberately treats a missing or invalid latest bound as
 unavailable. Existing activation, alert deduplication and schedule rules stay in
 place; this change adds no schedule, restart authority or paid build.
+
+## Bounded legacy checkpoint bootstrap
+
+A legacy autonomous reader with stored events but no canonical checkpoint must
+replay every stored block before publishing certified history. Its bootstrap
+uses a separate read-only attempt: at most 20 minutes, 2,000 read admissions and
+six attempts for any one immutable request. All initial and final cursor anchors
+count toward these limits. Single-attempt transport retains the shared provider
+hold and disables internal wire retries, so an admission counts at most one
+network request. Successful reads and retries start at least one second apart;
+this spacing does not depend on inherited process environment.
+
+Only classified temporary transport failures and provider throttling retry the
+same block. Retry delays grow from five to sixty seconds, and a longer provider
+`Retry-After` is honored in full. A delay that cannot fit the original deadline
+ends the attempt without another request. Successful prefixes remain only in
+memory. Malformed data, changed anchors, changed stored event tuples or exhausted
+limits enter the existing non-exiting operator hold with a failed heartbeat.
+The child does not crash or ask its supervisor to restart healthy sibling readers.
+An intentional process restart starts a new bounded attempt; these limits are
+not a durable cross-restart quota or an automatic restart authorization.
+
+After all comparisons, the original primary and optional archive cursor anchors
+must still agree. A short final database transaction locks event writes, compares
+the complete replayed event tuples again, and performs the existing cursor and
+checkpoint compare-and-swap. The lock wait is limited to two seconds and each
+statement to five seconds, within the original overall deadline. No network
+request runs under this lock. A cancelled or unsuccessful attempt leaves no
+partial checkpoint, does not reset the cursor and never reports a fresh success
+heartbeat. Existing checked history and payment rules remain unchanged.

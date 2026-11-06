@@ -16,6 +16,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+import bootstrap_repair_admission as repair
 
 ROOT=Path(__file__).resolve().parents[1]
 PUBLIC='https://github.com/NSPG13/agent-bounties'
@@ -193,6 +194,29 @@ def prepare_release(client, manifest, migrate, bootstrap=False, preflight_record
     if preflight_record is not None:preflight_record.update(observation)
     return prepare(client, manifest, migrate, bootstrap)
 
+def repair_inventory(client, manifest):
+    # This incident is already on public source. Inspection must never migrate
+    # repository settings or admit another service into the mutation boundary.
+    if (manifest.get('repository')!=PUBLIC or manifest.get('branch')!='main'
+            or manifest.get('workspace_id')!=repair.WORKSPACE
+            or manifest.get('autonomous_bootstrap_service_id')!=repair.SERVICE
+            or manifest.get('marketplace_readiness',{}).get('url')!=repair.READINESS
+            or set(manifest.get('marketplace_readiness',{}).get('protocols',[]))!=repair.PROTOCOLS
+            or len(manifest.get('services',[]))!=9
+            or len({row['id'] for row in manifest['services']})!=9):
+        raise ReleaseError('bootstrap_repair_inventory_changed')
+    selected=[]
+    for expected in manifest['services']:
+        service=client.request('GET','services/'+expected['id'])
+        validate_service(service,expected,manifest,expected['id']!=repair.SERVICE)
+        if expected['id']==repair.SERVICE:
+            if expected['type']!='background_worker' or expected.get('dockerfile')!='./Dockerfile.posting-indexers':
+                raise ReleaseError('bootstrap_repair_inventory_changed')
+            selected.append((expected,service))
+    validate_blueprints(client,manifest)
+    if len(selected)!=1:raise ReleaseError('bootstrap_repair_inventory_changed')
+    return selected
+
 def verify_live_readers(manifest, revision):
     deadline = time.monotonic() + 300
     successes = 0
@@ -225,11 +249,16 @@ def main():
         help='Deploy only the reviewed autonomous reader service; independent checkpoint acceptance is required before the full release')
     parser.add_argument('--accepted-autonomous-deploy-id',
         help='Reuse the exact independently accepted autonomous deployment during manual full promotion')
+    parser.add_argument('--bootstrap-repair-case',
+        help='Exact expiring manually reviewed incident; never permits full promotion or source migration')
     parser.add_argument('--evidence-dir',type=Path,required=True)
     args=parser.parse_args()
     approved=os.environ.get('APPROVED_REVISION','')
     event=os.environ.get('RELEASE_EVENT','')
     validate_release_approval(args.revision,os.environ.get('PRODUCTION_EXPECTED_REVISION',''),approved,event)
+    if args.bootstrap_repair_case:
+        repair.validate_request(args.bootstrap_repair_case,args.revision,approved,event,
+            args.migrate_source,args.bootstrap_autonomous_readers,args.accepted_autonomous_deploy_id,repair.now())
     if args.accepted_autonomous_deploy_id and (args.bootstrap_autonomous_readers
             or event!='workflow_dispatch' or approved!=args.revision
             or not re.fullmatch(r'dep-[a-z0-9]+',args.accepted_autonomous_deploy_id)):
@@ -240,7 +269,8 @@ def main():
             and row.get('type')=='background_worker' and row.get('dockerfile')=='./Dockerfile.posting-indexers'
             for row in manifest['services'])!=1:
         raise ReleaseError('accepted reader is absent from the reviewed inventory')
-    client=Render(os.environ.get('RENDER_API_KEY'))
+    client=(repair.Render(os.environ.get('RENDER_API_KEY'),args.revision) if args.bootstrap_repair_case
+            else Render(os.environ.get('RENDER_API_KEY')))
     directory=args.evidence_dir;directory.mkdir(parents=True,exist_ok=False)
     record={'revision':args.revision,'repository':PUBLIC,'workspace_id':manifest['workspace_id'],
             'phase':'autonomous-bootstrap' if args.bootstrap_autonomous_readers else 'full-release',
@@ -250,7 +280,13 @@ def main():
     save()
     try:
         record['preflight']={}
-        services=prepare_release(client,manifest,args.migrate_source,args.bootstrap_autonomous_readers,record['preflight'])
+        ticket=None
+        if args.bootstrap_repair_case:
+            ticket=repair.Ticket(client,lambda:repair_inventory(client,manifest))
+            services=ticket.services
+            record['preflight'].update(ticket.receipt)
+        else:
+            services=prepare_release(client,manifest,args.migrate_source,args.bootstrap_autonomous_readers,record['preflight'])
         for expected,previous in services:
             deploys=client.request('GET',f"services/{expected['id']}/deploys?limit=20")
             live=[v.get('deploy',v) for v in deploys if v.get('deploy',v).get('status')=='live']
@@ -262,6 +298,9 @@ def main():
         # Validate any accepted reader before starting another service deploy.
         for row in record['services']:
             if row.get('reused_accepted_deployment'):continue
+            if ticket is not None:
+                ticket.before_deploy()
+                record['preflight'].update(ticket.receipt);save()
             deployed=client.request('POST',f"services/{row['id']}/deploys",{'commitId':args.revision,'clearCache':'do_not_clear'})
             validate_deploy(deployed,args.revision)
             row.update(deploy_id=deployed['id'],status=deployed.get('status'));save()

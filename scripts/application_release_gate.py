@@ -29,7 +29,7 @@ STEPS = (
     ("production-compose", ("bash", "scripts/check-production-compose.sh")),
 )
 POSTGRES = (
-    ("db", "autonomous_canonicality::tests::", 1),
+    ("db", "autonomous_canonicality::tests::", 2),
     ("worker", "autonomous_canonicality::tests::", 3),
     ("db", "terms_publication::tests::", 3),
     ("api", "terms_publication::tests::publication_http_wallet_ownership_and_exact_historical_replay", 1),
