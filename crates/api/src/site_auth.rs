@@ -865,6 +865,7 @@ async fn session(Extension(service): Extension<SiteAuthService>, headers: Header
     );
     if user.is_none() {
         payload["account_status"] = json!("signed_out");
+        payload["solver_status"] = json!("signed_out");
     }
     no_store_json(StatusCode::OK, payload)
 }
@@ -2388,28 +2389,30 @@ fn build_linked_account_dashboard(
     let completed_count = completed_posts.len();
     let participating_items = sorted_activities(participating.into_values());
     let completed_items = sorted_activities(completed_posts.into_values());
-    Ok(json!({
-        "schema_version": "agent-bounties/account-dashboard-v1",
-        "data_status": "available",
-        "reason": null,
-        "identity_link_status": "verified",
-        "account_status": "ready",
-        "account_complete": true,
-        "wallets": wallets,
-        "stats": {
-            "participating_bounties": participating_count,
-            "completed_posted_bounties": completed_count,
-            "earned_usdc": usdc_from_base_units(earned),
-            "spent_usdc": usdc_from_base_units(spent),
-            "leaderboard_rank": rank,
-        },
-        "activity_inbox": crate::account_activity::inbox(evidence, &addresses, Utc::now()),
-        "activities": {
-            "participating": participating_items,
-            "completed_posts": completed_items,
-        },
-        "evidence_boundary": "Wallet ownership was verified with a one-time EIP-191 signature. Earnings count canonical solver rewards and timeout bonuses; spending counts gross canonical FundingAdded contributions. Rank is the best current weekly rank among linked wallets.",
-    }))
+    let wallet_count = wallets.len();
+    Ok(with_account_setup(
+        json!({
+            "schema_version": "agent-bounties/account-dashboard-v1",
+            "data_status": "available",
+            "reason": null,
+            "identity_link_status": "verified",
+            "wallets": wallets,
+            "stats": {
+                "participating_bounties": participating_count,
+                "completed_posted_bounties": completed_count,
+                "earned_usdc": usdc_from_base_units(earned),
+                "spent_usdc": usdc_from_base_units(spent),
+                "leaderboard_rank": rank,
+            },
+            "activity_inbox": crate::account_activity::inbox(evidence, &addresses, Utc::now()),
+            "activities": {
+                "participating": participating_items,
+                "completed_posts": completed_items,
+            },
+            "evidence_boundary": "Wallet ownership was verified with a one-time EIP-191 signature. Earnings count canonical solver rewards and timeout bonuses; spending counts gross canonical FundingAdded contributions. Rank is the best current weekly rank among linked wallets.",
+        }),
+        Some(wallet_count),
+    ))
 }
 
 fn unavailable_account_dashboard(reason: &str, wallets: Vec<BrowserWallet>) -> Value {
@@ -2440,15 +2443,21 @@ fn unavailable_account_dashboard(reason: &str, wallets: Vec<BrowserWallet>) -> V
 }
 
 // The server alone decides completion, using persisted ownership-verified links.
+// Posting (card or crypto) needs only a signed-in account: card buyers are
+// authenticated by account, and crypto funding proves its funding wallet at
+// the funding step. A verified wallet is a solver requirement (claims, bonds,
+// submissions and payouts), so it is reported separately and grants nothing.
 // A missing store is unknown, never a completed account or an empty wallet list.
 fn with_account_setup(mut payload: Value, verified_wallet_count: Option<usize>) -> Value {
-    let status = match verified_wallet_count {
-        Some(0) => "wallet_required",
-        Some(_) => "ready",
-        None => "unavailable",
+    let (account, solver) = match verified_wallet_count {
+        Some(0) => ("ready", "wallet_required"),
+        Some(_) => ("ready", "ready"),
+        None => ("unavailable", "unavailable"),
     };
-    payload["account_status"] = json!(status);
-    payload["account_complete"] = json!(status == "ready");
+    payload["account_status"] = json!(account);
+    payload["account_complete"] = json!(account == "ready");
+    payload["solver_status"] = json!(solver);
+    payload["solver_ready"] = json!(solver == "ready");
     payload
 }
 
@@ -3817,7 +3826,10 @@ mod tests {
             )
             .unwrap();
             let drafts = if path.ends_with("/account") {
-                assert_eq!(payload["account_status"], "wallet_required");
+                assert_eq!(payload["account_status"], "ready");
+                assert_eq!(payload["account_complete"], true);
+                assert_eq!(payload["solver_status"], "wallet_required");
+                assert_eq!(payload["solver_ready"], false);
                 assert_eq!(payload["stats"]["earned_usdc"], Value::Null);
                 &payload["saved_drafts"]
             } else {
@@ -3884,13 +3896,23 @@ mod tests {
     }
 
     #[test]
-    fn account_completion_requires_a_verified_link_and_survives_evidence_outage() {
+    fn posting_accounts_need_no_wallet_and_solver_readiness_requires_a_verified_link() {
+        // A card-paying poster is complete without a wallet; only solving needs one.
         let pending = unavailable_account_dashboard("marketplace_identity_unlinked", vec![]);
-        assert_eq!(pending["account_status"], "wallet_required");
-        assert_eq!(pending["account_complete"], false);
+        assert_eq!(pending["account_status"], "ready");
+        assert_eq!(pending["account_complete"], true);
+        assert_eq!(pending["solver_status"], "wallet_required");
+        assert_eq!(pending["solver_ready"], false);
+        assert!(pending["stats"]["earned_usdc"].is_null());
         let unknown = unavailable_account_dashboard("wallet_link_store_unavailable", vec![]);
         assert_eq!(unknown["account_status"], "unavailable");
         assert_eq!(unknown["account_complete"], false);
+        assert_eq!(unknown["solver_status"], "unavailable");
+        assert_eq!(unknown["solver_ready"], false);
+        // Unknown storage is never a completed account, even with zero wallets reported.
+        let service_down = unavailable_account_dashboard("account_service_unavailable", vec![]);
+        assert_eq!(service_down["account_complete"], false);
+        assert_eq!(service_down["solver_ready"], false);
         let linked = unavailable_account_dashboard(
             "marketplace_evidence_unavailable",
             vec![BrowserWallet {
@@ -3908,10 +3930,27 @@ mod tests {
         );
         assert_eq!(linked["account_status"], "ready");
         assert_eq!(linked["account_complete"], true);
+        assert_eq!(linked["solver_status"], "ready");
+        assert_eq!(linked["solver_ready"], true);
         assert!(linked["stats"]["earned_usdc"].is_null());
+        // Removing the final wallet ends solver readiness, not the posting account.
         let removed = with_account_setup(json!({"unlinked": true, "wallets": []}), Some(0));
-        assert_eq!(removed["account_status"], "wallet_required");
-        assert_eq!(removed["account_complete"], false);
+        assert_eq!(removed["account_status"], "ready");
+        assert_eq!(removed["account_complete"], true);
+        assert_eq!(removed["solver_status"], "wallet_required");
+        assert_eq!(removed["solver_ready"], false);
+    }
+
+    #[test]
+    fn linked_dashboard_derives_solver_readiness_from_its_wallets() {
+        let empty = json!({"autonomous": [], "competition_v1": [], "competition_v2": [],
+            "leaderboard": {"weekly": {"ranking": {"entries": []}}}});
+        // An empty list must never be reported as a verified solver wallet.
+        let dashboard =
+            build_linked_account_dashboard(vec![], &empty).expect("empty evidence is valid");
+        assert_eq!(dashboard["account_complete"], true);
+        assert_eq!(dashboard["solver_ready"], false);
+        assert_eq!(dashboard["solver_status"], "wallet_required");
     }
 
     pub(super) fn test_user() -> SessionUser {

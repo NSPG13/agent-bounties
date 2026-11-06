@@ -68,16 +68,19 @@
     "sun", "road", "lamp", "building", "tree", "water", "screen", "document", "network", "tool", "person", "check", "bridge", "book", "chart",
   ]);
 
+  // Posting needs only a signed-in account. Card buyers are authenticated by
+  // account, and crypto funding proves its funding wallet at the funding step;
+  // a linked wallet is a solver requirement, not a posting one.
   function postingAccountStatus(payload) {
     if (!payload?.authenticated) return "signed_out";
     if (payload.account_status === "ready" && payload.account_complete === true) return "ready";
-    if (payload.account_status === "wallet_required" && payload.account_complete === false) return "setup";
+    // The previous API reported a signed-in account without a wallet this way.
+    if (payload.account_status === "wallet_required" && payload.account_complete === false) return "ready";
     return "unavailable";
   }
 
   function postingPrimaryAction(accountStatus, handoffReview = false) {
     if (accountStatus === "ready") return { action: "approve", disabled: false, label: handoffReview ? "Confirm bounty" : "Approve bounty card" };
-    if (accountStatus === "setup") return { action: "login", disabled: false, label: "FINISH SETUP TO POST" };
     if (accountStatus === "restoring") return { action: "wait", disabled: true, label: "Restoring saved draft…" };
     if (accountStatus === "checking") return { action: "wait", disabled: true, label: "Checking login…" };
     if (accountStatus === "unavailable") return { action: "login", disabled: false, label: "CHECK ACCOUNT TO POST" };
@@ -281,11 +284,8 @@
   function postingAuthMessage() {
     if (state.postingAccountStatus === "ready") {
       return state.postingAuthReceipt
-        ? "Login and account setup are complete. Your prepared bounty is intact. Confirm it, then choose the wallet that will fund it."
+        ? "You’re signed in. Your prepared bounty is intact. Confirm it, then pay by card or choose the wallet that will fund it."
         : "Review the terms, reward, content-derived visual, and verification disclosure. Nothing has been posted or funded.";
-    }
-    if (state.postingAccountStatus === "setup") {
-      return "You are signed in. Finish linking an account wallet, then you will return to this exact prepared bounty. Account setup cannot post or fund it.";
     }
     if (state.postingAccountStatus === "restoring") {
       return "You are signed in. Restoring your saved draft before review; nothing has been posted or funded.";

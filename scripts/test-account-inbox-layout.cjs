@@ -46,6 +46,8 @@ function sorted(value) { return value && typeof value === "object" ? Array.isArr
       await page.getByRole("heading",{name:"Saved drafts (1)"}).waitFor();
       assert.equal(await inbox.isVisible(),true);
       assert.equal(await page.locator("[data-account-stats]").isVisible(),false);
+      // The previous API's wallet-less session is a ready posting account, not unfinished setup.
+      assert.deepEqual(await page.locator("[data-auth-dialog]").evaluate(el=>[el.dataset.accountStatus,el.dataset.solverStatus]),["ready","wallet_required"]);
       await page.waitForFunction(()=>Boolean(window.AgentBountiesWebMCP));
       const agent=await page.evaluate(()=>window.AgentBountiesWebMCP.call("agent_bounties_get_account_activity"));
       assert.equal(agent.items.length,1); assert.equal(agent.items[0].operation_id,operation);

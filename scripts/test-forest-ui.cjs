@@ -178,7 +178,8 @@ async function main() {
       mode="invalid";await page.locator("[data-leaderboard-refresh]").click();await page.waitForFunction(()=>!document.querySelector("[data-leaderboard-refresh]").disabled);assert.equal(await page.locator("[data-leaderboard-table]").isVisible(),false);
       for(const state of ["wallet_required","ready"]) {
         account=state;await page.goto(origin+"/#account");await page.locator("[data-auth-dialog][open]").waitFor();
-        await page.waitForFunction(expected=>document.querySelector("[data-auth-dialog]").dataset.accountStatus===expected,state);
+        // A wallet-less account is ready to post; only solver readiness waits for a wallet.
+        await page.waitForFunction(expected=>{const d=document.querySelector("[data-auth-dialog]").dataset;return d.accountStatus==="ready"&&d.solverStatus===expected;},state);
         await capture(page,`account-${state}-${width}`);
         await page.locator("[data-auth-close]").click();
         await page.locator('button[data-theme-choice="light"]').click();

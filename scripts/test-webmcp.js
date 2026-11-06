@@ -94,6 +94,33 @@ test("account inspection uses the existing session and never returns credentials
   assert.equal(JSON.stringify(result).includes("must-not-return"), false);
 });
 
+test("account inspection separates posting readiness from solver wallet readiness", async () => {
+  const id = "ab".repeat(32);
+  const read = async (session) => {
+    const env = environment();
+    env.window.fetch = async () => ({ ok: true, json: async () => ({ authenticated: true, user: { id }, ...session }) });
+    env.register();
+    return env.tools.get("agent_bounties_get_account_status").execute();
+  };
+  const cardOnly = await read({ account_status: "ready", account_complete: true, solver_status: "wallet_required", solver_ready: false });
+  assert.equal(cardOnly.posting_ready, true); assert.equal(cardOnly.solver_ready, false);
+  const solver = await read({ account_status: "ready", account_complete: true, solver_status: "ready", solver_ready: true });
+  assert.equal(solver.posting_ready, true); assert.equal(solver.solver_ready, true);
+  // Previous API during a rolling release.
+  const legacyPending = await read({ account_status: "wallet_required", account_complete: false });
+  assert.equal(legacyPending.posting_ready, true); assert.equal(legacyPending.solver_ready, false);
+  const legacyReady = await read({ account_status: "ready", account_complete: true });
+  assert.equal(legacyReady.posting_ready, true); assert.equal(legacyReady.solver_ready, true);
+  // Contradictory or unknown state is never readiness, and never authority.
+  const contradictory = await read({ account_status: "ready", account_complete: true, solver_status: "wallet_required", solver_ready: true });
+  assert.equal(contradictory.solver_ready, false);
+  const unknown = await read({ account_status: "unavailable", account_complete: false, solver_status: "unavailable", solver_ready: false });
+  assert.equal(unknown.posting_ready, false); assert.equal(unknown.solver_ready, false);
+  for (const result of [cardOnly, solver, legacyPending, legacyReady, contradictory, unknown]) {
+    assert.equal(result.wallet_authorized, false); assert.equal(result.payment_authorized, false);
+  }
+});
+
 test("posting options explain both supported checks and preserve campaign economics", () => {
   const env = environment("/post.html"); env.register();
   const result = env.tools.get("agent_bounties_get_posting_options").execute();
