@@ -86,11 +86,9 @@ pub(super) async fn verify_previous(
     store: &PostgresStore,
     config: &AutonomousIndexerConfig,
     cursor: Option<u64>,
+    checkpoint: Option<db::AutonomousCanonicalCheckpoint>,
     safe: &chain_base::BaseBlockIdentity,
 ) -> anyhow::Result<Option<db::AutonomousCanonicalCheckpoint>> {
-    let checkpoint = store
-        .autonomous_canonical_checkpoint(&config.network, &config.factory_contract)
-        .await?;
     if let Some(c) = &checkpoint {
         if c.invalidated || cursor != Some(c.block_number) {
             return Err(anyhow!(
@@ -615,9 +613,18 @@ mod tests {
             mode.store(failure, Ordering::SeqCst);
             anchors.store(0, Ordering::SeqCst);
             log_reads.lock().unwrap().clear();
-            let error = verify_previous(&store, &config, Some(100), &safe)
-                .await
-                .unwrap_err();
+            let error = verify_previous(
+                &store,
+                &config,
+                Some(100),
+                store
+                    .autonomous_canonical_checkpoint(&config.network, &config.factory_contract)
+                    .await
+                    .unwrap(),
+                &safe,
+            )
+            .await
+            .unwrap_err();
             assert!(
                 !indexer_error_is_retryable(&error),
                 "bootstrap case {failure} must hold without automatic restart"
@@ -658,17 +665,35 @@ mod tests {
         mode.store(7, Ordering::SeqCst);
         log_reads.lock().unwrap().clear();
         anchors.store(0, Ordering::SeqCst);
-        let checkpoint = verify_previous(&store, &config, Some(100), &safe)
-            .await
-            .unwrap()
-            .unwrap();
+        let checkpoint = verify_previous(
+            &store,
+            &config,
+            Some(100),
+            store
+                .autonomous_canonical_checkpoint(&config.network, &config.factory_contract)
+                .await
+                .unwrap(),
+            &safe,
+        )
+        .await
+        .unwrap()
+        .unwrap();
         assert_eq!(checkpoint.block_hash, safe.hash);
         assert_eq!(anchors.load(Ordering::SeqCst), 2);
         assert_eq!(*log_reads.lock().unwrap(), vec!["0x32", "0x33", "0x33"]);
         archive_task.abort();
-        assert!(verify_previous(&store, &config, Some(100), &safe)
-            .await
-            .is_ok());
+        assert!(verify_previous(
+            &store,
+            &config,
+            Some(100),
+            store
+                .autonomous_canonical_checkpoint(&config.network, &config.factory_contract)
+                .await
+                .unwrap(),
+            &safe
+        )
+        .await
+        .is_ok());
         assert_eq!(
             serde_json::to_value(
                 store
@@ -770,9 +795,18 @@ mod tests {
             hash: format!("0x{}", "aa".repeat(32)),
             timestamp: 1,
         };
-        let error = verify_previous(&store, &config, Some(100), &safe)
-            .await
-            .unwrap_err();
+        let error = verify_previous(
+            &store,
+            &config,
+            Some(100),
+            store
+                .autonomous_canonical_checkpoint(&config.network, &config.factory_contract)
+                .await
+                .unwrap(),
+            &safe,
+        )
+        .await
+        .unwrap_err();
         let recovery = IndexerRecoveryPolicy {
             initial_backoff_seconds: 5,
             max_backoff_seconds: 120,
@@ -808,10 +842,19 @@ mod tests {
         assert_eq!(waiting.updated_at, original.updated_at);
 
         safe.number = 100;
-        let certified = verify_previous(&store, &config, Some(100), &safe)
-            .await
-            .unwrap()
-            .unwrap();
+        let certified = verify_previous(
+            &store,
+            &config,
+            Some(100),
+            store
+                .autonomous_canonical_checkpoint(&config.network, &config.factory_contract)
+                .await
+                .unwrap(),
+            &safe,
+        )
+        .await
+        .unwrap()
+        .unwrap();
         server.await.unwrap();
         assert_eq!(requests.load(Ordering::SeqCst), 2);
         assert_eq!(certified.block_number, 100);
@@ -821,9 +864,18 @@ mod tests {
         // The identical height lag after certification is an integrity failure,
         // not a bootstrap wait. It must quarantine and remain nonretryable.
         safe.number = 99;
-        let error = verify_previous(&store, &config, Some(100), &safe)
-            .await
-            .unwrap_err();
+        let error = verify_previous(
+            &store,
+            &config,
+            Some(100),
+            store
+                .autonomous_canonical_checkpoint(&config.network, &config.factory_contract)
+                .await
+                .unwrap(),
+            &safe,
+        )
+        .await
+        .unwrap_err();
         assert!(!indexer_error_is_retryable(&error));
         assert!(
             store
@@ -834,9 +886,18 @@ mod tests {
                 .invalidated
         );
         safe.number = 100;
-        let error = verify_previous(&store, &config, Some(100), &safe)
-            .await
-            .unwrap_err();
+        let error = verify_previous(
+            &store,
+            &config,
+            Some(100),
+            store
+                .autonomous_canonical_checkpoint(&config.network, &config.factory_contract)
+                .await
+                .unwrap(),
+            &safe,
+        )
+        .await
+        .unwrap_err();
         assert!(!indexer_error_is_retryable(&error));
         assert_eq!(requests.load(Ordering::SeqCst), 2);
         assert_eq!(
@@ -973,9 +1034,18 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(verify_previous(&store, &config, Some(100), &block)
-            .await
-            .is_ok());
+        assert!(verify_previous(
+            &store,
+            &config,
+            Some(100),
+            store
+                .autonomous_canonical_checkpoint(&config.network, &config.factory_contract)
+                .await
+                .unwrap(),
+            &block
+        )
+        .await
+        .is_ok());
         assert_eq!(
             store
                 .list_autonomous_bounty_events(&config.network)
@@ -985,9 +1055,18 @@ mod tests {
             2
         );
         reorg.store(true, Ordering::SeqCst);
-        let error = verify_previous(&store, &config, Some(100), &block)
-            .await
-            .unwrap_err();
+        let error = verify_previous(
+            &store,
+            &config,
+            Some(100),
+            store
+                .autonomous_canonical_checkpoint(&config.network, &config.factory_contract)
+                .await
+                .unwrap(),
+            &block,
+        )
+        .await
+        .unwrap_err();
         assert!(!indexer_error_is_retryable(&error));
         let independent =
             PostgresStore::from_pool(sqlx::PgPool::connect_with(options).await.unwrap());

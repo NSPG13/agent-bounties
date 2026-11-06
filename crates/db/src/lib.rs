@@ -4,7 +4,7 @@ pub use projection_snapshot::{
     OpenCompetitionV2ProjectionSnapshot, ProjectionReaderSnapshot,
 };
 mod autonomous_canonicality;
-pub use autonomous_canonicality::AutonomousCanonicalCheckpoint;
+pub use autonomous_canonicality::{AutonomousCanonicalCheckpoint, AutonomousIndexerPosition};
 mod stripe_reconciliation;
 pub use stripe_reconciliation::{
     StripeConnectSnapshotTransaction, StripeReconciliationSnapshot, StripeReconciliationTransaction,
@@ -253,6 +253,8 @@ const BOND_SPONSORSHIP_SELECT_BY_CANDIDATE_SQL: &str = r#"
 pub enum DbError {
     #[error("conflicting Stripe reconciliation evidence")]
     StripeReconciliationConflict,
+    #[error("identical autonomous checkpoint was committed by another poller; retry from current position")]
+    AutonomousCheckpointAlreadyCommitted,
     #[error("historical payout projection exceeds its bounded snapshot capacity")]
     PayoutProofCapacity,
     #[error("invalid push notification: {0}")]

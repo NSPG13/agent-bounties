@@ -94,7 +94,10 @@ pub fn indexer_error_is_retryable(error: &anyhow::Error) -> bool {
                 | ChainBaseError::RpcRetryAfter { .. }
         );
     }
-    matches!(error.downcast_ref::<DbError>(), Some(DbError::Sqlx(_)))
+    matches!(
+        error.downcast_ref::<DbError>(),
+        Some(DbError::Sqlx(_) | DbError::AutonomousCheckpointAlreadyCommitted)
+    )
 }
 
 fn indexer_persistence_failure(error: &anyhow::Error, persistence: DbError) -> anyhow::Error {
@@ -730,18 +733,23 @@ pub async fn poll_autonomous_indexer_once(
 ) -> anyhow::Result<AutonomousIndexerPollReport> {
     let descriptor = config.network_descriptor()?;
     backfill_autonomous_event_block_times(store, config).await?;
+    // Capture one durable position before the fresh headers. A competing poll
+    // may advance afterwards, but cannot mix our cursor with its checkpoint or
+    // make a newer checkpoint appear to regress behind an older safe response.
+    let position = store
+        .autonomous_indexer_position(&config.network, &config.factory_contract)
+        .await?;
+    let scan_cursor = position.cursor;
     let latest_block = fetch_block_number(&config.rpc_url, config.request_id).await?;
     let safe = fetch_safe_block_identity(&config.rpc_url, config.request_id + 30_000).await?;
     let confirmed_to_block = latest_block
         .checked_sub(config.confirmations)
         .map(|n| n.min(safe.number));
-    let scan_cursor = store
-        .get_base_log_cursor(&config.network, &config.factory_contract)
-        .await?;
     let checkpoint = autonomous_canonicality::verify_previous(
         store,
         config,
         scan_cursor.as_ref().map(|c| c.last_scanned_block),
+        position.checkpoint,
         &safe,
     )
     .await?;
@@ -2481,3 +2489,6 @@ mod double_failure_tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod autonomous_checkpoint_contention_tests;

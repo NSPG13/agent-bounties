@@ -277,8 +277,14 @@ pub async fn cleanup_loop(state: SharedState, objects: worker::artifact_store::A
                         let confirmed = json!({"network":network,"bounty_contract":item.bounty_contract.to_lowercase(),"bounty_id":item.bounty_id,"round":round,"event_id":event.id,"submission_hash":expected,"solver":event.data["solver"],"visibility":"private"});
                         // Recovery confirms retention only. Publishing files still
                         // requires the solver's explicit authenticated request.
+                        // The pending snapshot may be stale after that request completes.
                         let _ = store
-                            .confirm_artifact(artifact.id, &artifact.owner_key, &confirmed)
+                            .confirm_pending_artifact(
+                                artifact.id,
+                                &artifact.owner_key,
+                                scope,
+                                &confirmed,
+                            )
                             .await;
                     } else if item
                         .events

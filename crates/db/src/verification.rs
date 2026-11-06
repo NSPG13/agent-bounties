@@ -325,6 +325,163 @@ mod tests {
     use std::collections::BTreeMap;
     #[tokio::test]
     #[ignore = "requires isolated PostgreSQL"]
+    async fn artifact_recovery_preserves_publication_and_exact_pending_scope_postgres() {
+        let url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        crate::test_support::assert_isolated_security_database(&url);
+        let store = PostgresStore::connect(&url).await.unwrap();
+        store.migrate().await.unwrap();
+        let other = PostgresStore::connect(&url).await.unwrap();
+        let owner = format!("account:{}", Uuid::new_v4());
+
+        async fn prepared(store: &PostgresStore, owner: &str) -> (Artifact, Value, Value) {
+            let manifest = Manifest::from_files(&BTreeMap::from([(
+                "work.txt".into(),
+                b"retained work".to_vec(),
+            )]))
+            .unwrap();
+            let a = store
+                .reserve_artifact(
+                    owner,
+                    &Uuid::new_v4().to_string(),
+                    &manifest,
+                    MAX_UPLOAD as i64,
+                )
+                .await
+                .unwrap();
+            store
+                .finish_artifact(a.id, owner, &a.manifest_hash)
+                .await
+                .unwrap();
+            let pending = serde_json::json!({"network":"base-mainnet","bounty_contract":"0xsynthetic","round":1,"solver":"0xsolver"});
+            store
+                .prepare_artifact_scope(a.id, owner, &pending)
+                .await
+                .unwrap();
+            let mut confirmed = pending.clone();
+            confirmed["event_id"] = serde_json::json!("synthetic-confirmed-event");
+            confirmed["submission_hash"] = serde_json::json!(a.manifest_hash);
+            confirmed["visibility"] = serde_json::json!("private");
+            (a, pending, confirmed)
+        }
+
+        // A worker selected this pending row, then the owner published before
+        // the worker's later write. The stale recovery must not unpublish it.
+        let (a, pending, private) = prepared(&store, &owner).await;
+        let mut public = private.clone();
+        public["visibility"] = serde_json::json!("public");
+        assert!(store
+            .pending_artifacts()
+            .await
+            .unwrap()
+            .iter()
+            .any(|v| v.id == a.id));
+        other.confirm_artifact(a.id, &owner, &public).await.unwrap();
+        assert!(!store
+            .confirm_pending_artifact(a.id, &owner, &pending, &private)
+            .await
+            .unwrap());
+        assert_eq!(
+            store.artifact_internal(a.id).await.unwrap().canonical_scope,
+            Some(public.clone())
+        );
+
+        // Recovery may win first, but subsequent explicit publication still works.
+        let (b, pending_b, private_b) = prepared(&store, &owner).await;
+        assert!(store
+            .confirm_pending_artifact(b.id, &owner, &pending_b, &private_b)
+            .await
+            .unwrap());
+        let mut public_b = private_b.clone();
+        public_b["visibility"] = serde_json::json!("public");
+        other
+            .confirm_artifact(b.id, &owner, &public_b)
+            .await
+            .unwrap();
+        assert!(!store
+            .confirm_pending_artifact(b.id, &owner, &pending_b, &private_b)
+            .await
+            .unwrap());
+        assert_eq!(
+            store.artifact_internal(b.id).await.unwrap().canonical_scope,
+            Some(public_b)
+        );
+
+        // Independent connections racing either way always preserve the owner.
+        for _ in 0..8 {
+            let (a, pending, private) = prepared(&store, &owner).await;
+            let mut public = private.clone();
+            public["visibility"] = serde_json::json!("public");
+            let (recovered, published) = tokio::join!(
+                store.confirm_pending_artifact(a.id, &owner, &pending, &private),
+                other.confirm_artifact(a.id, &owner, &public)
+            );
+            recovered.unwrap();
+            published.unwrap();
+            assert_eq!(
+                store.artifact_internal(a.id).await.unwrap().canonical_scope,
+                Some(public)
+            );
+        }
+
+        let (c, pending_c, private_c) = prepared(&store, &owner).await;
+        assert!(!store
+            .confirm_pending_artifact(c.id, "wrong-owner", &pending_c, &private_c)
+            .await
+            .unwrap());
+        assert!(matches!(
+            store
+                .confirm_pending_artifact(c.id, &owner, &pending_c, &public)
+                .await,
+            Err(EvidenceError::Invalid)
+        ));
+        // A proven-ended intent may be released and replaced. Its stale worker
+        // must not confirm the new pending submission using the old snapshot.
+        store
+            .release_unsubmitted_artifact(c.id, &pending_c)
+            .await
+            .unwrap();
+        assert!(!store
+            .confirm_pending_artifact(c.id, &owner, &pending_c, &private_c)
+            .await
+            .unwrap());
+        let mut next = pending_c.clone();
+        next["round"] = serde_json::json!(2);
+        store
+            .prepare_artifact_scope(c.id, &owner, &next)
+            .await
+            .unwrap();
+        assert!(!store
+            .confirm_pending_artifact(c.id, &owner, &pending_c, &private_c)
+            .await
+            .unwrap());
+        let retained = store.artifact_internal(c.id).await.unwrap();
+        assert!(retained.canonical_scope.is_none());
+        assert_eq!(retained.pending_scope, Some(next));
+
+        // The authenticated path can still unpublish, but cannot change the
+        // canonical event. Recovery has no authority to override either choice.
+        other
+            .confirm_artifact(a.id, &owner, &private)
+            .await
+            .unwrap();
+        assert!(!store
+            .confirm_pending_artifact(a.id, &owner, &pending, &private)
+            .await
+            .unwrap());
+        let mut wrong_event = private.clone();
+        wrong_event["event_id"] = serde_json::json!("different-event");
+        assert!(matches!(
+            other.confirm_artifact(a.id, &owner, &wrong_event).await,
+            Err(EvidenceError::Conflict)
+        ));
+        assert_eq!(
+            store.artifact_internal(a.id).await.unwrap().canonical_scope,
+            Some(private)
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires isolated PostgreSQL"]
     async fn concurrent_artifacts_and_runs_survive_restarts_without_cross_owner_access() {
         let url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
         crate::test_support::assert_isolated_security_database(&url);
@@ -555,6 +712,22 @@ impl PostgresStore {
     pub async fn confirm_artifact(&self, id: Uuid, owner: &str, scope: &Value) -> Result<Artifact> {
         // Publication permission can change; the canonical commitment cannot.
         artifact(sqlx::query("UPDATE verification_artifacts SET canonical_scope=$3,pending_scope=NULL,updated_at=now() WHERE id=$1 AND owner_key=$2 AND status='ready' AND (canonical_scope IS NULL OR canonical_scope-'visibility'=$3::jsonb-'visibility') RETURNING *").bind(id).bind(owner).bind(scope).fetch_optional(&self.pool).await?.ok_or(EvidenceError::Conflict)?)
+    }
+    /// Retain a recovered submission only while the exact pending intent remains.
+    /// Recovery never replaces an authenticated publication choice or publishes files.
+    pub async fn confirm_pending_artifact(
+        &self,
+        id: Uuid,
+        owner: &str,
+        pending: &Value,
+        scope: &Value,
+    ) -> Result<bool> {
+        if scope.get("visibility").and_then(Value::as_str) != Some("private") {
+            return Err(EvidenceError::Invalid);
+        }
+        let changed = sqlx::query("UPDATE verification_artifacts SET canonical_scope=$4,pending_scope=NULL,updated_at=now() WHERE id=$1 AND owner_key=$2 AND status='ready' AND canonical_scope IS NULL AND pending_scope=$3")
+            .bind(id).bind(owner).bind(pending).bind(scope).execute(&self.pool).await?;
+        Ok(changed.rows_affected() == 1)
     }
     pub async fn retain_closed_artifact(
         &self,

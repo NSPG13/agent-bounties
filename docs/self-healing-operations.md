@@ -76,6 +76,16 @@ successful main CI -> exact-SHA Render deploy controller -> API/MCP/workers live
                                                        +-> exact web revision proof
 ```
 
+Autonomous readers capture the persisted cursor and canonical checkpoint together
+in one read-only database snapshot before requesting current chain headers. During
+a rolling deployment, two pollers may finish the exact same block. If the locked
+current cursor and non-invalidated checkpoint already match that exact block and
+hash, the losing poll retries from fresh database and chain reads under the
+existing retry budget. It does not rewrite the checkpoint, report a successful
+scan, or repeat downstream notifications. A different target or hash, detached
+cursor, quarantine, or bootstrap conflict still requires investigation. This
+narrow contention handling does not authorize clearing an existing integrity hold.
+
 The deploy controller is separate from the public observer. It is allowed to
 deploy the latest successful reviewed application revision reachable from
 main. It resolves services against the canonical repository and branch,

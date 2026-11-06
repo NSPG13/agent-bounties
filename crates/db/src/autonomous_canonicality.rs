@@ -9,6 +9,12 @@ pub struct AutonomousCanonicalCheckpoint {
     pub invalidated: bool,
 }
 
+/// Cursor and certification must describe the same database snapshot before RPC reads.
+pub struct AutonomousIndexerPosition {
+    pub cursor: Option<BaseLogScanCursor>,
+    pub checkpoint: Option<AutonomousCanonicalCheckpoint>,
+}
+
 fn unavailable() -> DbError {
     DbError::InvalidEnum("autonomous canonical history requires reconciliation".into())
 }
@@ -64,6 +70,22 @@ fn same_event_payloads(a: &[AutonomousBountyEvent], b: &[AutonomousBountyEvent])
 }
 
 impl PostgresStore {
+    pub async fn autonomous_indexer_position(
+        &self,
+        network: &str,
+        factory: &str,
+    ) -> DbResult<AutonomousIndexerPosition> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *tx)
+            .await?;
+        let cursor = Self::get_base_log_cursor_on(&mut *tx, network, factory).await?;
+        let checkpoint =
+            Self::autonomous_canonical_checkpoint_on(&mut *tx, network, factory).await?;
+        tx.commit().await?;
+        Ok(AutonomousIndexerPosition { cursor, checkpoint })
+    }
+
     pub async fn autonomous_canonical_checkpoint(
         &self,
         network: &str,
@@ -209,9 +231,7 @@ impl PostgresStore {
             .await?;
         let current: Option<i64>=sqlx::query_scalar("SELECT last_scanned_block FROM base_log_cursors WHERE network=$1 AND escrow_contract=$2 FOR UPDATE")
             .bind(network).bind(&factory).fetch_optional(&mut *tx).await?;
-        if current.map(u64_from_i64).transpose()? != expected_cursor {
-            return Err(unavailable());
-        }
+        let current = current.map(u64_from_i64).transpose()?;
         let row=sqlx::query("SELECT block_number,block_hash,invalidated FROM autonomous_canonical_checkpoints WHERE network=$1 AND factory_contract=$2 FOR UPDATE")
             .bind(network).bind(&factory).fetch_optional(&mut *tx).await?;
         let actual = row
@@ -223,7 +243,20 @@ impl PostgresStore {
                 })
             })
             .transpose()?;
-        if actual.as_ref() != expected {
+        if current != expected_cursor || actual.as_ref() != expected {
+            // A rolling deployment can finish the exact same bounded scan twice.
+            // The losing poll must re-read state and headers, not report success
+            // or repeat downstream work. Broader divergence still needs review.
+            if bootstrap_events.is_none()
+                && current == Some(block.number)
+                && actual.as_ref().is_some_and(|checkpoint| {
+                    !checkpoint.invalidated
+                        && checkpoint.block_number == block.number
+                        && checkpoint.block_hash == block.hash.to_lowercase()
+                })
+            {
+                return Err(DbError::AutonomousCheckpointAlreadyCommitted);
+            }
             return Err(unavailable());
         }
         if let Some(events) = bootstrap_events {
