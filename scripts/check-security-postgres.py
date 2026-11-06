@@ -24,7 +24,7 @@ SUITES = (
     ("mcp-server", "tests::bounty_discovery_regressions::", 1),
     ("db", "verifier_checkpoints::tests::", 1),
     ("db", "evidence_retention::tests::", 1),
-    ("db", "verification::tests::", 2),
+    ("db", "verification::tests::", 3),
     ("db", "review_notifications::tests::broad_reminders", 1),
     ("api", "tests::broad_verification_regressions::", 1),
     ("db", "auth::tests::", 1),
