@@ -1080,6 +1080,11 @@ ${competitionChildBrief(item)}`;
         if (switchLabel) switchLabel.textContent = accountMode === "signup" ? "Already have an account?" : "New to Agentizable.ai?";
         if (returnButton) returnButton.hidden = !postingAuth?.pending(win);
         workspaceReturn.hidden = !ready || !workspaceAccountReturn(win, "pending");
+        // Workspace is a solver surface: posting needs no wallet, but entering it does.
+        if (!workspaceReturn.hidden && !verifiedWallets.length) {
+          workspaceNote.textContent = "The Workspace is where solvers work on bounties, so it needs a linked wallet. Link one below to continue. Posting and paying by card need no wallet.";
+        }
+        workspaceButton.hidden = !verifiedWallets.length;
         if (setupSteps) {
           setupSteps.hidden = ready;
           setupSteps.querySelector("[data-setup-signin]")?.toggleAttribute("data-complete", Boolean(currentUser));
