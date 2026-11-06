@@ -80,7 +80,7 @@ jobs:
       - name: Test assistant desktop handoff and draft preservation
         run: node scripts/test-ai-bounty-handoff.js
       - name: Test login and prepared-bounty continuity
-        run: node --test scripts/test-posting-auth.js scripts/test-account-navigation.js scripts/test-posting-brief.cjs scripts/test-posting-reference.js scripts/test-posting-session.js scripts/test-funding-readiness.js
+        run: node --test scripts/test-posting-auth.js scripts/test-account-navigation.js scripts/test-workspace-account-return.js scripts/test-posting-brief.cjs scripts/test-posting-reference.js scripts/test-posting-session.js scripts/test-funding-readiness.js
       - name: Test the retained Metrics evidence engine
         run: node --test scripts/test-metrics-dashboard.js
       - name: Test unified marketplace readiness, timing, and economics

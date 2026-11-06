@@ -26,6 +26,63 @@
   };
   const BOUNTY_POSTING_PROMPT = postingPrompt.build();
 
+  // The Workspace sends people without a usable session here as `?workspaceReturn=/workspace/…#login`.
+  // The intent is a route for this tab, never a credential, and it survives the OAuth round trip.
+  const WORKSPACE_RETURN_KEY = "agentizable:workspace-account-return:v1";
+  const WORKSPACE_RETURN_MAX_AGE_MS = 30 * 60 * 1000;
+  // A ready account sent straight back this soon means the Workspace refused it. Stop returning
+  // automatically, so a refusal shows a message and a button instead of a redirect loop.
+  const WORKSPACE_BOUNCE_WINDOW_MS = 2 * 60 * 1000;
+
+  function workspaceReturnTarget(candidate, origin) {
+    if (typeof candidate !== "string" || !candidate.startsWith("/") || candidate.startsWith("//") || candidate.length > 200) return null;
+    try {
+      const target = new URL(candidate, origin);
+      if (target.origin !== new URL(origin).origin || target.username || target.password || target.hash
+        || target.pathname !== "/workspace/") return null;
+      const keys = [...target.searchParams.keys()];
+      if (keys.some(key => key !== "project" && key !== "bounty") || new Set(keys).size !== keys.length) return null;
+      const project = target.searchParams.get("project"), bounty = target.searchParams.get("bounty");
+      if (project !== null && !/^[a-zA-Z0-9-]{1,64}$/.test(project)) return null;
+      if (bounty !== null && !/^0x[0-9a-fA-F]{64}$/.test(bounty)) return null;
+      return target.pathname + target.search;
+    } catch (_) { return null; }
+  }
+
+  function workspaceAccountReturn(win, action, { now = Date.now(), manual = false } = {}) {
+    try {
+      const storage = win.sessionStorage;
+      const read = () => { try { return JSON.parse(storage.getItem(WORKSPACE_RETURN_KEY)) || {}; } catch (_) { return {}; } };
+      let intent = read();
+      if (action === "clear") { storage.removeItem(WORKSPACE_RETURN_KEY); return null; }
+      if (action === "remember") {
+        const params = new URLSearchParams(win.location.search);
+        if (!params.has("workspaceReturn")) return workspaceAccountReturn(win, "pending", { now });
+        const target = workspaceReturnTarget(params.get("workspaceReturn"), win.location.origin);
+        const returnedAt = Number.isFinite(intent.returnedAt) && intent.returnedAt <= now ? intent.returnedAt : null;
+        intent = target ? { target, at: now, bounced: returnedAt !== null && now - returnedAt < WORKSPACE_BOUNCE_WINDOW_MS } : {};
+        if (target) storage.setItem(WORKSPACE_RETURN_KEY, JSON.stringify(intent));
+        else storage.removeItem(WORKSPACE_RETURN_KEY);
+        params.delete("workspaceReturn");
+        const search = params.toString();
+        win.history?.replaceState?.(null, "", `${win.location.pathname}${search ? `?${search}` : ""}${win.location.hash || ""}`);
+      }
+      const target = workspaceReturnTarget(intent.target, win.location.origin);
+      if (!target || !Number.isFinite(intent.at) || now < intent.at || now - intent.at >= WORKSPACE_RETURN_MAX_AGE_MS) {
+        // Keep only the time of the last return, so an immediate bounce is still recognised.
+        if (intent.target !== undefined || intent.at !== undefined) storage.removeItem(WORKSPACE_RETURN_KEY);
+        return null;
+      }
+      const pending = { target, bounced: intent.bounced === true };
+      if (action !== "complete") return pending;
+      if (pending.bounced && !manual) return null;
+      storage.setItem(WORKSPACE_RETURN_KEY, JSON.stringify({ returnedAt: now }));
+      if (manual) win.location.assign(target);
+      else win.location.replace(target);
+      return pending;
+    } catch (_) { return null; }
+  }
+
   function reviewNotificationView(payload, provider) {
     if (!payload || typeof payload.enabled !== "boolean") return {
       checked: false, disabled: true, address: "", confirmEmail: false, linkWallet: false,
@@ -857,6 +914,7 @@ ${competitionChildBrief(item)}`;
       const dialog = doc.querySelector("[data-auth-dialog]");
       const openButton = doc.querySelector("[data-auth-open]");
       if (!dialog || !openButton || typeof dialog.showModal !== "function") return;
+      workspaceAccountReturn(win, "remember");
       const closeButton = dialog.querySelector("[data-auth-close]");
       const form = dialog.querySelector("[data-auth-form]");
       const accountDashboard = dialog.querySelector("[data-account-dashboard]");
@@ -951,7 +1009,36 @@ ${competitionChildBrief(item)}`;
       });
       accountDashboard?.prepend(returnButton);
 
+      let leavingForWorkspace = false;
+      const workspaceReturn = doc.createElement("div");
+      workspaceReturn.hidden = true;
+      const workspaceNote = doc.createElement("p");
+      workspaceNote.className = "account-setup-note";
+      workspaceNote.setAttribute("role", "status");
+      const workspaceButton = doc.createElement("button");
+      workspaceButton.type = "button";
+      workspaceButton.className = "account-setup-retry";
+      workspaceButton.textContent = "Continue to Workspace";
+      workspaceReturn.append(workspaceNote, workspaceButton);
+      accountDashboard?.prepend(workspaceReturn);
+      // Only a fresh account response with a verified wallet finishes Workspace onboarding.
+      const returnToWorkspace = (manual = false) => {
+        if (leavingForWorkspace) return true;
+        if (!currentUser || accountStatus !== "ready" || !verifiedWallets.length) return false;
+        const pending = workspaceAccountReturn(win, "pending");
+        if (!pending) return false;
+        if (pending.bounced && !manual) {
+          workspaceNote.textContent = "Your account and wallet are ready, but the Workspace sent you back here. Select Continue to Workspace to try again.";
+          return false;
+        }
+        workspaceNote.textContent = "Your account is ready. Returning to the Workspace…";
+        leavingForWorkspace = Boolean(workspaceAccountReturn(win, "complete", { manual }));
+        return leavingForWorkspace;
+      };
+      workspaceButton.addEventListener("click", () => returnToWorkspace(true));
+
       const returnToPreparedPost = (details = {}) => {
+        if (leavingForWorkspace) return true;
         if (!currentUser || accountStatus !== "ready" || !postingAuth?.pending(win) || win.location.hash === "#account") return false;
         setStatus("Your account is ready. Returning to the prepared bounty…");
         return postingAuth.complete(win, details);
@@ -970,6 +1057,8 @@ ${competitionChildBrief(item)}`;
       const closeDialog = () => {
         if (dialog.open) dialog.close();
       };
+      // Closing the dialog cancels the Workspace onboarding, so a later visit is not redirected.
+      dialog.addEventListener("close", () => { if (!leavingForWorkspace) workspaceAccountReturn(win, "clear"); });
 
       const renderSetup = (state) => {
         accountStatus = state;
@@ -990,6 +1079,7 @@ ${competitionChildBrief(item)}`;
         if (modeToggle) modeToggle.textContent = accountMode === "signup" ? "Sign in" : "Create an account";
         if (switchLabel) switchLabel.textContent = accountMode === "signup" ? "Already have an account?" : "New to Agentizable.ai?";
         if (returnButton) returnButton.hidden = !postingAuth?.pending(win);
+        workspaceReturn.hidden = !ready || !workspaceAccountReturn(win, "pending");
         if (setupSteps) {
           setupSteps.hidden = ready;
           setupSteps.querySelector("[data-setup-signin]")?.toggleAttribute("data-complete", Boolean(currentUser));
@@ -1286,6 +1376,7 @@ ${competitionChildBrief(item)}`;
           const payload = await response.json();
           if (requestId !== accountLoadId || !currentUser) return null;
           renderAccountDashboard(payload);
+          returnToWorkspace();
           if (Array.isArray(payload.wallets) && payload.wallets.length === 0) {
             win.agentBountiesAnalytics?.track("wallet_missing_detected");
           }
@@ -1407,6 +1498,7 @@ ${competitionChildBrief(item)}`;
           }
           if (verifiedWallets.some((wallet) => wallet.address === address)) {
             setWalletStatus(`${shortWalletAddress(address)} has verified ownership and is connected for this session. Funding readiness is checked separately when posting.`);
+            if (returnToWorkspace(true)) return;
             returnToPreparedPost({ walletKind: selection.kind, address });
             return;
           }
@@ -1436,7 +1528,8 @@ ${competitionChildBrief(item)}`;
           renderWallets(verifiedWallets);
           renderSetup("ready");
           await loadAccount();
-          if (currentUser !== linkingUser) return;
+          // Linking a wallet is the step the Workspace asked for, so it returns even after a bounce.
+          if (currentUser !== linkingUser || returnToWorkspace(true)) return;
           showDialog();
           setWalletStatus(accountStatus === "ready" && verifiedWallets.some(wallet => wallet.address === address)
             ? `${shortWalletAddress(address)} is verified and linked. You can now claim bounties and receive payouts.`
@@ -1549,6 +1642,7 @@ ${competitionChildBrief(item)}`;
       const authParams = new URLSearchParams(win.location.search);
       const authResult = authParams.get("auth");
       loadSession().then(async () => {
+        if (leavingForWorkspace) return;
         if (currentUser && win.AgentBountiesWalletLink?.hasPending(currentUser.id)) await linkWallet(true);
         if ((authParams.get("postReturn") === "1" || authResult === "success") && win.location.hash !== "#account" && returnToPreparedPost()) return;
         if (authResult !== "success" && authResult !== "error") return;
@@ -1791,6 +1885,8 @@ ${competitionChildBrief(item)}`;
 
   return {
     BOUNTY_POSTING_PROMPT,
+    workspaceAccountReturn,
+    workspaceReturnTarget,
     accountDashboardView,
     accountInboxView,
     accountSetupStatus,
