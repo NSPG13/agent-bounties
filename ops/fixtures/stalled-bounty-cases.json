@@ -1,0 +1,733 @@
+{
+  "schema": "agent-bounties/stalled-bounty-fixtures-v1",
+  "version": 1,
+  "reference_timestamp": 1785000000,
+  "cases": [
+    {
+      "name": "healthy_claimed_active",
+      "description": "Bounty is actively claimed by solver with ample time remaining in claim window",
+      "contract": {
+        "bounty_id": "0x1111111111111111111111111111111111111111111111111111111111111111",
+        "contract_address": "0x1111111111111111111111111111111111111111",
+        "title": "Build resilient RPC provider failover",
+        "creator": "0x884834e884d6e93462655a2820140ad03e6747bc",
+        "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "solver_reward": 1000000,
+        "verifier_reward": 100000,
+        "claim_bond": 100000,
+        "funding_deadline": 1798675200,
+        "claim_window_seconds": 604800,
+        "verification_window_seconds": 7200,
+        "terms_hash": "0xaaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111",
+        "policy_hash": "0xbbbb1111bbbb1111bbbb1111bbbb1111bbbb1111bbbb1111bbbb1111bbbb1111",
+        "verification_mode": "signed_quorum",
+        "verifiers": [
+          "0xbe6292b9e465f549e2363b918d6dd9187038431e",
+          "0xb7c2ce6430b66fb986e27b6140b29309550d487a"
+        ],
+        "threshold": 2
+      },
+      "lifecycle_state": {
+        "status": "claimed",
+        "round": 1,
+        "solver": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+        "claim_expires_at": 1785500000,
+        "verification_expires_at": 0,
+        "submission_hash": null,
+        "evidence_hash": null
+      },
+      "canonical_events": [
+        {
+          "event": "FundingAdded",
+          "block_number": 50000100,
+          "block_timestamp": 1784000000,
+          "tx_hash": "0x1000000000000000000000000000000000000000000000000000000000000001",
+          "payload": { "funded_amount": 1100000, "target_amount": 1100000 }
+        },
+        {
+          "event": "BountyBecameClaimable",
+          "block_number": 50000101,
+          "block_timestamp": 1784000000,
+          "tx_hash": "0x1000000000000000000000000000000000000000000000000000000000000001",
+          "payload": { "funded_amount": 1100000 }
+        },
+        {
+          "event": "BountyClaimed",
+          "block_number": 50000200,
+          "block_timestamp": 1784895200,
+          "tx_hash": "0x1000000000000000000000000000000000000000000000000000000000000002",
+          "payload": {
+            "round": 1,
+            "solver": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+            "claim_bond": 100000,
+            "claim_expires_at": 1785500000
+          }
+        }
+      ],
+      "verifier_status": {
+        "verifiers_available": true,
+        "healthy_count": 2,
+        "required_threshold": 2
+      },
+      "indexer_status": {
+        "is_stale": false,
+        "lag_blocks": 0,
+        "heartbeat_age_seconds": 5
+      },
+      "expected": {
+        "classification": "healthy_claimed",
+        "is_stalled": false,
+        "is_terminal": false,
+        "next_action": "submit_work",
+        "deadline": 1785500000,
+        "urgency": "low"
+      }
+    },
+    {
+      "name": "boundary_claim_exact_second_before",
+      "description": "Claim is at exact boundary: 1 second before expiration",
+      "reference_timestamp": 1785500000,
+      "contract": {
+        "bounty_id": "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "contract_address": "0x2222222222222222222222222222222222222222",
+        "title": "Add inventory breakdown reporter",
+        "creator": "0x884834e884d6e93462655a2820140ad03e6747bc",
+        "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "solver_reward": 1000000,
+        "verifier_reward": 100000,
+        "claim_bond": 100000,
+        "funding_deadline": 1798675200,
+        "claim_window_seconds": 604800,
+        "verification_window_seconds": 7200,
+        "terms_hash": "0xaaaa2222aaaa2222aaaa2222aaaa2222aaaa2222aaaa2222aaaa2222aaaa2222",
+        "policy_hash": "0xbbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222",
+        "verification_mode": "signed_quorum",
+        "verifiers": [
+          "0xbe6292b9e465f549e2363b918d6dd9187038431e",
+          "0xb7c2ce6430b66fb986e27b6140b29309550d487a"
+        ],
+        "threshold": 2
+      },
+      "lifecycle_state": {
+        "status": "claimed",
+        "round": 1,
+        "solver": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+        "claim_expires_at": 1785500001,
+        "verification_expires_at": 0
+      },
+      "canonical_events": [
+        {
+          "event": "BountyClaimed",
+          "block_number": 50000200,
+          "block_timestamp": 1784895201,
+          "tx_hash": "0x2000000000000000000000000000000000000000000000000000000000000002",
+          "payload": {
+            "round": 1,
+            "solver": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+            "claim_bond": 100000,
+            "claim_expires_at": 1785500001
+          }
+        }
+      ],
+      "verifier_status": {
+        "verifiers_available": true,
+        "healthy_count": 2,
+        "required_threshold": 2
+      },
+      "indexer_status": {
+        "is_stale": false,
+        "lag_blocks": 0,
+        "heartbeat_age_seconds": 1
+      },
+      "expected": {
+        "classification": "claim_expiring",
+        "is_stalled": true,
+        "is_terminal": false,
+        "next_action": "submit_work",
+        "deadline": 1785500001,
+        "urgency": "critical"
+      }
+    },
+    {
+      "name": "boundary_claim_exact_second_at",
+      "description": "Claim is at exact boundary: timestamp equals claim_expires_at",
+      "reference_timestamp": 1785500000,
+      "contract": {
+        "bounty_id": "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "contract_address": "0x2222222222222222222222222222222222222222",
+        "title": "Add inventory breakdown reporter",
+        "creator": "0x884834e884d6e93462655a2820140ad03e6747bc",
+        "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "solver_reward": 1000000,
+        "verifier_reward": 100000,
+        "claim_bond": 100000,
+        "funding_deadline": 1798675200,
+        "claim_window_seconds": 604800,
+        "verification_window_seconds": 7200,
+        "terms_hash": "0xaaaa2222aaaa2222aaaa2222aaaa2222aaaa2222aaaa2222aaaa2222aaaa2222",
+        "policy_hash": "0xbbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222",
+        "verification_mode": "signed_quorum",
+        "verifiers": [
+          "0xbe6292b9e465f549e2363b918d6dd9187038431e",
+          "0xb7c2ce6430b66fb986e27b6140b29309550d487a"
+        ],
+        "threshold": 2
+      },
+      "lifecycle_state": {
+        "status": "claimed",
+        "round": 1,
+        "solver": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+        "claim_expires_at": 1785500000,
+        "verification_expires_at": 0
+      },
+      "canonical_events": [
+        {
+          "event": "BountyClaimed",
+          "block_number": 50000200,
+          "block_timestamp": 1784895200,
+          "tx_hash": "0x2000000000000000000000000000000000000000000000000000000000000002",
+          "payload": {
+            "round": 1,
+            "solver": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+            "claim_bond": 100000,
+            "claim_expires_at": 1785500000
+          }
+        }
+      ],
+      "verifier_status": {
+        "verifiers_available": true,
+        "healthy_count": 2,
+        "required_threshold": 2
+      },
+      "indexer_status": {
+        "is_stale": false,
+        "lag_blocks": 0,
+        "heartbeat_age_seconds": 1
+      },
+      "expected": {
+        "classification": "claim_expiring",
+        "is_stalled": true,
+        "is_terminal": false,
+        "next_action": "submit_work",
+        "deadline": 1785500000,
+        "urgency": "critical"
+      }
+    },
+    {
+      "name": "boundary_claim_exact_second_after",
+      "description": "Claim is at exact boundary: 1 second past claim_expires_at, requires expireClaim",
+      "reference_timestamp": 1785500001,
+      "contract": {
+        "bounty_id": "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "contract_address": "0x2222222222222222222222222222222222222222",
+        "title": "Add inventory breakdown reporter",
+        "creator": "0x884834e884d6e93462655a2820140ad03e6747bc",
+        "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "solver_reward": 1000000,
+        "verifier_reward": 100000,
+        "claim_bond": 100000,
+        "funding_deadline": 1798675200,
+        "claim_window_seconds": 604800,
+        "verification_window_seconds": 7200,
+        "terms_hash": "0xaaaa2222aaaa2222aaaa2222aaaa2222aaaa2222aaaa2222aaaa2222aaaa2222",
+        "policy_hash": "0xbbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222",
+        "verification_mode": "signed_quorum",
+        "verifiers": [
+          "0xbe6292b9e465f549e2363b918d6dd9187038431e",
+          "0xb7c2ce6430b66fb986e27b6140b29309550d487a"
+        ],
+        "threshold": 2
+      },
+      "lifecycle_state": {
+        "status": "claimed",
+        "round": 1,
+        "solver": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+        "claim_expires_at": 1785500000,
+        "verification_expires_at": 0
+      },
+      "canonical_events": [
+        {
+          "event": "BountyClaimed",
+          "block_number": 50000200,
+          "block_timestamp": 1784895200,
+          "tx_hash": "0x2000000000000000000000000000000000000000000000000000000000000002",
+          "payload": {
+            "round": 1,
+            "solver": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+            "claim_bond": 100000,
+            "claim_expires_at": 1785500000
+          }
+        }
+      ],
+      "verifier_status": {
+        "verifiers_available": true,
+        "healthy_count": 2,
+        "required_threshold": 2
+      },
+      "indexer_status": {
+        "is_stale": false,
+        "lag_blocks": 0,
+        "heartbeat_age_seconds": 1
+      },
+      "expected": {
+        "classification": "claim_expiring",
+        "is_stalled": true,
+        "is_terminal": false,
+        "next_action": "expire_claim",
+        "deadline": 1785500000,
+        "urgency": "critical"
+      }
+    },
+    {
+      "name": "healthy_submitted_active",
+      "description": "Solver submitted work, currently awaiting verification with healthy verifiers",
+      "reference_timestamp": 1785000000,
+      "contract": {
+        "bounty_id": "0x3333333333333333333333333333333333333333333333333333333333333333",
+        "contract_address": "0x3333333333333333333333333333333333333333",
+        "title": "Expose bounded-wallet liquidity and authority separately",
+        "creator": "0x884834e884d6e93462655a2820140ad03e6747bc",
+        "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "solver_reward": 1000000,
+        "verifier_reward": 100000,
+        "claim_bond": 100000,
+        "funding_deadline": 1798675200,
+        "claim_window_seconds": 604800,
+        "verification_window_seconds": 7200,
+        "terms_hash": "0xaaaa3333aaaa3333aaaa3333aaaa3333aaaa3333aaaa3333aaaa3333aaaa3333",
+        "policy_hash": "0xbbbb3333bbbb3333bbbb3333bbbb3333bbbb3333bbbb3333bbbb3333bbbb3333",
+        "verification_mode": "signed_quorum",
+        "verifiers": [
+          "0xbe6292b9e465f549e2363b918d6dd9187038431e",
+          "0xb7c2ce6430b66fb986e27b6140b29309550d487a"
+        ],
+        "threshold": 2
+      },
+      "lifecycle_state": {
+        "status": "submitted",
+        "round": 1,
+        "solver": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+        "claim_expires_at": 1785500000,
+        "verification_expires_at": 1785005000,
+        "submission_hash": "0x9999000099990000999900009999000099990000999900009999000099990000",
+        "evidence_hash": "0x8888000088880000888800008888000088880000888800008888000088880000"
+      },
+      "canonical_events": [
+        {
+          "event": "SubmissionAdded",
+          "block_number": 50000300,
+          "block_timestamp": 1784997800,
+          "tx_hash": "0x3000000000000000000000000000000000000000000000000000000000000003",
+          "payload": {
+            "round": 1,
+            "solver": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+            "submission_hash": "0x9999000099990000999900009999000099990000999900009999000099990000",
+            "evidence_hash": "0x8888000088880000888800008888000088880000888800008888000088880000",
+            "verification_expires_at": 1785005000
+          }
+        }
+      ],
+      "verifier_status": {
+        "verifiers_available": true,
+        "healthy_count": 2,
+        "required_threshold": 2
+      },
+      "indexer_status": {
+        "is_stale": false,
+        "lag_blocks": 0,
+        "heartbeat_age_seconds": 2
+      },
+      "expected": {
+        "classification": "submitted",
+        "is_stalled": false,
+        "is_terminal": false,
+        "next_action": "attest_and_settle",
+        "deadline": 1785005000,
+        "urgency": "medium"
+      }
+    },
+    {
+      "name": "boundary_verification_exact_second_before",
+      "description": "Submission verification boundary: 1 second before deadline",
+      "reference_timestamp": 1785005000,
+      "contract": {
+        "bounty_id": "0x3333333333333333333333333333333333333333333333333333333333333333",
+        "contract_address": "0x3333333333333333333333333333333333333333",
+        "title": "Expose bounded-wallet liquidity and authority separately",
+        "creator": "0x884834e884d6e93462655a2820140ad03e6747bc",
+        "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "solver_reward": 1000000,
+        "verifier_reward": 100000,
+        "claim_bond": 100000,
+        "funding_deadline": 1798675200,
+        "claim_window_seconds": 604800,
+        "verification_window_seconds": 7200,
+        "terms_hash": "0xaaaa3333aaaa3333aaaa3333aaaa3333aaaa3333aaaa3333aaaa3333aaaa3333",
+        "policy_hash": "0xbbbb3333bbbb3333bbbb3333bbbb3333bbbb3333bbbb3333bbbb3333bbbb3333",
+        "verification_mode": "signed_quorum",
+        "verifiers": [
+          "0xbe6292b9e465f549e2363b918d6dd9187038431e",
+          "0xb7c2ce6430b66fb986e27b6140b29309550d487a"
+        ],
+        "threshold": 2
+      },
+      "lifecycle_state": {
+        "status": "submitted",
+        "round": 1,
+        "solver": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+        "claim_expires_at": 1785500000,
+        "verification_expires_at": 1785005001,
+        "submission_hash": "0x9999000099990000999900009999000099990000999900009999000099990000",
+        "evidence_hash": "0x8888000088880000888800008888000088880000888800008888000088880000"
+      },
+      "canonical_events": [
+        {
+          "event": "SubmissionAdded",
+          "block_number": 50000300,
+          "block_timestamp": 1784997801,
+          "tx_hash": "0x3000000000000000000000000000000000000000000000000000000000000003",
+          "payload": {
+            "round": 1,
+            "solver": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+            "submission_hash": "0x9999000099990000999900009999000099990000999900009999000099990000",
+            "evidence_hash": "0x8888000088880000888800008888000088880000888800008888000088880000",
+            "verification_expires_at": 1785005001
+          }
+        }
+      ],
+      "verifier_status": {
+        "verifiers_available": true,
+        "healthy_count": 2,
+        "required_threshold": 2
+      },
+      "indexer_status": {
+        "is_stale": false,
+        "lag_blocks": 0,
+        "heartbeat_age_seconds": 1
+      },
+      "expected": {
+        "classification": "verification_expiring",
+        "is_stalled": true,
+        "is_terminal": false,
+        "next_action": "urgent_attest_and_settle",
+        "deadline": 1785005001,
+        "urgency": "critical"
+      }
+    },
+    {
+      "name": "boundary_verification_exact_second_after",
+      "description": "Submission verification boundary: 1 second past deadline, requires expireSubmission refund",
+      "reference_timestamp": 1785005002,
+      "contract": {
+        "bounty_id": "0x3333333333333333333333333333333333333333333333333333333333333333",
+        "contract_address": "0x3333333333333333333333333333333333333333",
+        "title": "Expose bounded-wallet liquidity and authority separately",
+        "creator": "0x884834e884d6e93462655a2820140ad03e6747bc",
+        "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "solver_reward": 1000000,
+        "verifier_reward": 100000,
+        "claim_bond": 100000,
+        "funding_deadline": 1798675200,
+        "claim_window_seconds": 604800,
+        "verification_window_seconds": 7200,
+        "terms_hash": "0xaaaa3333aaaa3333aaaa3333aaaa3333aaaa3333aaaa3333aaaa3333aaaa3333",
+        "policy_hash": "0xbbbb3333bbbb3333bbbb3333bbbb3333bbbb3333bbbb3333bbbb3333bbbb3333",
+        "verification_mode": "signed_quorum",
+        "verifiers": [
+          "0xbe6292b9e465f549e2363b918d6dd9187038431e",
+          "0xb7c2ce6430b66fb986e27b6140b29309550d487a"
+        ],
+        "threshold": 2
+      },
+      "lifecycle_state": {
+        "status": "submitted",
+        "round": 1,
+        "solver": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+        "claim_expires_at": 1785500000,
+        "verification_expires_at": 1785005001,
+        "submission_hash": "0x9999000099990000999900009999000099990000999900009999000099990000",
+        "evidence_hash": "0x8888000088880000888800008888000088880000888800008888000088880000"
+      },
+      "canonical_events": [
+        {
+          "event": "SubmissionAdded",
+          "block_number": 50000300,
+          "block_timestamp": 1784997801,
+          "tx_hash": "0x3000000000000000000000000000000000000000000000000000000000000003",
+          "payload": {
+            "round": 1,
+            "solver": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+            "submission_hash": "0x9999000099990000999900009999000099990000999900009999000099990000",
+            "evidence_hash": "0x8888000088880000888800008888000088880000888800008888000088880000",
+            "verification_expires_at": 1785005001
+          }
+        }
+      ],
+      "verifier_status": {
+        "verifiers_available": true,
+        "healthy_count": 2,
+        "required_threshold": 2
+      },
+      "indexer_status": {
+        "is_stale": false,
+        "lag_blocks": 0,
+        "heartbeat_age_seconds": 1
+      },
+      "expected": {
+        "classification": "verification_expiring",
+        "is_stalled": true,
+        "is_terminal": false,
+        "next_action": "expire_submission",
+        "deadline": 1785005001,
+        "urgency": "critical"
+      }
+    },
+    {
+      "name": "verifier_outage_submitted",
+      "description": "Submitted work blocked because required verifiers are experiencing an outage",
+      "reference_timestamp": 1785000000,
+      "contract": {
+        "bounty_id": "0x4444444444444444444444444444444444444444444444444444444444444444",
+        "contract_address": "0x4444444444444444444444444444444444444444",
+        "title": "Generate deterministic inventory replenishment plans",
+        "creator": "0x884834e884d6e93462655a2820140ad03e6747bc",
+        "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "solver_reward": 1000000,
+        "verifier_reward": 100000,
+        "claim_bond": 100000,
+        "funding_deadline": 1798675200,
+        "claim_window_seconds": 604800,
+        "verification_window_seconds": 7200,
+        "terms_hash": "0xaaaa4444aaaa4444aaaa4444aaaa4444aaaa4444aaaa4444aaaa4444aaaa4444",
+        "policy_hash": "0xbbbb4444bbbb4444bbbb4444bbbb4444bbbb4444bbbb4444bbbb4444bbbb4444",
+        "verification_mode": "signed_quorum",
+        "verifiers": [
+          "0xbe6292b9e465f549e2363b918d6dd9187038431e",
+          "0xb7c2ce6430b66fb986e27b6140b29309550d487a"
+        ],
+        "threshold": 2
+      },
+      "lifecycle_state": {
+        "status": "submitted",
+        "round": 1,
+        "solver": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+        "claim_expires_at": 1785500000,
+        "verification_expires_at": 1785006000,
+        "submission_hash": "0x9999000099990000999900009999000099990000999900009999000099990000",
+        "evidence_hash": "0x8888000088880000888800008888000088880000888800008888000088880000"
+      },
+      "canonical_events": [
+        {
+          "event": "SubmissionAdded",
+          "block_number": 50000300,
+          "block_timestamp": 1784998800,
+          "tx_hash": "0x4000000000000000000000000000000000000000000000000000000000000004",
+          "payload": {
+            "round": 1,
+            "solver": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+            "submission_hash": "0x9999000099990000999900009999000099990000999900009999000099990000",
+            "evidence_hash": "0x8888000088880000888800008888000088880000888800008888000088880000",
+            "verification_expires_at": 1785006000
+          }
+        }
+      ],
+      "verifier_status": {
+        "verifiers_available": false,
+        "healthy_count": 0,
+        "required_threshold": 2,
+        "error": "Verifier fleet HTTP 503 outage on all quorum nodes"
+      },
+      "indexer_status": {
+        "is_stale": false,
+        "lag_blocks": 0,
+        "heartbeat_age_seconds": 2
+      },
+      "expected": {
+        "classification": "verifier_unavailable",
+        "is_stalled": true,
+        "is_terminal": false,
+        "next_action": "failover_verifier",
+        "deadline": 1785006000,
+        "urgency": "high"
+      }
+    },
+    {
+      "name": "already_settled_work_bountysettled",
+      "description": "Bounty has completed canonical BountySettled event and is terminal",
+      "reference_timestamp": 1785000000,
+      "contract": {
+        "bounty_id": "0x5555555555555555555555555555555555555555555555555555555555555555",
+        "contract_address": "0x5555555555555555555555555555555555555555",
+        "title": "Diagnose stalled claimed and submitted bounties",
+        "creator": "0x884834e884d6e93462655a2820140ad03e6747bc",
+        "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "solver_reward": 1000000,
+        "verifier_reward": 100000,
+        "claim_bond": 100000,
+        "funding_deadline": 1798675200,
+        "claim_window_seconds": 604800,
+        "verification_window_seconds": 7200,
+        "terms_hash": "0xaaaa5555aaaa5555aaaa5555aaaa5555aaaa5555aaaa5555aaaa5555aaaa5555",
+        "policy_hash": "0xbbbb5555bbbb5555bbbb5555bbbb5555bbbb5555bbbb5555bbbb5555bbbb5555",
+        "verification_mode": "signed_quorum",
+        "verifiers": [
+          "0xbe6292b9e465f549e2363b918d6dd9187038431e",
+          "0xb7c2ce6430b66fb986e27b6140b29309550d487a"
+        ],
+        "threshold": 2
+      },
+      "lifecycle_state": {
+        "status": "settled",
+        "round": 1,
+        "solver": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+        "claim_expires_at": 1785500000,
+        "verification_expires_at": 1785005000,
+        "submission_hash": "0x9999000099990000999900009999000099990000999900009999000099990000",
+        "evidence_hash": "0x8888000088880000888800008888000088880000888800008888000088880000"
+      },
+      "canonical_events": [
+        {
+          "event": "BountySettled",
+          "block_number": 50000400,
+          "block_timestamp": 1785001000,
+          "tx_hash": "0x5000000000000000000000000000000000000000000000000000000000000005",
+          "payload": {
+            "round": 1,
+            "solver": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+            "solver_reward": 1000000,
+            "claim_bond_returned": 100000,
+            "timeout_bond_bonus": 0,
+            "verifier_reward": 100000,
+            "submission_hash": "0x9999000099990000999900009999000099990000999900009999000099990000",
+            "evidence_hash": "0x8888000088880000888800008888000088880000888800008888000088880000",
+            "policy_hash": "0xbbbb5555bbbb5555bbbb5555bbbb5555bbbb5555bbbb5555bbbb5555bbbb5555",
+            "verification_hash": "0x7777000077770000777700007777000077770000777700007777000077770000"
+          }
+        }
+      ],
+      "verifier_status": {
+        "verifiers_available": true,
+        "healthy_count": 2,
+        "required_threshold": 2
+      },
+      "indexer_status": {
+        "is_stale": false,
+        "lag_blocks": 0,
+        "heartbeat_age_seconds": 1
+      },
+      "expected": {
+        "classification": "settled",
+        "is_stalled": false,
+        "is_terminal": true,
+        "next_action": null,
+        "deadline": null,
+        "urgency": "none"
+      }
+    },
+    {
+      "name": "missing_terms_stall",
+      "description": "Bounty on-chain termsHash cannot be resolved to published terms document",
+      "reference_timestamp": 1785000000,
+      "contract": {
+        "bounty_id": "0x6666666666666666666666666666666666666666666666666666666666666666",
+        "contract_address": "0x6666666666666666666666666666666666666666",
+        "title": "Unlinked terms bounty",
+        "creator": "0x884834e884d6e93462655a2820140ad03e6747bc",
+        "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "solver_reward": 1000000,
+        "verifier_reward": 100000,
+        "claim_bond": 100000,
+        "funding_deadline": 1798675200,
+        "claim_window_seconds": 604800,
+        "verification_window_seconds": 7200,
+        "terms_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "policy_hash": "0xbbbb6666bbbb6666bbbb6666bbbb6666bbbb6666bbbb6666bbbb6666bbbb6666",
+        "verification_mode": "signed_quorum",
+        "verifiers": [
+          "0xbe6292b9e465f549e2363b918d6dd9187038431e",
+          "0xb7c2ce6430b66fb986e27b6140b29309550d487a"
+        ],
+        "threshold": 2
+      },
+      "has_valid_terms_document": false,
+      "lifecycle_state": {
+        "status": "claimed",
+        "round": 1,
+        "solver": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+        "claim_expires_at": 1785500000,
+        "verification_expires_at": 0
+      },
+      "canonical_events": [],
+      "verifier_status": {
+        "verifiers_available": true,
+        "healthy_count": 2,
+        "required_threshold": 2
+      },
+      "indexer_status": {
+        "is_stale": false,
+        "lag_blocks": 0,
+        "heartbeat_age_seconds": 1
+      },
+      "expected": {
+        "classification": "claim_expiring",
+        "is_stalled": true,
+        "is_terminal": false,
+        "next_action": "resolve_missing_terms",
+        "deadline": 1785500000,
+        "urgency": "high"
+      }
+    },
+    {
+      "name": "stale_indexer_projection",
+      "description": "Indexer state lag exceeds maximum allowed threshold, stalling automated resolution",
+      "reference_timestamp": 1785000000,
+      "contract": {
+        "bounty_id": "0x7777777777777777777777777777777777777777777777777777777777777777",
+        "contract_address": "0x7777777777777777777777777777777777777777",
+        "title": "Lagged index bounty",
+        "creator": "0x884834e884d6e93462655a2820140ad03e6747bc",
+        "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "solver_reward": 1000000,
+        "verifier_reward": 100000,
+        "claim_bond": 100000,
+        "funding_deadline": 1798675200,
+        "claim_window_seconds": 604800,
+        "verification_window_seconds": 7200,
+        "terms_hash": "0xaaaa7777aaaa7777aaaa7777aaaa7777aaaa7777aaaa7777aaaa7777aaaa7777",
+        "policy_hash": "0xbbbb7777bbbb7777bbbb7777bbbb7777bbbb7777bbbb7777bbbb7777bbbb7777",
+        "verification_mode": "signed_quorum",
+        "verifiers": [
+          "0xbe6292b9e465f549e2363b918d6dd9187038431e",
+          "0xb7c2ce6430b66fb986e27b6140b29309550d487a"
+        ],
+        "threshold": 2
+      },
+      "lifecycle_state": {
+        "status": "claimed",
+        "round": 1,
+        "solver": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+        "claim_expires_at": 1785500000,
+        "verification_expires_at": 0
+      },
+      "canonical_events": [],
+      "verifier_status": {
+        "verifiers_available": true,
+        "healthy_count": 2,
+        "required_threshold": 2
+      },
+      "indexer_status": {
+        "is_stale": true,
+        "lag_blocks": 500,
+        "heartbeat_age_seconds": 3600
+      },
+      "expected": {
+        "classification": "claim_expiring",
+        "is_stalled": true,
+        "is_terminal": false,
+        "next_action": "refresh_index_state",
+        "deadline": 1785500000,
+        "urgency": "high"
+      }
+    }
+  ]
+}
