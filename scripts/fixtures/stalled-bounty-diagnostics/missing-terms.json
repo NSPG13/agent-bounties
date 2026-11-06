@@ -1,0 +1,9 @@
+{
+  "bounty_id": "bounty-108",
+  "canonical_events": [
+    {"name": "BountyClaimed", "at": "2026-08-16T12:00:00Z"}
+  ],
+  "terms": {},
+  "verifier_available": true,
+  "index_updated_at": "2026-08-17T11:30:00Z"
+}
