@@ -511,8 +511,13 @@ pub fn review_indexer_is_fresh(heartbeat: &BaseIndexerHeartbeat, now: DateTime<U
         && (0..=300).contains(&age)
         && heartbeat
             .latest_block
+            .zip(heartbeat.confirmed_to_block)
             .zip(heartbeat.persisted_cursor_block)
-            .is_some_and(|(latest, cursor)| cursor <= latest && cursor.saturating_add(20) >= latest)
+            .is_some_and(|((latest, confirmed), cursor)| {
+                // The reader stops at the confirmed safe target, which can
+                // legitimately trail the latest chain tip by more than 20 blocks.
+                confirmed <= latest && cursor <= confirmed && cursor.saturating_add(20) >= confirmed
+            })
 }
 
 #[cfg(test)]
@@ -638,10 +643,8 @@ mod tests {
         assert!(wallet("0x0000000000000000000000000000000000000000").is_none());
     }
 
-    #[test]
-    fn delivery_requires_a_recent_successful_indexer_near_the_chain_tip() {
-        let now = Utc::now();
-        let heartbeat = BaseIndexerHeartbeat {
+    fn healthy_indexer(now: DateTime<Utc>) -> BaseIndexerHeartbeat {
+        BaseIndexerHeartbeat {
             network: NETWORK.into(),
             escrow_contract: format!("0x{}", "1".repeat(40)),
             status: "success".into(),
@@ -656,14 +659,20 @@ mod tests {
             skipped_reason: None,
             error_message: None,
             updated_at: now,
-        };
+        }
+    }
+
+    #[test]
+    fn delivery_requires_a_recent_successful_indexer_near_its_confirmed_target() {
+        let now = DateTime::from_timestamp(1800000000, 0).unwrap();
+        let heartbeat = healthy_indexer(now);
         assert!(review_indexer_is_fresh(&heartbeat, now));
         for seconds in [-1, 301] {
             let mut stale = heartbeat.clone();
             stale.completed_at = Some(now - Duration::seconds(seconds));
             assert!(!review_indexer_is_fresh(&stale, now));
         }
-        for cursor in [79, 101] {
+        for cursor in [77, 99, 101] {
             let mut lagging = heartbeat.clone();
             lagging.persisted_cursor_block = Some(cursor);
             assert!(!review_indexer_is_fresh(&lagging, now));
@@ -677,6 +686,67 @@ mod tests {
         assert!(review_indexer_is_fresh(&idle, now));
         idle.skipped_reason = Some("indexing disabled".into());
         assert!(!review_indexer_is_fresh(&idle, now));
+    }
+
+    #[test]
+    fn delivery_uses_the_confirmed_safe_target_without_accepting_real_lag() {
+        let now = DateTime::from_timestamp(1800000000, 0).unwrap();
+        let mut heartbeat = healthy_indexer(now);
+        heartbeat.latest_block = Some(1000);
+        heartbeat.confirmed_to_block = Some(900);
+        for cursor in [900, 880] {
+            heartbeat.persisted_cursor_block = Some(cursor);
+            assert!(review_indexer_is_fresh(&heartbeat, now));
+        }
+        for cursor in [879, 901, 1001] {
+            heartbeat.persisted_cursor_block = Some(cursor);
+            assert!(!review_indexer_is_fresh(&heartbeat, now));
+        }
+    }
+
+    #[test]
+    fn delivery_rejects_missing_or_inconsistent_target_and_failed_observations() {
+        let now = DateTime::from_timestamp(1800000000, 0).unwrap();
+        for case in ["latest", "target", "cursor", "completed", "order", "failed"] {
+            let mut heartbeat = healthy_indexer(now);
+            match case {
+                "latest" => heartbeat.latest_block = None,
+                "target" => heartbeat.confirmed_to_block = None,
+                "cursor" => heartbeat.persisted_cursor_block = None,
+                "completed" => heartbeat.completed_at = None,
+                "order" => heartbeat.confirmed_to_block = Some(101),
+                _ => heartbeat.status = "failed".into(),
+            }
+            assert!(!review_indexer_is_fresh(&heartbeat, now), "{case}");
+        }
+        let heartbeat = healthy_indexer(now - Duration::seconds(300));
+        assert!(review_indexer_is_fresh(&heartbeat, now));
+    }
+
+    #[test]
+    fn safe_target_progress_preserves_recipients_and_never_extends_review_deadlines() {
+        let now = DateTime::from_timestamp(1800000000, 0).unwrap();
+        let mut heartbeat = healthy_indexer(now);
+        heartbeat.latest_block = Some(1000);
+        heartbeat.confirmed_to_block = Some(900);
+        heartbeat.persisted_cursor_block = Some(900);
+        let (factory, events, terms) = canonical_fixture(now);
+        assert!(review_indexer_is_fresh(&heartbeat, now));
+        let (pending, _, _) =
+            project_verifier_reviews(&factory, events.clone(), vec![terms.clone()], now);
+        assert_eq!(pending.len(), 2);
+        assert!(pending.iter().all(
+            |notice| notice.round == 1 && notice.review_deadline == now + Duration::minutes(59)
+        ));
+
+        let deadline = now + Duration::minutes(59);
+        heartbeat.completed_at = Some(deadline);
+        assert!(review_indexer_is_fresh(&heartbeat, deadline));
+        let (pending, _, _) = project_verifier_reviews(&factory, events, vec![terms], deadline);
+        assert!(
+            pending.is_empty(),
+            "freshness cannot revive an expired review"
+        );
     }
 
     fn canonical_fixture(
