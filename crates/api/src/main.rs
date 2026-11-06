@@ -2492,6 +2492,7 @@ struct AutonomousBountyInventorySummary {
     canonical_source: String,
     claimable_bounty_count: usize,
     verification_ready_bounty_count: usize,
+    earning_ready_bounty_count: usize,
     standing_meta_bounty_count: usize,
     funded_usdc_base_units: String,
     funded_usdc: String,
@@ -16882,6 +16883,10 @@ fn build_autonomous_inventory_summary(
     let verifier = sum(|item| &item.verifier_reward)?;
     let verification_ready_bounty_count =
         feed.iter().filter(|item| item.verification_ready).count();
+    let earning_ready_bounty_count = feed
+        .iter()
+        .filter(|item| autonomous_bounty_is_earning_ready(item))
+        .count();
     let standing_meta_bounty_count = feed
         .iter()
         .filter(|item| standing_meta_v2_parent_context(item).is_ok())
@@ -16913,6 +16918,7 @@ fn build_autonomous_inventory_summary(
         ),
         claimable_bounty_count: feed.len(),
         verification_ready_bounty_count,
+        earning_ready_bounty_count,
         standing_meta_bounty_count,
         funded_usdc_base_units: funded.to_string(),
         funded_usdc: format_usdc_base_units(funded),
@@ -26570,6 +26576,7 @@ mod tests {
 
         assert_eq!(summary.claimable_bounty_count, 1);
         assert_eq!(summary.verification_ready_bounty_count, 1);
+        assert_eq!(summary.earning_ready_bounty_count, 1);
         assert_eq!(summary.funded_usdc, "1.00");
         assert_eq!(summary.solver_reward_usdc, "0.90");
         assert_eq!(summary.verifier_reward_usdc, "0.10");
