@@ -425,10 +425,18 @@ ${competitionChildBrief(item)}`;
     return messages[reason] || "The wallet could not be linked. Please try again.";
   }
 
-  function accountSetupStatus(payload, wallets) {
+  // Solver readiness: an ownership-verified wallet is required only to claim,
+  // submit and receive payouts. During a rolling release, the prior API still
+  // provides authoritative ownership receipts (it reported a wallet-less account
+  // as `wallet_required`). Never turn a bare address or an empty 200 into proof.
+  function solverSetupStatus(payload, wallets) {
     const count = wallets.length;
-    // During a rolling release, the prior API still provides authoritative
-    // ownership receipts. Never turn a bare address or an empty 200 into proof.
+    if (payload && Object.hasOwn(payload, "solver_status")) {
+      if (payload.account_status !== "ready" || payload.account_complete !== true) return "unavailable";
+      if (payload.solver_status === "ready" && payload.solver_ready === true && count) return "ready";
+      if (payload.solver_status === "wallet_required" && payload.solver_ready === false && !count) return "wallet_required";
+      return "unavailable";
+    }
     if (payload && (Object.hasOwn(payload, "account_status") || Object.hasOwn(payload, "account_complete"))) {
       if (payload.account_status === "ready" && payload.account_complete === true && count) return "ready";
       if (payload.account_status === "wallet_required" && payload.account_complete === false && !count) return "wallet_required";
@@ -437,6 +445,12 @@ ${competitionChildBrief(item)}`;
     if (count && (payload?.identity_link_status === "verified" || payload?.linked === true || payload?.unlinked === true)) return "ready";
     if (!count && (payload?.unlinked === true || payload?.reason === "marketplace_identity_unlinked")) return "wallet_required";
     return "unavailable";
+  }
+
+  // Account readiness: a signed-in account with readable storage can post and
+  // pay by card without any wallet. Unknown storage is never a ready account.
+  function accountSetupStatus(payload, wallets) {
+    return solverSetupStatus(payload, wallets) === "unavailable" ? "unavailable" : "ready";
   }
 
   function accountInboxView(payload, origin = "https://agentizable.ai") {
@@ -1051,28 +1065,37 @@ ${competitionChildBrief(item)}`;
         const ready = Boolean(currentUser && state === "ready");
         dialog.dataset.view = currentUser ? ready ? "account" : "setup" : accountMode;
         dialog.dataset.accountStatus = currentUser ? state : "signed_out";
-        if (heading) heading.textContent = currentUser ? ready ? "Your activity" : "Finish your account" : accountMode === "signup" ? "Create an account" : "Sign in";
+        // Solving needs a verified wallet; posting does not. Wallet-derived stats
+        // and settlement history stay hidden until one is linked.
+        const solverReady = ready && verifiedWallets.length > 0;
+        dialog.dataset.solverStatus = !currentUser ? "signed_out" : !ready ? state : solverReady ? "ready" : "wallet_required";
+        if (heading) heading.textContent = currentUser ? ready ? "Your activity" : state === "checking" ? "Checking your account" : "We couldn’t confirm your account" : accountMode === "signup" ? "Create an account" : "Sign in";
         if (description) description.textContent = currentUser
           ? ready ? "Your bounties and payments, all in one place."
-            : "Link a wallet to finish setup. You can use one you have or create one here."
+            : state === "checking" ? "One moment while we confirm your account."
+              : "We couldn’t confirm your account. Check again to continue."
           : accountMode === "signup" ? "Choose a provider to get started." : "Welcome back. Choose your provider.";
         openButton.textContent = currentUser ? "Account" : "Create an account";
         if (modeToggle) modeToggle.textContent = accountMode === "signup" ? "Sign in" : "Create an account";
         if (switchLabel) switchLabel.textContent = accountMode === "signup" ? "Already have an account?" : "New to Agentizable.ai?";
         if (returnButton) returnButton.hidden = !postingAuth?.pending(win);
         workspaceReturn.hidden = !ready || !workspaceAccountReturn(win, "pending");
+        // Workspace is a solver surface: posting needs no wallet, but entering it does.
+        if (!workspaceReturn.hidden && !verifiedWallets.length) {
+          workspaceNote.textContent = "The Workspace is where solvers work on bounties, so it needs a linked wallet. Link one below to continue. Posting and paying by card need no wallet.";
+        }
+        workspaceButton.hidden = !verifiedWallets.length;
         if (setupSteps) {
           setupSteps.hidden = ready;
           setupSteps.querySelector("[data-setup-signin]")?.toggleAttribute("data-complete", Boolean(currentUser));
           setupSteps.querySelector("[data-setup-signin]")?.setAttribute("aria-current", currentUser ? "false" : "step");
           setupSteps.querySelector("[data-setup-wallet]")?.setAttribute("aria-current", currentUser ? "step" : "false");
         }
-        [accountStats, accountActivity, accountEvidence].forEach(node => { if (node) node.hidden = !ready; });
+        [accountStats, accountActivity, accountEvidence].forEach(node => { if (node) node.hidden = !solverReady; });
         if (setupNote) {
           setupNote.hidden = ready;
           setupNote.textContent = state === "checking" ? "Checking your account setup…"
-            : state === "unavailable" ? "We couldn’t check your linked wallets. Your setup is saved. Check again to continue."
-              : "Your account is not ready yet. Confirm wallet ownership to finish. No payment or deposit is needed.";
+            : "We couldn’t check your account. Your setup is saved. Check again to continue.";
         }
         if (setupRetry) setupRetry.hidden = state !== "unavailable";
         if (walletLinkButton) walletLinkButton.hidden = state === "checking" || state === "unavailable";
@@ -1112,7 +1135,7 @@ ${competitionChildBrief(item)}`;
         } else if (!wallets.length && !unverifiedEmbedded) {
           const item = doc.createElement("li");
           item.className = "wallet-empty";
-          item.textContent = "No verified wallet linked.";
+          item.textContent = "No wallet linked. You only need one to solve bounties and receive payouts.";
           walletList.append(item);
         } else {
           wallets.forEach((wallet) => {
@@ -1233,14 +1256,14 @@ ${competitionChildBrief(item)}`;
           view.participatingItems,
           view.available
             ? "No active bounty participation."
-            : view.wallets.length ? "Canonical activity is temporarily unavailable." : "Link a verified wallet to load activity.",
+            : view.wallets.length ? "Canonical activity is temporarily unavailable." : "Wallet activity appears here after you link a wallet. Card orders stay on their order page.",
         );
         replaceActivityList(
           accountCompletedList,
           view.completedItems,
           view.available
             ? "No completed posted bounties."
-            : view.wallets.length ? "Settlement history is temporarily unavailable." : "Link a verified wallet to load settlements.",
+            : view.wallets.length ? "Settlement history is temporarily unavailable." : "Wallet settlements appear here after you link a wallet.",
         );
         if (accountEvidence) accountEvidence.textContent = view.message;
       };
@@ -1366,8 +1389,10 @@ ${competitionChildBrief(item)}`;
         } catch (error) {
           if (requestId === accountLoadId && currentUser) renderAccountDashboard({
             wallets: verifiedWallets,
-            account_status: ["ready", "wallet_required"].includes(accountStatus) ? accountStatus : "unavailable",
-            account_complete: verifiedWallets.length > 0 && accountStatus === "ready",
+            account_status: accountStatus === "ready" ? "ready" : "unavailable",
+            account_complete: accountStatus === "ready",
+            solver_status: accountStatus !== "ready" ? "unavailable" : verifiedWallets.length ? "ready" : "wallet_required",
+            solver_ready: accountStatus === "ready" && verifiedWallets.length > 0,
           });
           return null;
         }
@@ -1499,7 +1524,7 @@ ${competitionChildBrief(item)}`;
           });
           if (currentUser !== linkingUser) throw { code: 4001 };
           const linkedWallets = accountDashboardView(verification).wallets;
-          if (verification.linked !== true || accountSetupStatus(verification, linkedWallets) !== "ready"
+          if (verification.linked !== true || solverSetupStatus(verification, linkedWallets) !== "ready"
             || !linkedWallets.some(wallet => wallet.address === address)) {
             throw { reason: "wallet_link_store_unavailable" };
           }
@@ -1512,7 +1537,7 @@ ${competitionChildBrief(item)}`;
           if (currentUser !== linkingUser || returnToWorkspace(true)) return;
           showDialog();
           setWalletStatus(accountStatus === "ready" && verifiedWallets.some(wallet => wallet.address === address)
-            ? `${shortWalletAddress(address)} is verified and linked. Your account is ready.`
+            ? `${shortWalletAddress(address)} is verified and linked. You can now claim bounties and receive payouts.`
             : "Wallet ownership was confirmed. Recheck your account setup to continue.");
           win.agentBountiesAnalytics?.track("wallet_link_confirmed");
           returnToPreparedPost({ walletKind: selection.kind, address });
@@ -1564,7 +1589,7 @@ ${competitionChildBrief(item)}`;
           await loadAccount();
           if (currentUser === unlinkingUser) setWalletStatus(verifiedWallets.length
             ? "Wallet removed from this account."
-            : "Wallet removed. Link a wallet to finish your account setup again.");
+            : "Wallet removed. You can still post and pay by card. Link a wallet again before you solve bounties.");
         } catch (error) {
           if (currentUser === unlinkingUser) setWalletStatus(walletLinkErrorMessage(error));
           button.disabled = false;
@@ -1627,7 +1652,7 @@ ${competitionChildBrief(item)}`;
         if ((authParams.get("postReturn") === "1" || authResult === "success") && win.location.hash !== "#account" && returnToPreparedPost()) return;
         if (authResult !== "success" && authResult !== "error") return;
         setStatus(authResult === "success" && accountStatus !== "ready"
-          ? "You’re signed in. Link a wallet to finish your account."
+          ? "You’re signed in. We couldn’t confirm your account yet; check again to continue."
           : authResultMessage(authResult, authParams.get("provider"), authParams.get("reason")));
         if (authResult === "success") win.agentBountiesAnalytics?.track("auth_completed");
         showDialog();
@@ -1870,6 +1895,7 @@ ${competitionChildBrief(item)}`;
     accountDashboardView,
     accountInboxView,
     accountSetupStatus,
+    solverSetupStatus,
     createReviewNotificationController,
     reviewNotificationView,
     authApiPath,

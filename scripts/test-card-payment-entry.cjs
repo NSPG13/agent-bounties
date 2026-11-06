@@ -99,3 +99,19 @@ test('a signed-out poster is sent to login before any quote request', async () =
   assert.equal(context.loggedIn, true);
   assert.equal(context.requests.length, 0);
 });
+
+test('a signed-in poster without a wallet gets a card quote instead of wallet setup', async () => {
+  const composer = require('../site/bounty-composer-v2.js');
+  for (const session of [
+    { authenticated: true, account_status: 'ready', account_complete: true, solver_status: 'wallet_required', solver_ready: false },
+    // The previous API reported the same wallet-less account this way during a rolling release.
+    { authenticated: true, account_status: 'wallet_required', account_complete: false },
+  ]) {
+    const { payByCard, context } = controller({ ok: true, json: async () => ({ quote: { input: { quote_id: ID } } }) });
+    context.state.postingAccountStatus = composer.postingAccountStatus(session);
+    await payByCard();
+    assert.equal(context.loggedIn, false);
+    assert.equal(context.requests.length, 1);
+    assert.equal(context.opened, `account.html?managed_quote=${ID}`);
+  }
+});

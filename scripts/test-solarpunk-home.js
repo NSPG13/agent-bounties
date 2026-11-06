@@ -130,17 +130,43 @@ test("uncertain saves can be reconciled by a new read and cancelled account work
   assert.equal(renders.at(-1).error, false);
 });
 
-test("rolling auth deployments still require explicit server wallet proof", () => {
+test("rolling auth deployments still require explicit server wallet proof for solving", () => {
   const wallets = [{address:"0x" + "11".repeat(20)}];
-  assert.equal(home.accountSetupStatus({identity_link_status:"verified"},wallets),"ready");
-  assert.equal(home.accountSetupStatus({linked:true},wallets),"ready");
-  assert.equal(home.accountSetupStatus({unlinked:true},[]),"wallet_required");
-  assert.equal(home.accountSetupStatus({reason:"marketplace_identity_unlinked"},[]),"wallet_required");
-  assert.equal(home.accountSetupStatus({},wallets),"unavailable");
-  assert.equal(home.accountSetupStatus({linked:true},[]),"unavailable");
-  assert.equal(home.accountSetupStatus({identity_link_status:"verified",account_status:"unavailable",account_complete:false},wallets),"unavailable");
-  assert.equal(home.accountSetupStatus({linked:true,account_complete:false},wallets),"unavailable");
-  assert.equal(home.accountSetupStatus({account_status:"wallet_required",account_complete:true},[]),"unavailable");
+  assert.equal(home.solverSetupStatus({identity_link_status:"verified"},wallets),"ready");
+  assert.equal(home.solverSetupStatus({linked:true},wallets),"ready");
+  assert.equal(home.solverSetupStatus({unlinked:true},[]),"wallet_required");
+  assert.equal(home.solverSetupStatus({reason:"marketplace_identity_unlinked"},[]),"wallet_required");
+  assert.equal(home.solverSetupStatus({},wallets),"unavailable");
+  assert.equal(home.solverSetupStatus({linked:true},[]),"unavailable");
+  assert.equal(home.solverSetupStatus({identity_link_status:"verified",account_status:"unavailable",account_complete:false},wallets),"unavailable");
+  assert.equal(home.solverSetupStatus({linked:true,account_complete:false},wallets),"unavailable");
+  assert.equal(home.solverSetupStatus({account_status:"wallet_required",account_complete:true},[]),"unavailable");
+  // Previous API: ready always carried a wallet; wallet_required meant signed in without one.
+  assert.equal(home.solverSetupStatus({account_status:"ready",account_complete:true},wallets),"ready");
+  assert.equal(home.solverSetupStatus({account_status:"ready",account_complete:true},[]),"unavailable");
+  assert.equal(home.solverSetupStatus({account_status:"wallet_required",account_complete:false},[]),"wallet_required");
+});
+
+test("posting accounts are ready without a wallet; solving still needs one", () => {
+  const wallets = [{address:"0x" + "11".repeat(20)}];
+  const cardOnly = {account_status:"ready",account_complete:true,solver_status:"wallet_required",solver_ready:false};
+  const solver = {account_status:"ready",account_complete:true,solver_status:"ready",solver_ready:true};
+  assert.equal(home.accountSetupStatus(cardOnly,[]),"ready");
+  assert.equal(home.solverSetupStatus(cardOnly,[]),"wallet_required");
+  assert.equal(home.accountSetupStatus(solver,wallets),"ready");
+  assert.equal(home.solverSetupStatus(solver,wallets),"ready");
+  // The previous API's wallet-less account is also ready to post.
+  assert.equal(home.accountSetupStatus({account_status:"wallet_required",account_complete:false},[]),"ready");
+  assert.equal(home.accountSetupStatus({unlinked:true,wallets:[]},[]),"ready");
+  // Solver claims must agree with the wallet list; disagreement is never proof.
+  assert.equal(home.solverSetupStatus(solver,[]),"unavailable");
+  assert.equal(home.solverSetupStatus(cardOnly,wallets),"unavailable");
+  assert.equal(home.solverSetupStatus({...solver,solver_ready:false},wallets),"unavailable");
+  assert.equal(home.solverSetupStatus({...solver,account_complete:false},wallets),"unavailable");
+  // Unknown storage is never a ready account.
+  const unknown = {account_status:"unavailable",account_complete:false,solver_status:"unavailable",solver_ready:false};
+  assert.equal(home.accountSetupStatus(unknown,[]),"unavailable");
+  assert.equal(home.accountSetupStatus({},[]),"unavailable");
 });
 
 test("scene lighting follows the declared local-time bands", () => {

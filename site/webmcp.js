@@ -377,7 +377,7 @@
   register({
     name: "agent_bounties_get_account_status",
     title: "Check my signed-in account",
-    description: "Read the current first-party account session and account-draft availability. Returns an opaque account identifier for support, never credentials or payment authority. Does not log in, change the draft, link a wallet, or sign anything.",
+    description: "Read the current first-party account session and account-draft availability. Returns an opaque account identifier for support, whether the account can post (no wallet is needed to post and pay by card) and whether a verified solver wallet is linked (needed only to claim, submit and receive payouts). Never returns credentials or payment authority. Does not log in, change the draft, link a wallet, or sign anything.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, untrustedContentHint: false },
     async execute() {
@@ -385,7 +385,12 @@
       if (!response.ok) throw new Error("Account status is temporarily unavailable. Your draft is preserved.");
       const session = await response.json();
       const authenticated = session.authenticated === true && /^[0-9a-f]{64}$/.test(session.user?.id || "");
-      return { authenticated, account_id: authenticated ? session.user.id : null, posting_drafts_enabled: authenticated && session.posting_drafts_enabled === true, wallet_authorized: false, payment_authorized: false };
+      // The previous API reported `ready` only with a verified wallet and had no solver fields.
+      const legacy = !Object.hasOwn(session, "solver_status");
+      const posting_ready = authenticated && ((session.account_status === "ready" && session.account_complete === true)
+        || (legacy && session.account_status === "wallet_required" && session.account_complete === false));
+      const solver_ready = posting_ready && (legacy ? session.account_status === "ready" : session.solver_ready === true && session.solver_status === "ready");
+      return { authenticated, account_id: authenticated ? session.user.id : null, posting_drafts_enabled: authenticated && session.posting_drafts_enabled === true, posting_ready, solver_ready, wallet_authorized: false, payment_authorized: false };
     },
   });
 

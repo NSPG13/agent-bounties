@@ -266,8 +266,16 @@ class WalletLinkStore:
 
 
 def account_setup(wallet_count: int | None) -> dict[str, Any]:
-    status = "unavailable" if wallet_count is None else "ready" if wallet_count else "wallet_required"
-    return {"account_status": status, "account_complete": status == "ready"}
+    # Mirrors the API: posting needs only a signed-in account; a verified wallet
+    # is a solver requirement and is reported separately.
+    account = "unavailable" if wallet_count is None else "ready"
+    solver = "unavailable" if wallet_count is None else "ready" if wallet_count else "wallet_required"
+    return {
+        "account_status": account,
+        "account_complete": account == "ready",
+        "solver_status": solver,
+        "solver_ready": solver == "ready",
+    }
 
 
 def unavailable_account_dashboard(reason: str, wallets: list[dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -769,6 +777,7 @@ class LocalAuthHandler(SimpleHTTPRequestHandler):
             try:
                 setup = account_setup(len(self.wallet_store.wallets_for(user))) if user else {
                     "account_status": "signed_out", "account_complete": False,
+                    "solver_status": "signed_out", "solver_ready": False,
                 }
             except (OSError, ValueError, json.JSONDecodeError):
                 setup = account_setup(None)

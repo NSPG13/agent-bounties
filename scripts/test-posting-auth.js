@@ -87,14 +87,25 @@ test("expired, malformed, and storage-disabled continuation state fails closed",
 
 test("posting action is driven by server account state", () => {
   assert.equal(composer.postingAccountStatus({ authenticated: false, account_status: "signed_out" }), "signed_out");
-  assert.equal(composer.postingAccountStatus({ authenticated: true, account_status: "wallet_required", account_complete: false }), "setup");
   assert.equal(composer.postingAccountStatus({ authenticated: true, account_status: "ready", account_complete: true }), "ready");
   assert.equal(composer.postingAccountStatus({ authenticated: true, account_status: "ready", account_complete: false }), "unavailable");
+  assert.equal(composer.postingAccountStatus({ authenticated: true, account_status: "unavailable", account_complete: false }), "unavailable");
   assert.deepEqual(composer.postingPrimaryAction("signed_out", true), { action: "login", disabled: false, label: "LOG IN TO POST" });
-  assert.deepEqual(composer.postingPrimaryAction("setup", true), { action: "login", disabled: false, label: "FINISH SETUP TO POST" });
   assert.deepEqual(composer.postingPrimaryAction("checking", true), { action: "wait", disabled: true, label: "Checking login…" });
   assert.deepEqual(composer.postingPrimaryAction("unavailable", true), { action: "login", disabled: false, label: "CHECK ACCOUNT TO POST" });
   assert.deepEqual(composer.postingPrimaryAction("ready", true), { action: "approve", disabled: false, label: "Confirm bounty" });
+});
+
+test("a signed-in poster without a wallet can approve and pay by card", () => {
+  // Current API: account ready, solver wallet missing.
+  const cardOnly = { authenticated: true, account_status: "ready", account_complete: true, solver_status: "wallet_required", solver_ready: false };
+  assert.equal(composer.postingAccountStatus(cardOnly), "ready");
+  assert.equal(composer.postingPrimaryAction(composer.postingAccountStatus(cardOnly), false).action, "approve");
+  // Previous API during a rolling release reported the same account as wallet_required.
+  assert.equal(composer.postingAccountStatus({ authenticated: true, account_status: "wallet_required", account_complete: false }), "ready");
+  // Signed-out and unknown accounts still cannot approve.
+  assert.equal(composer.postingAccountStatus({ authenticated: false, account_status: "ready", account_complete: true }), "signed_out");
+  assert.equal(composer.postingAccountStatus({ authenticated: true, account_status: "wallet_required", account_complete: true }), "unavailable");
 });
 
 for (const path of ["/post", "/post.html"]) test(`account sign-in preserves ${path} continuation`, () => {

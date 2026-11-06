@@ -1,8 +1,17 @@
 # Website account setup
 
-An account requires sign-in and at least one verified wallet. Users choose **Link wallet** or **Link another** to use a phone wallet (QR), an installed browser wallet, or create a wallet with the configured embedded provider. Phone pairing has no separate floating button. Closing setup saves progress; it does not complete the account.
+An account requires sign-in only. A signed-in account can prepare, approve and
+post a bounty, and pay for it by card, without a crypto wallet. Card buyers are
+authenticated by their account; crypto funding proves its funding wallet at the
+funding step.
 
-The wallet connection is followed by one bounded ownership message. The server verifies the signature and stores the link before account setup completes. Pairing, an address, a signature alone, or a successful sign-in does not prove completion. No deposit, token approval or transaction is needed to create an account. Already verified wallets do not need another ownership signature. Removing the final wallet returns the account to unfinished setup.
+A verified wallet is required only to **solve**: to claim a bounty, sign a
+solver bond, submit work, enter solver surfaces such as Workspace, and receive
+payouts. Users choose **Link wallet** or **Link another** to use a phone wallet
+(QR), an installed browser wallet, or create a wallet with the configured
+embedded provider. Phone pairing has no separate floating button.
+
+The wallet connection is followed by one bounded ownership message. The server verifies the signature and stores the link before solver readiness is reported. Pairing, an address, a signature alone, or a successful sign-in does not prove a linked wallet. No deposit, token approval or transaction is needed to link one. Already verified wallets do not need another ownership signature. Removing the final wallet ends solver readiness; the account can still post and pay by card.
 
 ## API contract
 
@@ -13,14 +22,29 @@ Session, account, successful verification and unlink responses include:
 | Field | Meaning |
 | --- | --- |
 | `account_status: signed_out` | No authenticated identity; returned by the session route. |
-| `account_status: wallet_required` | Signed in, with no stored verified wallet. Setup is unfinished. |
-| `account_status: ready` | At least one stored, ownership-verified wallet. |
-| `account_status: unavailable` | Wallet storage could not be checked. Do not report completion. |
-| `account_complete` | True only for `ready`. |
+| `account_status: ready` | Signed in and account storage is readable. The account can post and pay by card, with or without a wallet. |
+| `account_status: unavailable` | Account storage could not be checked. Do not report a ready account. |
+| `account_complete` | True only for `account_status: ready`. |
+| `solver_status: ready` | At least one stored, ownership-verified wallet. The account can claim, submit and receive payouts. |
+| `solver_status: wallet_required` | Ready account with no stored verified wallet. Link one before solving. |
+| `solver_status: unavailable` / `signed_out` | Wallet storage could not be checked, or nobody is signed in. |
+| `solver_ready` | True only for `solver_status: ready`. |
 
-`authenticated` continues to describe the signed-in identity so pending users can request a wallet challenge and finish setup. It is not an account-completion flag. Website clients must use the server's completion fields and verified wallet list before showing a completed account. The session's opaque `user.id` binds resumable setup to the same identity.
+`authenticated` continues to describe the signed-in identity. Website clients must use the server's completion fields and verified wallet list before showing a ready account or a linked solver wallet; a `solver_ready` claim that disagrees with the wallet list is treated as unavailable. The session's opaque `user.id` binds resumable setup to the same identity.
 
-An unavailable marketplace activity feed does not revoke a verified link. Account completion and activity availability are separate. Signature and transaction confirmations remain in the user's wallet. These account links grant no authority to spend, fund, publish or settle work.
+Neither readiness flag is authority. Card quotes still require an authenticated account and an allowed Origin. Claims, submissions, terms publication and payouts still require server-side proof of the exact wallet (`authorize_verified_wallet`), whatever these fields say.
+
+### Rolling release
+
+Release the website before the API. The current website also understands the
+previous API, which reported a signed-in account without a wallet as
+`account_status: wallet_required` with `account_complete: false`, and reported
+`ready` only with a verified wallet. The website treats that previous
+`wallet_required` response as a ready posting account whose solver wallet is
+missing. A previous website reading the current API would show a wallet-less
+account as unavailable, so the API must not be released first.
+
+An unavailable marketplace activity feed does not revoke a verified link. Account readiness and activity availability are separate. Wallet-derived stats and settlement history appear only after a wallet is linked. Card orders stay on their order page. Signature and transaction confirmations remain in the user's wallet. These account links grant no authority to spend, fund, publish or settle work.
 
 New ownership-verification requests may include `provider_id`. Responses preserve
 this user-selected hint, `wallet_type`, `chain_ids`, and `last_verified_at`.
@@ -29,7 +53,7 @@ signing session, ownership of another address, or funding readiness.
 
 ## Continue your work
 
-The account panel lists saved drafts before wallet setup. It groups confirmed
+The account panel lists saved drafts whether or not a wallet is linked. It groups confirmed
 activity by next action, recovery, working, awaiting review, paid and past
 activity. A deadline is a reminder; only confirmed terminal events establish
 payment, refund, rejection or expiry. Rounds remain separate after reopening.
@@ -89,4 +113,4 @@ Saved approval records express review of draft contents only. They do not
 replace legal consent, wallet confirmation, or canonical evidence. A saved
 transaction hash must be reconciled instead of creating another transaction.
 
-During a rolling deployment, the website also understands the previous API's explicit verified-identity and wallet-link receipts. New completion fields take precedence when present. A wallet address or empty successful response alone never completes setup.
+During a rolling deployment, the website also understands the previous API's explicit verified-identity and wallet-link receipts. New completion and solver fields take precedence when present. A wallet address or empty successful response alone never proves a linked solver wallet.
