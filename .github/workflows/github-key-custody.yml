@@ -28,6 +28,9 @@ jobs:
     environment: legacy-keeper
     runs-on: ubuntu-24.04
     timeout-minutes: 8
+    concurrency:
+      group: agent-bounties-shared-base-keeper
+      cancel-in-progress: false
     env:
       CUSTODY_AUTHORIZED_REVISION: ${{ vars.KEY_CUSTODY_MIGRATION_REVISION }}
       CUSTODY_AUTHORIZED_PHASE: ${{ vars.KEY_CUSTODY_MIGRATION_PHASE }}

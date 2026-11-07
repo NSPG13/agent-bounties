@@ -194,6 +194,18 @@ class CustodyTest(unittest.TestCase):
             with self.assertRaises(c.Refused):
                 c.read_json(output)
 
+    def test_migration_obeys_the_existing_shared_keeper_lock_guard(self):
+        spec = importlib.util.spec_from_file_location("keeper_guard", PATH.with_name("regression_verifier_source_guard.py"))
+        guard = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(guard)
+        root = PATH.resolve().parents[1]
+        self.assertIn("github-key-custody.yml", guard.validate_keeper_workflow_locks(root))
+        workflow = (root / c.WORKFLOW).read_text()
+        lock = "    concurrency:\n      group: agent-bounties-shared-base-keeper\n      cancel-in-progress: false\n"
+        self.assertIn(lock, workflow)
+        with self.assertRaises(guard.GuardError):
+            guard._validate_yaml_keeper_locks(workflow.replace(lock, "", 1), "github-key-custody.yml")
+
 
 if __name__ == "__main__":
     unittest.main()
