@@ -25,6 +25,26 @@ pub(crate) async fn require_certified_history(
     connection: &mut sqlx::PgConnection,
     network: &str,
 ) -> DbResult<()> {
+    // A known autonomous reader failure is an availability condition, separate
+    // from damaged or uncertified history. Missing historical heartbeats retain
+    // the previous archival semantics; this is not a current-read freshness gate.
+    let failed_reader: bool = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM base_indexer_heartbeats h
+            JOIN autonomous_canonical_checkpoints c
+              ON c.network=h.network AND c.factory_contract=h.escrow_contract
+            WHERE h.network=$1
+              AND (h.status NOT IN ('success','skipped') OR h.error_message IS NOT NULL)
+        )
+    "#,
+    )
+    .bind(network)
+    .fetch_one(&mut *connection)
+    .await?;
+    if failed_reader {
+        return Err(DbError::AutonomousReaderUnavailable);
+    }
     let uncertified: bool = sqlx::query_scalar(r#"
         SELECT EXISTS (
             SELECT 1 FROM autonomous_bounty_events e
@@ -130,13 +150,28 @@ impl PostgresStore {
         factory: &str,
         through: u64,
     ) -> DbResult<()> {
-        match self
-            .autonomous_canonical_checkpoint(network, factory)
-            .await?
-        {
-            Some(c) if !c.invalidated && c.block_number >= through => Ok(()),
-            _ => Err(unavailable()),
+        // Retained historical certification is not a current availability
+        // claim. A known reader failure blocks public certified reads until
+        // an ordinary successful poll revalidates the exact checkpoint hash.
+        // No heartbeat was required for legacy archival certification; current
+        // projections retain their separate strict heartbeat freshness gate.
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *tx)
+            .await?;
+        let checkpoint =
+            Self::autonomous_canonical_checkpoint_on(&mut *tx, network, factory).await?;
+        let heartbeat = Self::get_base_indexer_heartbeat_on(&mut *tx, network, factory).await?;
+        if checkpoint.is_none_or(|c| c.invalidated || c.block_number < through) {
+            return Err(unavailable());
         }
+        if heartbeat.is_some_and(|h| {
+            !matches!(h.status.as_str(), "success" | "skipped") || h.error_message.is_some()
+        }) {
+            return Err(DbError::AutonomousReaderUnavailable);
+        }
+        tx.commit().await?;
+        Ok(())
     }
 
     /// Compare-and-swap with the read cursor and atomically certify the new cursor.

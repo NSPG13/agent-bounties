@@ -347,6 +347,80 @@ async fn autonomous_readers_keep_factory_health_identity_and_boundaries_separate
             .unwrap();
         assert_eq!(v2["ready"], healthy[1]);
     }
+    // A transient provider-behind failure retains certification but cannot
+    // masquerade as a healthy reader or an empty canonical public feed.
+    for factory in &factories {
+        reader(&store, factory, true, 999).await;
+    }
+    let saved = store
+        .autonomous_canonical_checkpoint("base-mainnet", &factories[1])
+        .await
+        .unwrap();
+    let mut failed = store
+        .get_base_indexer_heartbeat("base-mainnet", &factories[1])
+        .await
+        .unwrap()
+        .unwrap();
+    failed.status = "failed".into();
+    failed.error_message = Some("autonomous provider safe head behind checkpoint".into());
+    store.upsert_base_indexer_heartbeat(&failed).await.unwrap();
+    for route in [
+        "/feed".to_string(),
+        format!("/feed?bounty_contract={}", children[1]),
+        format!("/feed?claimable_only=true&bounty_contract={}", children[1]),
+    ] {
+        let response = client.get(format!("{base}{route}")).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_ne!(
+            response.text().await.unwrap(),
+            "[]",
+            "unavailable is not empty"
+        );
+    }
+    assert_eq!(
+        client
+            .get(format!("{base}/feed?bounty_contract={}", children[0]))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    let readiness: Value = client
+        .get(format!("{base}/readiness"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let v2 = readiness["readers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["protocol"] == AUTONOMOUS_V2_PROTOCOL_VERSION)
+        .unwrap();
+    assert_eq!(v2["ready"], false);
+    assert_eq!(v2["blocker"], "reader_failed");
+    assert_eq!(
+        store
+            .autonomous_canonical_checkpoint("base-mainnet", &factories[1])
+            .await
+            .unwrap(),
+        saved
+    );
+    reader(&store, &factories[1], true, 999).await;
+    // The unrelated orphan fixture remains a certification error. Only the
+    // typed temporary availability condition was changed to HTTP 503.
+    assert_eq!(
+        client
+            .get(format!("{base}/feed"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
     // Verified-only metrics retain their v1 scope instead of inheriting v2 rows.
     assert!(store
         .list_autonomous_bounty_events_for_factory("base-mainnet", &factories[0], true)

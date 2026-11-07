@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SUITES = (
     ("db", "autonomous_canonicality::tests::", 2),
     ("worker", "autonomous_canonicality::tests::", 3),
+    ("worker", "autonomous_canonicality::safe_head_tests::", 3),
     ("worker", "autonomous_checkpoint_contention_tests::", 4),
     ("worker", "indexer_log_batch_tests::", 9),
     ("api", "nonce_retirement::tests::", 5),

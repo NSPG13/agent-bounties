@@ -251,6 +251,8 @@ const BOND_SPONSORSHIP_SELECT_BY_CANDIDATE_SQL: &str = r#"
 
 #[derive(Debug, Error)]
 pub enum DbError {
+    #[error("autonomous canonical reader is temporarily unavailable")]
+    AutonomousReaderUnavailable,
     #[error("conflicting Stripe reconciliation evidence")]
     StripeReconciliationConflict,
     #[error("identical autonomous checkpoint was committed by another poller; retry from current position")]

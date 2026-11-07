@@ -5,6 +5,10 @@ use std::collections::{BTreeMap, BTreeSet};
 mod bootstrap_reads;
 use bootstrap_reads::{BootstrapReadPolicy, BootstrapReads};
 
+#[cfg(test)]
+#[path = "autonomous_safe_head_tests.rs"]
+mod safe_head_tests;
+
 // Only bootstrap uses this wrapper. Normal polling and global RPC parsers keep
 // their existing behavior. Every delegated operation remains one wire attempt.
 struct BootstrapTransport<T>(T);
@@ -96,13 +100,14 @@ pub(super) async fn verify_previous(
             ));
         }
         if c.block_number > safe.number {
-            store
-                .invalidate_autonomous_canonical_checkpoint(
-                    &config.network,
-                    &config.factory_contract,
-                )
-                .await?;
-            return Err(anyhow!("safe chain regressed below autonomous checkpoint"));
+            // A provider's current safe tag can lag its previously certified
+            // header. This observation proves unavailability, not a changed
+            // canonical hash. Keep the certification and history intact, and
+            // require the exact checkpoint hash again once safe catches up.
+            return Err(anyhow::Error::new(AutonomousSafeHeadBehind {
+                checkpoint_block: c.block_number,
+                provider_safe_block: safe.number,
+            }));
         }
         let now =
             fetch_exact_block_identity(&config.rpc_url, c.block_number, config.request_id + 30_001)
@@ -861,8 +866,8 @@ mod tests {
         assert_eq!(certified.block_hash, safe.hash);
         assert!(!certified.invalidated);
 
-        // The identical height lag after certification is an integrity failure,
-        // not a bootstrap wait. It must quarantine and remain nonretryable.
+        // A lower safe tag after certification is provider unavailability, not
+        // proof of a different checkpoint hash. It must not rewrite authority.
         safe.number = 99;
         let error = verify_previous(
             &store,
@@ -876,7 +881,26 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(!indexer_error_is_retryable(&error));
+        assert!(indexer_error_is_retryable(&error));
+        assert_eq!(
+            serde_json::to_value(indexer_safe_head_observation(&error)).unwrap(),
+            serde_json::json!({"checkpoint_block":100,"provider_safe_block":99})
+        );
+        assert!(
+            !store
+                .autonomous_canonical_checkpoint(&config.network, &factory)
+                .await
+                .unwrap()
+                .unwrap()
+                .invalidated
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        // Existing quarantine is still terminal; a higher safe head cannot
+        // silently clear it or trigger another RPC request.
+        store
+            .invalidate_autonomous_canonical_checkpoint(&config.network, &factory)
+            .await
+            .unwrap();
         assert!(
             store
                 .autonomous_canonical_checkpoint(&config.network, &factory)
