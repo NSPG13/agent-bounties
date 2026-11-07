@@ -83,9 +83,37 @@ impl fmt::Display for IndexerOperationalError {
 
 impl std::error::Error for IndexerOperationalError {}
 
+/// Fixed public block numbers only; no URL, query, contract or customer data.
+#[derive(Debug, Clone, Serialize)]
+pub struct AutonomousSafeHeadBehind {
+    checkpoint_block: u64,
+    provider_safe_block: u64,
+}
+
+impl fmt::Display for AutonomousSafeHeadBehind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "autonomous provider safe head behind checkpoint: checkpoint_block={} provider_safe_block={}",
+            self.checkpoint_block, self.provider_safe_block)
+    }
+}
+
+impl std::error::Error for AutonomousSafeHeadBehind {}
+
+pub fn indexer_safe_head_observation(error: &anyhow::Error) -> Option<&AutonomousSafeHeadBehind> {
+    error.downcast_ref::<AutonomousSafeHeadBehind>()
+}
+
+fn indexer_waits_for_safe_head(error: &anyhow::Error) -> bool {
+    // A fatal outer persistence failure must win over an inner observation.
+    indexer_error_is_retryable(error) && indexer_safe_head_observation(error).is_some()
+}
+
 pub fn indexer_error_is_retryable(error: &anyhow::Error) -> bool {
     if let Some(error) = error.downcast_ref::<IndexerOperationalError>() {
         return error.retryable;
+    }
+    if indexer_safe_head_observation(error).is_some() {
+        return true;
     }
     if let Some(error) = error.downcast_ref::<ChainBaseError>() {
         return matches!(
@@ -137,7 +165,7 @@ pub struct IndexerRecoveryPolicy {
     pub exit_after_consecutive_failures: u32,
 }
 
-/// Provider throttling has its own backoff and never spends the ordinary
+/// Provider throttling/safe-head lag has its own backoff and never spends the ordinary
 /// transient-failure budget. Only a successful poll clears that budget.
 #[derive(Debug, Default)]
 pub struct IndexerRecoveryState {
@@ -155,7 +183,8 @@ impl IndexerRecoveryState {
         policy: &IndexerRecoveryPolicy,
         error: &anyhow::Error,
     ) -> IndexerRecoveryDecision {
-        let count = if indexer_provider_delay(error).is_some() {
+        let count = if indexer_provider_delay(error).is_some() || indexer_waits_for_safe_head(error)
+        {
             self.provider_holds = self.provider_holds.saturating_add(1);
             self.provider_holds
         } else {
@@ -223,9 +252,12 @@ impl IndexerRecoveryPolicy {
         consecutive_failures: u32,
         error: &anyhow::Error,
     ) -> IndexerRecoveryDecision {
-        if let Some(provider_delay) = indexer_provider_delay(error) {
-            // Repeated rate limits cannot be fixed by resetting the process.
-            // Preserve the provider's delay even when it exceeds our usual cap.
+        let provider_delay = indexer_provider_delay(error);
+        if provider_delay.is_some() || indexer_waits_for_safe_head(error) {
+            // Rate limits and a provider's lagging safe tag cannot be fixed by
+            // restarting this process and its healthy sibling readers. Safe
+            // lag uses our bounded backoff, never a fabricated Retry-After.
+            // Preserve an actual provider delay even above our usual cap.
             let multiplier = 1_u64
                 .checked_shl(consecutive_failures.saturating_sub(1).min(63))
                 .unwrap_or(u64::MAX);
@@ -233,7 +265,7 @@ impl IndexerRecoveryPolicy {
                 .initial_backoff_seconds
                 .saturating_mul(multiplier)
                 .min(self.max_backoff_seconds)
-                .max(provider_delay);
+                .max(provider_delay.unwrap_or(0));
             return IndexerRecoveryDecision::RetryFromPersistedCursor {
                 consecutive_failures,
                 backoff_seconds,
@@ -711,20 +743,22 @@ pub async fn poll_autonomous_indexer_once_with_heartbeat(
                 updated_at: completed_at,
             };
             if let Err(heartbeat_error) = store.upsert_base_indexer_heartbeat(&heartbeat).await {
-                return Err(anyhow::Error::new(IndexerOperationalError {
+                let context = IndexerOperationalError {
                     message: format!(
                         "{error_message}; failed to persist autonomous Base indexer failure heartbeat: {}",
                         redact_operational_error(&heartbeat_error.to_string())
                     ),
                     retryable: retryable && matches!(heartbeat_error, DbError::Sqlx(_)),
                     provider_delay_seconds: indexer_provider_delay(&error),
-                }));
+                };
+                return Err(error.context(context));
             }
-            Err(anyhow::Error::new(IndexerOperationalError {
+            let context = IndexerOperationalError {
                 message: error_message,
                 retryable,
                 provider_delay_seconds: indexer_provider_delay(&error),
-            }))
+            };
+            Err(error.context(context))
         }
     }
 }
@@ -734,7 +768,6 @@ pub async fn poll_autonomous_indexer_once(
     config: &AutonomousIndexerConfig,
 ) -> anyhow::Result<AutonomousIndexerPollReport> {
     let descriptor = config.network_descriptor()?;
-    backfill_autonomous_event_block_times(store, config).await?;
     // Capture one durable position before the fresh headers. A competing poll
     // may advance afterwards, but cannot mix our cursor with its checkpoint or
     // make a newer checkpoint appear to regress behind an older safe response.
@@ -755,6 +788,9 @@ pub async fn poll_autonomous_indexer_once(
         &safe,
     )
     .await?;
+    // Do not update historical timestamps while a provider is behind, the
+    // stored checkpoint is quarantined, or its exact hash has not revalidated.
+    backfill_autonomous_event_block_times(store, config).await?;
     let from_block = next_indexer_from_block(
         scan_cursor.as_ref().map(|cursor| cursor.last_scanned_block),
         None,

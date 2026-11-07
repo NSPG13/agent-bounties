@@ -8,13 +8,13 @@ use std::{
 };
 use tokio::time::sleep;
 use worker::{
-    dispatch_discovery_webhooks_once, poll_autonomous_indexer_once_with_heartbeat,
-    poll_open_competition_indexer_once_with_heartbeat, poll_open_competition_v2_broker_once,
-    poll_open_competition_v2_indexer_once_with_heartbeat, poll_open_competition_v2_keeper_once,
-    poll_open_competition_v2_shadow_with_cache, redact_operational_error,
-    run_regression_sandbox_request, snapshot_directory, stage_regression_input,
-    validate_regression_candidate, AutonomousIndexerConfig, DiscoveryWebhookConfig,
-    IndexerRecoveryDecision, IndexerRecoveryPolicy, IndexerRecoveryState,
+    dispatch_discovery_webhooks_once, indexer_safe_head_observation,
+    poll_autonomous_indexer_once_with_heartbeat, poll_open_competition_indexer_once_with_heartbeat,
+    poll_open_competition_v2_broker_once, poll_open_competition_v2_indexer_once_with_heartbeat,
+    poll_open_competition_v2_keeper_once, poll_open_competition_v2_shadow_with_cache,
+    redact_operational_error, run_regression_sandbox_request, snapshot_directory,
+    stage_regression_input, validate_regression_candidate, AutonomousIndexerConfig,
+    DiscoveryWebhookConfig, IndexerRecoveryDecision, IndexerRecoveryPolicy, IndexerRecoveryState,
     OpenCompetitionIndexerConfig, OpenCompetitionV2BrokerChainConfig,
     OpenCompetitionV2BrokerConfig, OpenCompetitionV2IndexerConfig, OpenCompetitionV2KeeperConfig,
     OpenCompetitionV2ShadowCache, OpenCompetitionV2ShadowConfig,
@@ -295,6 +295,7 @@ async fn main() -> anyhow::Result<()> {
                         "network": config.network,
                         "factory_contract": config.factory_contract,
                         "error": redact_operational_error(&error.to_string()),
+                        "safe_head_observation": indexer_safe_head_observation(&error),
                         "decision": decision,
                         "evidence_boundary": "Retry resumes from the persisted monotonic cursor. It cannot create funding, verification, payout, or settlement evidence."
                     }))?

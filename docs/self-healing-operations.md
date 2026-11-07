@@ -125,6 +125,27 @@ process. Malformed responses, invalid emitters, decode/config/cursor errors, and
 other unclassified failures halt ingestion after the failed heartbeat; they are
 not retried or converted into canonical evidence.
 
+An autonomous provider whose current `safe` block is below an already associated,
+non-invalidated checkpoint is unavailable. The reader records a failed heartbeat
+and the fixed `checkpoint_block` and `provider_safe_block` observation, then waits
+with the existing bounded backoff. Like a provider throttle, this typed wait
+neither spends nor resets the ordinary transient-failure count and never causes
+a supervisor restart. It does not invent a provider `Retry-After`. An outer
+nonretryable failure still halts. It does not invalidate a previously checked
+hash based on height alone, backfill event timestamps, advance a cursor, report a
+successful scan, or establish new canonical evidence. Once `safe` reaches the
+checkpoint, the reader must recheck that exact stored hash before any progress.
+A different exact hash still quarantines history and halts; a checkpoint already
+invalidated remains held and cannot be cleared by provider recovery or restart.
+
+Retained certification is distinct from availability. A known failed reader
+heartbeat blocks that factory's public certified history until a normal poll
+succeeds after revalidation, even if the failure heartbeat becomes old. The
+internal archival rows remain readable for investigation. Historical reads that
+had no heartbeat retain their existing archival semantics; current projections,
+earning discovery and readiness still require their existing fresh successful
+reader evidence. Neither archival access nor provider recovery proves payment.
+
 The Open Competition V2 keeper uses the indexer classifier plus a keeper-only
 allowlist for relayer transport failures. The relayer currently retains
 sanitized provider messages rather than the original error types, so the

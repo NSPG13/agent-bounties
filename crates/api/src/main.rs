@@ -16510,10 +16510,14 @@ async fn load_autonomous_bounty_feed(
         .store
         .as_ref()
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-    let events = store
-        .list_autonomous_bounty_events(network)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let events =
+        store
+            .list_autonomous_bounty_events(network)
+            .await
+            .map_err(|error| match error {
+                db::DbError::AutonomousReaderUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            })?;
     let terms = store
         .list_autonomous_bounty_terms()
         .await
