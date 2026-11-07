@@ -600,6 +600,91 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn provider_bounded_batches_preserve_complete_shadow_union() {
+        for count in [0, 10, 11, 73] {
+            let rpc = rpc_fixture(move |request| {
+                let filter = &request["params"][0];
+                assert_eq!(filter["fromBlock"], "0x1");
+                assert_eq!(filter["toBlock"], "0x64");
+                assert_eq!(
+                    filter["topics"],
+                    json!([open_competition_v2_event_topics()])
+                );
+                if filter["address"].is_string() {
+                    json!((1..=count)
+                        .map(|n| creation_log(n, &format!("{n:02x}")))
+                        .collect::<Vec<_>>())
+                } else if filter["address"].as_array().unwrap().len() > 10 {
+                    json!({"provider_refusal": "maximum ten addresses"})
+                } else {
+                    json!([])
+                }
+            })
+            .await;
+            let config = config("http://primary.invalid", &rpc.url);
+            let events = fetch_shadow_events(&config, 100, None).await.unwrap();
+            assert_eq!(events.len(), count as usize);
+            let requests = rpc.requests.lock().unwrap();
+            let batches = requests
+                .iter()
+                .filter(|q| q["params"][0]["address"].is_array())
+                .collect::<Vec<_>>();
+            assert!(batches
+                .iter()
+                .all(|q| q["params"][0]["address"].as_array().unwrap().len() <= 10));
+            let actual = batches
+                .iter()
+                .flat_map(|q| {
+                    q["params"][0]["address"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|a| a.as_str().unwrap().to_string())
+                })
+                .collect::<Vec<_>>();
+            let expected = (1..=count)
+                .map(|n| format!("0x{}", format!("{n:02x}").repeat(20)))
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected, "all shadow competitions appear once");
+            assert_eq!(batches.len(), (count as usize).div_ceil(10));
+        }
+    }
+
+    #[tokio::test]
+    async fn shadow_middle_refusal_or_late_invalid_emitter_cannot_complete_prefix() {
+        for invalid_last in [false, true] {
+            let rpc = rpc_fixture(move |request| {
+                let filter = &request["params"][0];
+                if filter["address"].is_string() {
+                    json!((1..=23)
+                        .map(|n| creation_log(n, &format!("{n:02x}")))
+                        .collect::<Vec<_>>())
+                } else {
+                    let addresses = filter["address"].as_array().unwrap();
+                    if addresses.len() > 10
+                        || (!invalid_last && addresses[0] == format!("0x{}", "0b".repeat(20)))
+                    {
+                        json!({"provider_refusal":"do not skip failed addresses"})
+                    } else if invalid_last && addresses[0] == format!("0x{}", "15".repeat(20)) {
+                        json!([creation_log(24, "ff")])
+                    } else {
+                        json!([])
+                    }
+                }
+            })
+            .await;
+            let config = config("http://primary.invalid", &rpc.url);
+            let error = fetch_shadow_events(&config, 100, None).await.unwrap_err();
+            if invalid_last {
+                assert!(error.to_string().contains("emitter"), "{error}");
+            }
+            let requests = rpc.requests.lock().unwrap();
+            assert_eq!(requests.len(), if invalid_last { 4 } else { 3 });
+            assert_eq!(requests.last().unwrap()["method"], "eth_getLogs");
+        }
+    }
+
+    #[tokio::test]
     async fn verified_anchor_is_rechecked_on_both_providers_even_without_new_blocks() {
         let primary = rpc_fixture(block_response).await;
         let shadow = rpc_fixture(block_response).await;

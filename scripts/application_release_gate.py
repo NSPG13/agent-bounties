@@ -31,6 +31,7 @@ STEPS = (
 POSTGRES = (
     ("db", "autonomous_canonicality::tests::", 2),
     ("worker", "autonomous_canonicality::tests::", 3),
+    ("worker", "indexer_log_batch_tests::", 9),
     ("db", "terms_publication::tests::", 3),
     ("api", "terms_publication::tests::publication_http_wallet_ownership_and_exact_historical_replay", 1),
     ("api", "marketplace_readiness::tests::database_snapshots_finish_before_first_shared_head_postgres", 1),
