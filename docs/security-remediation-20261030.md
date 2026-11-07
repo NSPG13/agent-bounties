@@ -58,6 +58,12 @@ migration or signer rotation needs custody-owner execution; a repository adminis
 with workflow-write and secret access remains trusted. Full action pins and step-level
 key injection reduce third-party action exposure but do not make compromised runners safe.
 
+The owner subsequently authorized the
+[one-time GitHub-internal custody migration](github-key-custody-migration.md).
+That procedure verifies every destination before retiring repository copies and
+keeps signing consumers disabled. Publishing its workflow alone does not prove
+that the transfer or final reconciliation has completed.
+
 The current deployed diagnostic patch also remains included: fixed failure classes
 separate local request pacing, provider transport and database/head timeouts, retaining
 the existing twelve-second freshness deadline and excluding raw error values.
