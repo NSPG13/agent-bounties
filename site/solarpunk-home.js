@@ -49,6 +49,15 @@
     } catch (_) { return null; }
   }
 
+  // A selected local project can be a test bounty. This only permits navigation:
+  // Workspace must authorize the account and reject wallet-free platform access.
+  function workspaceReturnNeedsWallet(candidate, origin) {
+    const target = workspaceReturnTarget(candidate, origin);
+    if (!target) return true;
+    const params = new URL(target, origin).searchParams;
+    return !params.has("project") || params.has("bounty");
+  }
+
   function workspaceAccountReturn(win, action, { now = Date.now(), manual = false } = {}) {
     try {
       const storage = win.sessionStorage;
@@ -1021,14 +1030,15 @@ ${competitionChildBrief(item)}`;
       workspaceButton.textContent = "Continue to Workspace";
       workspaceReturn.append(workspaceNote, workspaceButton);
       accountDashboard?.prepend(workspaceReturn);
-      // Only a fresh account response with a verified wallet finishes Workspace onboarding.
+      // A fresh account may return to a selected test project without a wallet.
       const returnToWorkspace = (manual = false) => {
         if (leavingForWorkspace) return true;
-        if (!currentUser || accountStatus !== "ready" || !verifiedWallets.length) return false;
+        if (!currentUser || accountStatus !== "ready") return false;
         const pending = workspaceAccountReturn(win, "pending");
         if (!pending) return false;
+        if (!verifiedWallets.length && workspaceReturnNeedsWallet(pending.target, win.location.origin)) return false;
         if (pending.bounced && !manual) {
-          workspaceNote.textContent = "Your account and wallet are ready, but the Workspace sent you back here. Select Continue to Workspace to try again.";
+          workspaceNote.textContent = "Your account is ready, but the Workspace sent you back here. Select Continue to Workspace to try again.";
           return false;
         }
         workspaceNote.textContent = "Your account is ready. Returning to the Workspace…";
@@ -1079,12 +1089,14 @@ ${competitionChildBrief(item)}`;
         if (modeToggle) modeToggle.textContent = accountMode === "signup" ? "Sign in" : "Create an account";
         if (switchLabel) switchLabel.textContent = accountMode === "signup" ? "Already have an account?" : "New to Agentizable.ai?";
         if (returnButton) returnButton.hidden = !postingAuth?.pending(win);
-        workspaceReturn.hidden = !ready || !workspaceAccountReturn(win, "pending");
-        // Workspace is a solver surface: posting needs no wallet, but entering it does.
-        if (!workspaceReturn.hidden && !verifiedWallets.length) {
-          workspaceNote.textContent = "The Workspace is where solvers work on bounties, so it needs a linked wallet. Link one below to continue. Posting and paying by card need no wallet.";
+        const workspacePending = workspaceAccountReturn(win, "pending");
+        workspaceReturn.hidden = !ready || !workspacePending;
+        const workspaceWalletMissing = !verifiedWallets.length
+          && workspaceReturnNeedsWallet(workspacePending?.target, win.location.origin);
+        if (!workspaceReturn.hidden && workspaceWalletMissing) {
+          workspaceNote.textContent = "Link a wallet below to enter this bounty. A selected test bounty can be opened without a wallet. Posting and paying by card need no wallet.";
         }
-        workspaceButton.hidden = !verifiedWallets.length;
+        workspaceButton.hidden = workspaceWalletMissing;
         if (setupSteps) {
           setupSteps.hidden = ready;
           setupSteps.querySelector("[data-setup-signin]")?.toggleAttribute("data-complete", Boolean(currentUser));
@@ -1892,6 +1904,7 @@ ${competitionChildBrief(item)}`;
     BOUNTY_POSTING_PROMPT,
     workspaceAccountReturn,
     workspaceReturnTarget,
+    workspaceReturnNeedsWallet,
     accountDashboardView,
     accountInboxView,
     accountSetupStatus,
