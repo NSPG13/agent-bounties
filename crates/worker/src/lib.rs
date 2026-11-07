@@ -57,7 +57,9 @@ pub use creator_push::CreatorPushSender;
 mod review_email;
 pub use review_email::*;
 
-const AUTONOMOUS_LOG_ADDRESS_BATCH_SIZE: usize = 500;
+// Keep every canonical address while respecting bounded public RPC log filters.
+// Shared by autonomous, competition primary readers, and independent shadow replay.
+const AUTONOMOUS_LOG_ADDRESS_BATCH_SIZE: usize = 10;
 const INDEXER_HEARTBEAT_SUCCESS: &str = "success";
 const INDEXER_HEARTBEAT_SKIPPED: &str = "skipped";
 const INDEXER_HEARTBEAT_FAILED: &str = "failed";
@@ -2492,3 +2494,6 @@ mod double_failure_tests {
 
 #[cfg(test)]
 mod autonomous_checkpoint_contention_tests;
+
+#[cfg(test)]
+mod indexer_log_batch_tests;
