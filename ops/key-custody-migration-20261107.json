@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "repository": "NSPG13/agent-bounties",
+  "nonce": "cb08c54a98f404d522cf24adef825558316b0be990285ff0fa712e9644d6ef10",
+  "expires_at": "2026-11-10T00:00:00+00:00",
+  "environments": {
+    "legacy-keeper": {
+      "id": 25830927474,
+      "key_id": "3380204578043523366",
+      "key": "FlKTXAfMyi+JpaullOUsbyGb8n6X/s88E5o//s/noEY="
+    },
+    "legacy-verifier-one": {
+      "id": 25830930606,
+      "key_id": "3380204578043523366",
+      "key": "ihYqSnQ5ygs/D2iP9VnrdcAvQdkR4PVHcvGlhpJ9AjM="
+    },
+    "legacy-verifier-two": {
+      "id": 25830933810,
+      "key_id": "3380204578043523366",
+      "key": "cLWFIjdgvR3yta+Vc9OIIojTQy/S1Lj8xAU6i9ETBXo="
+    }
+  }
+}

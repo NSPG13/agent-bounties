@@ -1,0 +1,36 @@
+name: Key custody checks
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/github-key-custody.yml'
+      - '.github/workflows/key-custody-checks.yml'
+      - 'scripts/*github_key_custody*'
+      - 'ops/key-custody-migration-20261107.json'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/github-key-custody.yml'
+      - '.github/workflows/key-custody-checks.yml'
+      - 'scripts/*github_key_custody*'
+      - 'ops/key-custody-migration-20261107.json'
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-custody-rehearsal:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install distribution crypto library
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libsodium23
+      - name: Rehearse encryption and administrator gates using synthetic values
+        run: |
+          python3 -I scripts/test_github_key_custody.py -v
+          python3 -I scripts/test_migrate_github_key_custody.py -v
