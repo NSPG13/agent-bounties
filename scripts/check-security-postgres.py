@@ -17,6 +17,7 @@ SUITES = (
     ("db", "autonomous_canonicality::tests::", 2),
     ("worker", "autonomous_canonicality::tests::", 3),
     ("worker", "autonomous_checkpoint_contention_tests::", 4),
+    ("worker", "indexer_log_batch_tests::", 9),
     ("api", "nonce_retirement::tests::", 5),
     ("api", "nonce_retirement::retained_dispatch::tests::", 5),
     ("db", "timeout_relay::tests::", 3),
