@@ -3,11 +3,21 @@
 // Builds on the approach proposed in #1742.
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { workspaceAccountReturn, workspaceReturnTarget } = require("../site/solarpunk-home.js");
+const { workspaceAccountReturn, workspaceReturnTarget, workspaceReturnNeedsWallet } = require("../site/solarpunk-home.js");
 
 const ORIGIN = "https://agentizable.ai";
 const PROJECT = "0988a16c-3d9a-4c16-8c7d-d5664aee2961";
 const BOUNTY = `0x${"ab".repeat(32)}`;
+
+test("only a selected project return can omit the wallet; canonical and unknown targets retain it", () => {
+  assert.equal(workspaceReturnNeedsWallet(`/workspace/?project=${PROJECT}`, ORIGIN), false);
+  for (const target of ["/workspace/", `/workspace/?bounty=${BOUNTY}`,
+    `/workspace/?project=${PROJECT}&bounty=${BOUNTY}`, "/workspace/?project=",
+    "/workspace/?project=x&funded=false", "/workspace/?project=a&project=b",
+    "https://evil.test/workspace/?project=test", undefined]) {
+    assert.equal(workspaceReturnNeedsWallet(target, ORIGIN), true, String(target));
+  }
+});
 
 function browser(target, { hash = "#login" } = {}) {
   const values = new Map();
