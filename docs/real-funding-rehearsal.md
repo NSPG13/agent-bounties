@@ -50,6 +50,7 @@ $env:ENABLE_STRIPE_PUBLIC_CHECKOUT = "true"
 $env:STRIPE_SECRET_KEY = "sk_test_..."
 $env:STRIPE_PAYMENT_METHOD_CONFIGURATION = "" # optional Dashboard-managed Checkout method set
 $env:STRIPE_WEBHOOK_SECRET = "whsec_..."
+$env:ENABLE_HOSTED_FINANCIAL_SIGNING = "true"
 $env:ENABLE_BASE_TX_BROADCAST = "true"
 $env:BASE_SEPOLIA_RPC_URL = "https://..."
 ```

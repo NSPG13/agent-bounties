@@ -38,6 +38,7 @@ Prepare these values before posting the first beta bounty.
 | `BASE_SEPOLIA_RPC_URL` | Required for Sepolia log fetch and receipt polling | Optional |
 | `BASE_MAINNET_RPC_URL` | Not used | Required for Base mainnet log fetch and receipt polling |
 | `OPERATOR_API_TOKEN` | Recommended | Required |
+| `ENABLE_HOSTED_FINANCIAL_SIGNING` | Defaults to `false`; exact `true` requires an explicit signing activation decision | `false` throughout recovery; gates hosted key loading and direct broadcast |
 | `ENABLE_BASE_TX_BROADCAST` | Usually `false`; enable only for signed raw tx broadcast tests | `false` until operator review confirms broadcast policy |
 | Escrow contract address | Sepolia deployment from `base-sepolia-runbook` | Audited Base mainnet escrow deployment |
 | USDC token address | Base Sepolia USDC test token | Base mainnet USDC |

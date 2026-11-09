@@ -248,6 +248,7 @@ separately, not attributed to the Checkout return.
 - Leave `ENABLE_STRIPE_LIVE_EXECUTION=false` in local demos.
 - Never use `ALLOW_UNSIGNED_STRIPE_WEBHOOKS=true` in hosted real-money
   environments.
+- Keep `ENABLE_HOSTED_FINANCIAL_SIGNING=false` during recovery. Only an explicit operator activation may set it to exact `true` and restart the service; individual feature switches still apply.
 - Keep `ENABLE_BASE_TX_BROADCAST=false` unless the service should submit
   already-signed raw transactions.
 - AI judges can request review or clarification but cannot authorize funding or
