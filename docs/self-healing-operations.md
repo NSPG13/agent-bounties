@@ -488,3 +488,30 @@ statement to five seconds, within the original overall deadline. No network
 request runs under this lock. A cancelled or unsuccessful attempt leaves no
 partial checkpoint, does not reset the cursor and never reports a fresh success
 heartbeat. Existing checked history and payment rules remain unchanged.
+
+
+## Hosted financial signing hold
+
+API and MCP default to a financial signing hold. Only the exact value
+`ENABLE_HOSTED_FINANCIAL_SIGNING=true` opts in; an absent, false, or malformed
+value keeps the hold. Both public Render service definitions pin it to false.
+Public reads, wallet login and webhook evidence intake remain available.
+
+While held, API startup does not read or construct signers from
+`X402_RELAYER_PRIVATE_KEY`, `BOND_SPONSOR_GRANT_SIGNER_PRIVATE_KEY`, or
+`CUSTOMER_REVIEW_SIGNER_PRIVATE_KEY`. This also fences saved transaction retries
+and the managed review finalizer, which cannot be fenced by the direct broadcast
+switch alone. API and MCP raw transaction broadcast additionally require this
+opt-in and their existing `ENABLE_BASE_TX_BROADCAST` switch. Existing individual
+feature gates, authentication, budgets and canonical evidence checks still apply
+when signing is explicitly enabled.
+
+This is a startup control, not a hot reload: changing a saved variable does not
+fence a running old process. During recovery, keep signer services suspended until
+the public commit containing this hold is deployed and the effective runtime
+configuration and signer absence are verified. Keep the separate worker and
+GitHub signing holds in place. This control does not replace worker send pauses,
+GitHub environment restrictions or Stripe execution switches, and it does not
+change saved transactions, signatures, webhook records or canonical history.
+Automatic recovery must never enable it. Any later financial reactivation needs
+its own explicit operator decision after recovery verification.

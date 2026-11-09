@@ -46,7 +46,9 @@ pub struct ManagedPaymentsConfig {
     pub review_signer: Option<alloy::signers::local::PrivateKeySigner>,
 }
 impl ManagedPaymentsConfig {
-    pub fn from_env() -> anyhow::Result<Self> {
+    pub fn from_env(
+        signing: service_runtime::hosted_financial_signing::HostedFinancialSigning,
+    ) -> anyhow::Result<Self> {
         let public_checkout_enabled = match std::env::var("ENABLE_MANAGED_SERVICE_PUBLIC_CHECKOUT")
         {
             Ok(value) if value == "true" => true,
@@ -103,8 +105,8 @@ impl ManagedPaymentsConfig {
             "managed order intake requires a Checkout policy"
         );
         let bounty = crate::managed_bounty_quotes::ManagedBountyConfig::from_env()?;
-        let review_signer = std::env::var("CUSTOMER_REVIEW_SIGNER_PRIVATE_KEY")
-            .ok()
+        let review_signer = signing
+            .secret("CUSTOMER_REVIEW_SIGNER_PRIVATE_KEY")
             .filter(|key| !key.trim().is_empty())
             .map(|key| {
                 key.trim()

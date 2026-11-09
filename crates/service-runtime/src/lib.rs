@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod bounty_read_inputs;
+pub mod hosted_financial_signing;
 pub mod http_observability;
 pub mod managed_bridge;
 pub mod managed_checkout;
