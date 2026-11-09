@@ -232,6 +232,39 @@
     } finally { win.clearTimeout(timeout); }
   }
 
+  function createSessionRecovery(win, { loadSession, getState, resumeWallet, returnToPreparedPost, setStatus, showDialog }) {
+    const authParams = new URLSearchParams(win.location.search);
+    const authResult = authParams.get("auth");
+    let continuation = null;
+    return async () => {
+      const session = await loadSession();
+      if (!session) return null;
+      // Failed discovery leaves the continuation pending. Concurrent retries and later
+      // refreshes must not repeat wallet restoration, navigation or OAuth completion.
+      if (!continuation) continuation = (async () => {
+        if (getState().leavingForWorkspace) return;
+        const user = getState().currentUser;
+        if (user && win.AgentBountiesWalletLink?.hasPending(user.id)) await resumeWallet();
+        if (getState().leavingForWorkspace) return;
+        if ((authParams.get("postReturn") === "1" || authResult === "success")
+          && win.location.hash !== "#account" && returnToPreparedPost()) return;
+        if (authResult !== "success" && authResult !== "error") return;
+        setStatus(authResult === "success" && getState().accountStatus !== "ready"
+          ? "You’re signed in. We couldn’t confirm your account yet; check again to continue."
+          : authResultMessage(authResult, authParams.get("provider"), authParams.get("reason")));
+        if (authResult === "success") win.agentBountiesAnalytics?.track("auth_completed");
+        showDialog();
+        authParams.delete("auth");
+        authParams.delete("provider");
+        authParams.delete("reason");
+        const cleanSearch = authParams.toString();
+        win.history?.replaceState?.(null, "", `${win.location.pathname}${cleanSearch ? `?${cleanSearch}` : ""}${win.location.hash}`);
+      })();
+      await continuation;
+      return session;
+    };
+  }
+
   function authResultMessage(result, provider, reason) {
     if (result === "success") {
       const label = AUTH_PROVIDER_LABELS[String(provider || "").toLowerCase()] || "your provider";
@@ -1470,7 +1503,7 @@ ${competitionChildBrief(item)}`;
         })();
         return pendingSession;
       };
-      sessionRetry.addEventListener("click", () => loadSession());
+      sessionRetry.addEventListener("click", () => recoverSession());
 
       openButton.addEventListener("click", (event) => {
         event.preventDefault();
@@ -1696,24 +1729,13 @@ ${competitionChildBrief(item)}`;
       const openLoginHash = () => { if (["#login", "#account"].includes(win.location.hash)) openButton.click(); };
       win.addEventListener("hashchange", openLoginHash);
       openLoginHash();
-      const authParams = new URLSearchParams(win.location.search);
-      const authResult = authParams.get("auth");
-      loadSession().then(async () => {
-        if (leavingForWorkspace || !authServerReady) return;
-        if (currentUser && win.AgentBountiesWalletLink?.hasPending(currentUser.id)) await linkWallet(true);
-        if ((authParams.get("postReturn") === "1" || authResult === "success") && win.location.hash !== "#account" && returnToPreparedPost()) return;
-        if (authResult !== "success" && authResult !== "error") return;
-        setStatus(authResult === "success" && accountStatus !== "ready"
-          ? "You’re signed in. We couldn’t confirm your account yet; check again to continue."
-          : authResultMessage(authResult, authParams.get("provider"), authParams.get("reason")));
-        if (authResult === "success") win.agentBountiesAnalytics?.track("auth_completed");
-        showDialog();
-        authParams.delete("auth");
-        authParams.delete("provider");
-        authParams.delete("reason");
-        const cleanSearch = authParams.toString();
-        win.history?.replaceState?.(null, "", `${win.location.pathname}${cleanSearch ? `?${cleanSearch}` : ""}${win.location.hash}`);
+      const recoverSession = createSessionRecovery(win, {
+        loadSession,
+        getState: () => ({ currentUser, accountStatus, leavingForWorkspace }),
+        resumeWallet: () => linkWallet(true),
+        returnToPreparedPost, setStatus, showDialog,
       });
+      recoverSession();
     }
 
     function setupBountyLauncher() {
@@ -1954,6 +1976,7 @@ ${competitionChildBrief(item)}`;
     authApiPath,
     authProviderPath,
     fetchAuthSession,
+    createSessionRecovery,
     authResultMessage,
     bountyAssistantLinks,
     competitionChildBrief,
