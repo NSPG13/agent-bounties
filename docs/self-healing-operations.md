@@ -138,6 +138,17 @@ checkpoint, the reader must recheck that exact stored hash before any progress.
 A different exact hash still quarantines history and halts; a checkpoint already
 invalidated remains held and cannot be cleared by provider recovery or restart.
 
+Creator-open indexing also treats an unusable sampled safe head or a safe tag
+behind its checkpoint as provider unavailability. It waits with the existing
+capped provider backoff, without spending the ordinary transport-failure budget
+or restarting sibling readers. For an indexed item, the failure still fences
+availability and advances its concurrency version, but retains the checkpoint,
+logs and projection. Catch-up must recheck the exact checkpoint hash before
+continuing; a changed hash still clears the cached projection for replay. An
+unusable head detected before seeding writes no creator indexes. Recovery logs
+include the bounded URL-redacted error and fixed block observations, so an
+operator halt retains its cause. Unknown or integrity failures still halt.
+
 Retained certification is distinct from availability. A known failed reader
 heartbeat blocks that factory's public certified history until a normal poll
 succeeds after revalidation, even if the failure heartbeat becomes old. The

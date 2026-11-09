@@ -208,7 +208,11 @@ async fn main() -> anyhow::Result<()> {
                     let decision = recovery_state.on_error(&recovery_policy, &error);
                     eprintln!(
                         "{}",
-                        serde_json::json!({"schema": "agent-bounties/creator-open-indexer-recovery-v1", "decision": decision})
+                        worker::creator_open_indexer_recovery_report(
+                            &release.network,
+                            &error,
+                            decision
+                        )
                     );
                     if once {
                         anyhow::bail!("creator-open index poll failed");

@@ -50,7 +50,7 @@ mod creator_open_indexer;
 mod creator_open_notifications;
 pub use creator_open_notifications::CreatorOpenNotificationRuntime;
 mod creator_push;
-pub use creator_open_indexer::poll_creator_open_indexer;
+pub use creator_open_indexer::{creator_open_indexer_recovery_report, poll_creator_open_indexer};
 pub mod managed_funding;
 mod shared_relay;
 pub use creator_push::CreatorPushSender;
@@ -105,14 +105,18 @@ pub fn indexer_safe_head_observation(error: &anyhow::Error) -> Option<&Autonomou
 
 fn indexer_waits_for_safe_head(error: &anyhow::Error) -> bool {
     // A fatal outer persistence failure must win over an inner observation.
-    indexer_error_is_retryable(error) && indexer_safe_head_observation(error).is_some()
+    indexer_error_is_retryable(error)
+        && (indexer_safe_head_observation(error).is_some()
+            || creator_open_indexer::safe_head_observation(error).is_some())
 }
 
 pub fn indexer_error_is_retryable(error: &anyhow::Error) -> bool {
     if let Some(error) = error.downcast_ref::<IndexerOperationalError>() {
         return error.retryable;
     }
-    if indexer_safe_head_observation(error).is_some() {
+    if indexer_safe_head_observation(error).is_some()
+        || creator_open_indexer::safe_head_observation(error).is_some()
+    {
         return true;
     }
     if let Some(error) = error.downcast_ref::<ChainBaseError>() {
