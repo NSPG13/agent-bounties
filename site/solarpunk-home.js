@@ -213,6 +213,25 @@
       : null;
   }
 
+  async function fetchAuthSession(win) {
+    const controller = new win.AbortController();
+    const timeout = win.setTimeout(() => controller.abort(), 10000);
+    try {
+      const response = await win.fetch(authApiPath("/session", win.location), {
+        credentials: "include", cache: "no-store", signal: controller.signal,
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) throw new Error("Sign-in service unavailable");
+      const payload = await response.json();
+      if (!payload || typeof payload.authenticated !== "boolean" || !payload.providers
+        || typeof payload.providers !== "object" || Array.isArray(payload.providers)
+        || Object.values(payload.providers).some(value => typeof value !== "boolean")) {
+        throw new Error("Invalid sign-in response");
+      }
+      return payload;
+    } finally { win.clearTimeout(timeout); }
+  }
+
   function authResultMessage(result, provider, reason) {
     if (result === "success") {
       const label = AUTH_PROVIDER_LABELS[String(provider || "").toLowerCase()] || "your provider";
@@ -965,8 +984,18 @@ ${competitionChildBrief(item)}`;
       const modeToggle = dialog.querySelector("[data-auth-mode-toggle]");
       const switchLabel = dialog.querySelector("[data-auth-switch-label]");
       const status = dialog.querySelector("[data-auth-status]");
+      const sessionRetry = doc.createElement("button");
+      sessionRetry.type = "button";
+      sessionRetry.className = "account-setup-retry";
+      sessionRetry.textContent = "Retry sign-in";
+      sessionRetry.setAttribute("data-auth-session-retry", "");
+      sessionRetry.hidden = true;
+      status?.after(sessionRetry);
       const providerButtons = Array.from(dialog.querySelectorAll("[data-auth-provider]"));
       let authServerReady = false;
+      let sessionFailed = false;
+      let pendingSession = null;
+      const unavailableMessage = "Sign-in is temporarily unavailable. Try again in a moment. You do not need to create another account.";
       let providerAvailability = {};
       let currentUser = null;
       let accountLoadId = 0;
@@ -1412,33 +1441,44 @@ ${competitionChildBrief(item)}`;
 
       setupRetry?.addEventListener("click", () => loadAccount());
 
-      const loadSession = async () => {
-        try {
-          const response = await win.fetch(authApiPath("/session", win.location), {
-            credentials: "include",
-            headers: { Accept: "application/json" },
-          });
-          if (!response.ok) throw new Error(`session ${response.status}`);
-          const payload = await response.json();
-          authServerReady = true;
-          renderSession(payload);
-          if (payload.authenticated) await loadAccount();
-          return payload;
-        } catch (error) {
-          authServerReady = false;
-          providerAvailability = {};
-          renderProviderAvailability();
-          return null;
-        }
+      const loadSession = () => {
+        if (pendingSession) return pendingSession;
+        sessionRetry.disabled = true;
+        setStatus("Checking sign-in options…");
+        pendingSession = (async () => {
+          try {
+            const payload = await fetchAuthSession(win);
+            authServerReady = true;
+            sessionFailed = false;
+            sessionRetry.hidden = true;
+            setStatus("");
+            renderSession(payload);
+            if (payload.authenticated) await loadAccount();
+            return payload;
+          } catch (error) {
+            authServerReady = false;
+            sessionFailed = true;
+            providerAvailability = {};
+            renderProviderAvailability();
+            sessionRetry.hidden = false;
+            setStatus(unavailableMessage);
+            return null;
+          } finally {
+            sessionRetry.disabled = false;
+            pendingSession = null;
+          }
+        })();
+        return pendingSession;
       };
+      sessionRetry.addEventListener("click", () => loadSession());
 
       openButton.addEventListener("click", (event) => {
         event.preventDefault();
         if (currentUser && new URLSearchParams(win.location.search).get("postReturn") !== "1") {
           win.history?.replaceState?.(null, "", `${win.location.pathname}${win.location.search}#account`);
         }
-        if (!currentUser) { accountMode = "signup"; renderSetup("signed_out"); renderProviderAvailability(); }
-        setStatus("");
+        if (!currentUser) { accountMode = win.location.hash === "#login" ? "signin" : "signup"; renderSetup("signed_out"); renderProviderAvailability(); }
+        setStatus(sessionFailed ? unavailableMessage : pendingSession ? "Checking sign-in options…" : "");
         setWalletStatus("");
         showDialog();
         if (currentUser) loadAccount();
@@ -1648,7 +1688,7 @@ ${competitionChildBrief(item)}`;
         accountMode = accountMode === "signup" ? "signin" : "signup";
         renderSetup("signed_out");
         renderProviderAvailability();
-        setStatus("");
+        setStatus(sessionFailed ? unavailableMessage : "");
       });
 
       renderProviderAvailability();
@@ -1659,7 +1699,7 @@ ${competitionChildBrief(item)}`;
       const authParams = new URLSearchParams(win.location.search);
       const authResult = authParams.get("auth");
       loadSession().then(async () => {
-        if (leavingForWorkspace) return;
+        if (leavingForWorkspace || !authServerReady) return;
         if (currentUser && win.AgentBountiesWalletLink?.hasPending(currentUser.id)) await linkWallet(true);
         if ((authParams.get("postReturn") === "1" || authResult === "success") && win.location.hash !== "#account" && returnToPreparedPost()) return;
         if (authResult !== "success" && authResult !== "error") return;
@@ -1913,6 +1953,7 @@ ${competitionChildBrief(item)}`;
     reviewNotificationView,
     authApiPath,
     authProviderPath,
+    fetchAuthSession,
     authResultMessage,
     bountyAssistantLinks,
     competitionChildBrief,
