@@ -88,10 +88,11 @@ BASE_SEPOLIA_BOUNTY_FACTORY=0x9601a40b35ad6843846732c6cb73c4c82f9ba850
 BASE_SEPOLIA_BOUNTY_IMPLEMENTATION=0xe70b9d541a176307e50f308aa370a1661eabfd99
 BOND_SPONSOR_BASE_SEPOLIA_CONTRACT=0xa1e2e93530114f7fe64c251556b8de13dad7d157
 BOND_SPONSOR_GRANT_SIGNER_PRIVATE_KEY=<secret matching the committed public signer>
+ENABLE_HOSTED_FINANCIAL_SIGNING=true
 ENABLE_BOND_SPONSORSHIP=true
 ```
 
-The API also requires Postgres, the hosted x402 gas relayer, and its existing
+The signing opt-in above is only for an explicitly approved activation; retain false during recovery. The API also requires Postgres, the hosted x402 gas relayer, and its existing
 bounded gas/fee controls. Store the policy key only in the hosted secret store;
 never place it in Git, a GitHub issue, browser storage, shell history, or a
 wallet-import form.

@@ -1713,9 +1713,12 @@ async fn main() -> anyhow::Result<()> {
         network: Mutex::new(network),
         eval_runs: Mutex::new(eval_runs),
         base_rpc_urls: BaseRpcUrlConfig::from_env(),
-        base_broadcast_enabled: env::var("ENABLE_BASE_TX_BROADCAST")
-            .map(|value| value.eq_ignore_ascii_case("true"))
-            .unwrap_or(false),
+        base_broadcast_enabled:
+            service_runtime::hosted_financial_signing::HostedFinancialSigning::from_env().permits(
+                env::var("ENABLE_BASE_TX_BROADCAST")
+                    .map(|value| value.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false),
+            ),
         stripe_secret_key: env::var("STRIPE_SECRET_KEY").ok(),
         stripe_reconciliation_gate: tokio::sync::Mutex::new(()),
         stripe_live_execution_enabled: env::var("ENABLE_STRIPE_LIVE_EXECUTION")
@@ -5981,7 +5984,7 @@ async fn broadcast_base_signed_transaction(
     }
     if !state.base_broadcast_enabled {
         return mcp_error(
-            "Base transaction broadcast is disabled; set ENABLE_BASE_TX_BROADCAST=true",
+            "Base transaction broadcast is disabled; an operator must explicitly enable hosted financial signing and transaction broadcast",
         );
     }
     let request_id = args.request_id.unwrap_or(1);

@@ -1088,10 +1088,12 @@ impl X402HostedRelayerConfig {
                 .max(1),
         )
     }
-    fn from_env() -> anyhow::Result<Self> {
-        let enabled = env_flag("ENABLE_X402_HOSTED_RELAY");
-        let relayer = env::var("X402_RELAYER_PRIVATE_KEY")
-            .ok()
+    fn from_env(
+        signing: service_runtime::hosted_financial_signing::HostedFinancialSigning,
+    ) -> anyhow::Result<Self> {
+        let enabled = signing.permits(env_flag("ENABLE_X402_HOSTED_RELAY"));
+        let relayer = signing
+            .secret("X402_RELAYER_PRIVATE_KEY")
             .and_then(non_empty_secret)
             .map(|private_key| BaseTransactionRelayer::from_private_key(&private_key))
             .transpose()
@@ -1180,10 +1182,12 @@ impl Default for BondSponsorConfig {
 }
 
 impl BondSponsorConfig {
-    fn from_env() -> anyhow::Result<Self> {
-        let enabled = env_flag("ENABLE_BOND_SPONSORSHIP");
-        let grant_signer = env::var("BOND_SPONSOR_GRANT_SIGNER_PRIVATE_KEY")
-            .ok()
+    fn from_env(
+        signing: service_runtime::hosted_financial_signing::HostedFinancialSigning,
+    ) -> anyhow::Result<Self> {
+        let enabled = signing.permits(env_flag("ENABLE_BOND_SPONSORSHIP"));
+        let grant_signer = signing
+            .secret("BOND_SPONSOR_GRANT_SIGNER_PRIVATE_KEY")
             .and_then(non_empty_secret)
             .map(|private_key| BaseTransactionRelayer::from_private_key(&private_key))
             .transpose()
@@ -2619,7 +2623,9 @@ async fn main() -> anyhow::Result<()> {
         anyhow::bail!("Creator notification delivery requires DATABASE_URL");
     }
     let verifier_email_store = store.clone();
-    let mut x402_relayer = X402HostedRelayerConfig::from_env()?;
+    let financial_signing =
+        service_runtime::hosted_financial_signing::HostedFinancialSigning::from_env();
+    let mut x402_relayer = X402HostedRelayerConfig::from_env(financial_signing)?;
     if let (Some(store), Some(relayer)) = (&store, &mut x402_relayer.relayer) {
         *relayer = Arc::new(
             (**relayer)
@@ -2627,7 +2633,7 @@ async fn main() -> anyhow::Result<()> {
                 .with_gas_budget(store.gas_sponsor_budget()),
         );
     }
-    let bond_sponsor = BondSponsorConfig::from_env()?;
+    let bond_sponsor = BondSponsorConfig::from_env(financial_signing)?;
     if x402_relayer.enabled && store.is_none() {
         anyhow::bail!("ENABLE_X402_HOSTED_RELAY requires DATABASE_URL");
     }
@@ -2649,7 +2655,7 @@ async fn main() -> anyhow::Result<()> {
     let distribution_excluded_wallet_classes = distribution_excluded_wallet_classes_from_env()?;
     let state: SharedState = Arc::new(AppState {
         security_auth,
-        managed_payments: managed_payments::ManagedPaymentsConfig::from_env()?,
+        managed_payments: managed_payments::ManagedPaymentsConfig::from_env(financial_signing)?,
         network: Arc::new(Mutex::new(network)),
         eval_runs: Arc::new(Mutex::new(eval_runs)),
         stripe_webhook_livemode: env::var("STRIPE_WEBHOOK_LIVEMODE")
@@ -2677,9 +2683,7 @@ async fn main() -> anyhow::Result<()> {
         store,
         base_rpc_urls: BaseRpcUrlConfig::from_env(),
         marketplace_head_rpc: marketplace_head_rpc::HeadRpcOverrides::from_env(),
-        base_broadcast_enabled: env::var("ENABLE_BASE_TX_BROADCAST")
-            .map(|value| value.eq_ignore_ascii_case("true"))
-            .unwrap_or(false),
+        base_broadcast_enabled: financial_signing.permits(env_flag("ENABLE_BASE_TX_BROADCAST")),
         operator_api_token: env::var("OPERATOR_API_TOKEN")
             .ok()
             .and_then(non_empty_secret),
@@ -19105,6 +19109,9 @@ async fn persist_all_risk_events(state: &SharedState) -> Result<(), StatusCode> 
 fn expected_digest_for_body(body: &str) -> String {
     hash_artifact(body)
 }
+
+#[cfg(test)]
+mod hosted_financial_signing_tests;
 
 #[cfg(test)]
 mod tests {

@@ -5,6 +5,13 @@ use chain_base::{
     creator_open as protocol, creator_open_service as service, BaseBlockIdentity, EvmLog,
 };
 use std::collections::BTreeMap;
+mod recovery;
+pub use recovery::creator_open_indexer_recovery_report;
+pub(super) use recovery::safe_head_observation;
+use recovery::{require_usable_safe_head, CreatorSafeHeadUnavailable};
+
+#[cfg(test)]
+mod tests;
 
 pub async fn poll_creator_open_indexer(
     store: &PostgresStore,
@@ -31,44 +38,50 @@ async fn poll_inner(
     )
     .await?;
     let safe = fetch_safe_block_identity(rpc, 3).await?;
-    if safe.number > head.number
-        || safe.timestamp > head.timestamp
-        || head.timestamp.saturating_sub(safe.timestamp) > 3600
-    {
-        anyhow::bail!("creator-open safe index head unavailable");
-    }
+    require_usable_safe_head(&head, &safe)?;
     store.seed_creator_open_indexes(&release.network).await?;
     let mut updated = 0;
     for item in store
         .creator_open_index_batch(&release.network, None)
         .await?
     {
-        let result = tokio::time::timeout(
-            Duration::from_secs(45),
-            poll_one(store, release, rpc, &safe, &item),
-        )
-        .await;
-        match result {
-            Ok(Ok(true)) => updated += 1,
-            Ok(Ok(false)) => {}
-            Ok(Err(error)) => {
-                if let Err(persistence) = store.invalidate_creator_open_index(&item, false).await {
-                    return Err(indexer_persistence_failure(&error, persistence));
-                }
-                // Stop the batch on a provider failure; do not hammer the same
-                // provider once for every remaining bounty.
-                return Err(error);
-            }
-            Err(_) => {
-                store.invalidate_creator_open_index(&item, false).await?;
-                return Err(chain_base::ChainBaseError::RpcTransport(
-                    "creator-open item timed out".into(),
-                )
-                .into());
-            }
+        // Stop the batch on a provider failure; do not hammer the same provider
+        // once for every remaining bounty.
+        if poll_item_with_failure_fence(store, release, rpc, &safe, &item).await? {
+            updated += 1;
         }
     }
     Ok(updated)
+}
+
+async fn poll_item_with_failure_fence(
+    store: &PostgresStore,
+    release: &service::Release,
+    rpc: &str,
+    safe: &BaseBlockIdentity,
+    item: &db::CreatorOpenIndex,
+) -> anyhow::Result<bool> {
+    match tokio::time::timeout(
+        Duration::from_secs(45),
+        poll_one(store, release, rpc, safe, item),
+    )
+    .await
+    {
+        Ok(Ok(updated)) => Ok(updated),
+        Ok(Err(error)) => {
+            // Availability/version fencing remains mandatory on provider lag.
+            // Retain the checkpoint, logs and projection for exact revalidation;
+            // a lagging safe tag does not prove a chain reorganization.
+            if let Err(persistence) = store.invalidate_creator_open_index(item, false).await {
+                return Err(indexer_persistence_failure(&error, persistence));
+            }
+            Err(error)
+        }
+        Err(_) => {
+            store.invalidate_creator_open_index(item, false).await?;
+            Err(ChainBaseError::RpcTransport("creator-open item timed out".into()).into())
+        }
+    }
 }
 async fn receipt_logs(
     rpc: &str,
@@ -116,16 +129,16 @@ async fn poll_one(
     }
     if let Some(checkpoint) = &item.checkpoint {
         if checkpoint.number > safe.number {
-            store.invalidate_creator_open_index(item, true).await?;
-            return Ok(false);
+            return Err(CreatorSafeHeadUnavailable::BehindCheckpoint {
+                checkpoint_block: checkpoint.number,
+                provider_safe_block: safe.number,
+            }
+            .into());
         }
         let actual = fetch_exact_block_identity(rpc, checkpoint.number, 6).await?;
         if actual.hash != checkpoint.hash {
             store.invalidate_creator_open_index(item, true).await?;
             return Ok(false);
-        }
-        if checkpoint.number > safe.number {
-            anyhow::bail!("safe head moved behind checkpoint");
         }
     }
     let Some((creation, creation_logs)) = receipt_logs(rpc, &item.transaction_hash, safe).await?

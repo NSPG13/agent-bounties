@@ -7,9 +7,10 @@ directly from that wallet.
 
 ## Enable
 
-Set these only on the API service:
+After an explicit operator decision to activate signing, set these only on the API service. Keep `ENABLE_HOSTED_FINANCIAL_SIGNING=false` during recovery; changing saved configuration requires a qualified restart to affect the running process.
 
 ```text
+ENABLE_HOSTED_FINANCIAL_SIGNING=true
 ENABLE_X402_HOSTED_RELAY=true
 X402_RELAYER_PRIVATE_KEY=<dedicated gas-only Base key>
 X402_RELAYER_MIN_USDC_BASE_UNITS=100000
