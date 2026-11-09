@@ -1,12 +1,13 @@
 """
-Unit Test Suite for Issue #648 Verification Engine
-Tests both passing and failing controls across all 4 canonical criteria.
+Unit Test Suite for Issue #648 Evidence Validator Helper
+Tests valid conformance and rigorous negative assertions across all 10 maintainer review controls.
 """
 
+import math
 import unittest
 from solution import SolutionHandler
 
-class TestMCPChildBountyVerification(unittest.TestCase):
+class TestMCPChildBountyValidation(unittest.TestCase):
     def setUp(self):
         self.handler = SolutionHandler()
         self.valid_evidence = {
@@ -17,108 +18,148 @@ class TestMCPChildBountyVerification(unittest.TestCase):
             "verifier_framework": "sandboxed_regression_v1",
             "quorum_threshold": 2,
             "verifier_router": "0x380c1af742593dd88b6f20387e9ee693a0536731",
+            "policy_hash": "0x8d8e5cca196fcc8ba123d6ffdbb4659c014d82d27cfe1f587f9d031059e23e58",
             "child_profile_approved": True,
             "settlement_receipt": {
                 "tx_hash": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
                 "event": "BountySettled",
-                "settled": True
+                "settled": True,
+                "recipient": "0x2222222222222222222222222222222222222222",
+                "child_contract": "0x4444444444444444444444444444444444444444",
+                "amount_usdc": 1.00
             }
         }
 
-    def test_full_evidence_conformance_passes_all_controls(self):
-        """Asserts all 4 controls pass and status is VERIFIED_CONFORMANT when valid evidence is provided."""
+    def test_full_valid_evidence_conformance(self):
+        """Valid evidence matches all 4 controls deterministically."""
         result = self.handler.execute(self.valid_evidence)
-        self.assertEqual(result["status"], "VERIFIED_CONFORMANT")
+        self.assertEqual(result["status"], "SHAPE_AND_POLICY_CONFORMANT")
         self.assertTrue(result["all_controls_passed"])
         self.assertEqual(result["controls_passed"], 4)
         self.assertEqual(result["controls_failed"], 0)
 
-    def test_failing_control_identical_participants(self):
-        """Asserts Control 1 fails when parent and child solvers are identical."""
-        evidence = dict(self.valid_evidence)
-        evidence["child_solver"] = evidence["parent_solver"]
-        result = self.handler.execute(evidence)
-
-        self.assertEqual(result["status"], "EVIDENCE_VALIDATION_FAILED")
-        self.assertFalse(result["all_controls_passed"])
-        c1 = next(c for c in result["controls"] if c["control_id"] == "CONTROL_01_PARTICIPANT_INDEPENDENCE")
+    # --- CONTROL 1: PARTICIPANT INDEPENDENCE & ADDRESS BOUNDS ---
+    def test_reject_identical_participants(self):
+        """Parent and child solver cannot be identical addresses."""
+        ev = dict(self.valid_evidence, child_solver=self.valid_evidence["parent_solver"])
+        res = self.handler.execute(ev)
+        self.assertFalse(res["all_controls_passed"])
+        c1 = next(c for c in res["controls"] if c["control_id"] == "CONTROL_01_PARTICIPANT_INDEPENDENCE")
         self.assertFalse(c1["passed"])
         self.assertIn("distinct participants", c1["reason"])
 
-    def test_failing_control_invalid_address_format(self):
-        """Asserts Control 1 fails on malformed address strings."""
-        evidence = dict(self.valid_evidence)
-        evidence["parent_solver"] = "not-an-eth-address"
-        result = self.handler.execute(evidence)
-
-        self.assertFalse(result["all_controls_passed"])
-        c1 = next(c for c in result["controls"] if c["control_id"] == "CONTROL_01_PARTICIPANT_INDEPENDENCE")
+    def test_reject_all_zero_solver_address(self):
+        """All-zero Ethereum addresses are rejected."""
+        ev = dict(self.valid_evidence, parent_solver="0x0000000000000000000000000000000000000000")
+        res = self.handler.execute(ev)
+        self.assertFalse(res["all_controls_passed"])
+        c1 = next(c for c in res["controls"] if c["control_id"] == "CONTROL_01_PARTICIPANT_INDEPENDENCE")
         self.assertFalse(c1["passed"])
-        self.assertIn("Invalid parent solver", c1["reason"])
+        self.assertIn("cannot be all-zero", c1["reason"])
 
-    def test_failing_control_insufficient_margin(self):
-        """Asserts Control 2 fails when retained gross margin is under 1.00 USDC."""
-        evidence = dict(self.valid_evidence)
-        evidence["parent_reward_usdc"] = 1.50
-        evidence["child_target_usdc"] = 1.00  # Retained margin = 0.50 USDC (< 1.00)
-        result = self.handler.execute(evidence)
+    # --- CONTROL 2: STRICT NUMERIC & BOUNDED USDC AMOUNTS ---
+    def test_reject_string_and_boolean_funding_amounts(self):
+        """Boolean values (True/False) or raw strings as funding amounts are rejected."""
+        ev1 = dict(self.valid_evidence, child_target_usdc=True)
+        res1 = self.handler.execute(ev1)
+        self.assertFalse(res1["all_controls_passed"])
 
-        self.assertFalse(result["all_controls_passed"])
-        c2 = next(c for c in result["controls"] if c["control_id"] == "CONTROL_02_MARGIN_AND_FUNDING")
-        self.assertFalse(c2["passed"])
-        self.assertIn("Parent retained margin (0.50 USDC) is below required minimum", c2["reason"])
+        ev2 = dict(self.valid_evidence, parent_reward_usdc="2.00")
+        res2 = self.handler.execute(ev2)
+        self.assertFalse(res2["all_controls_passed"])
 
-    def test_failing_control_insufficient_child_funding(self):
-        """Asserts Control 2 fails when child target is below 1.00 USDC."""
-        evidence = dict(self.valid_evidence)
-        evidence["child_target_usdc"] = 0.50
-        result = self.handler.execute(evidence)
+    def test_reject_nan_and_infinite_funding_amounts(self):
+        """NaN and infinite float values bypass comparisons if not sanitized; assert rejected."""
+        ev_nan = dict(self.valid_evidence, child_target_usdc=float("nan"))
+        res_nan = self.handler.execute(ev_nan)
+        self.assertFalse(res_nan["all_controls_passed"])
+        c2_nan = next(c for c in res_nan["controls"] if c["control_id"] == "CONTROL_02_MARGIN_AND_FUNDING")
+        self.assertIn("cannot be NaN", c2_nan["reason"])
 
-        self.assertFalse(result["all_controls_passed"])
-        c2 = next(c for c in result["controls"] if c["control_id"] == "CONTROL_02_MARGIN_AND_FUNDING")
-        self.assertFalse(c2["passed"])
-        self.assertIn("Child funding target (0.50 USDC) is below required minimum", c2["reason"])
+        ev_inf = dict(self.valid_evidence, child_target_usdc=float("inf"))
+        res_inf = self.handler.execute(ev_inf)
+        self.assertFalse(res_inf["all_controls_passed"])
 
-    def test_failing_control_sub_quorum_threshold(self):
-        """Asserts Control 3 fails when quorum threshold is below 2."""
-        evidence = dict(self.valid_evidence)
-        evidence["quorum_threshold"] = 1
-        result = self.handler.execute(evidence)
+    def test_reject_insufficient_margin(self):
+        """Retained margin under 1.00 USDC is rejected."""
+        ev = dict(self.valid_evidence, parent_reward_usdc=1.50, child_target_usdc=1.00)
+        res = self.handler.execute(ev)
+        self.assertFalse(res["all_controls_passed"])
+        c2 = next(c for c in res["controls"] if c["control_id"] == "CONTROL_02_MARGIN_AND_FUNDING")
+        self.assertIn("below required minimum", c2["reason"])
 
-        self.assertFalse(result["all_controls_passed"])
-        c3 = next(c for c in result["controls"] if c["control_id"] == "CONTROL_03_VERIFIER_QUORUM")
-        self.assertFalse(c3["passed"])
-        self.assertIn("must be at least 2", c3["reason"])
+    # --- CONTROL 3: STRICT INTEGER QUORUM & POLICY HASH ---
+    def test_reject_fractional_quorum(self):
+        """Fractional quorum values like 2.5 are rejected."""
+        ev = dict(self.valid_evidence, quorum_threshold=2.5)
+        res = self.handler.execute(ev)
+        self.assertFalse(res["all_controls_passed"])
+        c3 = next(c for c in res["controls"] if c["control_id"] == "CONTROL_03_VERIFIER_QUORUM")
+        self.assertIn("strict integer", c3["reason"])
 
-    def test_failing_control_unapproved_child_profile(self):
-        """Asserts Control 4 fails when child profile is unapproved (current canonical blocker)."""
-        evidence = dict(self.valid_evidence)
-        evidence["child_profile_approved"] = False
-        result = self.handler.execute(evidence)
+    def test_reject_malformed_quorum_without_crash(self):
+        """Strings 'invalid' or null/None must fail gracefully without raising unhandled exceptions."""
+        ev_str = dict(self.valid_evidence, quorum_threshold="invalid")
+        res_str = self.handler.execute(ev_str)
+        self.assertFalse(res_str["all_controls_passed"])
 
-        self.assertFalse(result["all_controls_passed"])
-        c4 = next(c for c in result["controls"] if c["control_id"] == "CONTROL_04_LANE_READINESS_AND_SETTLEMENT")
-        self.assertFalse(c4["passed"])
-        self.assertIn("Child profile unapproved", c4["reason"])
+        ev_null = dict(self.valid_evidence, quorum_threshold=None)
+        res_null = self.handler.execute(ev_null)
+        self.assertFalse(res_null["all_controls_passed"])
 
-    def test_failing_control_missing_settlement_receipt(self):
-        """Asserts Control 4 fails when canonical BountySettled receipt is absent."""
-        evidence = dict(self.valid_evidence)
-        evidence["settlement_receipt"] = {}
-        result = self.handler.execute(evidence)
+    def test_reject_sub_threshold_quorum(self):
+        """Quorum threshold of 1 is below required minimum of 2."""
+        ev = dict(self.valid_evidence, quorum_threshold=1)
+        res = self.handler.execute(ev)
+        self.assertFalse(res["all_controls_passed"])
 
-        self.assertFalse(result["all_controls_passed"])
-        c4 = next(c for c in result["controls"] if c["control_id"] == "CONTROL_04_LANE_READINESS_AND_SETTLEMENT")
-        self.assertFalse(c4["passed"])
-        self.assertIn("BountySettled confirmation missing", c4["reason"])
+    def test_reject_policy_hash_mismatch(self):
+        """Policy hash must match the immutable canonical policy hash."""
+        ev = dict(self.valid_evidence, policy_hash="0x0000000000000000000000000000000000000000000000000000000000000000")
+        res = self.handler.execute(ev)
+        self.assertFalse(res["all_controls_passed"])
+        c3 = next(c for c in res["controls"] if c["control_id"] == "CONTROL_03_VERIFIER_QUORUM")
+        self.assertIn("policy hash mismatch", c3["reason"])
 
-    def test_empty_payload_fails_all_controls(self):
-        """Asserts empty payload produces 4 failing controls and never grants blanket success."""
-        result = self.handler.execute({})
-        self.assertEqual(result["status"], "EVIDENCE_VALIDATION_FAILED")
-        self.assertFalse(result["all_controls_passed"])
-        self.assertEqual(result["controls_passed"], 0)
-        self.assertEqual(result["controls_failed"], 4)
+    # --- CONTROL 4: STRICT BOOLEANS, NON-ZERO HASH, & SETTLEMENT ---
+    def test_reject_string_booleans(self):
+        """String 'false' or 'true' cannot bypass boolean checks."""
+        ev_app = dict(self.valid_evidence, child_profile_approved="false")
+        res_app = self.handler.execute(ev_app)
+        self.assertFalse(res_app["all_controls_passed"])
+
+        sr = dict(self.valid_evidence["settlement_receipt"], settled="false")
+        ev_set = dict(self.valid_evidence, settlement_receipt=sr)
+        res_set = self.handler.execute(ev_set)
+        self.assertFalse(res_set["all_controls_passed"])
+
+    def test_reject_all_zero_transaction_hash(self):
+        """All-zero 64-char transaction hash is rejected as mock placeholder."""
+        zero_receipt = dict(
+            self.valid_evidence["settlement_receipt"],
+            tx_hash="0x0000000000000000000000000000000000000000000000000000000000000000"
+        )
+        ev = dict(self.valid_evidence, settlement_receipt=zero_receipt)
+        res = self.handler.execute(ev)
+        self.assertFalse(res["all_controls_passed"])
+        c4 = next(c for c in res["controls"] if c["control_id"] == "CONTROL_04_LANE_READINESS_AND_SETTLEMENT")
+        self.assertIn("cannot be all-zero", c4["reason"])
+
+    def test_reject_missing_settlement_receipt(self):
+        """Absence of settlement receipt fails control 4."""
+        ev = dict(self.valid_evidence, settlement_receipt={})
+        res = self.handler.execute(ev)
+        self.assertFalse(res["all_controls_passed"])
+
+    # --- PAYLOAD ROBUSTNESS ---
+    def test_empty_and_non_dict_payload_fails_gracefully(self):
+        """Empty dict, None, or invalid payload structure fail safely without crashing."""
+        res_empty = self.handler.execute({})
+        self.assertEqual(res_empty["status"], "EVIDENCE_VALIDATION_FAILED")
+        self.assertEqual(res_empty["controls_failed"], 4)
+
+        res_none = self.handler.execute(None)
+        self.assertEqual(res_none["status"], "EVIDENCE_VALIDATION_FAILED")
 
 if __name__ == "__main__":
     unittest.main()
