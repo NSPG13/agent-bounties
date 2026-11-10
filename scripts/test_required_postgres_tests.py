@@ -99,5 +99,53 @@ class RequiredPostgresTests(unittest.TestCase):
             self.assertIn('scripts/run-required-postgres-test.py', text)
 
 
+class RecoverySecurityRunnerTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            'security_postgres', ROOT / 'scripts/check-security-postgres.py')
+        cls.runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.runner)
+
+    def suites(self):
+        names = {'recovery_read_tests::',
+                 'real_process_reads_preserve_data_privacy_quarantine_and_restart_boundaries'}
+        selected = tuple(suite for suite in self.runner.SUITES if suite[1] in names)
+        self.assertEqual({suite[1] for suite in selected}, names)
+        self.assertTrue(all(suite[2] >= 1 for suite in selected))
+        return selected
+
+    def run_recovery(self, response):
+        environment = {'AGENT_BOUNTIES_LOCAL_TEST_DATABASE': '1',
+                       'DATABASE_URL': 'postgres://agent_bounties_test:fixture@127.0.0.1:12345/agent_bounties_test'}
+        with patch.object(self.runner, 'SUITES', self.suites()), \
+                patch.dict(os.environ, environment, clear=True), \
+                patch.object(self.runner.shutil, 'which', return_value='cargo'), \
+                patch.object(self.runner.subprocess, 'run', return_value=response) as calls, \
+                contextlib.redirect_stdout(io.StringIO()):
+            code = self.runner.main()
+        return code, calls
+
+    def test_recovery_process_gets_fresh_fixture_and_both_suites_execute_ignored_tests(self):
+        code, calls = self.run_recovery(result('test result: ok. 1 passed; 0 failed;'))
+        self.assertEqual(code, 0)
+        self.assertEqual(calls.call_count, 2)
+        database, process = [call.args[0] for call in calls.call_args_list]
+        self.assertEqual(database[:5], ['cargo', 'test', '-p', 'db', 'recovery_read_tests::'])
+        self.assertEqual(process[:3], [sys.executable, 'scripts/run-with-test-postgres.py', '--'])
+        self.assertEqual(process[3:7], ['cargo', 'test', '-p', 'api'])
+        for command in [database, process]:
+            self.assertEqual(command[-3:], ['--', '--ignored', '--test-threads=1'])
+
+    def test_missing_recovery_tests_cannot_be_reported_as_success(self):
+        with self.assertRaisesRegex(RuntimeError, 'Missing security tests'):
+            self.run_recovery(result('test result: ok. 0 passed; 0 failed;'))
+
+    def test_recovery_test_failure_stops_runner(self):
+        code, calls = self.run_recovery(result(code=101))
+        self.assertEqual(code, 101)
+        self.assertEqual(calls.call_count, 1)
+
+
 if __name__ == '__main__':
     unittest.main()

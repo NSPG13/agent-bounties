@@ -14,6 +14,8 @@ from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 SUITES = (
+    ("db", "recovery_read_tests::", 1),
+    ("api", "real_process_reads_preserve_data_privacy_quarantine_and_restart_boundaries", 1),
     ("db", "autonomous_canonicality::tests::", 2),
     ("worker", "autonomous_canonicality::tests::", 3),
     ("worker", "autonomous_canonicality::safe_head_tests::", 3),
@@ -64,7 +66,8 @@ def main() -> int:
     cargo = shutil.which("cargo") or shutil.which("cargo.exe") or "cargo"
     for package, prefix, minimum in SUITES:
         command = [cargo, "test", "-p", package, prefix, "--", "--ignored", "--test-threads=1"]
-        if prefix.startswith(("opportunity_source_tests::", "autonomous_projection_tests::")):
+        if prefix.startswith(("opportunity_source_tests::", "autonomous_projection_tests::",
+                              "real_process_reads_preserve_data_privacy_quarantine_and_restart_boundaries")):
             # This route-level fixture writes the configured factory identity;
             # isolate it from the rest of the suite, including on assertion failure.
             command = [sys.executable, "scripts/run-with-test-postgres.py", "--", *command]

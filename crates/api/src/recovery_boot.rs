@@ -12,6 +12,7 @@ use std::env;
 pub(crate) enum BootMode {
     Normal,
     RecoveryHealthOnly,
+    RecoveryReadOnly,
 }
 
 impl BootMode {
@@ -27,7 +28,10 @@ impl BootMode {
         match value {
             None | Some("normal") => Ok(Self::Normal),
             Some("recovery-health-only") => Ok(Self::RecoveryHealthOnly),
-            _ => anyhow::bail!("API_BOOT_MODE must be normal or recovery-health-only"),
+            Some("recovery-read-only") => Ok(Self::RecoveryReadOnly),
+            _ => anyhow::bail!(
+                "API_BOOT_MODE must be normal, recovery-health-only or recovery-read-only"
+            ),
         }
     }
 }
@@ -97,6 +101,10 @@ mod tests {
         assert_eq!(
             BootMode::parse(Some("recovery-health-only")).unwrap(),
             BootMode::RecoveryHealthOnly
+        );
+        assert_eq!(
+            BootMode::parse(Some("recovery-read-only")).unwrap(),
+            BootMode::RecoveryReadOnly
         );
         for value in [
             "", "true", "false", "recovery", "NORMAL", " normal", "normal ",

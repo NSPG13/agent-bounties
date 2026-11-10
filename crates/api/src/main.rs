@@ -33,6 +33,7 @@ mod nonce_retirement;
 mod posting_readiness;
 mod privacy_cache;
 mod recovery_boot;
+mod recovery_reads;
 mod request_contract;
 mod review_reports;
 mod review_tasks;
@@ -2573,8 +2574,10 @@ struct BaseTransactionReceiptReport {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Resolve containment before diagnostics, database access, configuration or jobs.
-    if recovery_boot::BootMode::from_env()? == recovery_boot::BootMode::RecoveryHealthOnly {
-        return recovery_boot::serve().await;
+    match recovery_boot::BootMode::from_env()? {
+        recovery_boot::BootMode::RecoveryHealthOnly => return recovery_boot::serve().await,
+        recovery_boot::BootMode::RecoveryReadOnly => return recovery_reads::serve().await,
+        recovery_boot::BootMode::Normal => {}
     }
     // Private operator-shell mode. It exits before migrations, workers, HTTP
     // listeners or any provider request; connection/errors never reveal values.

@@ -1,8 +1,8 @@
 # API recovery staging
 
 Set `API_BOOT_MODE=recovery-health-only` to start only the API liveness server.
-The absent setting or exact `normal` preserves ordinary startup. Any other value
-fails before dependency access. Recovery mode also rejects command arguments,
+The absent setting or exact `normal` preserves ordinary startup. Unsupported values
+fail before dependency access. Recovery mode also rejects command arguments,
 including the database-backed notification diagnostic.
 
 Recovery mode returns before reading database, signer or provider configuration,
@@ -75,3 +75,55 @@ connection trap. Recovery must remain live, deny functional requests, and never
 contact that trap. Run the normal API tests as the compatibility gate.
 Run `python3 -m unittest scripts.test_recovery_revision_guard` for the executable
 revision boundary. The copied script is included in public runtime source parity.
+
+## Public read recovery
+
+`API_BOOT_MODE=recovery-read-only` is a separate early startup path. It requires
+`DATABASE_URL`, skips migrations and normal application initialization, and
+starts no background jobs or analytics middleware. It constructs disabled
+authentication, signing, payment and provider state without reading their keys.
+Its only routes are `GET`/`HEAD` `/health`, `/readiness/marketplace`,
+`/v1/opportunities`, and `/v1/base/autonomous-bounties/feed`. Every other method
+or path returns `503`, including OAuth callbacks and evaluation GETs. Only
+first-party OPTIONS preflights for these four paths, GET/HEAD and the Accept or
+Cache-Control request headers are accepted; this supports the existing homepage
+client's `cache-control: no-cache` header without enabling another application route.
+Public browser reads permit only the established first-party origins and never
+allow credentialed CORS. Existing authenticated UI flows are not restored by
+this mode. Responses identify the boot mode and use `Cache-Control: no-store`.
+
+The existing public projection handlers retain their privacy, source coverage,
+canonicality, quarantine, verification and freshness rules. Legacy opportunity
+requests hydrate real durable state for that request and fail unavailable if
+hydration fails; they do not substitute an empty in-memory inventory. Canonical
+and offchain source filters use their existing independent durable reads.
+Unavailable or quarantined readers remain unavailable: a working API is not
+proof of a fresh marketplace, claimable work or payment. No mutation action in a
+returned opportunity is enabled by this router.
+
+Every new and reused PostgreSQL connection enters read-only transaction mode
+before application queries, with a ten-second statement timeout, one-second
+lock timeout, five-second acquisition timeout and at most four connections.
+The request boundary is fifteen seconds. This guards accidental durable writes;
+it does **not** revoke the database role's privileges or sandbox a compromised
+process. Any production attachment must separately identify and authorize the
+exact existing credential and role exposure. A restricted read role, where
+available, remains preferable; this mode creates no role or grant.
+
+The normal Dockerfile and recovery image's health-only default are unchanged.
+Retained public `c3096b440269517b18f7385d7e0a3a5373fb84fa` rejects the new mode
+before database access; with its old configuration it remains health-only.
+Qualify those candidate/retained configuration paths before attaching a database.
+Actual runtime/source, selected configuration, durable-state preservation and
+bounded public reads still require separate deployment verification. Login,
+reader catch-up, quarantine repair, domain cutover, public release inventory and
+API/MCP revision agreement are separate recovery requirements. Signing stays off.
+
+Local tests require a fresh, isolated PostgreSQL fixture. Run
+`cargo test -p api --test recovery_reads -- --include-ignored --test-threads=1`,
+then `cargo test -p db recovery_read_tests:: -- --ignored --test-threads=1`.
+The process test proves no startup migrations, real public data, private-data
+filtering, unavailable canonical reads, denied methods and paths, restart and
+unchanged table contents. The database test rejects durable DML/DDL and verifies
+the policy on fresh and reused connections. Neither test qualifies production
+credentials, schema or provider rollback behavior.
