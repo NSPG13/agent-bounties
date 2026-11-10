@@ -10,6 +10,9 @@ on:
       - "bounties/**"
       - "Dockerfile*"
       - "scripts/run-posting-*.sh"
+      - "scripts/run-recovery-indexers.sh"
+      - "scripts/check-recovery-reader-build.sh"
+      - "scripts/check-recovery-reader-images.py"
       - "scripts/check-recovery-revision.sh"
       - "scripts/test_recovery_revision_guard.py"
       - "deployments/**"
@@ -39,6 +42,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  recovery-reader-image-controls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Build inert and reader artifacts with sequential shared-cache identities
+        run: |
+          docker build --file Dockerfile.recovery-indexers --tag recovery-reader-standby \
+            --build-arg RENDER_SERVICE_ID=srv-aaaaaaaaaaaaaaaaaaaa \
+            --build-arg RENDER_GIT_COMMIT=1111111111111111111111111111111111111111 \
+            --build-arg RECOVERY_READER_ARTIFACT_CAPABILITY=standby .
+          docker build --file Dockerfile.recovery-indexers --tag recovery-reader-a \
+            --build-arg RENDER_SERVICE_ID=srv-aaaaaaaaaaaaaaaaaaaa \
+            --build-arg RENDER_GIT_COMMIT=1111111111111111111111111111111111111111 \
+            --build-arg RECOVERY_READER_ARTIFACT_CAPABILITY=reader .
+          docker build --file Dockerfile.recovery-indexers --tag recovery-reader-b \
+            --build-arg RENDER_SERVICE_ID=srv-bbbbbbbbbbbbbbbbbbbb \
+            --build-arg RENDER_GIT_COMMIT=2222222222222222222222222222222222222222 \
+            --build-arg RECOVERY_READER_ARTIFACT_CAPABILITY=reader .
+      - name: Exercise actual image binding and capability controls
+        run: python3 scripts/check-recovery-reader-images.py --standby-image recovery-reader-standby --reader-a-image recovery-reader-a --reader-b-image recovery-reader-b
+
   production-compose-smoke:
     runs-on: ubuntu-latest
     steps:

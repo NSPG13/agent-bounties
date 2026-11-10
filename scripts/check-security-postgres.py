@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SUITES = (
     ("db", "recovery_read_tests::", 1),
     ("api", "real_process_reads_preserve_data_privacy_quarantine_and_restart_boundaries", 1),
+    ("worker", "recovery_reader_indexes_without_notifications_and_preserves_hold", 1),
     ("db", "autonomous_canonicality::tests::", 2),
     ("worker", "autonomous_canonicality::tests::", 3),
     ("worker", "autonomous_canonicality::safe_head_tests::", 3),
@@ -65,14 +66,25 @@ def main() -> int:
                    "AGENT_BOUNTIES_TEST_DATABASE_URL": database}
     cargo = shutil.which("cargo") or shutil.which("cargo.exe") or "cargo"
     for package, prefix, minimum in SUITES:
+        suite_environment = {key: value for key, value in environment.items()
+                             if not key.startswith("RECOVERY_READER_BOUND_")}
         command = [cargo, "test", "-p", package, prefix, "--", "--ignored", "--test-threads=1"]
+        if prefix == "recovery_reader_indexes_without_notifications_and_preserves_hold":
+            # Synthetic native identity is compiled only for this real-process
+            # fixture; never inherited by ordinary worker or API suites.
+            suite_environment.update(
+                RECOVERY_READER_BOUND_SERVICE_ID="srv-aaaaaaaaaaaaaaaaaaaa",
+                RECOVERY_READER_BOUND_REVISION="1" * 40,
+                RECOVERY_READER_BOUND_CAPABILITY="reader")
+            command[4:4] = ["--test", "recovery_reader"]
         if prefix.startswith(("opportunity_source_tests::", "autonomous_projection_tests::",
-                              "real_process_reads_preserve_data_privacy_quarantine_and_restart_boundaries")):
+                              "real_process_reads_preserve_data_privacy_quarantine_and_restart_boundaries",
+                              "recovery_reader_indexes_without_notifications_and_preserves_hold")):
             # This route-level fixture writes the configured factory identity;
             # isolate it from the rest of the suite, including on assertion failure.
             command = [sys.executable, "scripts/run-with-test-postgres.py", "--", *command]
         print(f"Running durable security suite: {package} {prefix}", flush=True)
-        result = subprocess.run(command, cwd=ROOT, env=environment, text=True,
+        result = subprocess.run(command, cwd=ROOT, env=suite_environment, text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         print(result.stdout, end="", flush=True)
         if result.returncode:

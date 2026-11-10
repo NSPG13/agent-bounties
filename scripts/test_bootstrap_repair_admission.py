@@ -52,7 +52,9 @@ def readiness():
 class Client:
     token = 'synthetic-token-never-transmitted'
     def __init__(self):
-        self.manifest = json.loads((Path(__file__).resolve().parents[1] / 'ops/public-runtime-services.json').read_text())
+        # Exercise historical absent-hold compatibility with a frozen fixture.
+        # Current production inventory is separately required to reject all paths.
+        self.manifest = json.loads((Path(__file__).resolve().parent / 'fixtures/public-runtime-before-transition.json').read_text())
         self.values, self.calls = {}, []
         for expected in self.manifest['services']:
             self.values['services/' + expected['id']] = {**expected, 'ownerId': r.WORKSPACE,
@@ -367,10 +369,12 @@ class AdmissionTests(unittest.TestCase):
     def test_main_only_posts_reader_after_all_checks_and_keeps_acceptance_pending(self):
         client = Client(); value, expected = logs()
         with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root/'ops').mkdir()
+            (root/'ops/public-runtime-services.json').write_text(json.dumps(client.manifest))
             evidence = Path(directory)/'evidence'
             args = ['release', '--revision', REVISION, '--migrate-source', '--bootstrap-autonomous-readers',
                     '--bootstrap-repair-case', r.CASE, '--evidence-dir', str(evidence)]
-            with patch('sys.argv', args), patch.dict(os.environ, ENV, clear=True), patch.object(r, 'Render', return_value=client), \
+            with patch.object(controller, 'ROOT', root), patch('sys.argv', args), patch.dict(os.environ, ENV, clear=True), patch.object(r, 'Render', return_value=client), \
                     patch.object(controller, 'public_ci_revision') as gates, patch.object(r, 'now', return_value=AT), \
                     patch.object(r, 'STARTUP_HASH', expected), patch.object(r, 'read', side_effect=[
                         (b'ok', REVISION), (json.dumps(readiness()).encode(), ''), (b'ok', REVISION),
@@ -398,10 +402,12 @@ class AdmissionTests(unittest.TestCase):
             elif failure == 'new_deploy': client.deploy['id'] = 'dep-newer'
             last_revision = 'b'*40 if failure == 'final_revision' else REVISION
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory); (root/'ops').mkdir()
+                (root/'ops/public-runtime-services.json').write_text(json.dumps(client.manifest))
                 evidence = Path(directory)/'evidence'
                 args = ['release', '--revision', REVISION, '--migrate-source', '--bootstrap-autonomous-readers',
                         '--bootstrap-repair-case', r.CASE, '--evidence-dir', str(evidence)]
-                with patch('sys.argv', args), patch.dict(os.environ, ENV, clear=True), patch.object(r, 'Render', return_value=client), \
+                with patch.object(controller, 'ROOT', root), patch('sys.argv', args), patch.dict(os.environ, ENV, clear=True), patch.object(r, 'Render', return_value=client), \
                         patch.object(controller, 'public_ci_revision'), patch.object(r, 'now', return_value=AT), \
                         patch.object(r, 'STARTUP_HASH', expected), patch.object(r, 'read', side_effect=[
                             (b'ok', REVISION), (json.dumps(initial).encode(), ''), (b'ok', REVISION),

@@ -48,5 +48,15 @@ class PublicRuntimeParityTests(unittest.TestCase):
     def test_symlink_input_rejected(self):
         p=self.roots[0]/'fixtures/input.json';p.unlink();p.symlink_to(self.roots[1]/'fixtures/input.json')
         with self.assertRaises((ValueError,RuntimeError)):guard.compare(*self.roots)
+    def test_reader_supervisor_build_guard_and_denylist_are_matching_runtime_inputs(self):
+        for name in ['scripts/run-recovery-indexers.sh', 'scripts/check-recovery-reader-build.sh',
+                     'ops/recovery-reader-denied-services.txt', 'Dockerfile.recovery-indexers']:
+            for root in self.roots:
+                path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text('reviewed\n')
+                subprocess.run(['git','-C',str(root),'add',str(path)],check=True)
+            guard.compare(*self.roots)
+            (self.roots[0]/name).write_text('changed\n')
+            with self.assertRaises(ValueError):guard.compare(*self.roots)
+            (self.roots[0]/name).write_text('reviewed\n')
 
 if __name__=='__main__':unittest.main()

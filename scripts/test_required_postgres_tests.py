@@ -146,6 +146,29 @@ class RecoverySecurityRunnerTests(unittest.TestCase):
         self.assertEqual(code, 101)
         self.assertEqual(calls.call_count, 1)
 
+    def test_reader_process_has_fresh_database_and_exclusive_synthetic_compilation_binding(self):
+        selector = 'recovery_reader_indexes_without_notifications_and_preserves_hold'
+        suites = tuple(suite for suite in self.runner.SUITES if suite[1] == selector)
+        self.assertEqual(suites, (('worker', selector, 1),))
+        environment = {'AGENT_BOUNTIES_LOCAL_TEST_DATABASE': '1',
+                       'DATABASE_URL': 'postgres://agent_bounties_test:fixture@127.0.0.1:12345/agent_bounties_test',
+                       'RECOVERY_READER_BOUND_SERVICE_ID': 'must-not-inherit',
+                       'RECOVERY_READER_BOUND_CAPABILITY': 'must-not-inherit'}
+        with patch.object(self.runner, 'SUITES', suites + self.suites()), \
+                patch.dict(os.environ, environment, clear=True), \
+                patch.object(self.runner.shutil, 'which', return_value='cargo'), \
+                patch.object(self.runner.subprocess, 'run', return_value=result('test result: ok. 1 passed;')) as calls, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.runner.main(), 0)
+        reader = calls.call_args_list[0]
+        self.assertEqual(reader.args[0][:9], [sys.executable, 'scripts/run-with-test-postgres.py', '--',
+            'cargo', 'test', '-p', 'worker', '--test', 'recovery_reader'])
+        self.assertEqual(reader.kwargs['env']['RECOVERY_READER_BOUND_SERVICE_ID'], 'srv-aaaaaaaaaaaaaaaaaaaa')
+        self.assertEqual(reader.kwargs['env']['RECOVERY_READER_BOUND_REVISION'], '1' * 40)
+        self.assertEqual(reader.kwargs['env']['RECOVERY_READER_BOUND_CAPABILITY'], 'reader')
+        for other in calls.call_args_list[1:]:
+            self.assertFalse(any(key.startswith('RECOVERY_READER_BOUND_') for key in other.kwargs['env']))
+
 
 if __name__ == '__main__':
     unittest.main()
