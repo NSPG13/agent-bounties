@@ -11,19 +11,16 @@ import signal
 import subprocess
 import sys
 import time
+import traceback
 from pathlib import Path
 
 import fixture_exports
 import image_build as binding
 import image_runtime as runtime
+import image_identity as identity
 
 PREDECESSOR = 'a9a023bae517338963f8aaa89ab8ecf0225cf11a'
-PINS = {
-    'rust': ('docker.io/library/rust@sha256:4ec71e955e6c08aeb238885083222ddff79d82eb87654a96c76e38e94da1a53b', 'sha256:1c3316753323aa5edd4c2be762323794f4aa9f4335635dc4c7964ee99cb986d2'),
-    'debian': ('docker.io/library/debian@sha256:c67e92c8099ba22853ab4cfda7cfb494d253d6012ca82dee98ba8976772af018', 'sha256:43f84a0b210f98845ef003912981774c95efe439eaa4b1cb62cf803fd46fc82a'),
-    'postgres': ('docker.io/library/postgres@sha256:43f9275df91e012c3da3d86bea5d7bb5e67a473296cc906c5f9e80b8176b1a37', runtime.PG),
-    'python': ('docker.io/library/python@sha256:05a994d2344eb364cc186910f4fc8786a38215f39f00d0acc25bff33a08f4177', runtime.PYTHON),
-}
+PINS = identity.PINS
 FRONTEND = 'docker.io/docker/dockerfile@sha256:7b32114e84ca21aeb2d6f871a0b62b3a0762193f75d9afd048ee4cbe889f3148'
 GIB = 1024 ** 3
 
@@ -56,6 +53,7 @@ class Context:
         config.mkdir(mode=0o700)
         self.env = {'PATH': os.environ['PATH'], 'HOME': str(self.target), 'DOCKER_CONFIG': str(config), 'GOMAXPROCS': '2'}
         self.runtime_ids, self.runtime_groups, self.watchdogs = [], {}, []
+        self.verified_images, self.base_images = {}, {}
         self.record('attempt.json', dict(self.attempt, start_monotonic=self.started, work_end=self.work_end, final_end=self.final_end))
 
     def record(self, name, value):
@@ -119,7 +117,8 @@ class Context:
 
 def build(ctx, source, dockerfile, name, revision, extra=()):
     tag = 'ab-funding-ci-' + ctx.attempt['nonce'] + ':' + name
-    args = ['docker', 'buildx', 'build', '--builder', 'default', '--platform', 'linux/amd64', '--progress', 'plain', '--load', '--tag', tag,
+    args = ['docker', 'buildx', 'build', '--builder', 'default', '--platform', 'linux/amd64', '--progress', 'plain', '--load',
+            '--provenance=false', '--sbom=false', '--tag', tag,
             '--file', str(source / dockerfile), '--iidfile', str(ctx.here / (name + '.iid')), '--metadata-file', str(ctx.here / (name + '-metadata.json')),
             '--build-context', 'rust:1.94-bookworm=docker-image://' + PINS['rust'][0],
             '--build-context', 'debian:bookworm-slim=docker-image://' + PINS['debian'][0],
@@ -128,12 +127,15 @@ def build(ctx, source, dockerfile, name, revision, extra=()):
             '--label', 'ab.recovery.owner=' + ctx.attempt['nonce'], *extra, str(source)]
     ctx.record(name + '-command.json', {'command': args, 'source': ctx.source_check()})
     ctx.long(args, name + '-build', ctx.phase_end)
+    # iid and metadata are already evidence files, retained even on rejection.
+    obj = identity.inspect(ctx, name + '-built', ['docker', 'image', 'inspect', tag])
     iid = (ctx.here / (name + '.iid')).read_text().strip()
-    assert re.fullmatch('sha256:[0-9a-f]{64}', iid)
-    obj = json.loads(ctx.small(['docker', 'image', 'inspect', tag]).stdout)[0]
-    assert obj['Id'] == iid and obj['Config']['Labels'].get('ab.recovery.owner') == ctx.attempt['nonce']
-    assert not obj['Config']['Entrypoint'] and obj['Size'] <= 3 * GIB
-    return {'id': iid, 'tag': tag, 'config': obj['Config'], 'rootfs': obj['RootFS'], 'size': obj['Size']}
+    metadata = json.loads((ctx.here / (name + '-metadata.json')).read_text())
+    base = ctx.base_images['rust' if name == 'fixture' else 'debian']
+    verified = identity.verify_build(obj, metadata, iid, ctx.image_store, base, ctx.attempt['nonce'])
+    ctx.verified_images[verified['id']] = verified
+    return {'id': verified['id'], 'tag': tag, 'config': obj['Config'], 'rootfs': obj['RootFS'],
+            'size': obj['Size'], 'identity': verified}
 
 
 def native_exports(ctx, fixture):
@@ -148,7 +150,7 @@ def native_exports(ctx, fixture):
     (ctx.target / 'inspector').mkdir(exist_ok=True)
     (ctx.target / 'policy').mkdir(exist_ok=True)
     duration = max(1, int(ctx.phase_end - time.monotonic()))
-    ctx.pg = runtime.create(ctx, 'pg', runtime.PG, {'POSTGRES_USER': 'agent_bounties_test', 'POSTGRES_DB': 'agent_bounties_test', 'POSTGRES_PASSWORD': 'fixture-only', 'PGDATA': '/var/lib/postgresql/data/pgdata'}, ['--signal=TERM', '--kill-after=10s', str(duration) + 's', '/usr/local/bin/docker-entrypoint.sh', 'postgres'], '/usr/bin/timeout')
+    ctx.pg = runtime.create(ctx, 'pg', ctx.base_images['postgres']['id'], {'POSTGRES_USER': 'agent_bounties_test', 'POSTGRES_DB': 'agent_bounties_test', 'POSTGRES_PASSWORD': 'fixture-only', 'PGDATA': '/var/lib/postgresql/data/pgdata'}, ['--signal=TERM', '--kill-after=10s', str(duration) + 's', '/usr/local/bin/docker-entrypoint.sh', 'postgres'], '/usr/bin/timeout')
     ready = time.monotonic() + 30
     while ctx.small(['docker', 'exec', ctx.pg, 'pg_isready', '-U', 'agent_bounties_test', '-d', 'agent_bounties_test'], check=False).returncode:
         assert time.monotonic() < ready
@@ -162,8 +164,11 @@ def native_exports(ctx, fixture):
             '--entrypoint', '/usr/bin/timeout', fixture['id'], '--signal=TERM', '--kill-after=10s', str(duration) + 's', '/bin/sleep', str(duration)]
     cid = ctx.small(args).stdout.strip()
     assert re.fullmatch('[0-9a-f]{64}', cid)
+    created = identity.inspect(ctx, 'native-created', ['docker', 'inspect', cid])
+    identity.verify_container(created, cid, fixture['id'], ctx.verified_images)
     ctx.small(['docker', 'start', cid])
-    obj = json.loads(ctx.small(['docker', 'inspect', cid]).stdout)[0]
+    obj = identity.inspect(ctx, 'native-started', ['docker', 'inspect', cid])
+    identity.verify_container(obj, cid, fixture['id'], ctx.verified_images)
     host = obj['HostConfig']
     assert obj['State']['Running'] and obj['Image'] == fixture['id']
     assert obj['Config']['User'] == f'{os.getuid()}:{os.getgid()}', 'native fixture user mismatch'
@@ -252,12 +257,19 @@ def main():
     try:
         assert shutil.disk_usage(ctx.target).free >= 12 * GIB
         ctx.record('source-before.json', ctx.source_check())
-        builder = ctx.small(['docker', 'buildx', 'inspect', 'default']).stdout
-        assert re.search(r'^Driver:\s+docker\s*$', builder, re.M), 'default Docker driver required'
+        builder = identity.observe(ctx, 'buildx-default', ['docker', 'buildx', 'inspect', 'default'])
         ctx.record('builder.json', {'name': 'default', 'description': builder, 'same_runner_cache': True, 'new_privileged_builder': False})
-        for name, (reference, image_id) in PINS.items():
+        assert re.search(r'^Driver:\s+docker\s*$', builder, re.M), 'default Docker driver required'
+        identity.observe(ctx, 'docker-version', ['docker', 'version', '--format', '{{json .}}'])
+        info = json.loads(identity.observe(ctx, 'docker-info', ['docker', 'info', '--format', '{{json .}}']))
+        ctx.image_store = identity.store_mode(info)
+        for name, (reference, _) in PINS.items():
             ctx.long(['docker', 'pull', '--platform', 'linux/amd64', reference], name + '-pull', ctx.phase_end)
-            assert ctx.small(['docker', 'image', 'inspect', reference, '--format', '{{.Id}}']).stdout.strip() == image_id
+            obj = identity.inspect(ctx, name + '-pulled', ['docker', 'image', 'inspect', reference])
+            verified = identity.verify_pin(name, obj, ctx.image_store)
+            ctx.base_images[name] = verified
+            ctx.verified_images[verified['id']] = verified
+        ctx.record('verified-base-images.json', ctx.base_images)
         standby = build(ctx, ctx.predecessor, 'Dockerfile.recovery-indexers', 'standby', binding.STANDBY_REVISION, ['--build-arg', 'RECOVERY_READER_ARTIFACT_CAPABILITY=standby'])
         funding = build(ctx, ctx.source, 'Dockerfile.recovery-funding', 'funding', binding.FUNDING_REVISION)
         fixture = build(ctx, ctx.source, 'Dockerfile.recovery-funding-fixture', 'fixture', binding.FUNDING_REVISION, ['--build-arg', 'FUNDING_IMAGE=' + funding['tag']])
@@ -274,6 +286,9 @@ def main():
         ctx.record('source-after.json', ctx.source_check())
     except BaseException as error:
         failure = type(error).__name__ + ': ' + str(error)[:1000]
+        ctx.record('failure-frames.json', {'type': type(error).__name__, 'message': str(error)[:1000],
+                   'frames': [{'file': frame.filename, 'line': frame.lineno, 'function': frame.name}
+                              for frame in traceback.extract_tb(error.__traceback__)]})
     complete = cleanup(ctx)
     ctx.record('outcome.json', {'passed': failure is None and complete, 'failure': failure, 'cleanup_complete': complete, 'production_signing_enabled': False, 'EVM_or_FX_settlement_qualified': False})
     ctx.disk_and_logs()

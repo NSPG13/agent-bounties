@@ -2,9 +2,8 @@
 import hashlib,importlib.util,json,os,re,subprocess,time,urllib.parse
 from pathlib import Path
 import image_build as build
+import image_identity as image_identity
 
-PG='sha256:ba07bdb15f0f2ac1ba7a88891da731cae65ac36d663fdb7de8f698ea47e0e381'
-PYTHON='sha256:78976a69c067520ef8be34cde307ef9f6fea6dcefa50edb57039773d241ca0db'
 PREFIX='ab-funding-image-fixture-'
 WATCHDOG='ab-funding-image-watchdog-20261110.service'
 INSPECTOR=Path(__file__).resolve().parent/'inspector'
@@ -63,8 +62,13 @@ def create(ctx,role,image,env,command=(),entrypoint=None):
     with (ctx.here/'runtime-attempts.jsonl').open('a') as f:f.write(json.dumps({'role':role,'name':name,'image':image,'at':time.monotonic()})+'\n')
     cid=ctx.small(args,timeout=10).stdout.strip();assert re.fullmatch('[0-9a-f]{64}',cid)
     ctx.runtime_ids.append(cid)
+    created=image_identity.inspect(ctx,role+'-created',['docker','inspect',cid])
+    image_identity.verify_container(created,cid,image,ctx.verified_images)
     ctx.small(['docker','start',cid],timeout=5)
-    obj=describe(ctx,cid);host=obj['HostConfig']
+    obj=image_identity.inspect(ctx,role+'-started',['docker','inspect',cid])
+    image_identity.verify_container(obj,cid,image,ctx.verified_images)
+    assert obj['Config']['Labels'].get('ab.recovery.owner')==ctx.attempt['nonce'] and obj['Config']['Labels'].get('ab.recovery.role')=='funding-image-fixture'
+    host=obj['HostConfig']
     assert obj['Image']==image and host['NanoCpus']==int(cpu*1e9) and host['Memory']==host['MemorySwap']==memory and host['PidsLimit']==pids
     assert host['ReadonlyRootfs'] and host['CapDrop']==['ALL'] and host['SecurityOpt']==['no-new-privileges'] and host['RestartPolicy']['Name']=='no'
     assert host['NetworkMode']==('none' if role=='pg' else 'container:'+ctx.pg) and not host['PortBindings']
@@ -251,14 +255,14 @@ def start(ctx,images):
     ctx.funding=images['funding']['id'];standby=images['standby']['id'];current(ctx,'initial','silent')
     ctx.start_runtime_watchdog(ctx.runtime_end)
     duration=max(1,int(ctx.runtime_end-time.monotonic()))
-    ctx.pg=create(ctx,'pg',PG,{'POSTGRES_USER':'agent_bounties_test','POSTGRES_DB':'agent_bounties_test','POSTGRES_PASSWORD':'fixture-only','PGDATA':'/var/lib/postgresql/data/pgdata'},['--signal=TERM','--kill-after=10s',str(duration)+'s','/usr/local/bin/docker-entrypoint.sh','postgres'],'/usr/bin/timeout')
+    ctx.pg=create(ctx,'pg',ctx.base_images['postgres']['id'],{'POSTGRES_USER':'agent_bounties_test','POSTGRES_DB':'agent_bounties_test','POSTGRES_PASSWORD':'fixture-only','PGDATA':'/var/lib/postgresql/data/pgdata'},['--signal=TERM','--kill-after=10s',str(duration)+'s','/usr/local/bin/docker-entrypoint.sh','postgres'],'/usr/bin/timeout')
     ready=min(ctx.runtime_end,time.monotonic()+30)
     while ctx.small(['docker','exec',ctx.pg,'pg_isready','-U','agent_bounties_test','-d','agent_bounties_test'],check=False).returncode:
         assert time.monotonic()<ready;time.sleep(.1)
     for mount,expected in [('/var/lib/postgresql/data',256*1024**2),('/var/run/postgresql',16*1024**2),('/tmp',16*1024**2)]:
         kind,block,count=ctx.small(['docker','exec',ctx.pg,'stat','-f','-c','%T %S %b',mount]).stdout.split()
         assert kind=='tmpfs' and int(block)*int(count)==expected
-    ctx.rpc=create(ctx,'rpc',PYTHON,{},['/rpc_fixture.py',str(max(1,int(ctx.runtime_end-time.monotonic())))],'python3')
+    ctx.rpc=create(ctx,'rpc',ctx.base_images['python']['id'],{},['/rpc_fixture.py',str(max(1,int(ctx.runtime_end-time.monotonic())))],'python3')
     ready=min(ctx.runtime_end,time.monotonic()+10)
     while not (ctx.exchange/'ready').exists():assert time.monotonic()<ready;time.sleep(.05)
     namespaces=[]
