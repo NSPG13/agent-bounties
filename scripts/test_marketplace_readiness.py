@@ -70,6 +70,47 @@ class MarketplaceReadinessTests(unittest.TestCase):
                 data = copy.deepcopy(self.payload); data['readers'][position].update(patch)
                 self.assertNotEqual(inspect(data, self.now)['state'], 'healthy')
 
+    def test_mainnet_denim_limits_and_legacy_limits_have_exact_boundaries(self):
+        for explicit, limit in [(False, 20), (True, 20), (True, 200)]:
+            for lag in [limit, limit + 1]:
+                data = copy.deepcopy(self.payload)
+                if explicit:
+                    data.update(network='base-mainnet', limits={'heartbeat_age_seconds': 90, 'lag_blocks': limit})
+                for reader in data['readers']:
+                    reader.update(cursor_block=1000-lag, lag_blocks=lag)
+                result = inspect(data, self.now)
+                self.assertEqual(result['state'], 'healthy' if lag <= limit else 'stale')
+                self.assertFalse(result['restartable'])
+
+    def test_mainnet_denim_limits_reject_arbitrary_or_ambiguous_relaxation(self):
+        valid = {'heartbeat_age_seconds': 90, 'lag_blocks': 200}
+        for limits in [None, [], {}, {'heartbeat_age_seconds': 90}, {'lag_blocks': 200},
+                       dict(valid, extra=True), dict(valid, heartbeat_age_seconds=91),
+                       dict(valid, heartbeat_age_seconds=90.0), dict(valid, heartbeat_age_seconds=True),
+                       dict(valid, lag_blocks=201), dict(valid, lag_blocks=0),
+                       dict(valid, lag_blocks='200'), dict(valid, lag_blocks=200.0),
+                       dict(valid, lag_blocks=True)]:
+            result = inspect(dict(self.payload, network='base-mainnet', limits=limits), self.now)
+            self.assertEqual(result['state'], 'unavailable')
+            self.assertEqual(result['validation_reason'], 'limits_invalid')
+            self.assertFalse(result['restartable'])
+        for network in [None, 'base-sepolia', 'unknown', 8453]:
+            data = dict(self.payload, limits=valid)
+            if network is not None:
+                data['network'] = network
+            self.assertEqual(inspect(data, self.now)['state'], 'unavailable')
+
+    def test_denim_limits_do_not_hide_failed_stale_future_or_missing_siblings(self):
+        for change in [{'ready': False, 'blocker': 'reader_failed'},
+                       {'heartbeat_age_seconds': 91}, {'heartbeat_age_seconds': -1},
+                       {'cursor_block': None, 'lag_blocks': None}]:
+            data = copy.deepcopy(self.payload)
+            data.update(network='base-mainnet', limits={'heartbeat_age_seconds': 90, 'lag_blocks': 200})
+            data['readers'][0].update(change)
+            result = inspect(data, self.now)
+            self.assertNotEqual(result['state'], 'healthy')
+            self.assertFalse(result['restartable'])
+
     def test_configured_v2_is_checked_with_every_existing_reader(self):
         data = copy.deepcopy(self.payload)
         data['readers'].append(dict(data['readers'][0], protocol='agent-bounties/autonomous-v2'))

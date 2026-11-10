@@ -26,7 +26,10 @@ impl AgentWalletReadinessProtocol {
     fn protocol_hash(self) -> String {
         match self {
             Self::AutonomousV1 => AUTONOMOUS_BOUNTY_PROTOCOL_HASH.to_string(),
-            Self::AutonomousV2 => format!("{:#x}", alloy::primitives::keccak256(super::AUTONOMOUS_V2_PROTOCOL_VERSION.as_bytes())),
+            Self::AutonomousV2 => format!(
+                "{:#x}",
+                alloy::primitives::keccak256(super::AUTONOMOUS_V2_PROTOCOL_VERSION.as_bytes())
+            ),
         }
     }
     fn label(self) -> &'static str {
@@ -150,8 +153,14 @@ pub async fn prepare_agent_to_earn_with_transport<T>(
 where
     T: JsonRpcTransport + ?Sized,
 {
-    prepare_agent_to_earn_for_protocol_with_transport(rpc_url, canonical_factory,
-        AgentWalletReadinessProtocol::AutonomousV1, input, transport).await
+    prepare_agent_to_earn_for_protocol_with_transport(
+        rpc_url,
+        canonical_factory,
+        AgentWalletReadinessProtocol::AutonomousV1,
+        input,
+        transport,
+    )
+    .await
 }
 
 pub async fn prepare_agent_to_earn_for_protocol(
@@ -160,8 +169,14 @@ pub async fn prepare_agent_to_earn_for_protocol(
     protocol: AgentWalletReadinessProtocol,
     input: &PrepareAgentToEarnInput,
 ) -> Result<AgentWalletReadinessReport, ChainBaseError> {
-    prepare_agent_to_earn_for_protocol_with_transport(rpc_url, canonical_factory, protocol,
-        input, &ReqwestJsonRpcTransport::default()).await
+    prepare_agent_to_earn_for_protocol_with_transport(
+        rpc_url,
+        canonical_factory,
+        protocol,
+        input,
+        &ReqwestJsonRpcTransport::default(),
+    )
+    .await
 }
 
 pub async fn prepare_agent_to_earn_for_protocol_with_transport<T>(
@@ -301,7 +316,10 @@ where
         protocol_hash.eq_ignore_ascii_case(&expected_protocol_hash),
         format!("bounty protocolVersion() returned {protocol_hash}"),
         format!("protocol hash {expected_protocol_hash}"),
-        &format!("Choose a {} bounty registered by its canonical factory.", protocol.label()),
+        &format!(
+            "Choose a {} bounty registered by its canonical factory.",
+            protocol.label()
+        ),
     ));
     checks.push(check(
         "factory_binding",
@@ -958,38 +976,74 @@ mod tests {
         let expected = AgentWalletReadinessProtocol::AutonomousV2;
         let transport = transport(250_000, 8453, 1, CREATOR, true, 100_000);
         transport.responses.lock().unwrap()[2]["result"] = json!(multicall_result(vec![
-            format!("0x{:064x}", 250_000), address_word(factory), address_word(USDC),
-            address_word(CREATOR), format!("0x{:064x}", 100_000), format!("0x{:064x}", 1),
+            format!("0x{:064x}", 250_000),
+            address_word(factory),
+            address_word(USDC),
+            address_word(CREATOR),
+            format!("0x{:064x}", 100_000),
+            format!("0x{:064x}", 1),
             expected.protocol_hash(),
         ]));
         let report = prepare_agent_to_earn_for_protocol_with_transport(
-            "https://rpc.example", factory, expected, &input(), &transport,
-        ).await.unwrap();
+            "https://rpc.example",
+            factory,
+            expected,
+            &input(),
+            &transport,
+        )
+        .await
+        .unwrap();
         assert!(report.ready);
         assert_eq!(report.canonical_factory, factory);
         let requests = transport.requests.lock().unwrap();
         assert_eq!(requests[1]["params"][0]["to"], factory);
         assert_eq!(requests[1]["params"][1], "0xabc");
-        assert!(report.checks.iter().any(|check| check.name == "protocol_version"
-            && check.status == "pass" && check.required.contains(&expected.protocol_hash())));
+        assert!(report
+            .checks
+            .iter()
+            .any(|check| check.name == "protocol_version"
+                && check.status == "pass"
+                && check.required.contains(&expected.protocol_hash())));
     }
 
     #[tokio::test]
     async fn readiness_does_not_accept_sibling_protocol_or_mismatched_factory() {
         for (expected, observed, factory_getter) in [
-            (AgentWalletReadinessProtocol::AutonomousV2, AgentWalletReadinessProtocol::AutonomousV1, FACTORY),
-            (AgentWalletReadinessProtocol::AutonomousV1, AgentWalletReadinessProtocol::AutonomousV2, FACTORY),
-            (AgentWalletReadinessProtocol::AutonomousV2, AgentWalletReadinessProtocol::AutonomousV2, CREATOR),
+            (
+                AgentWalletReadinessProtocol::AutonomousV2,
+                AgentWalletReadinessProtocol::AutonomousV1,
+                FACTORY,
+            ),
+            (
+                AgentWalletReadinessProtocol::AutonomousV1,
+                AgentWalletReadinessProtocol::AutonomousV2,
+                FACTORY,
+            ),
+            (
+                AgentWalletReadinessProtocol::AutonomousV2,
+                AgentWalletReadinessProtocol::AutonomousV2,
+                CREATOR,
+            ),
         ] {
             let transport = transport(250_000, 8453, 1, CREATOR, true, 100_000);
             transport.responses.lock().unwrap()[2]["result"] = json!(multicall_result(vec![
-                format!("0x{:064x}", 250_000), address_word(factory_getter), address_word(USDC),
-                address_word(CREATOR), format!("0x{:064x}", 100_000), format!("0x{:064x}", 1),
+                format!("0x{:064x}", 250_000),
+                address_word(factory_getter),
+                address_word(USDC),
+                address_word(CREATOR),
+                format!("0x{:064x}", 100_000),
+                format!("0x{:064x}", 1),
                 observed.protocol_hash(),
             ]));
             let report = prepare_agent_to_earn_for_protocol_with_transport(
-                "https://rpc.example", FACTORY, expected, &input(), &transport,
-            ).await.unwrap();
+                "https://rpc.example",
+                FACTORY,
+                expected,
+                &input(),
+                &transport,
+            )
+            .await
+            .unwrap();
             assert!(!report.ready);
             assert!(report.checks.iter().any(|check| check.status == "fail"
                 && matches!(check.name.as_str(), "protocol_version" | "factory_binding")));
@@ -1000,9 +1054,13 @@ mod tests {
     async fn readiness_v2_still_rejects_unregistered_contract_before_getters() {
         let transport = transport(250_000, 8453, 1, CREATOR, false, 100_000);
         let result = prepare_agent_to_earn_for_protocol_with_transport(
-            "https://rpc.example", FACTORY, AgentWalletReadinessProtocol::AutonomousV2,
-            &input(), &transport,
-        ).await;
+            "https://rpc.example",
+            FACTORY,
+            AgentWalletReadinessProtocol::AutonomousV2,
+            &input(),
+            &transport,
+        )
+        .await;
         assert!(matches!(result, Err(ChainBaseError::InvalidAddress(_))));
         assert_eq!(transport.requests.lock().unwrap().len(), 2);
     }

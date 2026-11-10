@@ -127,3 +127,36 @@ filtering, unavailable canonical reads, denied methods and paths, restart and
 unchanged table contents. The database test rejects durable DML/DDL and verifies
 the policy on fresh and reused connections. Neither test qualifies production
 credentials, schema or provider rollback behavior.
+
+## Base mainnet reader cadence
+
+Base's [Denim upgrade](https://www.base.org/blog/denim) uses 200ms mainnet
+blocks. Readiness allows a maximum 200-block lag from the independently observed
+safe head on `base-mainnet`, retaining the prior approximately 40-second
+allowance. Other networks retain 20 blocks. Actual admission, lag-only progress
+waiting and the marketplace response's reported limit use the same policy.
+The 90-second heartbeat limit, 300-second head timestamp limit, 12-second
+observation deadline, exact canonical hashes and quarantine checks remain in
+force. Projection reads remain capped at the lesser of the durable cursor and
+the provider's safe head. Freshness does not establish payment or finality.
+
+The recovery supervisor passes explicitly selected `BASE_INDEXER_POLL_SECONDS`
+and `BASE_INDEXER_CONFIRMATIONS` to both autonomous readers. Unset values retain
+their existing defaults. The proposed recovery selection is 15 seconds and 20
+confirmations; configuration requires separate deployment verification. The V2
+deployment start and its independent chunk limit remain unchanged. Confirmation
+depth still combines with the provider-safe cap; it does not replace it. This
+change introduces no faster polling or catch-up drain loop. Safe batches may
+arrive in jumps, and scan time adds to the poll delay.
+
+Public metrics intentionally retain their separate existing policy: a heartbeat
+up to 300 seconds old and a cursor within 20 blocks of that heartbeat's observed
+latest block. That metric does not use the independently observed safe head and
+can report delay even when the safe-capped readiness check succeeds.
+
+The read-only marketplace monitor accepts only the reviewed 20- or 200-block
+response limits with a 90-second heartbeat limit. The 200-block policy requires
+an explicit `base-mainnet` network; legacy responses without limits retain 20.
+Malformed limits fail unavailable. The generic self-healing policy's independent
+20-block alert remains conservative and is unchanged. Neither monitor authorizes
+a payment or restart merely because reader freshness succeeds.

@@ -116,6 +116,23 @@ while True: time.sleep(0.05)
         for environment in [v2, creator]:
             self.assertNotIn('BASE_INDEXER_BOOTSTRAP_ARCHIVE_RPC_URL', environment)
             self.assertNotIn('BASE_INDEXER_MAX_BLOCKS_PER_QUERY', environment)
+        for environment in [v1, v2, creator]:
+            self.assertNotIn('BASE_INDEXER_POLL_SECONDS', environment)
+            self.assertNotIn('BASE_INDEXER_CONFIRMATIONS', environment)
+
+    def test_selected_poll_and_confirmations_reach_both_autonomous_readers_only(self):
+        code, records, _ = self.run_fixture(overrides={
+            'BASE_INDEXER_POLL_SECONDS': '15', 'BASE_INDEXER_CONFIRMATIONS': '20'})
+        self.assertEqual(code, 17)
+        for role in ['autonomous-v1', 'autonomous-v2']:
+            self.assertEqual(records[role]['env']['BASE_INDEXER_POLL_SECONDS'], '15')
+            self.assertEqual(records[role]['env']['BASE_INDEXER_CONFIRMATIONS'], '20')
+        creator = records['creator-open-v1']['env']
+        self.assertNotIn('BASE_INDEXER_POLL_SECONDS', creator)
+        self.assertNotIn('BASE_INDEXER_CONFIRMATIONS', creator)
+        v2 = records['autonomous-v2']['env']
+        self.assertEqual(v2['BASE_INDEXER_START_BLOCK'], '52275492')
+        self.assertNotIn('BASE_INDEXER_MAX_BLOCKS_PER_QUERY', v2)
 
     def test_parent_term_stops_and_reaps_every_reader(self):
         code, records, stopped = self.run_fixture(stop_parent=True)

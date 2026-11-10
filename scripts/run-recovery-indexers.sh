@@ -47,7 +47,14 @@ if [[ "${POSTING_CREATOR_INDEXER_ENABLED:-false}" == true ]]; then
   children+=("$!")
 fi
 if [[ "${POSTING_V2_INDEXER_ENABLED:-false}" == true ]]; then
-  env -i "${common[@]}" BASE_INDEXER_PROTOCOL=autonomous-v2 BASE_INDEXER_NETWORK=base-mainnet     BASE_INDEXER_FACTORY_CONTRACT=0xc33e2ae33bb9580837ea59df18e57fa1039ae58a     BASE_INDEXER_START_BLOCK=52275492 BASE_INDEXER_RPC_URL="$BASE_MAINNET_RPC_URL"     PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-https://api.agentizable.ai}"     RUST_LOG="${RUST_LOG:-info}" /usr/local/bin/recovery-reader &
+  v2=("${common[@]}" BASE_INDEXER_PROTOCOL=autonomous-v2 BASE_INDEXER_NETWORK=base-mainnet
+      BASE_INDEXER_FACTORY_CONTRACT=0xc33e2ae33bb9580837ea59df18e57fa1039ae58a
+      BASE_INDEXER_START_BLOCK=52275492 "BASE_INDEXER_RPC_URL=$BASE_MAINNET_RPC_URL"
+      "PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-https://api.agentizable.ai}" "RUST_LOG=${RUST_LOG:-info}")
+  for key in BASE_INDEXER_POLL_SECONDS BASE_INDEXER_CONFIRMATIONS; do
+    if [[ -v "$key" ]]; then v2+=("$key=${!key}"); fi
+  done
+  env -i "${v2[@]}" /usr/local/bin/recovery-reader &
   children+=("$!")
 fi
 set +e

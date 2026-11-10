@@ -467,6 +467,10 @@ struct ReaderSnapshot {
 fn only_reader_lag(snapshot: &ReaderSnapshot, heads: (u64, i64, u64)) -> bool {
     let now = Utc::now();
     let (safe, safe_time, latest) = heads;
+    let Some(heartbeat) = snapshot.heartbeat.as_ref() else {
+        return false;
+    };
+    let max_cursor_lag_blocks = reader_max_cursor_lag_blocks(&heartbeat.network);
     let committed = snapshot
         .cursor
         .zip(
@@ -480,7 +484,7 @@ fn only_reader_lag(snapshot: &ReaderSnapshot, heads: (u64, i64, u64)) -> bool {
         .ok()
         .and_then(|time| checked_head_timestamp(time, now.timestamp()).ok())
         .is_none()
-        || committed.is_none_or(|cursor| safe.saturating_sub(cursor) <= 20)
+        || committed.is_none_or(|cursor| safe.saturating_sub(cursor) <= max_cursor_lag_blocks)
     {
         return false;
     }
@@ -937,8 +941,9 @@ pub(super) async fn readiness(State(state): State<SharedState>) -> Response {
         [(header::CACHE_CONTROL, "no-store")],
         Json(serde_json::json!({
             "schema": "agent-bounties/marketplace-readiness-v1", "ready": ready,
+            "network": "base-mainnet",
             "checked_at": now, "safe_block": safe, "latest_block": latest, "readers": readers,
-            "limits": { "heartbeat_age_seconds": 90, "lag_blocks": 20 },
+            "limits": { "heartbeat_age_seconds": 90, "lag_blocks": reader_max_cursor_lag_blocks("base-mainnet") },
             "evidence_boundary": "Reader freshness only. Does not approve verification, prove funding or payment, authorize a restart, or lift a protocol hold."
         })),
     ).into_response();
@@ -988,6 +993,9 @@ mod tests {
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
         let body: Value = response.json().await.unwrap();
         assert_eq!(body["ready"], false);
+        assert_eq!(body["network"], "base-mainnet");
+        assert_eq!(body["limits"]["lag_blocks"], 200);
+        assert_eq!(body["limits"]["heartbeat_age_seconds"], 90);
         rpc_server.abort();
         server.abort();
     }
@@ -1581,9 +1589,9 @@ mod tests {
     fn reader_requires_current_heartbeat_and_progress_against_independent_head() {
         let now = Utc::now();
         let mut h = heartbeat(now);
-        for head in [None, Some(1019)] {
+        for head in [None, Some(1199)] {
             assert_eq!(
-                reader_status("test", Some(&h), Some(998), head, Some(1030), now)["ready"],
+                reader_status("test", Some(&h), Some(998), head, Some(1210), now)["ready"],
                 false
             );
         }
