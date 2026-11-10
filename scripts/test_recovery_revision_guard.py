@@ -23,6 +23,8 @@ class RecoveryRevisionGuardTests(unittest.TestCase):
             "/usr/local/bin/run-recovery-indexers": self.folder / "supervisor",
             "/bin/bash": self.folder / "bash",
             "/usr/local/bin/check-recovery-revision": self.folder / "guard",
+            "/usr/local/bin/managed-funding-launcher": self.folder / "funding-launcher",
+            "/usr/local/bin/managed-funding-worker": self.folder / "funding-worker",
         }
         # Fixed production paths are rewritten only in this private test copy.
         # The shipped executable has no runtime path/configuration override.
@@ -43,6 +45,60 @@ class RecoveryRevisionGuardTests(unittest.TestCase):
         self.paths["/usr/local/bin/agent-bounties-service"].unlink()
         for name in ("/usr/local/bin/recovery-reader", "/usr/local/bin/run-recovery-indexers", "/bin/bash"):
             self.make_file(name)
+
+    def funding_fixture(self):
+        for name, path in self.paths.items():
+            if name != '/usr/local/bin/check-recovery-revision' and path.exists():
+                path.unlink()
+        for name in ('/usr/local/bin/managed-funding-launcher', '/usr/local/bin/managed-funding-worker'):
+            self.make_file(name)
+
+    def test_funding_receipt_hashes_both_fixed_files_without_executing_them(self):
+        self.funding_fixture()
+        direct = self.invoke([EXPECTED], EXPECTED)
+        shell = self.invoke([EXPECTED], EXPECTED, shell=True)
+        self.assertEqual((direct.returncode, direct.stderr), (0, ''))
+        self.assertEqual((shell.returncode, shell.stdout), (0, direct.stdout))
+        receipt = parse_receipt(direct.stdout, EXPECTED, 'funding')
+        for field, name in [('binary_sha256', '/usr/local/bin/managed-funding-worker'),
+                            ('launcher_sha256', '/usr/local/bin/managed-funding-launcher'),
+                            ('guard_sha256', '/usr/local/bin/check-recovery-revision')]:
+            self.assertEqual(receipt[field], hashlib.sha256(self.paths[name].read_bytes()).hexdigest())
+        for malformed in [direct.stdout.replace('launcher_sha256=', 'supervisor_sha256='),
+                          direct.stdout.replace('artifact_kind=funding', 'artifact_kind=api'),
+                          direct.stdout.replace('receipt_complete=true\n', ''),
+                          direct.stdout + 'launcher_sha256=' + '0' * 64 + '\n']:
+            with self.assertRaises(ValueError):
+                parse_receipt(malformed, EXPECTED, 'funding')
+
+    def test_funding_cannot_mix_with_api_or_reader_even_as_dangling_symlink(self):
+        self.funding_fixture()
+        for name in ('/usr/local/bin/agent-bounties-service', '/usr/local/bin/recovery-reader'):
+            for dangling in (False, True):
+                with self.subTest(name=name, dangling=dangling):
+                    if dangling:
+                        self.paths[name].symlink_to(self.folder / 'absent')
+                    else:
+                        self.make_file(name)
+                    result = self.invoke([EXPECTED], EXPECTED)
+                    self.assertEqual((result.returncode, result.stdout), (1, ''))
+                    self.paths[name].unlink()
+
+    def test_funding_requires_regular_executable_launcher_and_worker(self):
+        self.funding_fixture()
+        for name in ('/usr/local/bin/managed-funding-launcher', '/usr/local/bin/managed-funding-worker'):
+            target = self.paths[name]
+            for kind in ('missing', 'directory', 'nonexecutable', 'dangling'):
+                with self.subTest(name=name, kind=kind):
+                    target.unlink()
+                    if kind == 'directory': target.mkdir()
+                    elif kind == 'nonexecutable': self.make_file(name); target.chmod(0o644)
+                    elif kind == 'dangling': target.symlink_to(self.folder / 'absent')
+                    result = self.invoke([EXPECTED], EXPECTED)
+                    self.assertEqual((result.returncode, result.stdout), (1, ''))
+                    if target.is_dir(): target.rmdir()
+                    elif target.exists() or target.is_symlink(): target.unlink()
+                    self.make_file(name)
 
     def invoke(self, args, deployed=None, shell=False):
         env = {"PATH": "/usr/bin:/bin"}
@@ -165,11 +221,14 @@ class RecoveryRevisionGuardTests(unittest.TestCase):
         self.assertEqual((result.returncode,result.stdout),(1,''))
 
     def test_independent_hash_comparison_rejects_missing_extra_duplicate_and_wrong_files(self):
-        for kind in ('api','reader'):
+        for kind in ('api','reader','funding'):
             if kind=='reader':self.reader_fixture()
+            elif kind=='funding':self.funding_fixture()
             receipt=parse_receipt(self.invoke([EXPECTED],EXPECTED).stdout,EXPECTED,kind)
             names=['/usr/local/bin/check-recovery-revision']
-            names += ['/usr/local/bin/agent-bounties-service'] if kind=='api' else ['/usr/local/bin/recovery-reader','/usr/local/bin/run-recovery-indexers','/bin/bash']
+            names += {'api':['/usr/local/bin/agent-bounties-service'],
+                      'reader':['/usr/local/bin/recovery-reader','/usr/local/bin/run-recovery-indexers','/bin/bash'],
+                      'funding':['/usr/local/bin/managed-funding-worker','/usr/local/bin/managed-funding-launcher']}[kind]
             raw=''.join(hashlib.sha256(self.paths[name].read_bytes()).hexdigest()+'  '+name+'\n' for name in names)
             verify_file_hashes(receipt,raw)
             for bad in ('',raw+raw,raw.replace(names[0],'/unexpected'),raw.replace(raw[:64],'0'*64),raw.replace('  ',' ')):

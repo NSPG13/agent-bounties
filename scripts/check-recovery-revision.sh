@@ -42,14 +42,26 @@ file_digest() {
 }
 api_path=/usr/local/bin/agent-bounties-service
 reader_path=/usr/local/bin/recovery-reader
-if [ -e "$api_path" ] && [ ! -e "$reader_path" ] && [ ! -L "$reader_path" ]; then
+funding_launcher=/usr/local/bin/managed-funding-launcher
+funding_worker=/usr/local/bin/managed-funding-worker
+artifact_families=0
+api_present=false reader_present=false funding_present=false
+if [ -e "$api_path" ] || [ -L "$api_path" ]; then api_present=true; artifact_families=$((artifact_families + 1)); fi
+if [ -e "$reader_path" ] || [ -L "$reader_path" ]; then reader_present=true; artifact_families=$((artifact_families + 1)); fi
+if [ -e "$funding_launcher" ] || [ -L "$funding_launcher" ] || [ -e "$funding_worker" ] || [ -L "$funding_worker" ]; then funding_present=true; artifact_families=$((artifact_families + 1)); fi
+[ "$artifact_families" -eq 1 ] || artifact_error
+if [ "$api_present" = true ]; then
     artifact_kind=api
     binary_digest=$(file_digest "$api_path") || artifact_error
-elif [ -e "$reader_path" ] && [ ! -e "$api_path" ] && [ ! -L "$api_path" ]; then
+elif [ "$reader_present" = true ]; then
     artifact_kind=reader
     binary_digest=$(file_digest "$reader_path") || artifact_error
     supervisor_digest=$(file_digest /usr/local/bin/run-recovery-indexers) || artifact_error
     bash_digest=$(file_digest /bin/bash) || artifact_error
+elif [ "$funding_present" = true ]; then
+    artifact_kind=funding
+    binary_digest=$(file_digest "$funding_worker") || artifact_error
+    launcher_digest=$(file_digest "$funding_launcher") || artifact_error
 else
     artifact_error
 fi
@@ -58,5 +70,7 @@ printf 'schema=agentizable/recovery-artifact-receipt-v1\nsource_revision=%s\nart
 printf 'binary_sha256=%s\n' "$binary_digest"
 if [ "$artifact_kind" = reader ]; then
     printf 'supervisor_sha256=%s\nbash_sha256=%s\n' "$supervisor_digest" "$bash_digest"
+elif [ "$artifact_kind" = funding ]; then
+    printf 'launcher_sha256=%s\n' "$launcher_digest"
 fi
 printf 'guard_sha256=%s\nreceipt_complete=true\n' "$guard_digest"

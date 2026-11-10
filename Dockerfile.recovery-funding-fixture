@@ -1,0 +1,40 @@
+# syntax=docker/dockerfile:1
+# Test-only image. Never deploy or publish this image.
+ARG FUNDING_IMAGE
+FROM ${FUNDING_IMAGE} AS shipping
+FROM rust:1.94-bookworm AS builder
+WORKDIR /workspace
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY bounties ./bounties
+COPY contracts ./contracts
+COPY fixtures ./fixtures
+COPY migrations ./migrations
+COPY ops ./ops
+COPY schemas ./schemas
+COPY site ./site
+COPY deployments/base-mainnet.json ./deployments/base-mainnet.json
+ARG RENDER_SERVICE_ID
+ARG RENDER_GIT_COMMIT
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/workspace/target,sharing=locked \
+    find crates bounties contracts fixtures migrations ops schemas site deployments -type f -exec touch {} + \
+    && RECOVERY_FUNDING_BOUND_SERVICE_ID="$RENDER_SERVICE_ID" \
+       RECOVERY_FUNDING_BOUND_REVISION="$RENDER_GIT_COMMIT" \
+       CARGO_BUILD_JOBS=2 \
+       cargo test --locked --release -p worker --test recovery_funding --no-run \
+    && count=0 \
+    && for candidate in target/release/deps/recovery_funding-*; do \
+         if [ -f "$candidate" ] && [ -x "$candidate" ]; then \
+           cp "$candidate" /tmp/recovery-funding-fixture-test; count=$((count + 1)); \
+         fi; \
+       done \
+    && test "$count" -eq 1
+
+FROM rust:1.94-bookworm
+COPY --from=builder /tmp/recovery-funding-fixture-test /opt/recovery-funding-fixture-test
+# CARGO_BIN_EXE_worker was compiled with this fixed path. Use the exact shipping
+# image's worker bytes when the integration fixture starts its child process.
+COPY --from=shipping /usr/local/bin/managed-funding-worker /workspace/target/release/worker
+USER 1000:1000
+CMD ["/opt/recovery-funding-fixture-test", "--ignored", "--test-threads=1"]
