@@ -3,6 +3,7 @@ import hashlib,importlib.util,json,os,re,subprocess,time,urllib.parse
 from pathlib import Path
 import image_build as build
 import image_identity as image_identity
+import fixture_restore
 
 PREFIX='ab-funding-image-fixture-'
 WATCHDOG='ab-funding-image-watchdog-20261110.service'
@@ -103,12 +104,12 @@ def wait_exit(ctx,cid,deadline):
         time.sleep(.05)
     raise TimeoutError('fixture process exit deadline')
 
-def sql(ctx,statement,schema=None,script=None):
+def sql(ctx,statement,schema=None,script=None,case_name=None,expected_sha256=None):
     assert schema is None or re.fullmatch('recovery_funding_[a-z_]+',schema)
     prefix='SET search_path TO '+schema+';\n' if schema else ''
     if script is not None:
         assert script.stat().st_size<=16*1024**2
-        body=prefix.encode()+script.read_bytes()
+        body=prefix.encode()+fixture_restore.replay(script.read_bytes(),case_name,schema,expected_sha256)
     else:body=(prefix+statement).encode()
     result=subprocess.run(['docker','exec','-i',ctx.pg,'psql','-X','-q','-A','-t','-v','ON_ERROR_STOP=1','-U','agent_bounties_test','-d','agent_bounties_test'],input=body,capture_output=True,timeout=ctx.remaining(10))
     assert result.returncode==0 and len(result.stdout)<=1024*1024 and len(result.stderr)<=65536,(result.stderr[:200]).decode(errors='replace')
@@ -190,7 +191,7 @@ def protected(before,after,action,operation_id):
 def case(ctx,folder):
     metadata=json.loads((folder/'case.json').read_text());native=json.loads((folder/'native-result.json').read_text())
     name=metadata['name'];schema=metadata['database_schema'];assert metadata['schema']=='agentizable/funding-process-fixture-v1'
-    assert name==folder.name and time.time()<metadata['valid_until'] and re.fullmatch('recovery_funding_[a-z_]+',schema)
+    assert name==folder.name and time.time()<metadata['valid_until'] and schema==fixture_restore.schema_for(name)
     assert hashlib.sha256((folder/'before.sql').read_bytes()).hexdigest()==metadata['sql_sha256']
     sql(ctx,f'DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema}')
     if metadata['action']!='config_error':
@@ -198,7 +199,7 @@ def case(ctx,folder):
         tables=json.loads(sql(ctx,"SELECT jsonb_agg(tablename) FROM pg_tables WHERE schemaname='"+schema+"'"))
         assert all(re.fullmatch('[a-z_][a-z_0-9]*',t) for t in tables)
         sql(ctx,'TRUNCATE '+','.join(tables)+' CASCADE',schema)
-        sql(ctx,'',schema,folder/'before.sql')
+        sql(ctx,'',schema,folder/'before.sql',name,metadata['sql_sha256'])
         if name=='busy':
             # Preserve the live-lease branch despite the independent build between phases.
             sql(ctx,"UPDATE managed_bounty_funding_operations SET lease_until=now()+interval '180 seconds'",schema)
