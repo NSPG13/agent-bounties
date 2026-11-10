@@ -98,7 +98,7 @@ use chain_base::{
     plan_canonical_child_bounty_terms as build_canonical_child_bounty_terms_plan,
     plan_open_competition_action, plan_open_competition_creation,
     plan_open_competition_entrant_action, plan_standing_meta_v4_action,
-    prepare_agent_to_earn as inspect_agent_wallet_readiness, quote_autonomous_v2_bounty,
+    prepare_agent_to_earn_for_protocol as inspect_agent_wallet_readiness, quote_autonomous_v2_bounty,
     solver_leaderboard_award_id, standing_meta_v2_parent_context, standing_meta_v4_readiness,
     validate_attestation_request_against_feed, validate_autonomous_cancel_authority,
     validate_autonomous_creation_for_public_earning,
@@ -8217,23 +8217,19 @@ async fn prepare_agent_wallet_to_earn(
             })),
         ));
     }
-    let (descriptor, rpc_url) = state
+    let (_, rpc_url) = state
         .base_rpc_urls
         .resolve(&request.network)
         .map_err(map_agent_wallet_readiness_error)?;
-    let canonical_factory = autonomous_factory_for_chain(descriptor.chain_id).ok_or_else(|| {
-        agent_wallet_readiness_problem(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "readiness_not_configured",
-            false,
-            "resolve_canonical_factory",
-            "Canonical readiness is not configured for this Base network.",
-            "Use a network advertised by hosted discovery, or retry after the operator configures its canonical factory.",
-        )
-    })?;
     tokio::time::timeout(
         Duration::from_secs(12),
-        inspect_agent_wallet_readiness(&rpc_url, &canonical_factory, &request),
+        async {
+            let (canonical_factory, protocol) = canonical_wallet_readiness_target(
+                &state, &request.network, &request.bounty_contract,
+            ).await?;
+            inspect_agent_wallet_readiness(&rpc_url, &canonical_factory, protocol, &request)
+                .await.map(Json).map_err(map_agent_wallet_readiness_error)
+        },
     )
     .await
     .map_err(|_| {
@@ -8246,8 +8242,36 @@ async fn prepare_agent_wallet_to_earn(
             "Retry with the same public inputs after a short delay; do not sign or fund anything from this response.",
         )
     })?
-    .map(Json)
-    .map_err(map_agent_wallet_readiness_error)
+}
+
+/// Indexed canonical factory membership selects the protocol; fresh chain reads
+/// still independently verify registration, immutable factory and protocol hash.
+async fn canonical_wallet_readiness_target(
+    state: &SharedState,
+    network: &str,
+    contract: &str,
+) -> Result<(String, chain_base::AgentWalletReadinessProtocol), AgentWalletReadinessProblem> {
+    let contract = normalize_evm_address(contract).map_err(map_agent_wallet_readiness_error)?;
+    let unavailable = |status: StatusCode| {
+        agent_wallet_readiness_problem(
+            status,
+            "canonical_identity_unavailable",
+            status.is_server_error(),
+            "resolve_canonical_factory",
+            "The bounty's exact canonical protocol and configured factory could not be resolved.",
+            "Refresh canonical bounty inventory and retry; do not substitute a different factory.",
+        )
+    };
+    let protocol = autonomous_projection::protocol_for_contract(state, network, &contract)
+        .await
+        .map_err(unavailable)?;
+    let expected = match protocol {
+        AUTONOMOUS_PROTOCOL_VERSION => chain_base::AgentWalletReadinessProtocol::AutonomousV1,
+        AUTONOMOUS_V2_PROTOCOL_VERSION => chain_base::AgentWalletReadinessProtocol::AutonomousV2,
+        _ => return Err(unavailable(StatusCode::SERVICE_UNAVAILABLE)),
+    };
+    let factory = autonomous_projection::factory(network, protocol).map_err(unavailable)?;
+    Ok((factory, expected))
 }
 
 #[utoipa::path(
