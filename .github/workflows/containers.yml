@@ -73,3 +73,15 @@ jobs:
           failure_status=0
           docker run --rm public-runtime-worker /bin/sh -c 'exit 23' || failure_status=$?
           test "$failure_status" -eq 23
+          revision_guard='test "${RENDER_GIT_COMMIT:-}" = 1111111111111111111111111111111111111111'
+          docker run --rm --env RENDER_GIT_COMMIT=1111111111111111111111111111111111111111 public-runtime-worker /bin/sh -c "$revision_guard"
+          # Missing, empty, mismatched and malformed revisions must fail the
+          # actual image command with test's exit 1, not a Docker/runtime error.
+          failure_status=0
+          docker run --rm public-runtime-worker /bin/sh -c "$revision_guard" || failure_status=$?
+          test "$failure_status" -eq 1
+          for wrong_revision in '' 2222222222222222222222222222222222222222 invalid '1111111111111111111111111111111111111111; exit 0'; do
+            failure_status=0
+            docker run --rm --env "RENDER_GIT_COMMIT=$wrong_revision" public-runtime-worker /bin/sh -c "$revision_guard" || failure_status=$?
+            test "$failure_status" -eq 1
+          done
