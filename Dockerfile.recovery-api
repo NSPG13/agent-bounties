@@ -26,6 +26,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 app
 COPY --from=builder /tmp/agent-bounties-service /usr/local/bin/agent-bounties-service
+COPY --chmod=0555 scripts/check-recovery-revision.sh /usr/local/bin/check-recovery-revision
 USER app
 ENV RUST_LOG=info \
     API_BOOT_MODE=recovery-health-only \

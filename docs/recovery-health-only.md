@@ -17,9 +17,23 @@ revision header is platform metadata, not independent proof of the built source.
 `Dockerfile.recovery-api` builds the same locked public API sources and defaults
 to this mode with financial flags false. It has a `CMD` and no `ENTRYPOINT`, so a
 platform pre-deploy shell command is not appended as arguments to the API. The
-ordinary Dockerfile remains unchanged. The Containers workflow builds this
-additional recipe and checks both a successful shell override and a failing one.
-This validates Docker command behavior, not every hosting-platform failure path.
+ordinary Dockerfile remains unchanged.
+
+For the pre-deploy command, use the installed executable
+`/usr/local/bin/check-recovery-revision` followed by the reviewed 40-character
+lowercase commit as its sole argument. The payload is a plain path and argument,
+without an additional `sh -c`, quotes or environment expansion. The script reads
+`RENDER_GIT_COMMIT` itself and exits 0 only for an exact valid match. Missing,
+malformed or mismatched deployed revisions exit 1; malformed expected revisions
+or argument counts exit 2. Input values are neither evaluated nor printed.
+
+The first Render attempt used a quoted shell expression that passed local image
+checks but failed with exit 127 when the provider treated the expression as a
+command name. That failure did not establish a revision mismatch or qualify an
+API runtime. The executable avoids that nested quoting boundary. Containers CI
+now exercises the actual installed path with exact success/failure codes, plus
+one shell dispatch of the plain command. These checks do not establish every
+hosting-platform failure or rollback path.
 
 This mode is a startup setting, not a live switch. It does not protect an older
 artifact that predates the mode, enable another service, or qualify marketplace
@@ -59,3 +73,5 @@ restart tests, and `cargo test -p api recovery_boot::tests` for mode parsing.
 The process test supplies invalid dependency credentials and an observed local
 connection trap. Recovery must remain live, deny functional requests, and never
 contact that trap. Run the normal API tests as the compatibility gate.
+Run `python3 -m unittest scripts.test_recovery_revision_guard` for the executable
+revision boundary. The copied script is included in public runtime source parity.

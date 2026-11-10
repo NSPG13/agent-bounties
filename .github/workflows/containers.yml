@@ -10,6 +10,8 @@ on:
       - "bounties/**"
       - "Dockerfile*"
       - "scripts/run-posting-*.sh"
+      - "scripts/check-recovery-revision.sh"
+      - "scripts/test_recovery_revision_guard.py"
       - "deployments/**"
       - "contracts/**"
       - "crates/**"
@@ -60,6 +62,9 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+      - name: Test recovery revision executable
+        if: matrix.dockerfile == 'Dockerfile.recovery-api'
+        run: python3 -m unittest scripts.test_recovery_revision_guard
       - name: Build the deployed worker recipe
         env:
           WORKER_DOCKERFILE: ${{ matrix.dockerfile }}
@@ -73,15 +78,25 @@ jobs:
           failure_status=0
           docker run --rm public-runtime-worker /bin/sh -c 'exit 23' || failure_status=$?
           test "$failure_status" -eq 23
-          revision_guard='test "${RENDER_GIT_COMMIT:-}" = 1111111111111111111111111111111111111111'
-          docker run --rm --env RENDER_GIT_COMMIT=1111111111111111111111111111111111111111 public-runtime-worker /bin/sh -c "$revision_guard"
-          # Missing, empty, mismatched and malformed revisions must fail the
-          # actual image command with test's exit 1, not a Docker/runtime error.
-          failure_status=0
-          docker run --rm public-runtime-worker /bin/sh -c "$revision_guard" || failure_status=$?
-          test "$failure_status" -eq 1
+          revision_guard=/usr/local/bin/check-recovery-revision
+          expected_revision=1111111111111111111111111111111111111111
+          expect_exit() {
+            expected_status=$1
+            shift
+            actual_status=0
+            "$@" || actual_status=$?
+            test "$actual_status" -eq "$expected_status"
+          }
+          docker run --rm --env "RENDER_GIT_COMMIT=$expected_revision" public-runtime-worker "$revision_guard" "$expected_revision"
+          # Also qualify a provider's single shell dispatch of the plain path
+          # and argument. The pre-deploy payload contains no shell expressions.
+          docker run --rm --env "RENDER_GIT_COMMIT=$expected_revision" public-runtime-worker /bin/sh -c "$revision_guard $expected_revision"
+          expect_exit 1 docker run --rm public-runtime-worker "$revision_guard" "$expected_revision"
           for wrong_revision in '' 2222222222222222222222222222222222222222 invalid '1111111111111111111111111111111111111111; exit 0'; do
-            failure_status=0
-            docker run --rm --env "RENDER_GIT_COMMIT=$wrong_revision" public-runtime-worker /bin/sh -c "$revision_guard" || failure_status=$?
-            test "$failure_status" -eq 1
+            expect_exit 1 docker run --rm --env "RENDER_GIT_COMMIT=$wrong_revision" public-runtime-worker "$revision_guard" "$expected_revision"
+          done
+          expect_exit 2 docker run --rm public-runtime-worker "$revision_guard"
+          expect_exit 2 docker run --rm public-runtime-worker "$revision_guard" "$expected_revision" extra
+          for wrong_expected in '' short AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA '1111111111111111111111111111111111111111; exit 0'; do
+            expect_exit 2 docker run --rm --env "RENDER_GIT_COMMIT=$expected_revision" public-runtime-worker "$revision_guard" "$wrong_expected"
           done
