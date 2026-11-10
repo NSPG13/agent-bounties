@@ -15,6 +15,7 @@ on:
       - "scripts/check-recovery-reader-images.py"
       - "scripts/check-recovery-revision.sh"
       - "scripts/test_recovery_revision_guard.py"
+      - "scripts/parse_recovery_artifact_receipt.py"
       - "deployments/**"
       - "contracts/**"
       - "crates/**"
@@ -114,10 +115,13 @@ jobs:
             "$@" || actual_status=$?
             test "$actual_status" -eq "$expected_status"
           }
-          docker run --rm --env "RENDER_GIT_COMMIT=$expected_revision" public-runtime-worker "$revision_guard" "$expected_revision"
+          docker run --rm --env "RENDER_GIT_COMMIT=$expected_revision" public-runtime-worker "$revision_guard" "$expected_revision" > recovery-api-receipt.txt
+          docker run --rm public-runtime-worker /usr/bin/sha256sum /usr/local/bin/agent-bounties-service "$revision_guard" > recovery-api-file-hashes.txt
+          python3 scripts/parse_recovery_artifact_receipt.py recovery-api-receipt.txt --expected-revision "$expected_revision" --expected-kind api --file-hashes recovery-api-file-hashes.txt
           # Also qualify a provider's single shell dispatch of the plain path
           # and argument. The pre-deploy payload contains no shell expressions.
-          docker run --rm --env "RENDER_GIT_COMMIT=$expected_revision" public-runtime-worker /bin/sh -c "$revision_guard $expected_revision"
+          docker run --rm --env "RENDER_GIT_COMMIT=$expected_revision" public-runtime-worker /bin/sh -c "$revision_guard $expected_revision" > recovery-api-shell-receipt.txt
+          cmp recovery-api-receipt.txt recovery-api-shell-receipt.txt
           expect_exit 1 docker run --rm public-runtime-worker "$revision_guard" "$expected_revision"
           for wrong_revision in '' 2222222222222222222222222222222222222222 invalid '1111111111111111111111111111111111111111; exit 0'; do
             expect_exit 1 docker run --rm --env "RENDER_GIT_COMMIT=$wrong_revision" public-runtime-worker "$revision_guard" "$expected_revision"

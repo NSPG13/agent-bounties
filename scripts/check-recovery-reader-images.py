@@ -11,6 +11,7 @@ import re
 import subprocess
 import tempfile
 import time
+from parse_recovery_artifact_receipt import parse_receipt, verify_file_hashes
 
 A = 'srv-aaaaaaaaaaaaaaaaaaaa'
 B = 'srv-bbbbbbbbbbbbbbbbbbbb'
@@ -99,8 +100,13 @@ def verify(standby, reader_a, reader_b):
             if not expected:
                 assert 'Recovery runtime identity' in err or 'Standby artifact' in err
         # The predeploy command must execute directly, independently of reader mode.
-        code, _, err = container(image, matching, ['/usr/local/bin/check-recovery-revision', revision])
+        code, out, err = container(image, matching, ['/usr/local/bin/check-recovery-revision', revision])
         assert code == 0, err
+        receipt = parse_receipt(out, revision, 'reader')
+        code, hashes, err = container(image, {}, ['/usr/bin/sha256sum', BINARY,
+            '/usr/local/bin/run-recovery-indexers', '/bin/bash', '/usr/local/bin/check-recovery-revision'])
+        assert code == 0, err
+        verify_file_hashes(receipt, hashes)
         code, _, _ = container(image, matching, ['/bin/sh', '-c', 'exit 23'])
         assert code == 23
     print('recovery_reader_images: immutable capability, cache A-to-B binding, runtime admission and predeploy controls passed')
