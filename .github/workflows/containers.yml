@@ -55,7 +55,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        dockerfile: [Dockerfile.posting-indexers, Dockerfile.posting-spenders]
+        dockerfile: [Dockerfile.posting-indexers, Dockerfile.posting-spenders, Dockerfile.recovery-api]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -64,3 +64,12 @@ jobs:
         env:
           WORKER_DOCKERFILE: ${{ matrix.dockerfile }}
         run: docker build --file "$WORKER_DOCKERFILE" --tag public-runtime-worker .
+      - name: Check recovery image command containment
+        if: matrix.dockerfile == 'Dockerfile.recovery-api'
+        run: |
+          test "$(docker image inspect public-runtime-worker --format '{{json .Config.Entrypoint}}')" = 'null'
+          test "$(docker image inspect public-runtime-worker --format '{{json .Config.Cmd}}')" = '["/usr/local/bin/agent-bounties-service"]'
+          docker run --rm public-runtime-worker /bin/sh -c 'test "$API_BOOT_MODE" = recovery-health-only && test "$ENABLE_HOSTED_FINANCIAL_SIGNING" = false'
+          failure_status=0
+          docker run --rm public-runtime-worker /bin/sh -c 'exit 23' || failure_status=$?
+          test "$failure_status" -eq 23

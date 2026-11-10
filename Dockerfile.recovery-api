@@ -1,0 +1,45 @@
+# syntax=docker/dockerfile:1
+# Credential-free recovery staging; normal production Dockerfile is unchanged.
+ARG RUST_VERSION=1.94
+FROM rust:${RUST_VERSION}-bookworm AS builder
+WORKDIR /workspace
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY bounties ./bounties
+COPY contracts ./contracts
+COPY fixtures ./fixtures
+COPY migrations ./migrations
+COPY ops ./ops
+COPY schemas ./schemas
+COPY site ./site
+COPY deployments/base-mainnet.json ./deployments/base-mainnet.json
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/workspace/target,sharing=locked \
+    find crates bounties contracts fixtures migrations ops schemas site deployments \
+        -type f -exec touch {} + \
+    && cargo build --locked --release -p api \
+    && cp target/release/api /tmp/agent-bounties-service
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid 10001 app
+COPY --from=builder /tmp/agent-bounties-service /usr/local/bin/agent-bounties-service
+USER app
+ENV RUST_LOG=info \
+    API_BOOT_MODE=recovery-health-only \
+    ENABLE_HOSTED_FINANCIAL_SIGNING=false \
+    ENABLE_BASE_TX_BROADCAST=false \
+    ENABLE_X402_HOSTED_RELAY=false \
+    ENABLE_BOND_SPONSORSHIP=false \
+    ENABLE_STRIPE_LIVE_EXECUTION=false \
+    ENABLE_STRIPE_PUBLIC_CHECKOUT=false \
+    ENABLE_MANAGED_SERVICE_ORDERS=false \
+    ENABLE_MANAGED_SERVICE_PUBLIC_CHECKOUT=false \
+    ENABLE_MANAGED_SERVICE_REFUND_EXECUTION=false \
+    ENABLE_MANAGED_RECOVERED_BOUNTY_REFUNDS=false \
+    ENABLE_SPONSORED_POSTING_CREATION=false
+EXPOSE 8080
+# No ENTRYPOINT: a platform pre-deploy command must not become API arguments.
+CMD ["/usr/local/bin/agent-bounties-service"]

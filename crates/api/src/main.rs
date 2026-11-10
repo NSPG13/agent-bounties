@@ -32,6 +32,7 @@ use platform_payouts::PayoutProofMetadata;
 mod nonce_retirement;
 mod posting_readiness;
 mod privacy_cache;
+mod recovery_boot;
 mod request_contract;
 mod review_reports;
 mod review_tasks;
@@ -2571,6 +2572,10 @@ struct BaseTransactionReceiptReport {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Resolve containment before diagnostics, database access, configuration or jobs.
+    if recovery_boot::BootMode::from_env()? == recovery_boot::BootMode::RecoveryHealthOnly {
+        return recovery_boot::serve().await;
+    }
     // Private operator-shell mode. It exits before migrations, workers, HTTP
     // listeners or any provider request; connection/errors never reveal values.
     if env::args().nth(1).as_deref() == Some("--notification-readiness") {
