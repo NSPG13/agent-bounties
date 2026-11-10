@@ -150,8 +150,10 @@ def verify_pin(name, obj, mode, directory=None):
 def verify_build(obj, metadata, iid, mode, base, owner):
     platform(obj)
     config_digest = metadata.get('containerimage.config.digest')
-    require(valid_digest(config_digest) and iid == config_digest, 'build iid/config digest mismatch')
+    iid_kind = 'config'
+    config_source = 'exporter metadata'
     if mode == 'classic':
+        require(valid_digest(config_digest) and iid == config_digest, 'build iid/config digest mismatch')
         # Moby's classic default-driver exporter returns the config ID in both
         # digest fields, and no manifest descriptor. Do not invent a manifest.
         require('containerimage.descriptor' not in metadata, 'unexpected classic build descriptor')
@@ -163,12 +165,26 @@ def verify_build(obj, metadata, iid, mode, base, owner):
         require(valid_digest(metadata.get('containerimage.digest'))
                 and expected.get('digest') == metadata['containerimage.digest'], 'build manifest digest mismatch')
         require(isinstance(expected.get('size'), int) and expected['size'] > 0, 'invalid build manifest size')
-        # BuildKit 0.29 moves config.digest into the top-level result and removes
-        # this descriptor annotation. Older exporters retain it; neither may disagree.
-        for desc in (expected, obj.get('Descriptor') or {}):
-            annotation = (desc.get('annotations') or {}).get('config.digest')
-            require(annotation is None or annotation == config_digest, 'build descriptor/config digest mismatch')
-        descriptor(expected, expected)
+        # Bind the actual loaded manifest and every reported platform first.
+        descriptor(obj.get('Descriptor'), expected)
+        require(obj.get('Id') == expected['digest'], 'containerd local ID must equal manifest digest')
+        for desc in (expected, obj['Descriptor']):
+            if 'platform' in desc:
+                require(desc['platform'] == {'os': 'linux', 'architecture': 'amd64'},
+                        'build descriptor platform mismatch')
+        if 'containerimage.config.digest' in metadata:
+            require(valid_digest(config_digest) and iid == config_digest, 'build iid/config digest mismatch')
+        else:
+            # Buildx 0.38.1 removes the config field when prefer-image-digest
+            # applies to --load. getImageID then writes the manifest to iid.
+            require(iid == expected['digest'], 'build manifest iid mismatch')
+            config_digest = (obj['Descriptor'].get('annotations') or {}).get('config.digest')
+            require(valid_digest(config_digest), 'missing or invalid loaded config digest annotation')
+            iid_kind, config_source = 'manifest', 'loaded descriptor annotation'
+        for desc in (expected, obj['Descriptor']):
+            annotations = desc.get('annotations') or {}
+            if 'config.digest' in annotations:
+                require(annotations['config.digest'] == config_digest, 'build descriptor/config digest mismatch')
     ident = local_id(obj, mode, expected, config_digest)
     layers = rootfs(obj)
     require(len(layers) > len(base['rootfs']) and layers[:len(base['rootfs'])] == base['rootfs'],
@@ -182,6 +198,7 @@ def verify_build(obj, metadata, iid, mode, base, owner):
     return {'id': ident, 'store': mode, 'manifest': expected, 'config_digest': config_digest,
             'rootfs': layers, 'basis': 'Buildx exporter metadata and Docker inspect',
             'built_manifest_attested': mode == 'containerd',
+            'iid_kind': iid_kind, 'config_digest_source': config_source,
             'raw_built_config_independently_extracted': False}
 
 

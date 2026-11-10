@@ -57,7 +57,88 @@ def change(obj, path, value):
     obj[path[-1]] = value
 
 
+def actual_build():
+    folder = HERE / 'fixtures/buildx-0.38.1-standby'
+    hashes = {
+        'image-inspect.json': 'c0b4956e2e312652195003998590493c0c1969ee98449a06ee0abf336e29e3c3',
+        'standby-metadata.json': '66306161ba676db23ffd207d9889b58431e3001483b46ba05779e72e28296c93',
+        'standby.iid': '5c20be1d9e1282dba5387d5da32393b88ac4413c61dfd7d6d68e28f848e77de6',
+    }
+    for name, expected in hashes.items():
+        identity.require(identity.sha((folder / name).read_bytes()) == 'sha256:' + expected,
+                         'captured fixture bytes changed: ' + name)
+    obj = json.loads((folder / 'image-inspect.json').read_text())[0]
+    metadata = json.loads((folder / 'standby-metadata.json').read_text())
+    iid = (folder / 'standby.iid').read_text().strip()
+    base = identity.verify_pin('debian', base_object('debian', 'containerd'), 'containerd')
+    return obj, metadata, iid, base, '79aa8fe4f6809118a7711cc82c9f35f299ab8f292e6395ef'
+
+
 class Controls(unittest.TestCase):
+    def test_actual_omitted_config_uses_bound_manifest(self):
+        obj, metadata, iid, base, owner = actual_build()
+        self.assertNotIn('containerimage.config.digest', metadata)
+        result = identity.verify_build(obj, metadata, iid, 'containerd', base, owner)
+        config = 'sha256:06a84bd97e85370a3b5d3aeddb16ca8dedd434d506e4bc1fbfcd7a3e5aa856e9'
+        self.assertEqual(result['id'], iid)
+        self.assertEqual(result['config_digest'], config)
+        self.assertEqual(result['iid_kind'], 'manifest')
+        self.assertEqual(result['config_digest_source'], 'loaded descriptor annotation')
+        self.assertFalse(result['raw_built_config_independently_extracted'])
+        # Same bound image under the older config-present exporter representation.
+        metadata['containerimage.config.digest'] = config
+        result = identity.verify_build(obj, metadata, config, 'containerd', base, owner)
+        self.assertEqual(result['iid_kind'], 'config')
+        self.assertEqual(result['config_digest_source'], 'exporter metadata')
+
+    def test_present_invalid_config_is_never_omission(self):
+        for invalid in (None, '', 'not-a-digest', 7):
+            with self.subTest(invalid=invalid):
+                obj, metadata, iid, base, owner = actual_build()
+                metadata['containerimage.config.digest'] = invalid
+                with self.assertRaisesRegex(ValueError, 'iid/config'):
+                    identity.verify_build(obj, metadata, iid, 'containerd', base, owner)
+        obj, metadata, iid, base, owner = actual_build()
+        metadata['containerimage.config.digest'] = obj['Descriptor']['annotations']['config.digest']
+        with self.assertRaisesRegex(ValueError, 'iid/config'):
+            identity.verify_build(obj, metadata, iid, 'containerd', base, owner)
+        obj, metadata, base = built_object('classic')
+        del metadata['containerimage.config.digest']
+        with self.assertRaisesRegex(ValueError, 'iid/config'):
+            identity.verify_build(obj, metadata, CONFIG, 'classic', base, OWNER)
+
+    def test_actual_omission_rejects_mismatched_bindings(self):
+        controls = [
+            ('obj', ['Id'], ZERO, 'containerd local ID'),
+            ('metadata', ['containerimage.digest'], ZERO, 'manifest digest'),
+            ('metadata', ['containerimage.descriptor', 'digest'], ZERO, 'manifest digest'),
+            ('metadata', ['containerimage.descriptor', 'size'], 1, 'descriptor size'),
+            ('metadata', ['containerimage.descriptor', 'mediaType'], 'application/vnd.oci.image.manifest.v1+json', 'descriptor mediaType'),
+            ('metadata', ['containerimage.descriptor', 'platform'], {'os': 'linux', 'architecture': 'arm64'}, 'descriptor platform'),
+            ('obj', ['Descriptor', 'platform'], {'os': 'windows', 'architecture': 'amd64'}, 'descriptor platform'),
+            ('obj', ['Architecture'], 'arm64', 'image platform'),
+            ('obj', ['RootFS', 'Layers', 0], ZERO, 'base layers'),
+            ('obj', ['Descriptor', 'annotations'], {}, 'loaded config digest annotation'),
+            ('obj', ['Descriptor', 'annotations', 'config.digest'], None, 'loaded config digest annotation'),
+            ('obj', ['Descriptor', 'annotations', 'config.digest'], '', 'loaded config digest annotation'),
+            ('obj', ['Descriptor', 'annotations', 'config.digest'], 'not-a-digest', 'loaded config digest annotation'),
+        ]
+        for target, path, value, reason in controls:
+            with self.subTest(target=target, path=path, value=value):
+                obj, metadata, iid, base, owner = actual_build()
+                change(obj if target == 'obj' else metadata, path, value)
+                with self.assertRaisesRegex(ValueError, reason):
+                    identity.verify_build(obj, metadata, iid, 'containerd', base, owner)
+        for conflicting in (ZERO, None, '', 'not-a-digest'):
+            obj, metadata, iid, base, owner = actual_build()
+            metadata['containerimage.descriptor']['annotations'] = {'config.digest': conflicting}
+            with self.subTest(annotation=conflicting), self.assertRaisesRegex(ValueError, 'descriptor/config'):
+                identity.verify_build(obj, metadata, iid, 'containerd', base, owner)
+        obj, metadata, iid, base, owner = actual_build()
+        for incorrect_iid in (ZERO, obj['Descriptor']['annotations']['config.digest']):
+            with self.subTest(iid=incorrect_iid), self.assertRaisesRegex(ValueError, 'manifest iid'):
+                identity.verify_build(obj, metadata, incorrect_iid, 'containerd', base, owner)
+
     def test_store_selection(self):
         common = {'OSType': 'linux', 'Architecture': 'x86_64'}
         self.assertEqual(identity.store_mode(dict(common, Driver='overlay2', DriverStatus=[])), 'classic')

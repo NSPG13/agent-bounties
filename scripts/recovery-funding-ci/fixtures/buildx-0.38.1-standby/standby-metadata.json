@@ -1,0 +1,77 @@
+{
+  "buildx.build.provenance": {
+    "builder": {
+      "id": ""
+    },
+    "buildType": "https://mobyproject.org/buildkit@v1",
+    "materials": [
+      {
+        "uri": "pkg:docker/docker/dockerfile?digest=sha256:7b32114e84ca21aeb2d6f871a0b62b3a0762193f75d9afd048ee4cbe889f3148\u0026platform=linux%2Famd64",
+        "digest": {
+          "sha256": "7b32114e84ca21aeb2d6f871a0b62b3a0762193f75d9afd048ee4cbe889f3148"
+        }
+      },
+      {
+        "uri": "pkg:docker/docker/dockerfile?digest=sha256:7b32114e84ca21aeb2d6f871a0b62b3a0762193f75d9afd048ee4cbe889f3148",
+        "digest": {
+          "sha256": "7b32114e84ca21aeb2d6f871a0b62b3a0762193f75d9afd048ee4cbe889f3148"
+        }
+      },
+      {
+        "uri": "pkg:docker/debian?digest=sha256:c67e92c8099ba22853ab4cfda7cfb494d253d6012ca82dee98ba8976772af018\u0026platform=linux%2Famd64",
+        "digest": {
+          "sha256": "c67e92c8099ba22853ab4cfda7cfb494d253d6012ca82dee98ba8976772af018"
+        }
+      },
+      {
+        "uri": "pkg:docker/rust?digest=sha256:4ec71e955e6c08aeb238885083222ddff79d82eb87654a96c76e38e94da1a53b\u0026platform=linux%2Famd64",
+        "digest": {
+          "sha256": "4ec71e955e6c08aeb238885083222ddff79d82eb87654a96c76e38e94da1a53b"
+        }
+      }
+    ],
+    "invocation": {
+      "configSource": {
+        "entryPoint": "Dockerfile.recovery-indexers"
+      },
+      "parameters": {
+        "frontend": "gateway.v0",
+        "args": {
+          "build-arg:BUILDKIT_SYNTAX": "docker.io/docker/dockerfile@sha256:7b32114e84ca21aeb2d6f871a0b62b3a0762193f75d9afd048ee4cbe889f3148",
+          "build-arg:RECOVERY_READER_ARTIFACT_CAPABILITY": "standby",
+          "build-arg:RENDER_GIT_COMMIT": "1111111111111111111111111111111111111111",
+          "build-arg:RENDER_SERVICE_ID": "srv-aaaaaaaaaaaaaaaaaaaa",
+          "cmdline": "docker.io/docker/dockerfile@sha256:7b32114e84ca21aeb2d6f871a0b62b3a0762193f75d9afd048ee4cbe889f3148",
+          "context:debian:bookworm-slim": "docker-image://docker.io/library/debian@sha256:c67e92c8099ba22853ab4cfda7cfb494d253d6012ca82dee98ba8976772af018",
+          "context:rust:1.94-bookworm": "docker-image://docker.io/library/rust@sha256:4ec71e955e6c08aeb238885083222ddff79d82eb87654a96c76e38e94da1a53b",
+          "frontend.caps": "moby.buildkit.frontend.contexts+forward",
+          "label:ab.recovery.owner": "79aa8fe4f6809118a7711cc82c9f35f299ab8f292e6395ef",
+          "source": "docker.io/docker/dockerfile@sha256:7b32114e84ca21aeb2d6f871a0b62b3a0762193f75d9afd048ee4cbe889f3148"
+        },
+        "locals": [
+          {
+            "name": "context"
+          },
+          {
+            "name": "dockerfile"
+          }
+        ]
+      },
+      "environment": {
+        "platform": "linux/amd64"
+      }
+    }
+  },
+  "buildx.build.ref": "default/default/he9mc1l5k4hcrc9g8d2s4eneu",
+  "containerimage.descriptor": {
+    "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+    "digest": "sha256:3ec6662d6275e36b5bf85dd3d13ebcf7e2f4a66d904aa41aed8aaf25d0e72c76",
+    "size": 1290,
+    "platform": {
+      "architecture": "amd64",
+      "os": "linux"
+    }
+  },
+  "containerimage.digest": "sha256:3ec6662d6275e36b5bf85dd3d13ebcf7e2f4a66d904aa41aed8aaf25d0e72c76",
+  "image.name": "docker.io/library/ab-funding-ci-79aa8fe4f6809118a7711cc82c9f35f299ab8f292e6395ef:standby"
+}
