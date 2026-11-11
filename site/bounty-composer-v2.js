@@ -135,6 +135,7 @@
     fund: document.querySelector("[data-open-funding]"),
     card: document.querySelector("[data-pay-card]"),
     cardNote: document.querySelector("[data-card-payment-note]"),
+    cardStatus: document.querySelector("[data-card-payment-status]"),
     dialog: document.getElementById("funding-dialog"),
     closeDialog: document.querySelector("[data-close-funding]"),
     cryptoMethod: document.querySelector("[data-payment-method='crypto']"),
@@ -1708,8 +1709,20 @@
     ui.card.disabled = !eligible || state.reviewStale || !state.imageReady;
   }
 
+  // The form's status line is off-screen while the card is in view, so card payment reports beside its button.
+  function setCardStatus(message, tone) {
+    setStatus(message, tone);
+    if (!ui.cardStatus) return;
+    ui.cardStatus.textContent = message;
+    ui.cardStatus.dataset.tone = tone;
+    ui.cardStatus.hidden = !message;
+    if (message) ui.cardStatus.scrollIntoView?.({ behavior: "smooth", block: "center" });
+  }
+
   async function payByCard() {
-    if (ui.card?.dataset.cardPaymentEnabled !== "true" || !cardEligible() || state.reviewStale || !state.imageReady) return;
+    if (ui.card?.dataset.cardPaymentEnabled !== "true" || !cardEligible()) { setCardStatus("Card payment isn't available for this bounty. Nothing was charged.", "error"); return; }
+    if (state.reviewStale) { setCardStatus("Your brief changed. Choose Review draft to update the card, then pay.", "pending"); return; }
+    if (!state.imageReady) { setCardStatus("The bounty card is still loading. Try again in a moment.", "pending"); return; }
     if (state.postingAccountStatus !== "ready") { beginPostingLogin(); return; }
     const document = {
       title: state.draft.title,
@@ -1721,7 +1734,7 @@
     if (state.sourceUrl) document.source_url = state.sourceUrl;
     if (state.bountyImage) document.image = canonicalJsonValue(state.bountyImage);
     ui.card.disabled = true;
-    setStatus("Preparing your card price…", "pending");
+    setCardStatus("Preparing your card price…", "pending");
     try {
       const response = await fetch(`${API}/v1/managed-service/bounty-quotes`, {
         method: "POST", credentials: "include", cache: "no-store", redirect: "error",
@@ -1729,17 +1742,18 @@
         body: JSON.stringify({ document, solver_reward_micro_usdc: Number(currentRewardSplit().solver) }),
       });
       if (!response.ok) {
-        throw new Error(response.status === 401 ? "Sign in again to pay by card. Your draft is saved."
-          : response.status === 422 ? "This bounty is above the current card payment limit. Lower the reward or fund with a wallet."
-          : response.status === 503 ? "Card payment isn't available right now. You can still fund with a wallet."
-          : "This proposal can't be paid by card. The deadline must be at least a day after the quote and within 30 days, with public artifact evidence.");
+        const reason = response.status === 401 ? "Sign in again to pay by card. Your draft is saved."
+          : response.status === 422 ? "This bounty is above the current card payment limit. Lower the reward and try again."
+          : response.status === 503 ? "Card payment isn't available right now. Nothing was charged and your draft is saved."
+          : "This proposal can't be paid by card. The deadline must be at least a day after the quote and within 30 days, with public artifact evidence.";
+        throw new Error(`${reason} (code ${response.status})`);
       }
       const id = (await response.json())?.quote?.input?.quote_id;
       if (!window.AgentBountiesWorkflow.UUID.test(id || "")) throw new Error("The card price could not be confirmed. Nothing was charged.");
-      setStatus("Opening your itemized card price. Nothing is charged until you accept it and pay on Stripe.", "success");
+      setCardStatus("Opening your itemized card price. Nothing is charged until you accept it and pay on Stripe.", "success");
       window.location.assign(`account.html?managed_quote=${id}`);
     } catch (error) {
-      setStatus(error.message || String(error), "error");
+      setCardStatus(error.message || String(error), "error");
       syncCardPayment();
     }
   }
@@ -2539,7 +2553,7 @@
   ui.revise.addEventListener("click",reviseCard);
   ui.share.addEventListener("click",shareBountyCard);
   ui.fund.addEventListener("click",openFunding);
-  ui.card?.addEventListener("click", () => payByCard().catch((error) => setStatus(error.message, "error")));
+  ui.card?.addEventListener("click", () => payByCard().catch((error) => setCardStatus(error.message, "error")));
   ui.closeDialog.addEventListener("click",()=>ui.dialog.close());
   ui.cryptoMethod.addEventListener("click",chooseCryptoWallet);
   document.querySelector("[data-change-funding-wallet]")?.addEventListener("click", () => {
