@@ -1,0 +1,29 @@
+{
+  "name": "Regression Verifier Settlement Watchdog",
+  "on": {
+    "schedule": [
+      {
+        "cron": "*/10 * * * *"
+      }
+    ]
+  },
+  "permissions": {
+    "contents": "read",
+    "actions": "write"
+  },
+  "jobs": {
+    "watchdog": {
+      "runs-on": "ubuntu-latest",
+      "steps": [
+        {
+          "name": "Checkout protected main",
+          "uses": "actions/checkout@v4"
+        },
+        {
+          "name": "Plan and execute bounded verifier retries",
+          "run": "python3 scripts/regression_verifier_watchdog.py --jobs-file target/live-jobs.json --main-sha deadbeef --plan-out target/watchdog-plan.json --execute"
+        }
+      ]
+    }
+  }
+}
