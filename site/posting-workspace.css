@@ -77,6 +77,9 @@ html:has(.posting-page)::-webkit-scrollbar-thumb, .posting-page dialog::-webkit-
 .posting-workspace .bounty-card-actions:has([data-approve-card][data-approved="false"]) [data-open-funding],
 .posting-workspace .bounty-card-actions [data-approve-card][data-approved="true"] { display: none; }
 .posting-workspace .bounty-card-actions [data-approve-card] { color: #152006; border-color: #8ee46b; background: #8ee46b; }
+.posting-workspace .card-payment-status { margin: 16px 0 0; padding: 12px 14px; border: 1px solid #405044; border-radius: 12px; font-size: 15px; line-height: 1.5; }
+.posting-workspace .card-payment-status[data-tone="error"] { border-color: #e0805a; color: #ffd9c9; }
+.posting-workspace .card-payment-status[data-tone="success"] { border-color: #8ee46b; }
 .posting-workspace .card-payment-note { margin: 20px 0 0; padding: 12px 14px; border: 1px solid #354238; border-radius: 12px; font-size: 14px; line-height: 1.5; }
 .posting-workspace .ai-handoff { background: none; box-shadow: none; padding: 16px 0; border: 0; }
 .posting-workspace .ai-handoff h2 { font-size: 22px; }

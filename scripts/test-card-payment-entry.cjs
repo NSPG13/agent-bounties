@@ -14,7 +14,7 @@ function controller(response, released = 'true') {
   const button = () => ({ hidden: true, disabled: true, dataset: { cardPaymentEnabled: released } });
   const context = {
     API: 'https://api.agentizable.ai',
-    ui: { card: button(), cardNote: button() },
+    ui: { card: button(), cardNote: button(), cardStatus: button() },
     state: {
       draft: { title: 'T', goal: 'G', acceptance_criteria: ['C'], evidence_schema: { type: 'object' } },
       reviewStale: false, imageReady: true, postingAccountStatus: 'ready',
@@ -82,6 +82,22 @@ for (const [status, text] of [
     assert.deepEqual(context.statuses.at(-1)[0], 'error');
     assert.match(context.statuses.at(-1)[1], text);
     assert.equal(context.ui.card.disabled, false);
+    assert.equal(context.ui.cardStatus.hidden, false, 'the refusal shows beside the card button');
+    assert.match(context.ui.cardStatus.textContent, new RegExp(`code ${status}`));
+  });
+}
+
+for (const [setup, text] of [
+  [state => { state.imageReady = false; }, /still loading/],
+  [state => { state.reviewStale = true; }, /Choose Review draft/],
+]) {
+  test(`a card that is not ready says why instead of doing nothing (${text})`, async () => {
+    const { payByCard, context } = controller({ ok: true, json: async () => ({}) });
+    setup(context.state);
+    await payByCard();
+    assert.equal(context.requests.length, 0);
+    assert.equal(context.ui.cardStatus.hidden, false);
+    assert.match(context.ui.cardStatus.textContent, text);
   });
 }
 
