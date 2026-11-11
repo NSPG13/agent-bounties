@@ -1505,6 +1505,15 @@ ${competitionChildBrief(item)}`;
       };
       sessionRetry.addEventListener("click", () => recoverSession());
 
+      // The header link opens the same dialog in sign-in mode and gets focus back on close.
+      const headerLogin = doc.querySelector("[data-site-header] [data-account-link]");
+      let returnFocus = null;
+      headerLogin?.addEventListener("click", (event) => {
+        event.preventDefault();
+        returnFocus = headerLogin;
+        if (!currentUser) win.history?.replaceState?.(null, "", `${win.location.pathname}${win.location.search}#login`);
+        openButton.click();
+      });
       openButton.addEventListener("click", (event) => {
         event.preventDefault();
         if (currentUser && new URLSearchParams(win.location.search).get("postReturn") !== "1") {
@@ -1523,7 +1532,8 @@ ${competitionChildBrief(item)}`;
       closeButton?.addEventListener("click", closeDialog);
       dialog.addEventListener("close", () => {
         openButton.setAttribute("aria-expanded", "false");
-        openButton.focus();
+        (returnFocus || openButton).focus();
+        returnFocus = null;
         if (["#login", "#account"].includes(win.location.hash)) win.history?.replaceState?.(null, "", `${win.location.pathname}${win.location.search}`);
       });
       dialog.addEventListener("click", (event) => {

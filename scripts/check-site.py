@@ -749,7 +749,7 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
             "data-card-verifier",
             "function renderVerifierTerms",
             "if (!ui.verifierSummary || !ui.verifier) return;",
-            'bounty-composer-v2.js?v=36',
+            'bounty-composer-v2.js?v=37',
             "function verificationReadiness",
             "verificationReadiness(benchmark, state.draft?.evidence_schema)",
             'sourceSnapshotDigest.pattern === "^sha256:[0-9a-f]{64}$"',
@@ -786,8 +786,8 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
         [
             'data-post-auth-start',
             'posting-auth.js?v=3',
-            'solarpunk-home.js?v=37',
-            'bounty-composer-v2.js?v=36',
+            'solarpunk-home.js?v=38',
+            'bounty-composer-v2.js?v=37',
             'label: "LOG IN TO POST"',
             'credentials: "include"',
             'account_status === "ready" && payload.account_complete === true',
@@ -966,8 +966,8 @@ def check_homepage(site_dir: Path) -> None:
     if 'type="password"' in page or 'data-auth-unavailable' in page or 'Or start with your AI' in page:
         fail("homepage must not restore custom sign-up or competing posting controls")
     header_markup = page[header_start:header_end]
-    if 'How it works' not in header_markup or 'Browse work' not in header_markup or 'ab-site-menu' in header_markup or 'ab-site-login' in header_markup:
-        fail("shared header must keep only How it works and Browse work")
+    if 'Log in' not in header_markup or 'Browse work' not in header_markup or 'How it works' in header_markup or 'ab-site-menu' in header_markup or 'ab-site-login' in header_markup or 'data-auth-open' in header_markup:
+        fail("shared header must keep only Log in, Workspace and Browse work; the footer link owns the account dialog")
     if "town hall" in page.lower():
         fail("homepage must not use the retired town-hall language")
     for removed in ("how-it-works.html",):

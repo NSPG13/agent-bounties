@@ -111,7 +111,7 @@ async function main() {
           const url = new URL(el.href);
           return { text: el.textContent.trim(), href: url.pathname + url.search + url.hash };
         }));
-        assert.deepEqual(links, [{ text: "How it works", href: "/#how-it-works" }, { text: "Workspace", href: "/workspace" }, { text: "Browse work", href: "/earn.html" }], file);
+        assert.deepEqual(links, [{ text: "Log in", href: file === "post.html" ? "/?postReturn=1#login" : "/#login" }, { text: "Workspace", href: "/workspace" }, { text: "Browse work", href: "/earn.html" }], file);
         const appearance = await page.locator("[data-site-header]").evaluate(el => {
           const css = getComputedStyle(el), brand = getComputedStyle(el.querySelector("strong"));
           return { height: el.getBoundingClientRect().height, background: css.backgroundImage, padding: css.padding, brand: brand.font, color: brand.color };

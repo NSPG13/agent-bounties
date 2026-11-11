@@ -11,9 +11,11 @@ class Element extends EventTarget {
   setAttribute(key, value) { this.attributes[key] = value; }
 }
 function harness({ homepage = false, payload = { authenticated: false }, href = "./?postReturn=1#login" } = {}) {
-  const win = new EventTarget(), doc = new EventTarget(), header = new Element(), toggle = new Element(), nav = new Element(), link = new Element();
+  const win = new EventTarget(), doc = new EventTarget(), header = new Element(), toggle = new Element(), nav = new Element(), link = new Element(), headerLink = new Element();
   link.setAttribute("href", href);
   link.textContent = "Create an account";
+  headerLink.setAttribute("href", "./#login");
+  headerLink.textContent = "Log in";
   let calls = 0, failure = false;
   Object.assign(win, {
     location: new URL("https://agentizable.ai/post.html"), setTimeout, clearTimeout,
@@ -22,8 +24,9 @@ function harness({ homepage = false, payload = { authenticated: false }, href = 
   });
   header.querySelector = selector => ({ ".ab-site-menu": toggle, ".ab-site-nav": nav, ".ab-site-login": link })[selector];
   doc.querySelector = selector => selector === ".ab-site-login" ? link : selector === "[data-site-header]" ? header : selector === "[data-auth-dialog]" && homepage ? {} : null;
+  doc.querySelectorAll = selector => selector === "[data-account-link]" ? [headerLink, link] : [];
   vm.runInNewContext(source, { window: win, document: doc, URL, AbortController });
-  return { win, link, calls: () => calls, fail: () => { failure = true; }, emit: payload => win.dispatchEvent(new CustomEvent("agentbounties:account-session", { detail: payload })) };
+  return { win, link, headerLink, calls: () => calls, fail: () => { failure = true; }, emit: payload => win.dispatchEvent(new CustomEvent("agentbounties:account-session", { detail: payload })) };
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
@@ -33,6 +36,8 @@ test("interior Account link uses server session and strips posting return redire
   assert.equal(h.link.textContent, "Account");
   assert.equal(h.link.href, "https://agentizable.ai/#account");
   assert.equal(h.link.dataset.authenticated, "true");
+  assert.equal(h.headerLink.textContent, "Account");
+  assert.equal(h.headerLink.href, "https://agentizable.ai/#account");
   h.fail();
   h.win.dispatchEvent(new Event("focus"));
   await tick();
@@ -40,6 +45,8 @@ test("interior Account link uses server session and strips posting return redire
   h.emit({ authenticated: false, user: null });
   assert.equal(h.link.textContent, "Create an account");
   assert.equal(h.link.getAttribute("href"), "./?postReturn=1#login");
+  assert.equal(h.headerLink.textContent, "Log in", "each link returns to its own signed-out label");
+  assert.equal(h.headerLink.getAttribute("href"), "./#login");
 });
 
 test("homepage shares its existing session and never introduces duplicate auth requests", async () => {
@@ -48,6 +55,7 @@ test("homepage shares its existing session and never introduces duplicate auth r
   assert.equal(h.calls(), 0);
   h.emit({ authenticated: true, user: { id: "fixture", name: "Member" } });
   assert.equal(h.link.textContent, "Account");
+  assert.equal(h.headerLink.textContent, "Account");
   h.emit({ authenticated: true, user: { email: "unverified@example.invalid" } });
   assert.equal(h.link.textContent, "Create an account", "email alone is never a session identity");
 });

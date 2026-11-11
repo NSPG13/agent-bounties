@@ -80,7 +80,7 @@
   }
 
   function postingPrimaryAction(accountStatus, handoffReview = false) {
-    if (accountStatus === "ready") return { action: "approve", disabled: false, label: handoffReview ? "Confirm bounty" : "Approve bounty card" };
+    if (accountStatus === "ready") return { action: "approve", disabled: false, label: "Pay with USDC" };
     if (accountStatus === "restoring") return { action: "wait", disabled: true, label: "Restoring saved draft…" };
     if (accountStatus === "checking") return { action: "wait", disabled: true, label: "Checking login…" };
     if (accountStatus === "unavailable") return { action: "login", disabled: false, label: "CHECK ACCOUNT TO POST" };
@@ -1046,7 +1046,7 @@
     state.approved = false;
     ui.fund.disabled = true;
     ui.approve.dataset.approved = "false";
-    ui.approve.textContent = "Approve bounty card";
+    ui.approve.textContent = "Pay with USDC";
     renderCardText();
     renderMissionPlan();
     await renderAiVisualForCurrentDraft();
@@ -1681,10 +1681,10 @@
     postingSession.invalidate();
     state.approved = false;
     ui.approve.dataset.approved = "false";
-    ui.approve.textContent = "Approve bounty card";
+    ui.approve.textContent = "Pay with USDC";
     ui.fund.disabled = true;
     const savedGoal = ui.input.value;
-    setComposer({ phase:"revise", prompt:"Edit your brief, then prepare the updated proposal.", label:"What do you want delivered?", placeholder:"Describe the result you need.", button:"Prepare for review →", hint:"Review the updated terms before approving." });
+    setComposer({ phase:"revise", prompt:"Edit your brief, then prepare the updated proposal.", label:"What do you want delivered?", placeholder:"Describe the result you need.", button:"Review draft", hint:"Review the updated terms before approving." });
     ui.input.value = savedGoal || state.draft?.goal || state.originalRequest;
     ui.form.scrollIntoView({behavior:"smooth",block:"start"});
     ui.input.focus({ preventScroll: true });

@@ -21,7 +21,7 @@
     const manual = mode.value === "manual";
     manualFields.hidden = !manual;
     manualFields.disabled = !manual;
-    form.querySelector("[data-composer-submit]").textContent = manual ? "Prepare for review →" : "Continue with my AI →";
+    form.querySelector("[data-composer-submit]").textContent = manual ? "Review draft" : "Continue with my AI →";
   }
   const saved = client.load();
   mode.value = protectedHandoff ? "ai" : params.get("mode") === "manual" ? "manual" : saved?.brief?.preparation_mode || (saved?.draft ? "ai" : "manual");
