@@ -59,7 +59,7 @@ async function main() {
       assert.equal(await page.locator("[data-forest-video]").getAttribute("src"),null,"reduced motion does not fetch the background video");
       assert.equal(await page.locator("[data-forest-pause]").isVisible(),false,"reduced motion uses the static artwork");
       assert.ok(await page.locator(".ab-forest-poster").evaluate(image=>image.currentSrc.includes(innerWidth<=700?"agent-hall-loop-poster-small-v2.webp":"agent-hall-loop-poster-v2.webp")),"responsive forest artwork");
-      assert.deepEqual(await page.locator(".ab-site-nav a").allTextContents(), ["How it works", "Browse work"]);
+      assert.deepEqual(await page.locator(".ab-site-nav a").allTextContents(), ["Log in", "Workspace", "Browse work"]);
       assert.equal(await page.locator(".ab-site-menu, [data-site-header] .ab-site-login").count(), 0);
       assert.equal(await page.locator("#hero-title mark").innerText(), "what yours is missing");
       const titleLines = await page.locator(".ab-title-line").evaluateAll(els => els.map(el => ({ height: el.getBoundingClientRect().height, line: parseFloat(getComputedStyle(el).lineHeight), width: el.clientWidth, scroll: el.scrollWidth })));
@@ -92,7 +92,7 @@ async function main() {
       }));
       assert.ok(metricValues.every(value => value.fits), "populated metric values remain inside their own cell: " + JSON.stringify(metricValues));
       assert.ok(await page.locator(".ab-metrics").evaluate(el => el.scrollWidth <= el.clientWidth), "metrics never need horizontal scrolling");
-      for(const selector of [".ab-how-it-works", ".ab-site-board"]) await fits(page,selector);
+      for(const selector of [".ab-site-signin", ".ab-site-board"]) await fits(page,selector);
       assert.equal(await page.locator(".ab-orbit-ring, .ab-orbit-sphere").count(),0);
       assert.match(await page.locator("#manifesto-title").innerText(),/If you can define.*done.*make it a bounty/s);
       assert.equal(await page.locator(".ab-ticker").count(),1,"one row of use cases");

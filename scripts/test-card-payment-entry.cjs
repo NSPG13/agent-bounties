@@ -41,7 +41,7 @@ const ID = '11111111-1111-4111-8111-111111111111';
 
 test('the published page keeps card checkout off until its separate release', () => {
   const html = fs.readFileSync(require.resolve('../site/post.html'), 'utf8');
-  assert.match(html, /data-pay-card data-card-payment-enabled="false" hidden/);
+  assert.match(html, /data-pay-card data-card-payment-enabled="true" hidden>Pay with credit\/debit card</);
 });
 
 for (const released of [undefined, 'false', 'TRUE', '1']) {

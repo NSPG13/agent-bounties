@@ -5,25 +5,27 @@
   const nav = header.querySelector(".ab-site-nav");
   if (!nav) return;
   header.classList.add("is-enhanced");
-  const accountLink = document.querySelector(".ab-site-login");
-  const signedOutHref = accountLink?.getAttribute("href");
+  // The header "Log in" and footer "Create an account" links both become "Account".
+  const accountLinks = Array.from(document.querySelectorAll("[data-account-link]"), link => ({ link, href: link.getAttribute("href"), label: link.textContent }));
   const renderAccount = (session) => {
-    if (!accountLink || typeof session?.authenticated !== "boolean") return;
+    if (typeof session?.authenticated !== "boolean") return;
     const authenticated = session.authenticated && Boolean(session.user?.id);
-    accountLink.dataset.authenticated = String(authenticated);
-    accountLink.textContent = authenticated ? "Account" : "Create an account";
-    accountLink.title = authenticated && session.user.name ? `Account: ${String(session.user.name).slice(0, 100)}` : authenticated ? "Your account" : "Create an account";
-    if (authenticated) {
-      const destination = new URL(signedOutHref, window.location.href);
-      destination.searchParams.delete("postReturn");
-      destination.hash = "account";
-      accountLink.href = destination.href;
-    } else accountLink.setAttribute("href", signedOutHref);
+    for (const { link, href, label } of accountLinks) {
+      link.dataset.authenticated = String(authenticated);
+      link.textContent = authenticated ? "Account" : label;
+      link.title = authenticated && session.user.name ? `Account: ${String(session.user.name).slice(0, 100)}` : authenticated ? "Your account" : label;
+      if (authenticated) {
+        const destination = new URL(href, window.location.href);
+        destination.searchParams.delete("postReturn");
+        destination.hash = "account";
+        link.href = destination.href;
+      } else link.setAttribute("href", href);
+    }
   };
   window.addEventListener("agentbounties:account-session", event => renderAccount(event.detail));
   // The homepage owns its session. Interior pages read the same authenticated
   // endpoint; no email, wallet address, or cached display value proves login.
-  if (!document.querySelector("[data-auth-dialog]") && accountLink) {
+  if (!document.querySelector("[data-auth-dialog]") && accountLinks.length) {
     let checking = false;
     const refreshAccount = async () => {
       if (checking) return;

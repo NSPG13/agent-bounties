@@ -93,7 +93,7 @@ test("posting action is driven by server account state", () => {
   assert.deepEqual(composer.postingPrimaryAction("signed_out", true), { action: "login", disabled: false, label: "LOG IN TO POST" });
   assert.deepEqual(composer.postingPrimaryAction("checking", true), { action: "wait", disabled: true, label: "Checking login…" });
   assert.deepEqual(composer.postingPrimaryAction("unavailable", true), { action: "login", disabled: false, label: "CHECK ACCOUNT TO POST" });
-  assert.deepEqual(composer.postingPrimaryAction("ready", true), { action: "approve", disabled: false, label: "Confirm bounty" });
+  assert.deepEqual(composer.postingPrimaryAction("ready", true), { action: "approve", disabled: false, label: "Pay with USDC" });
 });
 
 test("a signed-in poster without a wallet can approve and pay by card", () => {
@@ -162,7 +162,7 @@ test('restored stale proposal replaces Checking login with its real blocker', as
   assert.match(c.context.message, /brief changed/i);
   c.state.reviewStale = false;
   c.syncPrimaryAction();
-  assert.equal(c.ui.approve.textContent, 'Approve bounty card');
+  assert.equal(c.ui.approve.textContent, 'Pay with USDC');
   assert.equal(c.ui.approve.disabled, false);
   assert.equal(c.state.approved, false);
 });
@@ -203,14 +203,14 @@ for (const phase of ['headers', 'body']) test(`hung session ${phase} times out a
   assert.equal(c.ui.fund.disabled, true);
   assert.equal(c.timers.size, 0);
   recover = true; await c.loadPostingAccount();
-  assert.equal(c.ui.approve.textContent, 'Approve bounty card');
+  assert.equal(c.ui.approve.textContent, 'Pay with USDC');
   assert.equal(c.state.approved, false);
 });
 
 test('optional wallet discovery cannot hide a completed login or hang initialization', async () => {
   const c = postingController(async url => url.endsWith('/session') ? jsonResponse(readySession) : new Promise(() => {}));
   const pending = c.loadPostingAccount(); await drain();
-  assert.equal(c.ui.approve.textContent, 'Approve bounty card');
+  assert.equal(c.ui.approve.textContent, 'Pay with USDC');
   assert.equal(c.ui.approve.disabled, false);
   for (const timer of [...c.timers.values()]) timer();
   await pending;
@@ -240,7 +240,7 @@ test('a ready account cannot approve while its saved draft is still hydrating', 
   assert.equal(c.ui.approve.disabled, true);
   assert.equal(c.ui.fundNow.disabled, true);
   finish(); await pending;
-  assert.equal(c.ui.approve.textContent, 'Approve bounty card');
+  assert.equal(c.ui.approve.textContent, 'Pay with USDC');
   assert.equal(c.ui.approve.disabled, false);
   assert.equal(c.state.approved, false);
 });

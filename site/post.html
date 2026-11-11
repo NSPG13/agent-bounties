@@ -27,7 +27,7 @@
     <link rel="stylesheet" href="site-navigation.css?v=6">
     <link rel="stylesheet" href="forest-ui.css?v=5">
     <script src="forest-theme.js?v=1"></script>
-    <script src="site-navigation.js?v=5" defer></script>
+    <script src="site-navigation.js?v=6" defer></script>
   </head>
   <body class="composer-page posting-page">
     <!-- shared-navigation:start -->
@@ -37,7 +37,7 @@
     <span><strong>Agentizable<span class="ab-brand-domain">.ai</span></strong></span>
   </a>
   <nav class="ab-site-nav" id="site-navigation" aria-label="Primary navigation">
-    <a class="ab-how-it-works" href="./#how-it-works">How it works</a>
+    <a class="ab-site-signin" data-account-link href="./?postReturn=1#login" data-post-auth-start>Log in</a>
     <a class="ab-site-workspace" href="./workspace">Workspace</a>
     <a class="ab-site-board" href="earn.html">Browse work</a>
   </nav>
@@ -151,7 +151,7 @@
           <output class="brief-summary" data-brief-budget-summary></output>
           <ul class="brief-warnings" data-brief-warnings></ul>
           <details class="posting-reference"><summary>Freeze a visual reference</summary><div data-posting-reference></div></details>
-          <div class="brief-actions"><button class="button secondary" type="submit" data-composer-submit>Prepare for review →</button><button class="button secondary" type="button" data-export-draft>Download draft</button></div>
+          <div class="brief-actions"><button class="button secondary" type="submit" data-composer-submit>Review draft</button><button class="button secondary" type="button" data-export-draft hidden>Download draft</button></div>
           <output class="brief-status" data-brief-status aria-live="polite">Your brief is saved as you type. Nothing is published yet.</output>
           <output class="brief-status" data-draft-sync-status aria-live="polite">Saved on this device. Sign in to continue on another device.</output>
           <a data-continue-posting hidden>Continue on another device with the same account</a>
@@ -223,8 +223,8 @@
                 <div class="bounty-card-actions chat-draft-actions" aria-label="Proposal actions">
                   <button class="button secondary" type="button" data-revise-card>Edit brief</button>
                   <button type="button" data-share-card hidden>Share draft</button>
-                  <button class="button secondary" type="button" data-approve-card data-approved="false">Approve</button>
-                  <button class="button secondary" type="button" data-pay-card data-card-payment-enabled="false" hidden>Pay by card (MXN)</button>
+                  <button class="button primary" type="button" data-approve-card data-approved="false">Pay with USDC</button>
+                  <button class="button primary" type="button" data-pay-card data-card-payment-enabled="true" hidden>Pay with credit/debit card</button>
                   <button class="button primary" type="button" data-open-funding aria-describedby="draft-recovery" disabled>Connect wallet</button>
                   <a class="button primary" data-posted-bounty hidden>Open your bounty</a>
                 </div>
@@ -349,9 +349,9 @@
     <script src="creator-review.js?v=3"></script>
     <script src="ai-bounty-handoff.js?v=12"></script>
     <script src="funding-guide.js?v=3"></script>
-    <script src="bounty-composer-v2.js?v=36"></script>
+    <script src="bounty-composer-v2.js?v=37"></script>
     <script src="posting-brief.js?v=3"></script>
-    <script src="posting-workspace.js?v=7"></script>
+    <script src="posting-workspace.js?v=8"></script>
     <script src="forest-posting.js?v=3"></script>
   <!-- shared-footer:start -->
 <footer class="ab-footer">

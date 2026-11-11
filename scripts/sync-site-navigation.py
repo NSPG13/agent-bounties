@@ -34,7 +34,9 @@ def sync(check=False):
         else:
             login_href = "#login"
             login_attributes = ""
-        markup = markup.replace("{{login_href}}", login_href).replace("{{login_attributes}}", login_attributes)
+        # The header link leaves dialog ownership to the footer link on the homepage.
+        header_login_attributes = " data-post-auth-start" if relative.as_posix() == "post.html" else ""
+        markup = markup.replace("{{login_href}}", login_href).replace("{{login_attributes}}", login_attributes).replace("{{header_login_attributes}}", header_login_attributes)
         block = START + "\n" + markup + "\n" + END
         source = path.read_text(encoding="utf-8")
         if PATTERN.search(source):
@@ -50,7 +52,7 @@ def sync(check=False):
         assets = f'''    <link rel="stylesheet" href="{prefix}site-navigation.css?v=6">
     <link rel="stylesheet" href="{prefix}forest-ui.css?v=5">
 {home_atmosphere}    <script src="{prefix}forest-theme.js?v=1"></script>
-    <script src="{prefix}site-navigation.js?v=5" defer></script>
+    <script src="{prefix}site-navigation.js?v=6" defer></script>
 '''
         result = re.sub(r"[ \t]*</head>", lambda _: assets + "  </head>", result)
         footer_block = "<!-- shared-footer:start -->\n" + footer.replace("{{root}}", prefix or "./").replace("{{prefix}}", prefix).replace("{{login_href}}", login_href).replace("{{login_attributes}}", login_attributes) + "\n<!-- shared-footer:end -->"
