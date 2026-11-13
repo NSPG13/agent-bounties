@@ -261,12 +261,13 @@
 
   function renderFundingGuide() {
     window.AgentBountiesFundingGuide?.render({
-      gasSponsored: state.gasSponsored === true,
+      gasSponsored: state.gasSponsored === true, directWallet: !state.metaParent && !postingSession.canContinue(),
       account: state.account, connected: Boolean(state.provider), balances: state.balances,
       connecting: walletConnecting, busy: postingBusy, approved: state.approved,
       recorded: Boolean(postingJournal.load()), continuable: postingSession.canContinue(),
       canonical: state.canonical, conflict: postingSession.snapshot().conflict,
-      total: formatUsdc(state.fundingUsdc), solver: state.fundingUsdc ? formatUsdc(Number(currentRewardSplit().solver) / 1e6) : "0.00",
+      fee: state.fundingUsdc && !state.metaParent ? formatUsdc(Number(v2FundingAmounts().fee) / 1e6) : "0.00",
+      total: state.fundingUsdc && !state.metaParent ? formatUsdc(Number(v2FundingAmounts().total) / 1e6) : formatUsdc(state.fundingUsdc), solver: state.fundingUsdc ? formatUsdc(Number(currentRewardSplit().solver) / 1e6) : "0.00",
       verifier: state.fundingUsdc ? formatUsdc(Number(currentRewardSplit().verifier) / 1e6) : "0.00", creator: state.draft?.benchmark?.engine === "creator_review_v1",
       message: ui.paymentStatus.textContent, tone: ui.paymentStatus.dataset.tone,
     });
@@ -502,6 +503,14 @@
       throw new Error("The combined reward is invalid.");
     }
     return { total, solver, verifier };
+  }
+
+  function v2FundingAmounts() {
+    const rewards = currentRewardSplit();
+    return window.AgentBountiesPostingV2Plan.economics(rewards.solver, rewards.verifier, {
+      protocol_version: "agent-bounties/autonomous-v2", platform_fee_bps: 750,
+      platform_fee_recipient: "0x884834e884d6e93462655a2820140ad03e6747bc",
+    });
   }
 
   function currentRewardSplit() {
@@ -1788,7 +1797,7 @@
     }
     const onrampUrl = new URL("onramp.html", window.location.href);
     onrampUrl.searchParams.set("purpose", "post");
-    onrampUrl.searchParams.set("amount", formatUsdc(state.fundingUsdc));
+    onrampUrl.searchParams.set("amount", window.AgentBountiesFundingReadiness.formatUnits(v2FundingAmounts().total));
     onrampUrl.searchParams.set("return", window.location.href);
     onrampUrl.searchParams.set("operation_id", window.AgentBountiesWorkflow.createClient(window).load()?.id || "");
     if (state.account) onrampUrl.searchParams.set("wallet", state.account);
@@ -1832,7 +1841,7 @@
       back.searchParams.set("funding_review", "1"); back.hash = "bounty-preview";
       const destination = new URL("onramp.html", window.location.href);
       destination.searchParams.set("purpose", "post");
-      destination.searchParams.set("amount", formatUsdc(state.fundingUsdc));
+      destination.searchParams.set("amount", window.AgentBountiesFundingReadiness.formatUnits(v2FundingAmounts().total));
 
       destination.searchParams.set("return", back.href);
       if (operation) destination.searchParams.set("operation_id", operation);
@@ -1903,12 +1912,24 @@
   }
 
   async function loadProtocol() {
-    if(state.protocol)return state.protocol;
-    const response=await fetch("protocol.json",{cache:"no-store"});
-    if(!response.ok)throw new Error("Protocol configuration is unavailable.");
-    const protocol=await response.json();
-    if(protocol.status!=="active"||!/^0x[0-9a-fA-F]{40}$/.test(protocol.factory||""))throw new Error("The Base protocol is not active. No transaction was requested.");
-    state.protocol=protocol;return protocol;
+    const recovery = postingSession.canContinue() || Boolean(state.metaParent);
+    const filename = recovery ? "protocol.json" : "protocol-v2.json";
+    if (state.protocol?.descriptor_file === filename) return state.protocol;
+    const response = await fetch(filename, { cache: "no-store" });
+    if (!response.ok) throw new Error("Protocol configuration is unavailable.");
+    const protocol = await response.json();
+    if (recovery) {
+      if (protocol.status !== "recovery_only") throw new Error("The historical recovery descriptor changed.");
+    } else if (protocol.status !== "active" || protocol.protocol_version !== "agent-bounties/autonomous-v2"
+      || protocol.chain_id !== 8453 || protocol.chain_id_hex !== "0x2105"
+      || protocol.factory !== "0xc33e2ae33bb9580837ea59df18e57fa1039ae58a"
+      || protocol.implementation !== "0x8420c9bd1ff8a6b1abc4230b349538612c58f3a6"
+      || protocol.native_usdc.toLowerCase() !== "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+      || protocol.platform_fee_bps !== 750 || protocol.platform_fee_recipient !== "0x884834e884d6e93462655a2820140ad03e6747bc"
+      || protocol.api_base_url !== API || protocol.creation_route !== "direct_wallet") {
+      throw new Error("The reviewed V2 protocol configuration does not match. No transaction was requested.");
+    }
+    state.protocol = { ...protocol, descriptor_file: filename }; return state.protocol;
   }
 
   async function switchToBase(provider,protocol){const current=await provider.request({method:"eth_chainId"});if(String(current).toLowerCase()===String(protocol.chain_id_hex).toLowerCase())return;try{await provider.request({method:"wallet_switchEthereumChain",params:[{chainId:protocol.chain_id_hex}]});}catch(error){if(error&&error.code===4902){await provider.request({method:"wallet_addEthereumChain",params:[{chainId:protocol.chain_id_hex,chainName:"Base",nativeCurrency:{name:"Ether",symbol:"ETH",decimals:18},rpcUrls:["https://mainnet.base.org"],blockExplorerUrls:[protocol.explorer_url]}]});}else throw error;}}
@@ -1917,6 +1938,11 @@
     if (postingBusy || walletConnecting) return;
     if ((item.kind === "embedded" || item.provider?.agentBountiesCapabilities?.directTransactions === false) && item.provider?.agentBountiesCapabilities?.postingTransactions !== true) {
       setPaymentStatus("This wallet version cannot create a bounty. Reload to update it or choose another wallet. Your draft and approval are saved.", "pending");
+      return;
+    }
+    if (!postingSession.canContinue() && (item.provider?.agentBountiesCapabilities?.reviewedPostingOnly
+      || item.provider?.agentBountiesCapabilities?.directTransactions === false)) {
+      setPaymentStatus("This wallet does not support V2 direct transactions. Choose an external Base wallet with USDC and ETH for network fees. Your draft is saved.", "pending");
       return;
     }
     walletConnecting = true;
@@ -1949,7 +1975,7 @@
   function legalBinding() {
     const session = window.AgentBountiesPostingSession;
     return session.stable({ owner: state.accountSession?.user?.id, operation_id: postingSession.snapshot().operation_id,
-      wallet: state.account?.toLowerCase(), draft: session.envelope(window.AgentBountiesWorkflow.createClient(window).load()) });
+      wallet: state.account?.toLowerCase(), payment_route: postingSession.canContinue() ? "historical_reconciliation" : "autonomous_v2_direct_wallet", draft: session.envelope(window.AgentBountiesWorkflow.createClient(window).load()) });
   }
   async function savedLegalAcceptance() {
     let saved; try { saved = JSON.parse(sessionStorage.getItem(LEGAL_RECEIPT_KEY)); } catch (_) { return null; }
@@ -1976,7 +2002,7 @@
     const walletState = document.querySelector("[data-wallet-state]");
     state.balances = null; ui.fundNow.disabled = true;
     ui.account.textContent = `${account.slice(0,8)}…${account.slice(-6)}`;
-    ui.requiredUsdc.textContent = `${formatUsdc(state.fundingUsdc)} USDC`;
+    ui.requiredUsdc.textContent = `${window.AgentBountiesFundingReadiness.formatUnits(v2FundingAmounts().total)} USDC`;
     ui.usdcBalance.textContent = "Checking…"; ui.ethBalance.textContent = "Checking…";
     ui.readiness.hidden = false; ui.fundingHelp.hidden = true;
     walletState.textContent = `${connection} · Checking Base balances…`;
@@ -2002,38 +2028,40 @@
       if (priorConsent) { legalCheckbox.checked = true; legalCheckbox.disabled = true; }
       else if (legalCheckbox.disabled) { legalCheckbox.checked = false; legalCheckbox.disabled = false; }
     }
-    let sponsorship;
-    try { sponsorship = await requestJson(`${API}/v1/base/gas-sponsorship`, { cache: "no-store" }); } catch (_) { sponsorship = null; }
-    if (!current()) return;
-    state.gasSponsored = sponsorship?.schema === "agent-bounties/gas-sponsorship-v1" && sponsorship.network === "base-mainnet" && sponsorship.creation?.available === true && !state.metaParent;
-    const required = usdcBaseUnits(state.fundingUsdc), { usdc, eth } = balances;
+    state.gasSponsored = false;
+    const required = v2FundingAmounts().total, { usdc, eth } = balances;
+    const costConsent = document.querySelector("[data-v2-cost-consent]");
+    const costBinding = legalBinding();
+    if (costConsent && state.v2CostConsentBinding !== costBinding) costConsent.checked = false;
+    state.v2CostConsentBinding = costBinding;
     state.balances = { ...balances, required };
-    const usdcReady = usdc >= required, gasAvailable = state.gasSponsored;
+    const usdcReady = usdc >= required, gasAvailable = eth > 0n;
     ui.account.textContent = `${account.slice(0,8)}…${account.slice(-6)}`;
     ui.usdcBalance.textContent = `${window.AgentBountiesFundingReadiness.formatUnits(usdc)} USDC`;
     ui.ethBalance.textContent = `${window.AgentBountiesFundingReadiness.formatUnits(eth, 18, 8)} ETH`;
-    ui.requiredUsdc.textContent = `${formatUsdc(state.fundingUsdc)} USDC`;
+    ui.requiredUsdc.textContent = `${window.AgentBountiesFundingReadiness.formatUnits(v2FundingAmounts().total)} USDC`;
     ui.readiness.hidden = false; ui.fundingHelp.hidden = usdcReady && gasAvailable;
     ui.missingUsdc.textContent = `${window.AgentBountiesFundingReadiness.formatUnits(required > usdc ? required - usdc : 0n)} USDC`;
     ui.fundNow.disabled = !state.approved || !provider || (!postingSession.canContinue() && (!usdcReady || !gasAvailable || Boolean(postingJournal.load()))) || postingSession.snapshot().conflict;
     ui.fundNow.textContent = postingSession.canContinue() ? "Continue funding" : "Review and post";
-    walletState.textContent = `${connection} · ${usdcReady ? "USDC available" : "USDC shortfall"}. ${gasAvailable ? "Network fees paid by Agentizable." : "Gas sponsorship is temporarily unavailable. Recheck to continue; no ETH purchase is required."}`;
+    walletState.textContent = `${connection} · ${usdcReady ? "USDC available" : "USDC shortfall"}. ${gasAvailable ? "Base ETH is present; your wallet quotes each network fee." : "Base ETH is required for network fees."}`;
     for (const link of ui.onramps) { const url = new URL(link.href); url.searchParams.set("wallet", account); url.searchParams.set("operation_id", window.AgentBountiesWorkflow.createClient(window).load()?.id || ""); link.href = url.href; link.target = "_self"; }
     updatePostingTracker(); updatePostingCost();
     if (!provider) setPaymentStatus("Choose your wallet to connect it. No money will move.", "pending");
     else if (postingSession.canContinue()) setPaymentStatus("Your signed request is saved. Continue funding to reconcile this same payment; no additional funds or new authorization are needed to check its status.", "pending");
-    else if (!gasAvailable) setPaymentStatus("Gas sponsorship is unavailable for this operation. Your draft is saved. Recheck to continue; no wallet transaction will be requested.", "error");
-    else if (!usdcReady) setPaymentStatus("Add the displayed Base USDC shortfall, then return here. Agentizable pays the network fee.", "pending");
-    else setPaymentStatus("USDC is available. Sign the exact funding authorization in your wallet; Agentizable pays all gas for this creation.", "success");
+    else if (!gasAvailable) setPaymentStatus("This V2 wallet route requires Base ETH for network fees. Your draft is saved. Card payment remains a separate option.", "error");
+    else if (!usdcReady) setPaymentStatus("The displayed Base USDC shortfall includes the 7.5% solver-reward fee. This wallet route also requires Base ETH for gas.", "pending");
+    else setPaymentStatus("Review the fee-inclusive USDC total and wallet-paid Base network fees. You approve an exact allowance, then create and fund the bounty.", "success");
   }
 
   function updatePostingCost(fees = null, request = null) {
     if (state.fundingUsdc == null) return;
-    const cost = `Bounty budget — rewards: ${formatUsdc(state.fundingUsdc)} USDC + platform fee: 0.00 USDC.`;
+    const amounts = v2FundingAmounts();
+    const cost = `Rewards: ${formatUsdc(state.fundingUsdc)} USDC + platform fee (7.5% of solver reward): ${window.AgentBountiesFundingReadiness.formatUnits(amounts.fee)} USDC. Total funding: ${window.AgentBountiesFundingReadiness.formatUnits(amounts.total)} USDC.`;
     const debit = request ? ` This request transfers ${window.AgentBountiesFundingReadiness.formatUnits(request.transferUsdcUnits)} USDC.` : "";
-    const gas = state.gasSponsored ? " Network fee paid by Agentizable: 0 ETH charged to you." : fees?.estimatedTotalWei != null
-      ? ` Estimated network fee for this request: ${window.AgentBountiesFundingReadiness.formatUnits(fees.estimatedTotalWei, 18, 18)} ETH. Your wallet confirms the final network fee; this is not a guaranteed maximum.`
-      : " Gas sponsorship is checked before signing. Posting pauses if it is unavailable; you will not be asked to pay gas.";
+    const gas = fees?.estimatedTotalWei != null
+      ? ` Estimated network fee for this request: ${window.AgentBountiesFundingReadiness.formatUnits(fees.estimatedTotalWei, 18, 18)} ETH. Your wallet confirms the final fee; the estimate is not a maximum.`
+      : " Your wallet pays Base ETH network fees for allowance approval and bounty creation. Review each fee in the wallet.";
     for (const selector of ["[data-posting-cost]", "[data-wallet-cost]"]) { const output = document.querySelector(selector); if (output) output.textContent = cost + debit + gas; }
   }
 
@@ -2045,14 +2073,21 @@
     if (status) status.textContent = canonical.public_inventory_verified ? "This exact bounty is confirmed in public ready-to-earn inventory." : postingSession.canContinue() ? "Your signed request is saved. Continue funding to review its transaction." : postingJournal.load() ? "A wallet operation is recorded. Checking the same operation automatically; do not pay again." : "Draft saved. Publication and funding remain pending.";
   }
 
+  function assertV2CostConsent() {
+    if (!document.querySelector("[data-v2-cost-consent]")?.checked || state.v2CostConsentBinding !== legalBinding())
+      throw new Error("Review and accept the current V2 funding total and wallet network fees first.");
+  }
+
   async function prepareWalletRequest(calls) {
     await assertPostingBinding();
+    assertV2CostConsent();
     const description = window.AgentBountiesFundingReadiness.describeWalletCalls({ calls, context: postingBinding.requestContext });
     const fees = await window.AgentBountiesFundingReadiness.estimateFees({ provider: state.provider, wallet: state.account, calls });
     updatePostingCost(fees, description);
     setPaymentStatus(description.summary, "pending");
     await postingSession.flush({ requireServer: true });
     await assertPostingBinding();
+    assertV2CostConsent();
   }
 
   async function assertPostingBinding() {
@@ -2099,13 +2134,13 @@
     }
   }
 
-  function contractTerms(protocol,rewards){const now=Math.floor(Date.now()/1000);return{protocol_version:protocol.protocol_version,creator_wallet:state.account,network:protocol.network,settlement_token:protocol.native_usdc,solver_reward:{amount:Number(rewards.solver),currency:"usdc"},verifier_reward:{amount:Number(rewards.verifier),currency:"usdc"},claim_bond:{amount:Number(rewards.verifier),currency:"usdc"},initial_funding:{amount:Number(rewards.total),currency:"usdc"},funding_deadline:state.deliveryDeadline?Math.floor(Date.parse(state.deliveryDeadline)/1000):now+30*86400,claim_window_seconds:state.taskWindowDays*86400,verification_window_seconds:48*3600,creation_nonce:randomBytes32()};}
+  function contractTerms(protocol,rewards){const now=Math.floor(Date.now()/1000);return{protocol_version:protocol.protocol_version,creator_wallet:state.account,network:protocol.network,settlement_token:protocol.native_usdc,solver_reward:{amount:Number(rewards.solver),currency:"usdc"},verifier_reward:{amount:Number(rewards.verifier),currency:"usdc"},claim_bond:{amount:Number(rewards.verifier),currency:"usdc"},initial_funding:{amount:Number(v2FundingAmounts().total),currency:"usdc"},platform_fee_bps:protocol.platform_fee_bps,platform_fee:{amount:Number(v2FundingAmounts().fee),currency:"usdc"},platform_fee_recipient:protocol.platform_fee_recipient,funding_deadline:state.deliveryDeadline?Math.floor(Date.parse(state.deliveryDeadline)/1000):now+30*86400,claim_window_seconds:state.taskWindowDays*86400,verification_window_seconds:48*3600,creation_nonce:randomBytes32()};}
 
   function termsDocument(committed){const document={schema_version:"agent-bounties/terms-v1",contract_terms:committed,title:state.draft.title,goal:state.draft.goal,acceptance_criteria:state.draft.acceptance_criteria,benchmark:canonicalJsonValue(missionBenchmark(state.draft.benchmark||{})),evidence_schema:canonicalJsonValue(stripVisualExtension(state.draft.evidence_schema)),verification_policy:supportedVerificationPolicy(),source_url:state.sourceUrl,discovery_source:state.bountyImage?"ai_assistant_approved_image_handoff":"ai_assistant_terms_handoff"};if(state.bountyImage)document.image=canonicalJsonValue(state.bountyImage);return document;}
 
   function createPayload(terms,committed){return{creator:state.account,solver_reward:committed.solver_reward,verifier_reward:committed.verifier_reward,terms_hash:terms.terms_hash,policy_hash:terms.policy_hash,acceptance_criteria_hash:terms.acceptance_criteria_hash,benchmark_hash:terms.benchmark_hash,evidence_schema_hash:terms.evidence_schema_hash,funding_deadline:committed.funding_deadline,claim_window_seconds:committed.claim_window_seconds,verification_window_seconds:committed.verification_window_seconds,verification_mode:"signed_quorum",verifier_module:null,verifier_reward_recipient:null,verifiers:supportedVerificationPolicy().verifiers,threshold:supportedVerificationPolicy().threshold,initial_funding:committed.initial_funding,creation_nonce:committed.creation_nonce};}
 
-  function validateCreationPlan(plan,protocol,create){if(!plan||!/^0x[0-9a-fA-F]{40}$/.test(plan.predicted_bounty_contract||""))throw new Error("The creation plan did not return a valid bounty address.");if(Number(plan.network&&plan.network.chain_id)!==Number(protocol.chain_id))throw new Error("The creation plan targets the wrong network.");if(String(plan.factory_contract||"").toLowerCase()!==String(protocol.factory).toLowerCase())throw new Error("The creation plan does not use the canonical factory.");const target=Number(create.solver_reward.amount)+Number(create.verifier_reward.amount);if(Number(create.initial_funding.amount)!==target)throw new Error("The creation plan is not fully funded.");}
+  function validateCreationPlan(plan,protocol,create){if(!plan||!/^0x[0-9a-fA-F]{40}$/.test(plan.predicted_bounty_contract||""))throw new Error("The creation plan did not return a valid bounty address.");if(Number(plan.network&&plan.network.chain_id)!==Number(protocol.chain_id))throw new Error("The creation plan targets the wrong network.");if(String(plan.factory_contract||"").toLowerCase()!==String(protocol.factory).toLowerCase())throw new Error("The creation plan does not use the canonical factory.");const target=Number(create.solver_reward.amount)+Number(create.verifier_reward.amount)+(protocol.protocol_version === "agent-bounties/autonomous-v2" ? Number(v2FundingAmounts().fee) : 0);if(Number(create.initial_funding.amount)!==target)throw new Error("The creation plan is not fully funded.");}
 
   async function pollCreation(api,bountyId,timeoutMs=100000){const started=Date.now();while(Date.now()-started<timeoutMs){const events=await requestJson(`${api}/v1/base/autonomous-bounties/events?network=base-mainnet&bounty_id=${encodeURIComponent(bountyId)}`,{cache:"no-store"});const created=events.some((event)=>event.kind==="canonical_bounty_created");const funded=events.some((event)=>event.kind==="funding_added");const claimable=events.some((event)=>event.kind==="bounty_became_claimable");if(created&&funded&&claimable)return events;await new Promise((resolve)=>setTimeout(resolve,2500));}return null;}
 
@@ -2217,27 +2252,7 @@
         await finishPosting(api, { bounty_id: saved.bounty_id, predicted_bounty_contract: saved.bounty_contract }, protocol, null);
         return;
       }
-      const policy = await window.AgentBountiesLegal.loadPolicy({ fresh: true });
-      const consent = saved.legal_acceptance;
-      if (!consent?.durable || consent.action !== "post_bounty" || consent.wallet_address?.toLowerCase() !== state.account.toLowerCase()
-        || policy.source !== "hosted" || !policy.supported_actions.includes("post_bounty")
-        || ["terms_version", "privacy_version", "statement_hash"].some(key => consent[key] !== policy[key]))
-        throw new Error("The legal terms changed or could not be checked. Review them before continuing; nothing was sent.");
-      if (saved.create.creator.toLowerCase() !== state.account.toLowerCase()) throw new Error("Restore the original signing wallet to continue this bounty.");
-      // The relay can return an earlier broadcast even after expiry or daily
-      // capacity depletion. Only its fresh-send path checks balance and budget.
-      const plan = await requestJson(`${api}/v1/base/autonomous-bounties/creation-plan`, {
-        method: "POST", body: JSON.stringify({ network: "base-mainnet", create: saved.create, authorization_valid_before: saved.authorization_valid_before }),
-      });
-      validateCreationPlan(plan, protocol, saved.create);
-      if (plan.bounty_id !== saved.bounty_id || plan.predicted_bounty_contract !== saved.bounty_contract)
-        throw new Error("The saved creation plan changed. Nothing was sent.");
-      const rewards = currentRewardSplit();
-      postingBinding.requestContext = { chainId: 8453, usdcAddress: protocol.native_usdc, factoryAddress: protocol.factory,
-        bountyAddress: saved.bounty_contract, fundingUsdcUnits: rewards.total, creatorAddress: state.account, validatedCalls: [] };
-      await assertPostingBinding();
-      const transactionHash = await relaySignedCreation(api, saved);
-      await finishPosting(api, plan, protocol, transactionHash);
+      throw new Error("This saved V1 authorization is retained for reconciliation. V1 creation is retired; no signature was replayed and no new payment was requested.");
     } catch (error) {
       await postingSession.flush().catch(() => {});
       setPaymentStatus(error.code === 4001 && postingSession.canContinue()
@@ -2276,14 +2291,14 @@
       await assertPostingBinding();
       await refreshWalletReadiness();
       if (state.metaParent) throw new Error("Sponsored child creation still needs a caller-preserving wallet path. Your draft is saved; no gas will be charged.");
-      if (state.balances.usdc < state.balances.required || !state.gasSponsored) throw new Error("The wallet is not ready to fund this bounty.");
+      if (state.balances.usdc < state.balances.required || state.balances.eth <= 0n || !document.querySelector("[data-v2-cost-consent]")?.checked) throw new Error("The wallet is not ready to fund this bounty.");
       if (!window.AgentBountiesLegal) throw new Error("The legal agreement could not be loaded. Reload before using the wallet.");
       const agreement = await postingLegalAcceptance();
       if (!agreement.durable) throw new Error("The agreement could not be recorded. Retry when the service is available; no transaction was sent.");
       const protocol = await loadProtocol();
       const api = String(protocol.api_base_url).replace(/\/$/, "");
       const rewards = currentRewardSplit();
-      let create, plan, childPlan = null, authorizationValidBefore;
+      let create, plan, childPlan = null, authorizationValidBefore, checkedV2;
       if (state.metaParent) {
         const parent = await metaChild.resolve(state.metaParent, window.AgentBountiesWorkflow.createClient(window));
         if (parent.terms_hash !== state.metaParent.terms_hash) throw new Error("The parent terms changed. Review the child again.");
@@ -2319,57 +2334,42 @@
             "x-agent-bounties-handoff-id": state.distributionAttribution.handoff,
           } : {}, window.AgentBountiesEvm);
         create = createPayload(terms, committed);
-        authorizationValidBefore = Math.min(create.funding_deadline, Math.floor(Date.now() / 1000) + 7200);
-        plan = await requestJson(`${api}/v1/base/autonomous-bounties/creation-plan`, {
-          method: "POST", body: JSON.stringify({ network: "base-mainnet", create, authorization_valid_before: authorizationValidBefore }),
+        const quote = await requestJson(`${api}/v1/base/autonomous-bounties/v2/quote`, {
+          method: "POST", body: JSON.stringify({ network: "base-mainnet", solver_reward: create.solver_reward, verifier_reward: create.verifier_reward }),
         });
+        window.AgentBountiesPostingV2Plan.validateQuote(quote, create, protocol);
+        plan = await requestJson(`${api}/v1/base/autonomous-bounties/v2/creation-plan`, {
+          method: "POST", body: JSON.stringify({ network: "base-mainnet", create }),
+        });
+        checkedV2 = window.AgentBountiesPostingV2Plan.validatePlan(plan, create, protocol);
       }
       validateCreationPlan(plan, protocol, create);
       postingBinding.requestContext = { chainId: 8453, usdcAddress: protocol.native_usdc, factoryAddress: protocol.factory,
-        bountyAddress: plan.predicted_bounty_contract, fundingUsdcUnits: rewards.total, creatorAddress: approvedAccount,
-        termsRegistry: childPlan?.terms_registry, validatedCalls: (childPlan?.pre_claim_wallet_calls || plan.wallet_calls || []).map(call => ({ ...call })) };
+        bountyAddress: plan.predicted_bounty_contract, fundingUsdcUnits: checkedV2?.total || rewards.total, creatorAddress: approvedAccount, protocolVersion: protocol.protocol_version,
+        termsRegistry: childPlan?.terms_registry, validatedCalls: (checkedV2?.calls || childPlan?.pre_claim_wallet_calls || plan.wallet_calls || []).map(call => ({ ...call })) };
       if (!state.approved || state.draft !== approvedDraft) throw new Error("The bounty changed during preparation. Review the revised commitment before funding.");
       if (state.account !== approvedAccount || String((await state.provider.request({ method: "eth_accounts" }))[0]).toLowerCase() !== String(approvedAccount).toLowerCase() || String(await state.provider.request({ method: "eth_chainId" })).toLowerCase() !== "0x2105") throw new Error("The wallet or network changed. Reopen the same review before funding.");
-      const deferEmbeddedCheckpoint = !childPlan && Boolean(state.provider.agentBountiesCapabilities?.reviewedPostingOnly && plan.eip3009_authorization);
+      const deferEmbeddedCheckpoint = !checkedV2 && !childPlan && Boolean(state.provider.agentBountiesCapabilities?.reviewedPostingOnly && plan.eip3009_authorization);
       if (!deferEmbeddedCheckpoint) postingJournal.prepare(plan);
       setPaymentStatus([
         "Review the wallet request carefully.",
-        `Exact total funding: ${formatUsdc(state.fundingUsdc)} Base USDC.`,
+        `Exact total funding: ${window.AgentBountiesFundingReadiness.formatUnits(checkedV2?.total || rewards.total)} Base USDC, including the displayed platform fee.`,
         `Solver reward: ${formatUsdc(Number(rewards.solver) / 1_000_000)} Base USDC.`,
         `${state.draft.benchmark?.engine === "creator_review_v1" ? "Creator-review reserve" : "Verifier reward"}: ${formatUsdc(Number(rewards.verifier) / 1_000_000)} Base USDC. The solver supplies its own bond separately.`,
         `Predicted bounty: ${plan.predicted_bounty_contract}`,
         "A signature or transaction hash is not funding evidence.",
       ].join("\n"), "pending");
       let transactionHash = null;
-      if (childPlan) {
-        setPaymentStatus("Create the reviewed 1 USDC child: publish its exact on-chain terms, approve only 1 USDC, then create and fully fund it. Parent claiming is a later step. These direct wallet calls require Base ETH for gas.", "pending");
-        await sendWalletCalls(childPlan.pre_claim_wallet_calls, protocol);
-      } else if (plan.eip3009_authorization) {
-        const authorization = window.AgentBountiesFundingReadiness.validateFundingAuthorization({ typedData: plan.eip3009_authorization,
-          context: { ...postingBinding.requestContext, creationNonce: create.creation_nonce, fundingDeadline: authorizationValidBefore } });
-        if (!deferEmbeddedCheckpoint) {
-          postingJournal.checkpoint("signing");
-          await postingSession.flush({ requireServer: true });
+      if (checkedV2) {
+        // Estimate each exact call after its prerequisites confirm. Never retry
+        // an uncertain send or replace a partly completed operation.
+        for (const call of checkedV2.calls) {
+          await assertPostingBinding();
+          transactionHash = await sendTransaction(call);
+          await waitReceipt(transactionHash);
         }
-        await assertPostingBinding();
-        setPaymentStatus(authorization.summary, "pending");
-        const signature = await state.provider.request({ method: "eth_signTypedData_v4", params: [state.account, authorization.serialized],
-          ...(state.provider.agentBountiesCapabilities?.reviewedPostingOnly ? {
-            agentBountiesPostingContext: { ...postingBinding.requestContext, creationNonce: create.creation_nonce, fundingDeadline: authorizationValidBefore },
-            agentBountiesBeforeSubmit: async () => {
-              await assertPostingBinding();
-              if (postingJournal.load()) throw new Error("A wallet operation is already recorded. Check that same operation before signing.");
-              postingJournal.prepare(plan);
-              postingJournal.checkpoint("signing");
-              await postingSession.flush({ requireServer: true });
-              await assertPostingBinding();
-            },
-          } : {}) });
-        const savedRequest = { create, signature, authorization_valid_before: authorizationValidBefore, legal_acceptance: agreement, bounty_id: plan.bounty_id, bounty_contract: plan.predicted_bounty_contract };
-        await postingSession.saveContinuation(savedRequest);
-        transactionHash = await relaySignedCreation(api, savedRequest);
       } else {
-        throw new Error("The sponsor did not provide a supported funding authorization. Your draft is saved; no customer-paid transaction will be requested.");
+        throw new Error("Only the reviewed V2 direct-wallet plan can start a new payment.");
       }
       await finishPosting(api, plan, protocol, transactionHash, childPlan);
     } catch (error) {

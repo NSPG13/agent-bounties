@@ -1,0 +1,18 @@
+{
+  "network": "base-mainnet",
+  "chain_id": 8453,
+  "factory": "0xc33e2ae33bb9580837ea59df18e57fa1039ae58a",
+  "deployment_transaction": "0xd65c624183f9be07704365c77ff8c6c6b37c6a5c4bbcb14c459ceb1ef7e5de1e",
+  "deployment_block": 52275492,
+  "protocol_version": "agent-bounties/autonomous-v2",
+  "status": "active",
+  "creation_route": "direct_wallet",
+  "chain_id_hex": "0x2105",
+  "native_usdc": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+  "implementation": "0x8420c9bd1ff8a6b1abc4230b349538612c58f3a6",
+  "platform_fee_bps": 750,
+  "platform_fee_recipient": "0x884834e884d6e93462655a2820140ad03e6747bc",
+  "api_base_url": "https://api.agentizable.ai",
+  "mcp_base_url": "https://mcp.agentizable.ai",
+  "explorer_url": "https://base.blockscout.com"
+}

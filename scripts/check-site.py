@@ -171,6 +171,7 @@ REQUIRED_FILES = {
     "posting-brief.js",
     "posting-reference.js",
     "posting-session.js",
+    "posting-v2-plan.js",
     "posting-draft-canary.html",
     "posting-draft-canary.js",
     "posting-workspace.js",
@@ -218,6 +219,7 @@ REQUIRED_FILES = {
     "post.html",
     "privacy.html",
     "protocol.json",
+    "protocol-v2.json",
     "robots.txt",
     "sitemap.xml",
     "solarpunk-home.js",
@@ -282,6 +284,7 @@ ALLOWED_UI_CODE = {
     "posting-brief.js",
     "posting-reference.js",
     "posting-session.js",
+    "posting-v2-plan.js",
     "posting-workspace.js",
     "posting-workspace.css",
     "manual-posting.css",
@@ -750,7 +753,7 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
             "data-card-verifier",
             "function renderVerifierTerms",
             "if (!ui.verifierSummary || !ui.verifier) return;",
-            'bounty-composer-v2.js?v=38',
+            'bounty-composer-v2.js?v=39',
             "function verificationReadiness",
             "verificationReadiness(benchmark, state.draft?.evidence_schema)",
             'sourceSnapshotDigest.pattern === "^sha256:[0-9a-f]{64}$"',
@@ -788,7 +791,7 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
             'data-post-auth-start',
             'posting-auth.js?v=3',
             'solarpunk-home.js?v=39',
-            'bounty-composer-v2.js?v=38',
+            'bounty-composer-v2.js?v=39',
             'label: "LOG IN TO POST"',
             'credentials: "include"',
             'account_status === "ready" && payload.account_complete === true',
@@ -1157,7 +1160,7 @@ def check_transactional_handoffs(site_dir: Path) -> None:
             "topup-guide.css",
             "Buying crypto does not fund the bounty.",
             "ETH on Base for network fees",
-            "Signed new-bounty creation uses platform-paid gas",
+            "V2 wallet posting requires Base ETH for network fees",
         ],
     )
     onramp_js = (site_dir / "moonpay-onramp.js").read_text(encoding="utf-8")
@@ -1165,7 +1168,7 @@ def check_transactional_handoffs(site_dir: Path) -> None:
         "moonpay-onramp.js",
         onramp_js,
         [
-            "Signed creation uses platform-paid gas",
+            "V2 wallet posting requires Base ETH for network fees",
             'if (provider === "moonpay") throw new Error',
             'body.environment !== "live"',
             'body.destination_network !== "base-mainnet"',
@@ -1507,6 +1510,7 @@ def main() -> int:
         str(repo_root / "scripts/test-payout-proof.cjs"),
         str(repo_root / "scripts/test-solver-v2.cjs"),
         str(repo_root / "scripts/test-terms-publication.cjs"),
+        str(repo_root / "scripts/test-posting-v2-plan.cjs"),
     ], check=True)
     for relative in sorted(REQUIRED_FILES | EXPECTED_SCENE_ASSETS):
         if not (site_dir / relative).exists():

@@ -65,7 +65,7 @@ test("expired authorization without canonical confirmation never claims nothing 
 
 test("continuation reconciles an expired request with zero remaining USDC and no fresh capacity", async () => {
   const continuation = source.slice(source.indexOf("  async function continueSignedBounty("), source.indexOf("  async function fundApprovedBounty("));
-  const calls = [];
+  const calls = [], statuses = [];
   const prior = { ...saved, authorization_valid_before: 1, legal_acceptance: { durable: true, action: "post_bounty", wallet_address: saved.create.creator, terms_version: "v1", privacy_version: "v1", statement_hash: "h" } };
   const context = vm.createContext({
     postingBusy: false, postingBinding: null,
@@ -82,11 +82,11 @@ test("continuation reconciles an expired request with zero remaining USDC and no
     requestJson: async () => ({ bounty_id: id, predicted_bounty_contract: contract }), validateCreationPlan: () => {}, currentRewardSplit: () => ({ total: 21_300_000 }),
     relaySignedCreation: async (_api, request) => { assert.equal(request, prior); calls.push("same-authorization"); return hash; },
     finishPosting: async (_api, _plan, _protocol, transaction) => { assert.equal(transaction, hash); calls.push("confirmation"); },
-    setPaymentStatus: message => { throw new Error(message); }, renderFundingGuide: () => {},
+    setPaymentStatus: message => statuses.push(message), renderFundingGuide: () => {},
   });
   vm.runInContext(continuation + "\nglobalThis.continuePosting = continueSignedBounty;", context);
   await context.continuePosting();
-  assert.deepEqual(calls, ["reconcile", "same-authorization", "confirmation"]);
+  assert.deepEqual(calls, ["reconcile"]); assert.match(statuses.at(-1), /V1 creation is retired/);
 });
 
 test("recovery stays visible instead of requesting a second wallet top-up", () => {
@@ -101,7 +101,7 @@ test("recovery stays visible instead of requesting a second wallet top-up", () =
   assert.equal(node("#funding-dialog").dataset.fundingView, "review");
   assert.equal(node("[data-fund-now]").disabled, false);
   assert.equal(node("[data-funding-topup] [data-onramp-link]").hidden, true);
-  assert.match(node("[data-funding-instruction]").textContent, /Do not add money/);
+  assert.match(node("[data-funding-instruction]").textContent, /Do not pay again/);
 });
 
 function revocationHarness(fetcher, walletSignature = "0x" + "12".repeat(65)) {
@@ -248,13 +248,13 @@ async function legalContinuationHarness() {
   return { ...h, prior, before, calls, policyCalls: h.calls, statuses, state: h.state, canonical: state, run: () => context.continuePosting() };
 }
 
-for (const fault of ["changed", "http", "integrity"]) test(`saved continuation blocks fresh ${fault} policy then reuses the exact authorization after recovery`, async () => {
+for (const fault of ["changed", "http", "integrity"]) test(`saved continuation blocks fresh ${fault} policy preserves the retired authorization without replay after policy recovery`, async () => {
   const h = await legalContinuationHarness();
   if (fault === "changed") h.state.policy = { ...h.initial, terms_version: "v2" }; else h.state.fault = fault;
-  await h.run(); assert.deepEqual(h.calls, ["reconcile"]); assert.match(h.statuses.at(-1), /legal terms changed or could not be checked/);
+  await h.run(); assert.deepEqual(h.calls, ["reconcile"]); assert.match(h.statuses.at(-1), /V1 creation is retired/);
   assert.equal(JSON.stringify(h.prior), h.before);
   h.state.policy = h.initial; h.state.fault = null; await h.run();
-  assert.deepEqual(h.calls, ["reconcile", "reconcile", "plan", "same-authorization", "confirmed"]);
+  assert.deepEqual(h.calls, ["reconcile", "reconcile"]);
   assert.equal(JSON.stringify(h.prior), h.before);
 });
 

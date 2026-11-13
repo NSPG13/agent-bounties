@@ -336,13 +336,13 @@
     if (state.usdcBalance === null || state.ethBalance === null) {
       guidance.textContent = state.bountyContract
         ? "This existing-bounty flow may use gas sponsorship; verify the final wallet request before signing."
-        : "Signed creation uses platform-paid gas. Return to your saved bounty to check sponsor availability; no ETH purchase is required.";
+        : "V2 wallet posting requires Base ETH for network fees. Return to the saved funding review to check the full USDC total and your wallet balance.";
       return;
     }
     const enoughUsdc = state.usdcBalance >= state.requiredUsdc;
     const messages = [
       enoughUsdc ? "This wallet holds the planned Base USDC amount." : `USDC shortfall: ${formatUnits(state.requiredUsdc - state.usdcBalance, 6, 6)} USDC.`,
-      "Return to the saved bounty to check gas sponsorship and review the exact funding request. Adding funds to a wallet does not fund a bounty.",
+      state.bountyContract ? "Return to the existing bounty to check its funding route and network fees. Adding funds to a wallet does not fund a bounty." : "Return to the V2 funding review. Your wallet pays Base ETH network fees in addition to the full USDC amount. Adding funds to a wallet does not fund a bounty.",
     ];
     guidance.textContent = messages.join(" ");
     guidance.dataset.tone = enoughUsdc ? "success" : "pending";

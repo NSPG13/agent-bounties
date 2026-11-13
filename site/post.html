@@ -234,7 +234,7 @@
                   <dl data-card-verifier></dl>
                 </section>
                 <section class="bounty-card-section" data-card-reference aria-label="Frozen reference" hidden></section>
-                <section class="bounty-card-section" aria-label="Total cost"><h3>Total cost</h3><p data-posting-cost>Rewards and platform fee will appear with the proposal. Agentizable pays the network fee for sponsored posting.</p></section>
+                <section class="bounty-card-section" aria-label="Total cost"><h3>Total cost</h3><p data-posting-cost>Rewards and platform fee will appear with the proposal. V2 wallet posting also requires Base ETH for network fees. Card pricing is shown separately.</p></section>
 
                 <details class="bounty-review-details">
                   <summary>Details to review</summary>
@@ -304,16 +304,17 @@
           <section class="wallet-readiness" data-wallet-readiness hidden aria-label="Wallet readiness">
             <div data-funding-topup hidden>
               <p class="guide-amount" data-funding-shortfall></p>
-              <p data-funding-help hidden><span data-funding-gas-help>Agentizable pays the transaction gas.</span><strong data-missing-usdc hidden>—</strong></p>
+              <p data-funding-help hidden><span data-funding-gas-help>This route requires Base ETH for network fees.</span><strong data-missing-usdc hidden>—</strong></p>
               <a class="button primary guide-primary" href="onramp.html?purpose=post" target="_self" rel="noopener noreferrer" data-onramp-link>Add Base USDC</a>
             </div>
             <div data-funding-review hidden>
               <p class="guide-amount" data-funding-total></p>
               <p data-funding-split></p>
-              <p>Network: <strong>Base</strong>. Agentizable pays the network fee.</p>
-              <p class="guide-note">You authorize only the reviewed USDC amount. You do not need ETH for sponsored posting.</p>
+              <p>Network: <strong>Base</strong>. Your wallet pays the network fees.</p>
+              <p class="guide-note">Approve the exact USDC allowance, then create and fund the bounty. Both transactions require Base ETH.</p>
               <div data-legal-consent data-consent-simple="true" data-consent-actions="post_bounty"></div>
               <p class="guide-note" data-funding-consent-hint>Check the box above to continue.</p>
+              <label><input type="checkbox" data-v2-cost-consent> I reviewed the full USDC total, including the platform fee, and will pay the Base ETH network fees shown by my wallet.</label>
               <button class="button primary guide-primary" type="button" data-fund-now disabled>Review and post</button>
             </div>
             <div data-funding-wait hidden><p class="guide-note">Your progress is saved. We check this same request.</p></div>
@@ -324,7 +325,7 @@
                 <div><span>Wallet</span><strong data-wallet-account>—</strong></div>
                 <div><span>Total for bounty</span><strong data-wallet-required>—</strong></div>
                 <div><span>USDC on Base</span><strong data-wallet-usdc>—</strong></div>
-                <div><span>ETH balance (not required)</span><strong data-wallet-eth>—</strong></div>
+                <div><span>Base ETH for network fees</span><strong data-wallet-eth>—</strong></div>
               </div>
               <p data-wallet-state></p><p data-wallet-cost></p>
               <ol>
@@ -359,7 +360,7 @@
     <script src="phone-wallet.js?v=9"></script>
     <script src="marketplace-workflow.js?v=16"></script>
     <script src="posting-session.js?v=6"></script>
-    <script src="funding-readiness.js?v=2"></script>
+    <script src="funding-readiness.js?v=3"></script>
     <script src="wallet-config.js?v=3"></script>
     <script src="wallet-link.js?v=15"></script>
     <script src="posting-reference.js?v=2"></script>
@@ -367,6 +368,7 @@
     <script src="analytics.js?v=7"></script>
     <script src="legal-consent.js?v=4"></script>
     <script src="evm.js"></script>
+    <script src="posting-v2-plan.js?v=1"></script>
     <script src="meta-child.js?v=2"></script>
     <script src="wallet-session.js?v=1"></script>
     <script src="terms-publication.js?v=1"></script>
@@ -374,8 +376,8 @@
     <script src="posting-prompt.js?v=7"></script>
     <script src="creator-review.js?v=3"></script>
     <script src="ai-bounty-handoff.js?v=12"></script>
-    <script src="funding-guide.js?v=3"></script>
-    <script src="bounty-composer-v2.js?v=38"></script>
+    <script src="funding-guide.js?v=4"></script>
+    <script src="bounty-composer-v2.js?v=39"></script>
     <script src="posting-brief.js?v=5"></script>
     <script src="posting-workspace.js?v=10"></script>
     <script src="forest-posting.js?v=4"></script>
