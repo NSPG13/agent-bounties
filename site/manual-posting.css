@@ -1,3 +1,5 @@
+/* The home page launcher loads this file for its "Create it here" button. */
+[data-bounty-manual] { margin: 22px 0 8px; width: 100%; justify-content: center; white-space: normal; }
 /* Posting form: one clear card with three groups — the work, the budget, the delivery. */
 .posting-page .brief-mode-field { margin: 0 0 18px; }
 .posting-page .brief-details { border: 1px solid var(--ab-line); border-radius: 16px; padding: 8px 22px 22px; margin: 0 0 18px; min-width: 0; background: var(--ab-panel); }

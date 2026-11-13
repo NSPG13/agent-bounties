@@ -28,12 +28,12 @@ const server = http.createServer((req, res) => {
       await page.goto(origin);
       await page.locator("#post-a-bounty").click();
       assert.equal(await page.locator("#bounty-launcher-title").innerText(), "Choose how to start");
+      assert.equal(await page.locator("[data-bounty-manual]").evaluate(el => getComputedStyle(el).marginTop), "22px", "the home launcher keeps its button layout");
       await page.locator("[data-bounty-manual]").click();
       await page.waitForURL("**/post.html?mode=manual#bounty-composer-form");
       assert.equal(await page.locator("[data-brief-mode]").inputValue(), "manual");
       await page.locator("[data-brief-title]").fill("Research competitors");
       await page.locator("[data-brief-criteria]").fill("Include 20 competitors\nLink each pricing source");
-      await page.locator("#bounty-composer-input").fill("Deliver a comparison spreadsheet");
       await page.locator("[data-brief-budget]").fill("20.01");
       await page.locator("[data-brief-reserve]").fill("0.11");
       await page.locator("[data-brief-deadline]").fill(new Date(Date.now() + 7*86400000).toISOString().slice(0,16));
@@ -46,16 +46,23 @@ const server = http.createServer((req, res) => {
       await page.waitForFunction(() => document.querySelector("[data-brief-status]").textContent.startsWith("Proposal prepared"));
       const draft = await page.evaluate(() => window.AgentBountiesWorkflow.createClient(window).load().draft);
       assert.equal(draft.title, "Research competitors");
+      assert.equal(draft.goal, "Research competitors. Done when: Include 20 competitors; Link each pricing source", "an empty description is generated from the title and criteria");
+      assert.equal(await page.locator("#bounty-composer-input").inputValue(), "", "the generated description stays out of the field");
       assert.equal(draft.solver_reward_usdc, "19.90");
       assert.equal(draft.verifier_reward_usdc, "0.11");
       assert.equal(draft.benchmark.engine, "creator_review_v1");
       assert.deepEqual(draft.acceptance_criteria, ["Include 20 competitors", "Link each pricing source"]);
       assert.equal(await page.locator("[data-open-funding]").isDisabled(), true, "preparing does not approve or fund");
       await page.locator("[data-revise-card]").click();
+      // "Edit brief" focuses the description on the next frame; wait for it before typing elsewhere.
+      await page.waitForFunction(() => document.activeElement?.id === "bounty-composer-input");
+      assert.equal(await page.locator("#bounty-composer-input").inputValue(), "");
+      assert.equal(await page.locator("[data-composer-label]").innerText(), "Description");
       await page.locator("[data-brief-criteria]").fill("Include 25 competitors\nLink each pricing source");
       assert.equal(await page.evaluate(() => window.AgentBountiesWorkflow.createClient(window).load().draft_stale), true);
       await page.locator("[data-composer-submit]").click();
       await page.waitForFunction(() => document.querySelector("[data-card-criteria]").textContent.includes("25 competitors"));
+      assert.equal(await page.evaluate(() => window.AgentBountiesWorkflow.createClient(window).load().draft.goal), "Research competitors. Done when: Include 25 competitors; Link each pricing source", "the description follows the edited criteria");
       await page.reload();
       await page.locator("#bounty-preview:not([hidden])").waitFor();
       assert.equal(await page.locator("[data-brief-mode]").inputValue(), "manual");

@@ -175,6 +175,25 @@ test("saved brief edits reach the shared journey and invalidate an older funding
   document.activeElement = budget; budget.value = "25.00"; budget.handlers.input();
   assert.equal(invalidations, before, "equivalent amount formatting preserves the proposal approval");
   assert.equal(Date.parse(client.load().brief.deadline_at), Date.parse(newCutoff));
+  // A description left empty is generated from the title and criteria. The generated text
+  // never returns to the field, so a later criteria edit cannot publish an outdated copy.
+  const helper = win.AgentBountiesPostingBrief, title = elements.get("[data-brief-title]"), criteria = elements.get("[data-brief-criteria]");
+  const generated = helper.fallbackGoal("Landing page", "Loads on mobile");
+  document.activeElement = null;
+  client.save({ ...client.load(), goal: generated, draft_stale: false, brief: { ...client.load().brief, goal: generated, title: "Landing page", criteria: "Loads on mobile" }, draft: { ...client.load().draft, title: "Landing page", goal: generated, acceptance_criteria: ["Loads on mobile"] } });
+  assert.equal(goal.value, "", "the generated description stays out of the field");
+  document.activeElement = budget; budget.handlers.input();
+  assert.equal(invalidations, before, "an untouched empty description is not a change to the proposal");
+  document.activeElement = criteria; criteria.value = "Loads on mobile\nHas a contact form"; criteria.handlers.input();
+  assert.equal(client.load().brief.goal, "", "the outdated generated text is not kept as the description");
+  assert.equal(helper.manualDraft({ ...client.load().brief, deadline_at: new Date(Date.now() + 86400000).toISOString() }).goal, "Landing page. Done when: Loads on mobile; Has a contact form");
+  assert.equal(client.load().goal, "Landing page. Done when: Loads on mobile; Has a contact form");
+  // Only this form's own drafts are limited to 30 days; AI-prepared drafts keep their own limits.
+  const mode = elements.get("[data-brief-mode]");
+  mode.value = "ai"; mode.handlers.change();
+  assert.equal(deadline.max, "", "the 30-day calendar limit applies to the manual form only");
+  mode.value = "manual"; mode.handlers.change();
+  assert.ok(deadline.max);
 });
 
 test("contract-wallet verdict preserves a wider signature through review and relay",async()=>{

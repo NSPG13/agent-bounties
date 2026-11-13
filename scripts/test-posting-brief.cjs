@@ -65,4 +65,9 @@ test("manual form preserves explicit terms without an AI and rejects incomplete 
   const bare = brief.manualDraft({...input, goal:"", title:"Landing page", criteria:"Loads on mobile\nHas a contact form"}, now);
   assert.equal(bare.goal, "Landing page. Done when: Loads on mobile; Has a contact form");
   assert.throws(() => brief.manualDraft({...input, goal:"", title:""}, now));
+  assert.equal(brief.fallbackGoal("Landing page", ["Loads on mobile", "Has a contact form"]), bare.goal, "form text and published criteria produce the same generated description");
+  assert.equal(brief.fallbackGoal("Landing page", ""), "");
+  assert.ok(brief.fallbackGoal("Landing page", Array(20).fill("x".repeat(1000)).join("\n")).length <= 4000);
+  assert.throws(() => brief.manualDraft({...input, goal:"x".repeat(4001)}, now), /4,000 characters/, "a written description is validated, never shortened silently");
+  assert.doesNotMatch(brief.resolveDeadline("2026-11-01T01:30", "America/Chicago").error, /UTC offset/, "the form has no offset field to point at");
 });
