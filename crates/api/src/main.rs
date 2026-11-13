@@ -32,6 +32,8 @@ use platform_payouts::PayoutProofMetadata;
 mod nonce_retirement;
 mod posting_readiness;
 mod privacy_cache;
+mod recovery_boot;
+mod recovery_reads;
 mod request_contract;
 mod review_reports;
 mod review_tasks;
@@ -96,10 +98,10 @@ use chain_base::{
     plan_canonical_child_bounty_terms as build_canonical_child_bounty_terms_plan,
     plan_open_competition_action, plan_open_competition_creation,
     plan_open_competition_entrant_action, plan_standing_meta_v4_action,
-    prepare_agent_to_earn as inspect_agent_wallet_readiness, quote_autonomous_v2_bounty,
-    solver_leaderboard_award_id, standing_meta_v2_parent_context, standing_meta_v4_readiness,
-    validate_attestation_request_against_feed, validate_autonomous_cancel_authority,
-    validate_autonomous_creation_for_public_earning,
+    prepare_agent_to_earn_for_protocol as inspect_agent_wallet_readiness,
+    quote_autonomous_v2_bounty, solver_leaderboard_award_id, standing_meta_v2_parent_context,
+    standing_meta_v4_readiness, validate_attestation_request_against_feed,
+    validate_autonomous_cancel_authority, validate_autonomous_creation_for_public_earning,
     validate_autonomous_v2_creation_for_public_earning,
     validate_open_competition_commitment_envelope, AgentWalletReadinessReport,
     AtomicClaimSponsorGrant, AutonomousBountyAuthorizationSignature,
@@ -2571,6 +2573,12 @@ struct BaseTransactionReceiptReport {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Resolve containment before diagnostics, database access, configuration or jobs.
+    match recovery_boot::BootMode::from_env()? {
+        recovery_boot::BootMode::RecoveryHealthOnly => return recovery_boot::serve().await,
+        recovery_boot::BootMode::RecoveryReadOnly => return recovery_reads::serve().await,
+        recovery_boot::BootMode::Normal => {}
+    }
     // Private operator-shell mode. It exits before migrations, workers, HTTP
     // listeners or any provider request; connection/errors never reveal values.
     if env::args().nth(1).as_deref() == Some("--notification-readiness") {
@@ -8209,23 +8217,19 @@ async fn prepare_agent_wallet_to_earn(
             })),
         ));
     }
-    let (descriptor, rpc_url) = state
+    let (_, rpc_url) = state
         .base_rpc_urls
         .resolve(&request.network)
         .map_err(map_agent_wallet_readiness_error)?;
-    let canonical_factory = autonomous_factory_for_chain(descriptor.chain_id).ok_or_else(|| {
-        agent_wallet_readiness_problem(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "readiness_not_configured",
-            false,
-            "resolve_canonical_factory",
-            "Canonical readiness is not configured for this Base network.",
-            "Use a network advertised by hosted discovery, or retry after the operator configures its canonical factory.",
-        )
-    })?;
     tokio::time::timeout(
         Duration::from_secs(12),
-        inspect_agent_wallet_readiness(&rpc_url, &canonical_factory, &request),
+        async {
+            let (canonical_factory, protocol) = canonical_wallet_readiness_target(
+                &state, &request.network, &request.bounty_contract,
+            ).await?;
+            inspect_agent_wallet_readiness(&rpc_url, &canonical_factory, protocol, &request)
+                .await.map(Json).map_err(map_agent_wallet_readiness_error)
+        },
     )
     .await
     .map_err(|_| {
@@ -8238,8 +8242,36 @@ async fn prepare_agent_wallet_to_earn(
             "Retry with the same public inputs after a short delay; do not sign or fund anything from this response.",
         )
     })?
-    .map(Json)
-    .map_err(map_agent_wallet_readiness_error)
+}
+
+/// Indexed canonical factory membership selects the protocol; fresh chain reads
+/// still independently verify registration, immutable factory and protocol hash.
+async fn canonical_wallet_readiness_target(
+    state: &SharedState,
+    network: &str,
+    contract: &str,
+) -> Result<(String, chain_base::AgentWalletReadinessProtocol), AgentWalletReadinessProblem> {
+    let contract = normalize_evm_address(contract).map_err(map_agent_wallet_readiness_error)?;
+    let unavailable = |status: StatusCode| {
+        agent_wallet_readiness_problem(
+            status,
+            "canonical_identity_unavailable",
+            status.is_server_error(),
+            "resolve_canonical_factory",
+            "The bounty's exact canonical protocol and configured factory could not be resolved.",
+            "Refresh canonical bounty inventory and retry; do not substitute a different factory.",
+        )
+    };
+    let protocol = autonomous_projection::protocol_for_contract(state, network, &contract)
+        .await
+        .map_err(unavailable)?;
+    let expected = match protocol {
+        AUTONOMOUS_PROTOCOL_VERSION => chain_base::AgentWalletReadinessProtocol::AutonomousV1,
+        AUTONOMOUS_V2_PROTOCOL_VERSION => chain_base::AgentWalletReadinessProtocol::AutonomousV2,
+        _ => return Err(unavailable(StatusCode::SERVICE_UNAVAILABLE)),
+    };
+    let factory = autonomous_projection::factory(network, protocol).map_err(unavailable)?;
+    Ok((factory, expected))
 }
 
 #[utoipa::path(
@@ -9725,13 +9757,22 @@ async fn open_competition_offchain_gates(
     })
 }
 
+fn reader_max_cursor_lag_blocks(network: &str) -> u64 {
+    match network {
+        // Denim mainnet blocks are 200ms: retain the prior ~40s lag allowance.
+        // This is an availability limit; provider-safe and canonicality checks remain required.
+        "base-mainnet" => 200,
+        _ => 20,
+    }
+}
+
 fn open_competition_monitoring_is_fresh(
     heartbeat: &BaseIndexerHeartbeat,
     safe_block_number: u64,
     now: DateTime<Utc>,
 ) -> bool {
     const MAX_HEARTBEAT_AGE_SECONDS: i64 = 90;
-    const MAX_CURSOR_LAG_BLOCKS: u64 = 20;
+    let max_cursor_lag_blocks = reader_max_cursor_lag_blocks(&heartbeat.network);
 
     let status_healthy = heartbeat.status == "success"
         || (heartbeat.status == "skipped"
@@ -9743,10 +9784,10 @@ fn open_competition_monitoring_is_fresh(
     let age = now.signed_duration_since(completed_at).num_seconds();
     let latest_block_healthy = heartbeat
         .latest_block
-        .is_some_and(|latest| latest.saturating_add(MAX_CURSOR_LAG_BLOCKS) >= safe_block_number);
+        .is_some_and(|latest| latest.saturating_add(max_cursor_lag_blocks) >= safe_block_number);
     let cursor_healthy = heartbeat
         .persisted_cursor_block
-        .is_some_and(|cursor| cursor.saturating_add(MAX_CURSOR_LAG_BLOCKS) >= safe_block_number);
+        .is_some_and(|cursor| cursor.saturating_add(max_cursor_lag_blocks) >= safe_block_number);
 
     status_healthy
         && heartbeat.error_message.is_none()
@@ -19619,7 +19660,7 @@ mod tests {
             &stale, safe_block, now
         ));
 
-        let lagging = open_competition_heartbeat(now, "success", Some(safe_block - 21), 15);
+        let lagging = open_competition_heartbeat(now, "success", Some(safe_block - 201), 15);
         assert!(!open_competition_monitoring_is_fresh(
             &lagging, safe_block, now
         ));
@@ -19628,6 +19669,39 @@ mod tests {
         assert!(!open_competition_monitoring_is_fresh(
             &failed, safe_block, now
         ));
+    }
+
+    #[test]
+    fn reader_lag_policy_tracks_mainnet_cadence_without_widening_other_networks() {
+        let now = Utc.with_ymd_and_hms(2026, 11, 10, 12, 0, 0).unwrap();
+        let safe = 60_000_000;
+        for (network, limit) in [("base-mainnet", 200), ("base-sepolia", 20), ("unknown", 20)] {
+            for (lag, expected) in [(limit, true), (limit + 1, false)] {
+                let mut heartbeat =
+                    open_competition_heartbeat(now, "success", Some(safe - lag), 15);
+                heartbeat.network = network.into();
+                assert_eq!(
+                    open_competition_monitoring_is_fresh(&heartbeat, safe, now),
+                    expected
+                );
+                // Observed latest and persisted progress must independently meet the limit.
+                heartbeat.persisted_cursor_block = Some(safe);
+                heartbeat.latest_block = Some(safe - lag);
+                assert_eq!(
+                    open_competition_monitoring_is_fresh(&heartbeat, safe, now),
+                    expected
+                );
+            }
+        }
+        let mut heartbeat = open_competition_heartbeat(now, "success", Some(safe - 5 * 15), 15);
+        assert!(open_competition_monitoring_is_fresh(&heartbeat, safe, now));
+        heartbeat.completed_at = Some(now - ChronoDuration::seconds(91));
+        assert!(!open_competition_monitoring_is_fresh(&heartbeat, safe, now));
+        heartbeat.completed_at = Some(now + ChronoDuration::seconds(1));
+        assert!(!open_competition_monitoring_is_fresh(&heartbeat, safe, now));
+        heartbeat.completed_at = Some(now);
+        heartbeat.error_message = Some("fixture failure".into());
+        assert!(!open_competition_monitoring_is_fresh(&heartbeat, safe, now));
     }
 
     #[test]

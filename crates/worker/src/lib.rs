@@ -697,8 +697,31 @@ pub async fn poll_autonomous_indexer_once_with_heartbeat(
     store: &PostgresStore,
     config: &AutonomousIndexerConfig,
 ) -> anyhow::Result<AutonomousIndexerPollReport> {
+    poll_autonomous_with_heartbeat_policy(store, config, DiscoveryEnqueuePolicy::Enabled).await
+}
+
+/// Recovery ingestion preserves canonical writes but cannot enqueue notifications.
+/// This is a caller policy, never an inherited environment switch.
+pub async fn poll_autonomous_recovery_once_with_heartbeat(
+    store: &PostgresStore,
+    config: &AutonomousIndexerConfig,
+) -> anyhow::Result<AutonomousIndexerPollReport> {
+    poll_autonomous_with_heartbeat_policy(store, config, DiscoveryEnqueuePolicy::Suppressed).await
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DiscoveryEnqueuePolicy {
+    Enabled,
+    Suppressed,
+}
+
+async fn poll_autonomous_with_heartbeat_policy(
+    store: &PostgresStore,
+    config: &AutonomousIndexerConfig,
+    discovery: DiscoveryEnqueuePolicy,
+) -> anyhow::Result<AutonomousIndexerPollReport> {
     let started_at = Utc::now();
-    match poll_autonomous_indexer_once(store, config).await {
+    match poll_autonomous_indexer_with_policy(store, config, discovery).await {
         Ok(report) => {
             let completed_at = Utc::now();
             let status = if report.skipped_reason.is_some() {
@@ -770,6 +793,14 @@ pub async fn poll_autonomous_indexer_once_with_heartbeat(
 pub async fn poll_autonomous_indexer_once(
     store: &PostgresStore,
     config: &AutonomousIndexerConfig,
+) -> anyhow::Result<AutonomousIndexerPollReport> {
+    poll_autonomous_indexer_with_policy(store, config, DiscoveryEnqueuePolicy::Enabled).await
+}
+
+async fn poll_autonomous_indexer_with_policy(
+    store: &PostgresStore,
+    config: &AutonomousIndexerConfig,
+    discovery: DiscoveryEnqueuePolicy,
 ) -> anyhow::Result<AutonomousIndexerPollReport> {
     let descriptor = config.network_descriptor()?;
     // Capture one durable position before the fresh headers. A competing poll
@@ -978,8 +1009,15 @@ pub async fn poll_autonomous_indexer_once(
             last_log_key,
         )
         .await?;
-    enqueue_canonical_discovery_events(store, &config.network, &config.public_base_url, &events)
+    if discovery == DiscoveryEnqueuePolicy::Enabled {
+        enqueue_canonical_discovery_events(
+            store,
+            &config.network,
+            &config.public_base_url,
+            &events,
+        )
         .await?;
+    }
 
     Ok(AutonomousIndexerPollReport {
         network: descriptor,
