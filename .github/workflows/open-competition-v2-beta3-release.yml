@@ -359,7 +359,7 @@ jobs:
         profile: [public-vector-metric-v1, structured-artifact-metric-v1, forward-canonical-gmv-attribution-metric-v2]
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         pattern: open-competition-v2-beta3-metric-${{ matrix.profile }}-*-${{ github.sha }}
         path: evidence
@@ -425,15 +425,15 @@ jobs:
         ref: f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d
         path: .sp1-safe
     - uses: ./.github/actions/setup-patched-sp1
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: open-competition-v2-beta3-static-analysis-${{ github.sha }}
         path: target/prerequisites/static-analysis
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: open-competition-v2-beta3-patched-source-${{ github.sha }}
         path: target/prerequisites/patched-source
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         pattern: open-competition-v2-beta3-metric-release-*-${{ github.sha }}
         path: target/prerequisites/metric-release
@@ -673,7 +673,7 @@ jobs:
     - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: "3.12"
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: open-competition-v2-beta3-release-assets-${{ github.sha }}
         path: target/release-assets
@@ -863,11 +863,11 @@ jobs:
     - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: "3.12"
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: open-competition-v2-beta3-release-assets-${{ github.sha }}
         path: target/release-assets
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: open-competition-v2-beta3-live-sepolia-${{ github.sha }}
         path: target/live-sepolia
@@ -952,15 +952,15 @@ jobs:
     - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: "3.12"
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: open-competition-v2-beta3-mainnet-canaries-${{ github.sha }}
         path: target/mainnet-canaries
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: open-competition-v2-beta3-production-control-plane-${{ github.sha }}
         path: target/production-control-plane
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: open-competition-v2-beta3-mainnet-deployment-${{ github.sha }}
         path: target/mainnet-deployment
@@ -1058,7 +1058,7 @@ jobs:
     timeout-minutes: 30
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: open-competition-v2-beta3-release-assets-${{ github.sha }}
         path: target/release-assets
@@ -1150,7 +1150,7 @@ jobs:
     - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: "3.12"
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: open-competition-v2-beta3-mainnet-deployment-${{ github.sha }}
         path: target/mainnet-deployment
@@ -1265,15 +1265,15 @@ jobs:
     - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: "3.12"
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: open-competition-v2-beta3-release-assets-${{ github.sha }}
         path: target/release-assets
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: open-competition-v2-beta3-mainnet-deployment-${{ github.sha }}
         path: target/mainnet-deployment
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: open-competition-v2-beta3-production-control-plane-${{ github.sha }}
         path: target/production-control-plane

@@ -44,14 +44,14 @@ jobs:
       with:
         python-version: "3.12"
     - name: Download the exact reviewed verifier assets
-      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: open-competition-v2-beta3-release-assets-${{ env.RELEASE_SOURCE_COMMIT }}
         path: target/release-assets
         github-token: ${{ github.token }}
         run-id: ${{ env.RELEASE_RUN_ID }}
     - name: Download the exact successful Sepolia evidence
-      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: open-competition-v2-beta3-live-sepolia-${{ env.RELEASE_SOURCE_COMMIT }}
         path: target/live-sepolia
