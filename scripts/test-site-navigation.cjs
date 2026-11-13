@@ -44,10 +44,21 @@ async function main() {
   });
   let mode = "ready";
   const errors = [];
+  // workspace/index.html is a redirect handoff: it refreshes at once to the API, which
+  // signs the visitor into the Workspace. Answering that request with 204 No Content keeps
+  // the browser on the page so it is measured like every other page; the fixture then
+  // serves a document to prove where the manual fallback link lands.
+  const workspaceHandoff = "https://api.agentizable.ai/v1/site-auth/workspace/open";
+  let handoff = null;
   async function context(options) {
     const ctx = await browser.newContext({ reducedMotion: "reduce", ...options });
     await ctx.route("**/*", route => {
       const url = new URL(route.request().url()), now = new Date().toISOString();
+      if (handoff && url.href === workspaceHandoff) {
+        handoff.requests.push(route.request());
+        handoff.seen();
+        return handoff.land ? route.fulfill({ contentType: "text/html", body: "<!doctype html><title>Workspace handoff fixture</title><p>Handoff reached.</p>" }) : route.fulfill({ status: 204 });
+      }
       if (url.pathname === "/v1/metrics/platform") return mode === "offline" ? route.fulfill({ status: 503, body: "unavailable" }) : route.fulfill({ json: fixture(url.searchParams.get("period"), mode) });
       if (url.pathname === "/generated/github-participation.json") return route.fulfill({ json: { generated_at: now, coverage: { status: "ready" }, periods: Object.fromEntries(["lifetime", "90d", "28d", "7d"].map(p => [p, { active_identities: 3 }])), repository_acquisition: { generated_at: now, started_at: now, ended_at: now, coverage: { status: "ready" } } } });
       if (url.pathname.endsWith("/events")) return route.fulfill({ json: [] });
@@ -100,6 +111,9 @@ async function main() {
           assert.equal(await page.locator('meta[name="robots"]').getAttribute("content"), "noindex, nofollow");
           continue;
         }
+        const redirects = file === "workspace/index.html";
+        let automatic;
+        if (redirects) automatic = new Promise(resolve => { handoff = { requests: [], seen: resolve, land: false }; });
         await page.goto(`${origin}/${file}`);
         await page.locator(".ab-site-header.is-enhanced").waitFor();
         await assertHeadingLayout(page, `${file} at ${width}px`);
@@ -120,6 +134,22 @@ async function main() {
         assert.deepEqual(appearance, reference, `same homepage header: ${file} at ${width}`);
         assert.equal(await page.locator(".ab-site-menu, [data-site-header] .ab-site-login").count(), 0);
         for (const n of [1, 2, 3]) await assertFits(page, `.ab-site-nav a:nth-child(${n})`);
+        if (redirects) {
+          assert.equal(await page.locator('meta[http-equiv="refresh"]').getAttribute("content"), `0; url=${workspaceHandoff}`);
+          assert.equal(await page.locator('meta[name="robots"]').getAttribute("content"), "noindex, nofollow");
+          assert.equal(await page.locator("main a").getAttribute("href"), workspaceHandoff, "manual fallback opens the same handoff");
+          await assertFits(page, "main a");
+          await automatic;
+          const isTopLevelGet = request => request.isNavigationRequest() && request.frame() === page.mainFrame() && request.method() === "GET";
+          assert.equal(handoff.requests.length, 1, "the page hands off once, without a retry loop");
+          assert.ok(isTopLevelGet(handoff.requests[0]), "automatic handoff is a top-level navigation");
+          handoff.land = true;
+          await page.locator("main a").click();
+          await page.waitForURL(workspaceHandoff);
+          assert.equal(await page.title(), "Workspace handoff fixture", "manual fallback reaches the handoff");
+          assert.ok(handoff.requests.length === 2 && isTopLevelGet(handoff.requests[1]), "manual fallback is a top-level navigation");
+          handoff = null;
+        }
       }
       console.log(`Shared homepage header and accessible links passed on ${pages.length} pages at ${width}px`);
       await page.goto(`${origin}/blog/`);
