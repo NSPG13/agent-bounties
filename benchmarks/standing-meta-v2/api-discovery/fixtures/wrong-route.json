@@ -1,0 +1,25 @@
+{
+  "schema": "https://agentbounties.app/schemas/unsupported-schema.v1.json",
+  "name": "Agent Bounties REST API",
+  "version": "autonomous-v1",
+  "protocol": {
+    "network": "ethereum-mainnet",
+    "chain_id": 1,
+    "asset": "ETH",
+    "token": "0x0000000000000000000000000000000000000000",
+    "deployment_status": "deprecated"
+  },
+  "endpoints": {
+    "api_base": "https://api.example.com",
+    "feed": "/api/v1/feed",
+    "inventory_summary": "/api/v1/stats",
+    "leaderboard": "/api/v1/leaders",
+    "openapi": "/docs/openapi.json"
+  },
+  "supported_routes": [
+    "/api/v1/feed",
+    "/api/v1/stats",
+    "/api/v1/leaders",
+    "/docs/openapi.json"
+  ]
+}
