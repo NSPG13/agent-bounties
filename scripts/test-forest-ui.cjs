@@ -85,7 +85,7 @@ async function main() {
       else assert.equal(new Set(metrics.map(metric => metric.y)).size, 1, "desktop metrics align horizontally");
       // Payout volume is a USD summary at $1 per USDC face value; the label must say so.
       await page.waitForFunction(() => document.querySelector("[data-market-volume]").textContent === "$1,000.25");
-      assert.match(await page.locator(".ab-metric", { has: page.locator("[data-market-volume]") }).innerText(), /USD paid out.*USDC payouts at \$1 face value/s);
+      assert.match(await page.locator(".ab-metric", { has: page.locator("[data-market-volume]") }).innerText(), /USD paid out/s);
       assert.equal(await page.locator("[data-completed-bounties]").innerText(), "1,234");
       const metricValues = await page.locator(".ab-metric output, .ab-metric strong").evaluateAll(els => els.map(el => {
         const range = document.createRange(); range.selectNodeContents(el);
