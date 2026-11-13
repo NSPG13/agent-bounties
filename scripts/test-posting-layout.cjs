@@ -129,12 +129,9 @@ async function recoveryRegressions(browser, origin) {
     await page.evaluate(draft => window.AgentBountiesComposer.stage(draft), fixture);
     // Capture real fixture bytes through the UI. The recorded reference is
     // independent of a generated cover image and survives the server envelope.
-    await page.locator(".posting-reference > summary").click();
-    await page.getByLabel("Homepage background scene", { exact: true }).selectOption("day");
-    await page.getByLabel("Background layout", { exact: true }).selectOption("mobile");
-    await page.getByRole("button", { name: "Freeze this background", exact: true }).click();
-    await page.waitForFunction(() => window.AgentBountiesWorkflow.createClient(window).load()?.reference_attachment?.phase === "day");
-    const reference = await page.evaluate(() => window.AgentBountiesWorkflow.createClient(window).load().reference_attachment);
+    // The posting form no longer shows the "Freeze a visual reference" panel; the
+    // reference helper still captures and verifies the same bytes for linked drafts.
+    const reference = await page.evaluate(() => window.AgentBountiesPostingReference.captureHomepage({ phase: "day", variant: "mobile" }, window));
     assert.equal(reference.sha256, "sha256:" + createHash("sha256").update(fs.readFileSync(path.join(root, "site/assets/solarpunk/scene-day-mobile.webp"))).digest("hex"));
     assert.equal(reference.byte_length, fs.statSync(path.join(root, "site/assets/solarpunk/scene-day-mobile.webp")).size);
     await page.evaluate(draft => window.AgentBountiesComposer.stage(draft), { ...fixture, reference_attachment: reference });
@@ -146,7 +143,6 @@ async function recoveryRegressions(browser, origin) {
       return state.includes("Balance checks only") && state.includes("USDC available");
     });
     assert.equal(await page.locator("[data-fund-now]").isDisabled(), true, "Verified ownership must not authorize funding");
-    assert.equal(await page.locator('[data-posting-step="wallet"]').getAttribute("data-complete"), "false");
     assert.equal(await page.evaluate(() => window.__walletRequests.includes("eth_requestAccounts")), false, "Linked wallet balances are checked without requesting connection");
     assert.ok(mock.rpcRequests.some(call => call.method === "eth_getBalance"));
     assert.ok(mock.rpcRequests.some(call => call.method === "eth_call"));
@@ -317,7 +313,7 @@ async function recoveryRegressions(browser, origin) {
       assert.equal(result.creation_confirmed, false); assert.equal(result.funding_confirmed, false);
       assert.equal(result.claimable, false); assert.equal(result.public_inventory_verified, false); assert.equal(result.paid, false);
     }
-    for (const step of ["creation", "funding", "claimable", "inventory"]) assert.equal(await page.locator(`[data-posting-step="${step}"]`).getAttribute("data-complete"), "false");
+    assert.equal(await page.locator("[data-posting-step]").count(), 0, "the posting page shows no status chips");
     await page.reload(); await awaitPosting(page);
     await page.waitForFunction(() => window.AgentBountiesComposer.review().canonical_status !== null);
     assert.equal(await page.locator("[data-open-funding]").isDisabled(), true, "Pending operation cannot create a second funding request");
@@ -667,7 +663,7 @@ async function main() {
         await page.setViewportSize(size);
       }
       await wheelToEnd(page);
-      const footer = await page.locator("[data-ai-options] > summary").boundingBox();
+      const footer = await page.locator("[data-composer-submit]").boundingBox();
       const dock = await page.locator(".bounty-card-actions").boundingBox();
       assert.ok(footer.y + footer.height < dock.y, "Bottom content must clear the action dock");
       if (process.env.POSTING_LAYOUT_SCREENSHOTS) {

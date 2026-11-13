@@ -1,7 +1,24 @@
-/* Native posting remains a first-class option alongside assistant handoffs. */
+/* The home page launcher loads this file for its "Create it here" button. */
 [data-bounty-manual] { margin: 22px 0 8px; width: 100%; justify-content: center; white-space: normal; }
-[data-manual-fields] { border: 1px solid var(--ab-line); border-radius: 12px; padding: 18px; margin: 20px 0; min-width: 0; }
-[data-manual-fields] input:not([type="checkbox"]), [data-manual-fields] textarea, [data-brief-mode] { box-sizing: border-box; width: 100%; background: var(--ab-bg); color: inherit; border: 1px solid var(--ab-line); border-radius: 8px; padding: 12px; font: inherit; }
-[data-manual-fields] label { display: block; margin: 12px 0 6px; }
-[data-manual-fields] p { color: var(--ab-muted); font-size: 14px; }
-[data-manual-review-consent] { width: auto; margin-right: 8px; }
+/* Posting form: one clear card with three groups — the work, the budget, the delivery. */
+.posting-page .brief-mode-field { margin: 0 0 18px; }
+.posting-page .brief-details { border: 1px solid var(--ab-line); border-radius: 16px; padding: 8px 22px 22px; margin: 0 0 18px; min-width: 0; background: var(--ab-panel); }
+.posting-page .brief-details legend { padding: 0 8px; font-weight: 700; color: var(--ab-ink); }
+.posting-page .brief-group { padding: 18px 0 4px; border-top: 1px solid var(--ab-line); }
+.posting-page .brief-group:first-of-type { border-top: 0; }
+.posting-page .brief-group h3 { margin: 0 0 12px; font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--ab-moss, var(--ab-muted)); }
+.posting-page .brief-field { display: flex; flex-direction: column; gap: 6px; margin: 0 0 14px; min-width: 0; }
+.posting-page .brief-field[hidden], .posting-page [data-ai-only][hidden] { display: none; }
+.posting-page .brief-field label { margin: 0; }
+.posting-page .brief-details :is(input:not([type="hidden"]), textarea), .posting-page [data-brief-mode] { box-sizing: border-box; width: 100%; background: var(--ab-bg); color: var(--ab-ink); border: 1px solid var(--ab-line); border-radius: 10px; padding: 12px 14px; font: inherit; }
+.posting-page .chat-composer-form .brief-details textarea { min-height: 96px; padding: 12px 14px; font-size: 16px; }
+.posting-page .brief-details small, .posting-page .brief-group > small { display: block; color: var(--ab-muted); font-size: 13px; line-height: 1.5; }
+.posting-page .brief-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.posting-page .brief-deadline { cursor: pointer; min-height: 48px; color-scheme: dark; }
+:root[data-theme="light"] .posting-page .brief-deadline { color-scheme: light; }
+.posting-page .brief-details .brief-summary { margin: 0 0 6px; color: var(--ab-ink); font-weight: 600; }
+.posting-page .brief-ai-options { margin: 0 0 18px; }
+@media (max-width: 640px) {
+  .posting-page .brief-details { padding: 6px 14px 16px; }
+  .posting-page .brief-row { grid-template-columns: minmax(0, 1fr); gap: 0; }
+}

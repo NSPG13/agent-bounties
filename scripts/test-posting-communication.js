@@ -28,11 +28,13 @@ test('routine guidance follows the three-sentence limit; detailed consent is exp
   assert.match(flow.GUIDANCE.style,/one primary next action/);
   assert.match(prompt.build(),/at most three short sentences/);
 });
-test('the page renders the shared choices and explains the posting sequence and protocol',()=>{
+test('the page opens on the form and keeps the shared review choices in code',()=>{
   const page=readFileSync(require.resolve('../site/post.html'),'utf8');
   const code=readFileSync(require.resolve('../site/bounty-composer-v2.js'),'utf8');
-  assert.match(page,/Describe the work, choose how it is checked, then review the cost/);
-  assert.match(page,/autonomous-v1 on Base/);
+  // The posting page goes straight to the form: no explainer box and no "choose how to create" panel.
+  assert.doesNotMatch(page,/How does a bounty work\?/);
+  assert.doesNotMatch(page,/Choose how to create your bounty/);
+  assert.match(page,/data-ai-options data-ai-only/);
   assert.match(code,/AgentBountiesWorkflow\.POSTING_OPTIONS\.choices/);
   for(const field of ['decision_maker','evidence','costs','limitations'])assert.ok(code.includes(`choice.${field}`));
 });

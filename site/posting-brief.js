@@ -45,7 +45,7 @@
       }
       const matches = [...offsets].filter(offset => wallTime(naive - offset * MINUTE, zone) === local);
       if (!matches.length) throw new Error("That local time does not exist because the clocks change. Choose another time.");
-      if (matches.length > 1) throw new Error("That local time occurs twice because the clocks change. Enter its exact UTC offset to choose which occurrence.");
+      if (matches.length > 1) throw new Error("That local time occurs twice because the clocks change. Choose a time before or after the repeated hour.");
       return { iso: local + ":00" + offsetText(matches[0]), error: null };
     } catch (error) { return { iso: null, error: error.message }; }
   }
@@ -92,9 +92,16 @@
     }
     return output;
   }
+  // The description is optional on the form: without one, the title and criteria describe the work.
+  function fallbackGoal(title, criteria) {
+    const name = String(title || "").trim();
+    const checks = (Array.isArray(criteria) ? criteria : String(criteria || "").split(/\r?\n/)).map(s => String(s).trim()).filter(Boolean);
+    return name && checks.length ? `${name}. Done when: ${checks.join("; ")}`.slice(0, 4000) : "";
+  }
   function manualDraft(brief, now = Date.now()) {
-    const title = String(brief.title || "").trim(), goal = String(brief.goal || "").trim();
+    const title = String(brief.title || "").trim();
     const criteria = String(brief.criteria || "").split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    const goal = String(brief.goal || "").trim() || fallbackGoal(title, criteria);
     if (!title || title.length > 200) throw new Error("Enter a title of up to 200 characters.");
     if (!goal || goal.length > 4000) throw new Error("Describe the work in up to 4,000 characters.");
     if (!criteria.length || criteria.length > 20 || criteria.some(s => s.length > 1000)) throw new Error("Add 1–20 acceptance criteria, one per line, with up to 1,000 characters each.");
@@ -105,5 +112,5 @@
     if (brief.review_consent !== true) throw new Error("Confirm that you will review submissions yourself.");
     return { title, goal, acceptance_criteria: criteria, solver_reward_usdc: ((total - reserve) / 100).toFixed(2), verifier_reward_usdc: (reserve / 100).toFixed(2), task_window_days: Math.max(1, Math.ceil(remaining / 86400000)), delivery_deadline: brief.deadline_at, review_mode: "creator", discovery_source: "Platform form (no AI)" };
   }
-  return Object.freeze({ manualDraft, resolveDeadline, wallTime, proposedSplit, estimateBudget, countdown, warnings, cents });
+  return Object.freeze({ manualDraft, fallbackGoal, resolveDeadline, wallTime, proposedSplit, estimateBudget, countdown, warnings, cents });
 });

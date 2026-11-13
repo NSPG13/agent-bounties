@@ -10,17 +10,48 @@
   const timezone = document.querySelector("[data-brief-timezone]");
   const helper = window.AgentBountiesPostingBrief;
   const mode = document.querySelector("[data-brief-mode]");
-  const manualFields = document.querySelector("[data-manual-fields]");
+  const manualOnly = document.querySelectorAll("[data-manual-only]");
+  const aiOnly = document.querySelectorAll("[data-ai-only]");
+  const goalLabel = document.querySelector("[data-composer-label]");
+  const zoneNote = document.querySelector("[data-brief-zone-note]");
   const title = document.querySelector("[data-brief-title]");
   const criteria = document.querySelector("[data-brief-criteria]");
   const reserve = document.querySelector("[data-brief-reserve]");
-  const consent = document.querySelector("[data-manual-review-consent]");
   const params = new URLSearchParams(window.location.search);
   const protectedHandoff = params.has("parentBounty") || ["ai-app", "chatgpt-app"].includes(params.get("from"));
+  const pad = n => String(n).padStart(2, "0");
+  const localInput = date => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  // The deadline is always read in the device's own time zone. If the browser cannot name a usable
+  // zone, use the device's current UTC offset instead of an error that nobody could correct.
+  const detectedTimezone = (() => {
+    const named = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    try { helper.wallTime(Date.now(), named); return named; } catch (_) { /* Use the offset below. */ }
+    const minutes = -new Date().getTimezoneOffset();
+    return `${minutes < 0 ? "-" : "+"}${pad(Math.floor(Math.abs(minutes) / 60))}:${pad(Math.abs(minutes) % 60)}`;
+  })();
+  function limitDeadline() {
+    const now = new Date(), manual = mode.value === "manual";
+    deadline.min = localInput(now);
+    // The form's own drafts run up to 30 days. A draft prepared with an AI follows its own review limits.
+    deadline.max = manual ? localInput(new Date(now.getTime() + 30 * 86400000)) : "";
+    if (zoneNote) zoneNote.textContent = `In your time zone (${detectedTimezone}).${manual ? " Pick a date and time within the next 30 days." : ""}`;
+  }
+  // An empty description is filled in from the title and criteria when the proposal is prepared.
+  // That generated text stays out of the field, so a later edit cannot leave an outdated copy in the terms.
+  const generatedGoals = journey => [helper.fallbackGoal(journey?.draft?.title, journey?.draft?.acceptance_criteria), helper.fallbackGoal(journey?.brief?.title, journey?.brief?.criteria)].filter(Boolean);
+  const ownGoal = (value, journey) => { const text = String(value || "").trim(); return mode.value === "manual" && generatedGoals(journey).includes(text) ? "" : text; };
   function setMode() {
     const manual = mode.value === "manual";
-    manualFields.hidden = !manual;
-    manualFields.disabled = !manual;
+    limitDeadline();
+    // Manual posting asks only for its own fields; the AI handoff shows only in AI mode.
+    for (const block of manualOnly) {
+      block.hidden = !manual;
+      for (const field of block.querySelectorAll("input, textarea, select")) field.disabled = !manual;
+    }
+    for (const block of aiOnly) block.hidden = manual;
+    goal.required = !manual;
+    if (goalLabel) goalLabel.textContent = manual ? "Description" : "What do you want delivered?";
+    goal.placeholder = manual ? "Context agents need: links, background, preferences." : "Describe the result you need.";
     form.querySelector("[data-composer-submit]").textContent = manual ? "Review draft" : "Continue with my AI →";
   }
   const saved = client.load();
@@ -30,15 +61,12 @@
   const deadlineSummary = document.querySelector("[data-brief-deadline-summary]");
   const budgetSummary = document.querySelector("[data-brief-budget-summary]");
   const warningList = document.querySelector("[data-brief-warnings]");
-  const detectedTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   timezone.value = detectedTimezone;
-  const zoneList = document.querySelector("#brief-timezones");
-  if (zoneList) {
-    const zones = typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : ["America/Mexico_City", "America/Chicago", "Europe/London", "Asia/Shanghai"];
-    for (const zone of new Set([detectedTimezone, "UTC", "-06:00", ...zones])) {
-      const option = document.createElement("option"); option.value = zone; zoneList.append(option);
-    }
-  }
+  // Open the calendar and clock as soon as the field is touched, not only from the small icon.
+  const openPicker = () => { limitDeadline(); try { deadline.showPicker?.(); } catch (_) { /* Some browsers allow it only on a direct click. */ } };
+  deadline.addEventListener("click", openPicker);
+  deadline.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openPicker(); } });
+  const friendly = iso => new Intl.DateTimeFormat(undefined, { weekday: "long", day: "numeric", month: "long", hour: "numeric", minute: "2-digit" }).format(new Date(iso));
   let restoring = false;
   const actions = document.querySelector(".bounty-card-actions");
   if (actions) {
@@ -46,23 +74,6 @@
     if (typeof ResizeObserver === "function") new ResizeObserver(measureActions).observe(actions);
     window.addEventListener("resize", measureActions);
     measureActions();
-  }
-  // Pricing is an explicit planning assumption; settled micro-bounties are not
-  // represented as market-clearing prices for unrelated professional work.
-  if (budgetSummary) {
-    const estimator = document.createElement("details");
-    const title = document.createElement("summary"); title.textContent = "Estimate a starting budget";
-    const inputs = [ ["Estimated work hours", "hours", "2"], ["USDC per hour", "rate", "20"], ["Review reserve in USDC", "reserve", "1"] ].map(([label, name, value]) => {
-      const row = document.createElement("label"); row.textContent = label;
-      const field = document.createElement("input"); field.type = "number"; field.min = "0.01"; field.step = "0.01"; field.value = value; field.name = `budget-estimate-${name}`;
-      row.append(field); return { row, field };
-    });
-    const result = document.createElement("p"); result.setAttribute("aria-live", "polite");
-    const note = document.createElement("p"); note.textContent = "This is hours × your chosen rate, plus the review reserve. It is a planning estimate, not a prediction of bids. Consider specialist access, tools and external expenses.";
-    const comparable = document.createElement("a"); comparable.href = "/metrics.html"; comparable.textContent = "Compare dated, confirmed payouts";
-    const update = () => { const estimate = helper.estimateBudget(...inputs.map(({ field }) => field.value)); result.textContent = estimate ? `${estimate.total} USDC total: ${estimate.solver} for the work + ${estimate.reserve} review reserve. Update your brief if you want this budget.` : "Enter positive hours, rate and review reserve within the supported range."; };
-    for (const { field } of inputs) field.addEventListener("input", update);
-    estimator.append(title, ...inputs.map(({ row }) => row), result, note, comparable); budgetSummary.after(estimator); update();
   }
   function render() {
     const result = helper.resolveDeadline(deadline.value, timezone.value.trim());
@@ -72,7 +83,7 @@
     // millisecond when this is only an edit to another field.
     if (result.iso && Number.isFinite(Date.parse(savedDeadline)) && helper.wallTime(Date.parse(savedDeadline), timezone.value.trim()) === deadline.value) result.iso = savedDeadline;
     deadline.setCustomValidity(result.error || "");
-    if (deadlineSummary) deadlineSummary.textContent = result.error || (result.iso ? `${deadline.value.replace("T", " ")} (${timezone.value.trim()}) · ${result.iso} · ${helper.countdown(result.iso)}` : "Choose the exact calendar deadline; the clock continues during wallet setup.");
+    if (deadlineSummary) deadlineSummary.textContent = result.error || (result.iso ? `${friendly(result.iso)} · ${helper.countdown(result.iso)}` : "");
     const draft = journey?.draft_stale ? null : journey?.draft;
     if (budgetSummary) {
       const staged = journey?.draft;
@@ -96,9 +107,10 @@
     restoring = true;
     const brief = journey.brief || {};
     const savedDeadline = brief.deadline_at || journey.draft?.delivery_deadline || "";
-    if (document.activeElement !== goal) goal.value = brief.goal || journey.draft?.goal || journey.goal || "";
+    if (brief.preparation_mode && !protectedHandoff) mode.value = brief.preparation_mode;
+    if (document.activeElement !== goal) goal.value = ownGoal(brief.goal || journey.draft?.goal || journey.goal || "", journey);
     if (document.activeElement !== budget) budget.value = brief.budget_usdc || (journey.draft ? String(Number(journey.draft.solver_reward_usdc) + Number(journey.draft.verifier_reward_usdc)) : "");
-    if (document.activeElement !== timezone) timezone.value = brief.timezone || savedDeadline.match(/([+-]\d\d:\d\d)$/)?.[1] || detectedTimezone;
+    timezone.value = detectedTimezone;
     if (document.activeElement !== deadline) {
       try {
         const local = helper.resolveDeadline(brief.deadline_local || "", timezone.value);
@@ -112,8 +124,6 @@
     if (document.activeElement !== title) title.value = brief.title ?? journey.draft?.title ?? "";
     if (document.activeElement !== criteria) criteria.value = brief.criteria ?? journey.draft?.acceptance_criteria?.join("\n") ?? "";
     if (document.activeElement !== reserve) reserve.value = brief.review_reward_usdc ?? journey.draft?.verifier_reward_usdc ?? "0.10";
-    if (document.activeElement !== consent) consent.checked = brief.review_consent === true;
-    if (brief.preparation_mode && !protectedHandoff) mode.value = brief.preparation_mode;
     setMode();
     status.textContent = journey.draft ? "Draft saved on this device. Review the proposal below." : "Brief saved on this device. Complete the details to prepare your proposal.";
     restoring = false;
@@ -123,7 +133,7 @@
     if (restoring) return;
     const current = client.load() || client.start({ role: "post" });
     const result = render();
-    const brief = { preparation_mode: mode.value, title: title.value, criteria: criteria.value, review_reward_usdc: reserve.value, review_consent: consent.checked, goal: goal.value.trim(), budget_usdc: budget.value, deadline_at: result.iso, deadline_local: deadline.value, timezone: timezone.value.trim() };
+    const brief = { preparation_mode: mode.value, title: title.value, criteria: criteria.value, review_reward_usdc: reserve.value, review_consent: mode.value === "manual", goal: ownGoal(goal.value, current), budget_usdc: budget.value, deadline_at: result.iso, deadline_local: deadline.value, timezone: timezone.value.trim() };
     // Compare decisions, not display formatting, so restoring an old brief
     // does not invalidate approval simply because display fields were added.
     const before = current.brief || {};
@@ -131,11 +141,11 @@
       || brief.criteria !== (before.criteria ?? current.draft?.acceptance_criteria?.join("\n") ?? "")
       || Number(brief.review_reward_usdc) !== Number(before.review_reward_usdc ?? current.draft?.verifier_reward_usdc ?? "0.10")
       || brief.review_consent !== (before.review_consent === true));
-    const changed = manualChanged || brief.goal !== (before.goal || current.draft?.goal || current.goal || "")
+    const changed = manualChanged || brief.goal !== ownGoal(before.goal || current.draft?.goal || current.goal || "", current)
       || Number(brief.budget_usdc) !== Number(before.budget_usdc || (current.draft ? Number(current.draft.solver_reward_usdc) + Number(current.draft.verifier_reward_usdc) : ""))
       || (Date.parse(brief.deadline_at) || null) !== (Date.parse(before.deadline_at || current.draft?.delivery_deadline) || null);
     if (changed && current.draft) window.AgentBountiesComposer?.invalidate();
-    client.save({ ...current, role: "post", goal: brief.goal, brief, draft_stale: current.draft_stale || Boolean(changed && current.draft), updated_at: new Date().toISOString() });
+    client.save({ ...current, role: "post", goal: brief.goal || (mode.value === "manual" ? helper.fallbackGoal(brief.title, brief.criteria) : ""), brief, draft_stale: current.draft_stale || Boolean(changed && current.draft), updated_at: new Date().toISOString() });
     status.textContent = result.error || (changed && current.draft ? "Brief updated. Prepare the updated proposal before approving funding." : "Brief saved. Prepare your proposal when the details are ready.");
   }
   mode.addEventListener("change", () => {
@@ -143,7 +153,9 @@
     window.history?.replaceState?.(null, "", url);
     setMode(); save();
   });
-  for (const input of [goal, budget, deadline, timezone, title, criteria, reserve, consent]) input.addEventListener("input", save);
+  for (const input of [goal, budget, deadline, title, criteria, reserve]) input.addEventListener("input", save);
+  // "Edit brief" refills the field from the proposal; keep this form's own label and an empty description empty.
+  document.querySelector("[data-revise-card]")?.addEventListener("click", () => { setMode(); goal.value = ownGoal(goal.value, client.load()); });
   form.addEventListener("submit", async (event) => {
     event.preventDefault(); event.stopImmediatePropagation(); save();
     if (!form.reportValidity()) return;

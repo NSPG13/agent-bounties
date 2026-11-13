@@ -55,15 +55,15 @@
   }
   offerTask(incoming);
   document.querySelectorAll("[data-post-example]").forEach(button => button.addEventListener("click", () => offerTask(button.dataset.postExample)));
-  document.querySelector("[data-open-connected-ai]").addEventListener("click", () => {
+  document.querySelector("[data-open-connected-ai]")?.addEventListener("click", () => {
     const journey = window.AgentBountiesWorkflow.createClient(window).load();
     window.AgentBountyAI.show(goal.value.trim(), { draft: journey?.draft, brief: journey?.brief });
     options.open = true; scroll(options);
   });
-  document.querySelector("[data-form-jump]").addEventListener("click", () => { const mode = document.querySelector("[data-brief-mode]"); mode.value = "manual"; mode.dispatchEvent(new Event("change", { bubbles: true })); scroll(form); goal.focus({ preventScroll: true }); });
+  document.querySelector("[data-form-jump]")?.addEventListener("click", () => { const mode = document.querySelector("[data-brief-mode]"); mode.value = "manual"; mode.dispatchEvent(new Event("change", { bubbles: true })); scroll(form); goal.focus({ preventScroll: true }); });
   document.querySelectorAll("[data-stage-target]").forEach(button => button.addEventListener("click", () => {
     const target = button.dataset.stageTarget;
-    if (target === "details") { scroll(form); goal.focus({ preventScroll: true }); }
+    if (target === "details") { scroll(form); (goal.required ? goal : document.querySelector("[data-brief-title]") || goal).focus({ preventScroll: true }); }
     if (target === "review") scroll(preview.hidden ? placeholder : preview);
     if (target === "fund" && !button.disabled) funding.click();
     stage(target);
