@@ -1,0 +1,29 @@
+{
+  "schema": "domain-origins/v1",
+  "canonical_website": "agentbounties.app",
+  "canonical_origins": ["agentbounties.app", "api.agentbounties.app", "mcp.agentbounties.app"],
+  "retired_origins": ["agent-bounties.vercel.app", "old-agentbounties.netlify.app", "bounties.openhands.dev"],
+  "accepted_inputs": [
+    {"url": "https://agentbounties.app/bounties/686", "surface": "website"},
+    {"url": "https://api.agentbounties.app/v1/bounties?state=open", "surface": "api"},
+    {"url": "https://mcp.agentbounties.app/mcp", "surface": "mcp"}
+  ],
+  "rejected_inputs": [
+    {"url": "https://agent-bounties.vercel.app/bounties/686", "surface": "website"},
+    {"url": "https://old-agentbounties.netlify.app/api/v1/bounties", "surface": "api"},
+    {"url": "https://bounties.openhands.dev/mcp", "surface": "mcp"},
+    {"url": "http://agentbounties.app/bounties/686", "surface": "website"}
+  ],
+  "generated_outputs": [
+    {"template": "https://{origin}/bounties/{bounty_id}", "bounty_id": "686",
+     "expected": "https://agentbounties.app/bounties/686"},
+    {"template": "https://{origin}/b/{bounty_id}/claim", "bounty_id": "682",
+     "expected": "https://agentbounties.app/b/682/claim"}
+  ],
+  "redirects": [
+    {"source": "https://agent-bounties.vercel.app/bounties/686",
+     "target": "https://agentbounties.app/bounties/686"},
+    {"source": "https://bounties.openhands.dev/mcp",
+     "target": "https://mcp.agentbounties.app/mcp"}
+  ]
+}
