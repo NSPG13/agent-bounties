@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Prepared replacement image for the existing always-running legacy indexer.
 # This file does not provision a service or enable creator-open indexing.
-FROM rust:1.94-bookworm AS builder
+FROM rust:1.99-bookworm AS builder
 WORKDIR /workspace
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
