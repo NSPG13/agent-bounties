@@ -1,4 +1,6 @@
 mod projection_snapshot;
+#[cfg(test)]
+mod recovery_read_tests;
 pub use projection_snapshot::{
     AutonomousProjectionSnapshot, OpenCompetitionProjectionSnapshot,
     OpenCompetitionV2ProjectionSnapshot, ProjectionReaderSnapshot,
@@ -1533,9 +1535,51 @@ pub struct OpenCompetitionV2IndexerAgreement {
     pub observed_at: DateTime<Utc>,
 }
 
+async fn prepare_recovery_read_connection(
+    connection: &mut sqlx::PgConnection,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("SET default_transaction_read_only = on")
+        .execute(&mut *connection)
+        .await?;
+    sqlx::query("SET statement_timeout = '10s'")
+        .execute(&mut *connection)
+        .await?;
+    sqlx::query("SET lock_timeout = '1s'")
+        .execute(&mut *connection)
+        .await?;
+    let read_only: String = sqlx::query_scalar("SHOW transaction_read_only")
+        .fetch_one(&mut *connection)
+        .await?;
+    if read_only != "on" {
+        return Err(sqlx::Error::Protocol(
+            "Recovery connection is not read-only".into(),
+        ));
+    }
+    Ok(())
+}
+
 impl PostgresStore {
     pub async fn connect(database_url: &str) -> DbResult<Self> {
         let pool = PgPool::connect(database_url).await?;
+        Ok(Self { pool })
+    }
+
+    /// Recovery reads only: no migrations, and every new or reused connection
+    /// enters PostgreSQL read-only mode before application queries are allowed.
+    /// This guards accidental writes; it does not change the database role's grants.
+    pub async fn connect_read_only(database_url: &str) -> DbResult<Self> {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(4)
+            .acquire_timeout(std::time::Duration::from_secs(5))
+            .after_connect(|connection, _| Box::pin(prepare_recovery_read_connection(connection)))
+            .before_acquire(|connection, _| {
+                Box::pin(async move {
+                    prepare_recovery_read_connection(connection).await?;
+                    Ok(true)
+                })
+            })
+            .connect(database_url)
+            .await?;
         Ok(Self { pool })
     }
 

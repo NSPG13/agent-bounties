@@ -30,9 +30,37 @@ fn heads() -> (u64, i64, u64) {
     (1200, Utc::now().timestamp(), 1300)
 }
 
+#[test]
+fn progress_wait_and_admission_share_the_network_lag_boundary() {
+    let heads = heads();
+    for protocol in [AUTONOMOUS_PROTOCOL_VERSION, AUTONOMOUS_V2_PROTOCOL_VERSION] {
+        for (network, limit) in [("base-mainnet", 200), ("base-sepolia", 20)] {
+            for lag in [limit, limit + 1] {
+                let mut reader = snapshot(heads.0 - lag);
+                reader.protocol = protocol;
+                reader.heartbeat.as_mut().unwrap().network = network.into();
+                assert_eq!(only_reader_lag(&reader, heads), lag > limit);
+                let boundary = projection_boundary(
+                    protocol,
+                    reader.heartbeat.as_ref(),
+                    reader.cursor,
+                    Some((heads.0, heads.1)),
+                    Some(heads.2),
+                    Utc::now(),
+                );
+                assert_eq!(boundary.is_ok(), lag <= limit);
+                if let Ok(boundary) = boundary {
+                    assert_eq!(boundary.block_number, heads.0 - lag);
+                    assert_eq!(boundary.safe_block_number, heads.0);
+                }
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn progress_resamples_sampling_race_without_replacing_original_heads() {
-    let initial = snapshot(1000);
+    let initial = snapshot(900);
     let heads = heads();
     let calls = AtomicUsize::new(0);
     let updated = wait_for_reader_progress(
@@ -65,12 +93,12 @@ async fn progress_waits_for_real_durable_progress_with_spaced_db_checks() {
     let calls = AtomicUsize::new(0);
     let started = tokio::time::Instant::now();
     let result = wait_for_reader_progress(
-        snapshot(1000),
+        snapshot(900),
         heads(),
         started + Duration::from_secs(3),
         || {
             let count = calls.fetch_add(1, Ordering::SeqCst);
-            std::future::ready(snapshot(if count == 0 { 1000 } else { 1200 }))
+            std::future::ready(snapshot(if count == 0 { 900 } else { 1200 }))
         },
     )
     .await;
@@ -86,7 +114,7 @@ async fn progress_never_renews_the_deadline_already_spent_on_heads() {
     let started = tokio::time::Instant::now();
     let calls = AtomicUsize::new(0);
     let heads = heads();
-    let result = wait_for_reader_progress(snapshot(1000), heads, deadline, || {
+    let result = wait_for_reader_progress(snapshot(900), heads, deadline, || {
         calls.fetch_add(1, Ordering::SeqCst);
         async {
             tokio::time::sleep(Duration::from_secs(5)).await;
@@ -94,7 +122,7 @@ async fn progress_never_renews_the_deadline_already_spent_on_heads() {
         }
     })
     .await;
-    assert_eq!(result.cursor, Some(1000));
+    assert_eq!(result.cursor, Some(900));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert!(started.elapsed() < Duration::from_millis(4500));
     assert!(projection_boundary(
@@ -110,18 +138,23 @@ async fn progress_never_renews_the_deadline_already_spent_on_heads() {
 
 #[tokio::test]
 async fn progress_does_not_poll_failed_stale_or_inconsistent_siblings() {
-    let mut failed = snapshot(1000);
+    let mut failed = snapshot(900);
     failed.heartbeat.as_mut().unwrap().status = "failed".into();
-    let mut stale = snapshot(1000);
+    let mut stale = snapshot(900);
     stale.heartbeat.as_mut().unwrap().completed_at =
         Some(Utc::now() - chrono::Duration::seconds(91));
-    let mut inconsistent = snapshot(1000);
+    let mut future = snapshot(900);
+    future.heartbeat.as_mut().unwrap().completed_at =
+        Some(Utc::now() + chrono::Duration::seconds(1));
+    let mut errored = snapshot(900);
+    errored.heartbeat.as_mut().unwrap().error_message = Some("fixture error".into());
+    let mut inconsistent = snapshot(900);
     inconsistent
         .heartbeat
         .as_mut()
         .unwrap()
-        .persisted_cursor_block = Some(1001);
-    for initial in [failed, stale, inconsistent, snapshot(1200)] {
+        .persisted_cursor_block = Some(901);
+    for initial in [failed, stale, future, errored, inconsistent, snapshot(1200)] {
         wait_for_reader_progress(
             initial,
             heads(),
@@ -142,10 +175,11 @@ async fn progress_stops_on_quarantine_failure_and_regression_without_retry() {
         "regressed",
         "completed_cursor_regressed",
         "identity",
+        "protocol",
     ] {
         let calls = AtomicUsize::new(0);
         let result = wait_for_reader_progress(
-            snapshot(1000),
+            snapshot(900),
             heads(),
             tokio::time::Instant::now() + Duration::from_secs(12),
             || {
@@ -157,10 +191,11 @@ async fn progress_stops_on_quarantine_failure_and_regression_without_retry() {
                         updated.cursor = None;
                     }
                     "failed" => updated.heartbeat.as_mut().unwrap().status = "failed".into(),
-                    "regressed" => updated.cursor = Some(999),
+                    "regressed" => updated.cursor = Some(899),
                     "completed_cursor_regressed" => {
-                        updated.heartbeat.as_mut().unwrap().persisted_cursor_block = Some(999)
+                        updated.heartbeat.as_mut().unwrap().persisted_cursor_block = Some(899)
                     }
+                    "protocol" => updated.protocol = AUTONOMOUS_V2_PROTOCOL_VERSION,
                     _ => updated.factory = Some("other".into()),
                 }
                 std::future::ready(updated)
@@ -187,12 +222,12 @@ async fn progress_no_change_stays_unavailable_and_does_not_spin() {
     let calls = AtomicUsize::new(0);
     let heads = heads();
     let result = wait_for_reader_progress(
-        snapshot(1000),
+        snapshot(900),
         heads,
         tokio::time::Instant::now() + Duration::from_millis(1500),
         || {
             calls.fetch_add(1, Ordering::SeqCst);
-            std::future::ready(snapshot(1000))
+            std::future::ready(snapshot(900))
         },
     )
     .await;
@@ -234,13 +269,13 @@ async fn progress_shared_observation_uses_four_rpc_calls_with_real_db_progress_p
     let factory = format!("0x{:040x}", Uuid::new_v4().as_u128());
     let failed_factory = format!("0x{:040x}", Uuid::new_v4().as_u128());
     for (factory, failed) in [(&factory, false), (&failed_factory, true)] {
-        let mut heartbeat = snapshot(1000).heartbeat.unwrap();
+        let mut heartbeat = snapshot(900).heartbeat.unwrap();
         heartbeat.escrow_contract = factory.clone();
         if failed {
             heartbeat.status = "failed".into();
         }
         store
-            .upsert_base_log_cursor("base-mainnet", factory, 1000, None)
+            .upsert_base_log_cursor("base-mainnet", factory, 900, None)
             .await
             .unwrap();
         store
@@ -351,7 +386,7 @@ async fn progress_shared_observation_uses_four_rpc_calls_with_real_db_progress_p
 
 #[tokio::test]
 async fn progress_requires_the_completed_heartbeat_after_the_cursor_commit() {
-    let mut committed_only = snapshot(1000);
+    let mut committed_only = snapshot(900);
     committed_only.cursor = Some(1200);
     let result = wait_for_reader_progress(
         committed_only,

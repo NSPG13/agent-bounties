@@ -253,6 +253,9 @@ def main() -> int:
 
     platform_script("preflight", platform, "-Mode", "full") if platform == "powershell" else platform_script("preflight", platform, "full")
     py("scripts/test_deploy_public_runtime.py", "-v")
+    py("scripts/test_public_runtime_transition.py", "-v")
+    py("scripts/test_recovery_inventory.py", "-v")
+    py("scripts/test_recovery_reader_boundary.py", "-v")
     py("scripts/test_bootstrap_repair_admission.py", "-v")
     py("scripts/test_public_runtime_parity.py", "-v")
     py("scripts/test_application_release_gate.py", "-v")
