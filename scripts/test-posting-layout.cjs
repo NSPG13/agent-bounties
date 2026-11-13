@@ -12,12 +12,15 @@ catch { playwright = require("playwright"); }
 const root = path.resolve(__dirname, "..");
 const baseline = process.env.POSTING_LAYOUT_BASELINE;
 const mime = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".json": "application/json", ".svg": "image/svg+xml", ".webp": "image/webp" };
+const siteSource = relative => baseline
+  ? execFileSync("git", ["show", baseline + ":site/" + relative], { cwd: root, stdio: ["ignore", "pipe", "ignore"] })
+  : fs.readFileSync(path.resolve(root, "site", relative));
 const server = http.createServer((req, res) => {
   const relative = decodeURIComponent(new URL(req.url, "http://localhost").pathname).replace(/^\/+/, "") || "index.html";
   const filename = path.resolve(root, "site", relative);
   if (!filename.startsWith(path.join(root, "site") + path.sep)) { res.writeHead(403).end(); return; }
   try {
-    const source = baseline ? execFileSync("git", ["show", baseline + ":site/" + relative], { cwd: root, stdio: ["ignore", "pipe", "ignore"] }) : fs.readFileSync(filename);
+    const source = siteSource(relative);
     res.writeHead(200, { "Content-Type": mime[path.extname(filename)] || "application/octet-stream" }).end(source);
   } catch { res.writeHead(404).end(); }
 });
@@ -33,6 +36,15 @@ const fixture = {
   review_mode: "creator", delivery_deadline: new Date(Date.now() + 7 * 86400000).toISOString()
 };
 const wallet = { address: "0x1111111111111111111111111111111111111111", label: "Test wallet", provider_id: "metamask", wallet_type: "browser", chain_ids: [8453], linked_at: "2026-01-01T00:00:00Z", last_verified_at: "2026-01-01T00:00:00Z" };
+// The gate must not follow the live protocol status. Every context receives
+// the checked-in manifest with an explicit synthetic status: active for layout
+// coverage, recovery_only for the fail-closed regression.
+function protocolFixture(status) {
+  const { retirement_reason, ...manifest } = JSON.parse(siteSource("protocol.json"));
+  const open = status === "active";
+  return { ...manifest, status, new_creation_enabled: open, new_funding_enabled: open, new_claims_enabled: open,
+    ...(open ? {} : { retirement_reason: "Synthetic retirement for the layout gate." }) };
+}
 function sortedJson(value) {
   if (Array.isArray(value)) return value.map(sortedJson);
   if (value && typeof value === "object") return Object.fromEntries(Object.keys(value).sort().map(key => [key, sortedJson(value[key])]));
@@ -69,7 +81,14 @@ async function fixtures(context, origin, options = {}) {
     }
     if (url.pathname === "/v1/base/gas-sponsorship") return route.fulfill({ json: { schema: "agent-bounties/gas-sponsorship-v1", network: "base-mainnet", creation: { available: mock.sponsorAvailable !== false } } });
     if (url.pathname === "/v1/base/autonomous-bounties/events") return route.fulfill({ json: mock.events });
-    if (url.pathname === "/v1/opportunities") return route.fulfill({ json: { schema_version: "agent-bounties/opportunity-projection-v1", items: mock.inventory } });
+    // Complete canonical coverage, as the workflow requires before it trusts
+    // a page. With no listing, a transaction hash alone must confirm nothing.
+    if (url.pathname === "/v1/opportunities") return route.fulfill({ json: { schema_version: "agent-bounties/opportunity-projection-v1", network: "base-mainnet",
+      degraded: false, coverage: "complete", coverage_scope: "inventory_page", requested_opportunity_id: null,
+      source_statuses: [{ source_type: "canonical_base", available: true, coverage: "complete", item_count: mock.inventory.length,
+        protocol_statuses: ["autonomous-v1", "open-competition-v1", "open-competition-v2-beta3"].map((protocol, index) => (
+          { protocol, coverage: "complete", item_count: index ? 0 : mock.inventory.length, error: null })) }],
+      items: mock.inventory } });
     if (url.origin === "https://mainnet.base.org") {
       const call = request.postDataJSON(); mock.rpcRequests.push(call);
       if (mock.rpcFailure) return route.fulfill({ status: 503, json: { error: { message: "Synthetic outage" } } });
@@ -78,6 +97,7 @@ async function fixtures(context, origin, options = {}) {
       return route.fulfill({ json: { jsonrpc: "2.0", id: call.id, result } });
     }
     if (url.origin !== origin) return route.abort();
+    if (url.pathname === "/protocol.json") return route.fulfill({ json: protocolFixture(options.protocolStatus || "active") });
     if (url.pathname === "/phone-wallet-config.js") return route.fulfill({ contentType: "text/javascript", body: 'window.agentBountiesPhoneWalletConfig={projectId:"00000000000000000000000000000000"};' });
     // Synthetic pairing only: this provider has no relay, signing or payment.
     if (url.pathname === "/vendor/phone-wallet.bundle.js") return route.fulfill({ contentType: "text/javascript", body: `
@@ -158,8 +178,8 @@ async function recoveryRegressions(browser, origin) {
     assert.equal(approved.review.explicitly_approved, true);
     assert.ok(approved.approval.hash);
     const exactTarget = page.url();
-    const account = page.locator("[data-post-auth-start]");
-    assert.equal(await account.textContent(), "Account");
+    assert.deepEqual(await page.locator("[data-post-auth-start]").allTextContents(), ["Account", "Account"], "Header and footer account links agree once signed in");
+    const account = page.locator(".ab-site-signin[data-post-auth-start]");
     await Promise.all([page.waitForURL(origin + "/#account"), account.click()]);
     await page.locator("[data-auth-dialog][open]").waitFor();
     await page.getByRole("button", { name: "Return to bounty", exact: true }).waitFor();
@@ -365,11 +385,25 @@ async function wheelToEnd(page, selector = null) {
   } else {
     const v = page.viewportSize(); await page.mouse.move(v.width / 2, v.height / 2);
   }
-  await page.mouse.wheel(0, 20000);
-  await page.waitForFunction(sel => {
+  // A field under the pointer may take a gesture before the page or dialog
+  // receives the next one, so keep wheeling as a person does. A real trap
+  // (locked page, contained overscroll) never reaches the end and fails here.
+  for (let gesture = 0; gesture < 6; gesture++) {
+    await page.mouse.wheel(0, 20000);
+    try {
+      await page.waitForFunction(sel => {
+        const el = sel ? document.querySelector(sel) : document.scrollingElement;
+        return el.scrollHeight - el.clientHeight - el.scrollTop <= 2;
+      }, selector, { timeout: 1500 });
+      return;
+    } catch (error) { if (error.name !== "TimeoutError") throw error; }
+  }
+  const stuck = await page.evaluate(sel => {
     const el = sel ? document.querySelector(sel) : document.scrollingElement;
-    return el.scrollHeight - el.clientHeight - el.scrollTop <= 2;
+    const under = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
+    return { remaining: el.scrollHeight - el.clientHeight - el.scrollTop, under: under && under.tagName.toLowerCase() + (under.id ? "#" + under.id : "") };
   }, selector);
+  assert.fail((selector || "The page") + " cannot be wheeled to its end: " + JSON.stringify(stuck));
 }
 async function modalBounds(page, selector) {
   const value = await page.locator(selector).evaluate(el => {
@@ -619,6 +653,32 @@ async function walletBrandRegressions(browser, origin) {
   }
 }
 
+// A retired protocol must stop before the wallet is asked for anything.
+async function retiredProtocolRegression(browser, origin) {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
+  await fixtures(context, origin, { protocolStatus: "recovery_only" });
+  const page = await context.newPage(), errors = [];
+  page.on("pageerror", error => { errors.push(error.message); console.error(error.stack); });
+  try {
+    await page.goto(origin + "/post.html");
+    await page.waitForFunction(() => window.AgentBountiesComposer);
+    await page.evaluate(draft => window.AgentBountiesComposer.stage(draft), fixture);
+    await page.locator("[data-approve-card]").click();
+    await page.locator(".wallet-option").first().waitFor();
+    await page.getByRole("button", { name: "MetaMask", exact: false }).click();
+    const status = page.locator("[data-payment-status]");
+    await page.waitForFunction(() => document.querySelector("[data-payment-status]").dataset.tone === "error" || window.__walletRequests.length > 0);
+    assert.deepEqual(await page.evaluate(() => window.__walletRequests), [], "A retired protocol must not ask the wallet for accounts");
+    assert.equal(await status.textContent(), "The Base protocol is not active. No transaction was requested.");
+    assert.equal(await page.locator("[data-wallet-readiness]").isVisible(), false, "A retired protocol shows no wallet readiness");
+    assert.equal(await page.locator("[data-funding-review]").isVisible(), false);
+    assert.equal(await page.locator("[data-fund-now]").isDisabled(), true, "A retired protocol cannot fund");
+    assert.deepEqual(await page.evaluate(() => window.__walletWrites), []);
+    assert.deepEqual(errors, []);
+    console.log("PASS retired protocol refuses wallet connection, readiness and funding without a wallet request");
+  } finally { await context.close(); }
+}
+
 async function main() {
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   const origin = "http://127.0.0.1:" + server.address().port;
@@ -774,6 +834,7 @@ async function main() {
       console.log("PASS signed-out posting action opens login with the exact draft preserved and no wallet request");
       await context.close();
     }
+    await retiredProtocolRegression(browser, origin);
     await recoveryRegressions(browser, origin);
     await guidedTopupRegressions(browser, origin);
     await topupPhoneConnectionRegression(browser, origin);
