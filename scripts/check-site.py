@@ -1592,7 +1592,8 @@ def main() -> int:
                 '<meta name="referrer" content="no-referrer">',
                 '<meta http-equiv="Content-Security-Policy"',
                 "default-src 'none'", "base-uri 'none'", "form-action 'none'",
-                'id="managed-private" hidden', 'id="managed-consent"',
+                'id="managed-private" hidden', 'id="managed-consent-note"',
+                "By accepting the quote you accept this deliverable, acceptance criteria, deadline, customer remedies, and full price.",
             ])
         else:
             require_phrases(relative, text, [

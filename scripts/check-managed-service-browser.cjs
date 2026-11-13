@@ -100,8 +100,10 @@ test('WebMCP prepares an account-bound quote visibly without accepting or openin
   assert.equal(tool.name, 'agent_bounties_prepare_card_quote'); assert.equal(tool.annotations.readOnlyHint, false); assert.match(tool.description, /Publish.*public bounty terms/);
   const result = await prepare(f.page); assert.equal(result.status, 'quote_ready_for_personal_review');
   assert.equal(result.total_minor, 217375); assert.equal(result.accepted, false); assert.equal(result.checkout_created, false);
-  await visible(f.page, 'Review the deliverable'); assert.equal(await f.page.locator('#managed-consent').isChecked(), false);
-  assert.equal(await f.page.locator('#managed-accept').isDisabled(), true);
+  // No checkbox: pressing "Accept quote" is the acceptance, and the note under it says what it covers.
+  await visible(f.page, 'Review the deliverable'); assert.equal(await f.page.locator('#managed-consent').count(), 0);
+  assert.match(await f.page.locator('#managed-consent-note').innerText(), /By accepting the quote you accept this deliverable/);
+  assert.equal(f.accepts.length, 0, 'preparing never accepts');
   assert.deepEqual(f.calls.filter(c => c.method === 'POST').map(c => c.path), ['/v1/managed-service/bounty-quotes']);
   assert.match((await prepare(f.page)).error, /current quote/); assert.equal(f.calls.filter(c => c.method === 'POST').length, 1); await f.close();
 });
@@ -118,7 +120,11 @@ test('a fractional USDC reward can display exactly MXN10 with all itemized costs
   await f.page.goto(base + '/account.html');
   const result = await prepare(f.page,{ ...quoteDraft(), solver_reward_micro_usdc: 178000, maximum_charge_minor: 1000 });
   assert.equal(result.total_minor,1000); assert.equal(await f.page.locator('#managed-total').innerText(),'MXN 10.00');
-  assert.equal(await f.page.locator('#managed-consent').isChecked(),false); assert.equal(f.accepts.length,0); await f.close();
+  // Review costs share one row and the platform fee shares one with the currency buffer; the rows still add up to the total.
+  const rows = await f.page.locator('#managed-lines dt').allInnerTexts();
+  assert.deepEqual(rows, ['Solver reward', 'Review and verification (deposit refundable)', 'Platform fee (7.5%) and currency conversion', 'Card processing']);
+  assert.equal((await f.page.locator('#managed-lines dd').allInnerTexts()).join(' | '), 'MXN 3.44 | MXN 2.28 | MXN 0.32 | MXN 3.96');
+  assert.equal(f.accepts.length,0); await f.close();
 });
 test('concurrent preparation and a late response after navigation cannot publish twice or expose a quote', async () => {
   let finish; const wait = new Promise(resolve => { finish=resolve; });
@@ -190,7 +196,7 @@ test('quote review shows full amounts and terms, with safe mobile layout', async
   assert.match(await f.page.locator('#managed-lines').innerText(), /1930|1,930/);
   assert.equal(await f.page.locator('#managed-total').innerText(), 'MXN 2,173.75');
   assert.match(await f.page.locator('#managed-lines').innerText(), /7\.5%/);
-  assert.equal(await f.page.locator('#managed-accept').isDisabled(), true);
+  assert.equal(await f.page.locator('#managed-accept').isDisabled(), false, 'the quote can be accepted with one press');
   assert.equal(f.calls.filter(c => c.method === 'POST').length, 0);
   const out = process.env.MANAGED_SERVICE_SCREENSHOTS;
   if (out) fs.mkdirSync(out, { recursive: true });
@@ -203,9 +209,9 @@ test('quote review shows full amounts and terms, with safe mobile layout', async
 });
 test('lost acceptance response survives reload with the original key, then explicit Stripe handoff', async () => {
   const f = await setup({ dropAccept: true }); await f.go(); await visible(f.page, 'Review the deliverable');
-  await f.page.check('#managed-consent'); await f.page.click('#managed-accept'); await visible(f.page, 'result could not be confirmed');
+  await f.page.click('#managed-accept'); await visible(f.page, 'result could not be confirmed');
   assert.equal(f.accepts.length, 1); await f.page.reload(); await visible(f.page, 'Review the deliverable');
-  assert.equal(f.accepts.length, 1); await f.page.check('#managed-consent'); await f.page.click('#managed-accept'); await visible(f.page, 'Payment is not confirmed');
+  assert.equal(f.accepts.length, 1); await f.page.click('#managed-accept'); await visible(f.page, 'Payment is not confirmed');
   assert.equal(f.accepts.length, 2); assert.deepEqual(f.accepts[0], f.accepts[1]);
   assert.equal(new URL(f.page.url()).search, '?managed_order=' + orderId);
   assert.equal(f.calls.filter(c => c.path.endsWith('/checkout')).length, 0);
@@ -219,7 +225,7 @@ test('lost acceptance response survives reload with the original key, then expli
 });
 test('concurrent clicks cannot send two acceptances', async () => {
   let release; const f = await setup({ acceptWait: new Promise(resolve => { release = resolve; }) });
-  await f.go(); await visible(f.page, 'Review the deliverable'); await f.page.check('#managed-consent');
+  await f.go(); await visible(f.page, 'Review the deliverable');
   await f.page.evaluate(() => { const b = document.getElementById('managed-accept'); b.click(); b.click(); });
   await f.page.waitForFunction(() => document.getElementById('managed-status').textContent.includes('Saving'));
   await new Promise(resolve => setTimeout(resolve, 50)); release(); await visible(f.page, 'Payment is not confirmed'); assert.equal(f.accepts.length, 1); await f.close();
@@ -269,7 +275,7 @@ test('tampered quote, wrong account, and unknown payout status never render priv
   }
 });
 test('account switch before acceptance clears private details and sends no write', async () => {
-  const f = await setup(); await f.go(); await visible(f.page, 'Review the deliverable'); await f.page.check('#managed-consent');
+  const f = await setup(); await f.go(); await visible(f.page, 'Review the deliverable');
   f.state.account = other; await f.page.click('#managed-accept'); await visible(f.page, 'sign-in changed or expired');
   assert.equal(f.accepts.length, 0); assert.equal(await f.page.locator('#managed-deliverable').innerText(), ''); await f.close();
 });
@@ -309,13 +315,13 @@ test('malicious, wrong-session or wrong-mode Checkout URLs cannot navigate', asy
 });
 test('expired quotes support exact prior-acceptance recovery without pretending to renew the offer', async () => {
   const f = await setup(); const q = f.state.quote.quote; q.input.issued_at -= 86400; q.input.expires_at = Math.floor(Date.now() / 1000) - 5; f.state.quote = sign(q);
-  await f.go(); await visible(f.page, 'quote has expired'); await f.page.check('#managed-consent'); await f.page.click('#managed-accept');
+  await f.go(); await visible(f.page, 'quote has expired'); await f.page.click('#managed-accept');
   await visible(f.page, 'Payment is not confirmed'); assert.equal(f.accepts.length, 1); assert.equal(f.accepts[0].quote_digest, f.state.quote.quote_digest); await f.close();
 });
 test('a timed-out acceptance can retry only the original request', async () => {
   let release; const f = await setup({ acceptWait: new Promise(resolve => { release = resolve; }) });
   await f.page.clock.install(); await f.go(); await visible(f.page, 'Review the deliverable');
-  await f.page.check('#managed-consent'); await f.page.click('#managed-accept');
+  await f.page.click('#managed-accept');
   for (let i = 0; !f.accepts.length && i < 100; i++) await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal(f.accepts.length, 1);
   await f.page.clock.runFor(15100); await visible(f.page, 'result could not be confirmed');
@@ -333,7 +339,7 @@ test('return polling is read-only and stops after two minutes', async () => {
 test('expired new acceptance and rate limits stay recoverable without a changed key', async () => {
   for (const [code, text] of [[410, 'offer has expired'], [429, 'Wait a minute']]) {
     const f = await setup({ acceptCode: code }); await f.go(); await visible(f.page, 'Review the deliverable');
-    await f.page.check('#managed-consent'); await f.page.click('#managed-accept'); await visible(f.page, text);
+    await f.page.click('#managed-accept'); await visible(f.page, text);
     assert.equal(f.accepts.length, 1); assert.equal(new URL(f.page.url()).search, '?managed_quote=' + quoteId); await f.close();
   }
 });

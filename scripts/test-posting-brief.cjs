@@ -53,14 +53,22 @@ test("manual form preserves explicit terms without an AI and rejects incomplete 
   const now = Date.parse("2026-10-03T00:00:00Z");
   const input = { title: "Research competitors", goal: "Deliver a comparison spreadsheet", criteria: "Include 20 competitors\nLink each pricing source", budget_usdc: "20.01", review_reward_usdc: "0.11", deadline_at: "2026-10-10T12:00:00-06:00", review_consent: true };
   const draft = brief.manualDraft(input, now);
-  assert.equal(draft.solver_reward_usdc, "19.90");
-  assert.equal(draft.verifier_reward_usdc, "0.11");
+  // The review reward is always 10% of the total; a stored review_reward_usdc no longer changes it.
+  assert.equal(draft.solver_reward_usdc, "18.01");
+  assert.equal(draft.verifier_reward_usdc, "2.00");
   assert.deepEqual(draft.acceptance_criteria, ["Include 20 competitors", "Link each pricing source"]);
   assert.equal(draft.review_mode, "creator");
   assert.equal(draft.delivery_deadline, input.deadline_at);
   assert.equal(draft.task_window_days, 8);
-  for (const bad of [{title:""}, {criteria:""}, {criteria:Array(21).fill("check").join("\n")}, {criteria:"x".repeat(1001)}, {budget_usdc:"2.10"}, {review_reward_usdc:"0"}, {budget_usdc:"1e3"}, {deadline_at:"invalid"}, {deadline_at:"2026-10-01T00:00:00Z"}, {deadline_at:"2027-01-01T00:00:00Z"}, {review_consent:false}]) assert.throws(() => brief.manualDraft({...input,...bad}, now));
-  assert.equal(brief.manualDraft({...input, budget_usdc:"2.01",review_reward_usdc:"0.01"},now).solver_reward_usdc,"2.00");
+  for (const bad of [{title:""}, {criteria:""}, {criteria:Array(21).fill("check").join("\n")}, {criteria:"x".repeat(1001)}, {budget_usdc:"2.10"}, {budget_usdc:"2.21"}, {budget_usdc:"1e3"}, {deadline_at:"invalid"}, {deadline_at:"2026-10-01T00:00:00Z"}, {deadline_at:"2027-01-01T00:00:00Z"}, {review_consent:false}]) assert.throws(() => brief.manualDraft({...input,...bad}, now));
+  const smallest = brief.manualDraft({...input, budget_usdc:"2.22", review_reward_usdc:"0.01"},now);
+  assert.deepEqual([smallest.solver_reward_usdc, smallest.verifier_reward_usdc], ["2.00", "0.22"], "2.22 USDC is the smallest total that leaves 2 USDC for the worker");
+  assert.equal(brief.reviewReward("25"), "2.50"); assert.equal(brief.reviewReward("0.05"), "0.01"); assert.equal(brief.reviewReward(""), "");
+  // New briefs carry an objective, required, and it leads the goal agents read.
+  assert.throws(() => brief.manualDraft({...input, objective:"  "}, now), /objective/);
+  assert.equal(brief.manualDraft({...input, objective:"Win more clients", goal: brief.composeGoal("Win more clients", "Spanish market")}, now).goal, "Win more clients\n\nDetails: Spanish market");
+  assert.equal(brief.composeGoal("Win more clients", ""), "Win more clients");
+  assert.equal(brief.composeGoal("", "Only details"), "Only details");
   // The description is optional: without it the title and criteria describe the work.
   const bare = brief.manualDraft({...input, goal:"", title:"Landing page", criteria:"Loads on mobile\nHas a contact form"}, now);
   assert.equal(bare.goal, "Landing page. Done when: Loads on mobile; Has a contact form");

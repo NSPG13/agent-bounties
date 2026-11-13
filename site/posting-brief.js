@@ -98,19 +98,30 @@
     const checks = (Array.isArray(criteria) ? criteria : String(criteria || "").split(/\r?\n/)).map(s => String(s).trim()).filter(Boolean);
     return name && checks.length ? `${name}. Done when: ${checks.join("; ")}`.slice(0, 4000) : "";
   }
+  // The creator's review reward is a fixed share of the total: 10%, at least 0.01 USDC. It is not a form field.
+  const REVIEW_SHARE_PERCENT = 10;
+  function reviewRewardCents(totalCents) { return Math.max(1, Math.round(totalCents * REVIEW_SHARE_PERCENT / 100)); }
+  function reviewReward(total) { const value = cents(total); return value === null ? "" : (reviewRewardCents(value) / 100).toFixed(2); }
+  // What agents read as the goal: the objective first, then any extra details.
+  function composeGoal(objective, description) {
+    const aim = String(objective || "").trim(), details = String(description || "").trim();
+    return aim && details ? `${aim}\n\nDetails: ${details}` : aim || details;
+  }
   function manualDraft(brief, now = Date.now()) {
     const title = String(brief.title || "").trim();
     const criteria = String(brief.criteria || "").split(/\r?\n/).map(s => s.trim()).filter(Boolean);
     const goal = String(brief.goal || "").trim() || fallbackGoal(title, criteria);
     if (!title || title.length > 200) throw new Error("Enter a title of up to 200 characters.");
+    // Briefs saved before the objective field existed have no objective key; new ones must fill it.
+    if (Object.prototype.hasOwnProperty.call(brief, "objective") && (!String(brief.objective || "").trim() || String(brief.objective).trim().length > 1000)) throw new Error("Enter the objective of the bounty in up to 1,000 characters.");
     if (!goal || goal.length > 4000) throw new Error("Describe the work in up to 4,000 characters.");
     if (!criteria.length || criteria.length > 20 || criteria.some(s => s.length > 1000)) throw new Error("Add 1–20 acceptance criteria, one per line, with up to 1,000 characters each.");
-    const total = cents(brief.budget_usdc), reserve = cents(brief.review_reward_usdc);
-    if (total === null || total > 900000000000 || reserve === null || total - reserve < 200) throw new Error("The total must cover at least 2 USDC for the worker plus a review reward of at least 0.01 USDC.");
+    const total = cents(brief.budget_usdc), reserve = total === null ? null : reviewRewardCents(total);
+    if (total === null || total > 900000000000 || total - reserve < 200) throw new Error(`Enter a total budget of at least 2.22 USDC: the worker receives at least 2 USDC after the ${REVIEW_SHARE_PERCENT}% review reward.`);
     const remaining = Date.parse(brief.deadline_at) - now;
     if (!Number.isFinite(remaining) || remaining <= 0 || remaining > 30 * 86400000) throw new Error("Choose a future delivery deadline within 30 days. Use a smaller milestone for longer work.");
     if (brief.review_consent !== true) throw new Error("Confirm that you will review submissions yourself.");
     return { title, goal, acceptance_criteria: criteria, solver_reward_usdc: ((total - reserve) / 100).toFixed(2), verifier_reward_usdc: (reserve / 100).toFixed(2), task_window_days: Math.max(1, Math.ceil(remaining / 86400000)), delivery_deadline: brief.deadline_at, review_mode: "creator", discovery_source: "Platform form (no AI)" };
   }
-  return Object.freeze({ manualDraft, fallbackGoal, resolveDeadline, wallTime, proposedSplit, estimateBudget, countdown, warnings, cents });
+  return Object.freeze({ manualDraft, fallbackGoal, composeGoal, reviewReward, REVIEW_SHARE_PERCENT, resolveDeadline, wallTime, proposedSplit, estimateBudget, countdown, warnings, cents });
 });
