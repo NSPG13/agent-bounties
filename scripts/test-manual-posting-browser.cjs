@@ -36,12 +36,11 @@ const server = http.createServer((req, res) => {
       await page.locator("#bounty-composer-input").fill("Deliver a comparison spreadsheet");
       await page.locator("[data-brief-budget]").fill("20.01");
       await page.locator("[data-brief-reserve]").fill("0.11");
-      await page.locator("[data-brief-timezone]").fill("UTC");
       await page.locator("[data-brief-deadline]").fill(new Date(Date.now() + 7*86400000).toISOString().slice(0,16));
-      await page.locator("[data-manual-review-consent]").check();
       await page.reload();
       assert.equal(await page.locator("[data-brief-title]").inputValue(), "Research competitors");
-      assert.equal(await page.locator("[data-manual-review-consent]").isChecked(), true);
+      assert.equal(await page.locator("[data-manual-review-consent]").count(), 0, "no separate review checkbox");
+      assert.equal(await page.locator("[data-posting-basics]").count(), 0, "the form opens without the explainer box");
       await page.locator("[data-composer-submit]").click();
       await page.locator("#bounty-preview:not([hidden])").waitFor();
       await page.waitForFunction(() => document.querySelector("[data-brief-status]").textContent.startsWith("Proposal prepared"));
@@ -66,7 +65,8 @@ const server = http.createServer((req, res) => {
       fs.mkdirSync("target/manual-posting", {recursive:true});
       await page.screenshot({path:`target/manual-posting/review-${width}.png`,fullPage:true});
       await page.locator("[data-brief-mode]").selectOption("ai");
-      assert.equal(await page.locator("[data-manual-fields]").isVisible(), false);
+      assert.equal(await page.locator("[data-brief-title]").isVisible(), false, "AI mode hides the manual fields");
+      assert.equal(await page.locator("[data-ai-options] > summary").isVisible(), true, "AI mode shows the AI handoff");
       assert.deepEqual(externalWrites, [], "preparation never calls a model, publishes or requests payment");
       assert.deepEqual(errors, []);
       await context.close(); console.log(`Manual entry, validation, native review, editing and recovery pass at ${width}px`);

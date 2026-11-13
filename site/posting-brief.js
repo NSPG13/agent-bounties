@@ -93,8 +93,10 @@
     return output;
   }
   function manualDraft(brief, now = Date.now()) {
-    const title = String(brief.title || "").trim(), goal = String(brief.goal || "").trim();
+    const title = String(brief.title || "").trim();
     const criteria = String(brief.criteria || "").split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    // The description is optional on the form: without one, the title and criteria describe the work.
+    const goal = (String(brief.goal || "").trim() || (title && criteria.length ? `${title}. Done when: ${criteria.join("; ")}` : "")).slice(0, 4000);
     if (!title || title.length > 200) throw new Error("Enter a title of up to 200 characters.");
     if (!goal || goal.length > 4000) throw new Error("Describe the work in up to 4,000 characters.");
     if (!criteria.length || criteria.length > 20 || criteria.some(s => s.length > 1000)) throw new Error("Add 1–20 acceptance criteria, one per line, with up to 1,000 characters each.");

@@ -61,4 +61,8 @@ test("manual form preserves explicit terms without an AI and rejects incomplete 
   assert.equal(draft.task_window_days, 8);
   for (const bad of [{title:""}, {criteria:""}, {criteria:Array(21).fill("check").join("\n")}, {criteria:"x".repeat(1001)}, {budget_usdc:"2.10"}, {review_reward_usdc:"0"}, {budget_usdc:"1e3"}, {deadline_at:"invalid"}, {deadline_at:"2026-10-01T00:00:00Z"}, {deadline_at:"2027-01-01T00:00:00Z"}, {review_consent:false}]) assert.throws(() => brief.manualDraft({...input,...bad}, now));
   assert.equal(brief.manualDraft({...input, budget_usdc:"2.01",review_reward_usdc:"0.01"},now).solver_reward_usdc,"2.00");
+  // The description is optional: without it the title and criteria describe the work.
+  const bare = brief.manualDraft({...input, goal:"", title:"Landing page", criteria:"Loads on mobile\nHas a contact form"}, now);
+  assert.equal(bare.goal, "Landing page. Done when: Loads on mobile; Has a contact form");
+  assert.throws(() => brief.manualDraft({...input, goal:"", title:""}, now));
 });

@@ -136,20 +136,28 @@ test("unavailable sponsorship stops before signing and a mismatched relay cannot
 
 test("saved brief edits reach the shared journey and invalidate an older funding proposal", () => {
   const flow = require("../site/marketplace-workflow.js"), records = new Map(), listeners = new Map(), elements = new Map();
-  const element = () => ({ value: "", textContent: "", open: false, handlers: {}, setCustomValidity(value) { this.validationMessage = value; }, addEventListener(name, fn) { this.handlers[name] = fn; } });
-  for (const name of ["#bounty-composer-form", "#bounty-composer-input", "[data-brief-budget]", "[data-brief-deadline]", "[data-brief-status]", "[data-brief-timezone]", "[data-ai-options]", "[data-export-draft]", "[data-brief-mode]", "[data-manual-fields]", "[data-brief-title]", "[data-brief-criteria]", "[data-brief-reserve]", "[data-manual-review-consent]", "[data-composer-submit]"]) elements.set(name, element());
+  const element = () => ({ value: "", textContent: "", open: false, hidden: false, required: false, placeholder: "", handlers: {}, setCustomValidity(value) { this.validationMessage = value; }, addEventListener(name, fn) { this.handlers[name] = fn; }, querySelectorAll: () => [] });
+  for (const name of ["#bounty-composer-form", "#bounty-composer-input", "[data-brief-budget]", "[data-brief-deadline]", "[data-brief-status]", "[data-brief-timezone]", "[data-ai-options]", "[data-export-draft]", "[data-brief-mode]", "[data-brief-title]", "[data-brief-criteria]", "[data-brief-reserve]", "[data-composer-submit]", "[data-composer-label]", "[data-brief-zone-note]"]) elements.set(name, element());
   elements.get("#bounty-composer-form").querySelector = name => elements.get(name);
-  const document = { activeElement: null, documentElement: { dataset: {} }, querySelector: (name) => elements.get(name), addEventListener() {} };
+  const document = { activeElement: null, documentElement: { dataset: {} }, querySelector: (name) => elements.get(name), querySelectorAll: () => [], addEventListener() {} };
+  // The creator's device reports Mexico City; the form always reads the deadline in that zone.
+  const DeviceIntl = { ...Intl, DateTimeFormat: function (...args) { return args.length ? new Intl.DateTimeFormat(...args) : { resolvedOptions: () => ({ timeZone: "America/Mexico_City" }) }; } };
   let invalidations = 0;
   const win = { AgentBountiesWorkflow: flow, AgentBountiesPostingBrief: require("../site/posting-brief.js"), AgentBountiesComposer: { invalidate() { invalidations++; } }, document, setInterval() {},
     crypto: require("node:crypto").webcrypto, location: new URL("https://agentizable.ai/post.html"),
     sessionStorage: { getItem: (key) => records.get(key) || null, setItem: (key, value) => records.set(key, value) },
     CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail; } },
     addEventListener(name, fn) { listeners.set(name, fn); }, dispatchEvent(event) { listeners.get(event.type)?.(event); } };
-  vm.runInNewContext(fs.readFileSync(require.resolve("../site/posting-workspace.js"), "utf8"), { window: win, document, Intl, Date, URL, URLSearchParams, Blob });
-  const goal = elements.get("#bounty-composer-input"), budget = elements.get("[data-brief-budget]"), deadline = elements.get("[data-brief-deadline]");
+  vm.runInNewContext(fs.readFileSync(require.resolve("../site/posting-workspace.js"), "utf8"), { window: win, document, Intl: DeviceIntl, Date, URL, URLSearchParams, Blob });
+  const goal = elements.get("#bounty-composer-input"), budget = elements.get("[data-brief-budget]"), deadline = elements.get("[data-brief-deadline]"), timezone = elements.get("[data-brief-timezone]");
+  assert.equal(timezone.value, "America/Mexico_City", "the deadline uses the creator's own time zone");
+  assert.match(elements.get("[data-brief-zone-note]").textContent, /America\/Mexico_City/);
+  assert.ok(deadline.min && deadline.max, "the calendar only offers the next 30 days");
+  assert.equal(typeof deadline.handlers.click, "function", "touching the field opens the calendar and clock");
   goal.value = "Make a dimensioned CAD model"; document.activeElement = goal; goal.handlers.input();
   const client = flow.createClient(win); assert.equal(client.load().goal, goal.value);
+  assert.equal(client.load().brief.review_consent, true, "choosing to post by hand is the creator-review choice; no separate checkbox");
+  assert.equal(client.load().brief.timezone, "America/Mexico_City");
   document.activeElement = budget; budget.value = "20"; budget.handlers.input();
   const cutoff = new Date(Date.now() + 7 * 86400000).toISOString();
   client.save({ ...client.load(), draft: { goal: goal.value, solver_reward_usdc: "18", verifier_reward_usdc: "2" }, brief: { ...client.load().brief, deadline_at: cutoff } });
@@ -157,9 +165,8 @@ test("saved brief edits reach the shared journey and invalidate an older funding
   budget.value = "25"; budget.handlers.input();
   assert.equal(client.load().brief.budget_usdc, "25"); assert.equal(client.load().draft_stale, true); assert.equal(invalidations, 1);
   assert.ok(client.load().brief.deadline_at, "editing the budget must not erase the deadline");
-  const timezone = elements.get("[data-brief-timezone]");
-  document.activeElement = timezone; timezone.value = "America/Mexico_City"; timezone.handlers.input();
   document.activeElement = deadline; deadline.value = "2026-12-10T21:00"; deadline.handlers.input();
+  assert.equal(client.load().brief.deadline_at, "2026-12-10T21:00:00-06:00", "the picked time is read in the creator's zone");
   const newCutoff = "2026-12-11T21:00:23.456-06:00";
   document.activeElement = null;
   client.save({ ...client.load(), draft_stale: false, brief: { ...client.load().brief, deadline_at: newCutoff }, draft: { goal: goal.value, solver_reward_usdc: "23", verifier_reward_usdc: "2", delivery_deadline: newCutoff } });
@@ -168,9 +175,6 @@ test("saved brief edits reach the shared journey and invalidate an older funding
   document.activeElement = budget; budget.value = "25.00"; budget.handlers.input();
   assert.equal(invalidations, before, "equivalent amount formatting preserves the proposal approval");
   assert.equal(Date.parse(client.load().brief.deadline_at), Date.parse(newCutoff));
-  document.activeElement = timezone; timezone.value = "CST"; timezone.handlers.input();
-  assert.equal(client.load().brief.deadline_at, null, "ambiguous zones cannot stage a guessed deadline");
-  assert.match(deadline.validationMessage, /ambiguous/);
 });
 
 test("contract-wallet verdict preserves a wider signature through review and relay",async()=>{
