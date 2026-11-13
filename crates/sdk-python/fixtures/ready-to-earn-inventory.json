@@ -1,0 +1,20 @@
+{
+  "schema": "ready-to-earn-inventory/v1",
+  "lifecycle_feed": [
+    {"id": "B-2001", "status": "funded", "claimable": true, "verification_ready": true,
+     "recovery_reserved": false, "terms_valid": true,
+     "exclusion_reason": null},
+    {"id": "B-2002", "status": "funded", "claimable": true, "verification_ready": false,
+     "recovery_reserved": false, "terms_valid": true,
+     "exclusion_reason": "verification_ready_false"},
+    {"id": "B-2003", "status": "funded", "claimable": false, "verification_ready": true,
+     "recovery_reserved": true, "terms_valid": true,
+     "exclusion_reason": "recovery_reserved"},
+    {"id": "B-2004", "status": "funded", "claimable": true, "verification_ready": true,
+     "recovery_reserved": false, "terms_valid": false,
+     "exclusion_reason": "invalid_terms"},
+    {"id": "B-2005", "status": "settled", "claimable": false, "verification_ready": true,
+     "recovery_reserved": false, "terms_valid": true,
+     "exclusion_reason": "terminal_status"}
+  ]
+}
