@@ -10,7 +10,7 @@
 .posting-page .brief-field { display: flex; flex-direction: column; gap: 6px; margin: 0 0 14px; min-width: 0; }
 .posting-page .brief-field[hidden], .posting-page [data-ai-only][hidden] { display: none; }
 .posting-page .brief-field label { margin: 0; }
-.posting-page .brief-details :is(input:not([type="hidden"]), textarea), .posting-page [data-brief-mode] { box-sizing: border-box; width: 100%; background: var(--ab-bg); color: var(--ab-ink); border: 1px solid var(--ab-line); border-radius: 10px; padding: 12px 14px; font: inherit; }
+.posting-page .brief-details :is(input:not([type="hidden"]):not([type="checkbox"]), textarea), .posting-page [data-brief-mode] { box-sizing: border-box; width: 100%; background: var(--ab-bg); color: var(--ab-ink); border: 1px solid var(--ab-line); border-radius: 10px; padding: 12px 14px; font: inherit; }
 .posting-page .chat-composer-form .brief-details textarea { min-height: 96px; padding: 12px 14px; font-size: 16px; }
 .posting-page .brief-details small, .posting-page .brief-group > small { display: block; color: var(--ab-muted); font-size: 13px; line-height: 1.5; }
 .posting-page .brief-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
@@ -18,7 +18,19 @@
 :root[data-theme="light"] .posting-page .brief-deadline { color-scheme: light; }
 .posting-page .brief-details .brief-summary { margin: 0 0 6px; color: var(--ab-ink); font-weight: 600; }
 .posting-page .brief-ai-options { margin: 0 0 18px; }
+/* The description box also has an older id-based style (dark, rounder); match the other fields in both themes. */
+.posting-page .brief-details #bounty-composer-input { background: var(--ab-bg); color: var(--ab-ink); border: 1px solid var(--ab-line); border-radius: 10px; padding: 12px 14px; min-height: 96px; font-size: 16px; box-shadow: none; }
+.posting-page .brief-details #bounty-composer-input::placeholder, .posting-page .brief-details textarea::placeholder, .posting-page .brief-details input::placeholder { color: var(--ab-muted); }
+.posting-page .brief-details .brief-objective { min-height: 64px; }
+/* Acceptance criteria: checklist grouped by kind of work, then "Other". */
+.posting-page .brief-label { font-size: 14px; font-weight: 700; color: var(--ab-ink); }
+.posting-page .criteria-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 6px 0 10px; }
+.posting-page .criteria-group { border: 1px solid var(--ab-line); border-radius: 12px; padding: 10px 14px 12px; margin: 0; min-width: 0; background: var(--ab-bg); }
+.posting-page .criteria-group legend { padding: 0 6px; font-size: 13px; font-weight: 700; color: var(--ab-moss, var(--ab-muted)); }
+.posting-page .criteria-group label { display: flex; gap: 10px; align-items: center; min-height: 36px; margin: 0; padding: 2px 0; font-weight: 500; line-height: 1.4; cursor: pointer; color: var(--ab-ink); }
+.posting-page .criteria-group input[type="checkbox"] { width: 18px; height: 18px; min-height: 0; margin: 0; flex: 0 0 auto; accent-color: var(--ab-leaf, #8ee46b); padding: 0; }
 @media (max-width: 640px) {
   .posting-page .brief-details { padding: 6px 14px 16px; }
   .posting-page .brief-row { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .posting-page .criteria-groups { grid-template-columns: minmax(0, 1fr); }
 }

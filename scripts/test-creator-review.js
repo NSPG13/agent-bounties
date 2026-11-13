@@ -137,7 +137,7 @@ test("unavailable sponsorship stops before signing and a mismatched relay cannot
 test("saved brief edits reach the shared journey and invalidate an older funding proposal", () => {
   const flow = require("../site/marketplace-workflow.js"), records = new Map(), listeners = new Map(), elements = new Map();
   const element = () => ({ value: "", textContent: "", open: false, hidden: false, required: false, placeholder: "", handlers: {}, setCustomValidity(value) { this.validationMessage = value; }, addEventListener(name, fn) { this.handlers[name] = fn; }, querySelectorAll: () => [] });
-  for (const name of ["#bounty-composer-form", "#bounty-composer-input", "[data-brief-budget]", "[data-brief-deadline]", "[data-brief-status]", "[data-brief-timezone]", "[data-ai-options]", "[data-export-draft]", "[data-brief-mode]", "[data-brief-title]", "[data-brief-criteria]", "[data-brief-reserve]", "[data-composer-submit]", "[data-composer-label]", "[data-brief-zone-note]"]) elements.set(name, element());
+  for (const name of ["#bounty-composer-form", "#bounty-composer-input", "[data-brief-budget]", "[data-brief-deadline]", "[data-brief-status]", "[data-brief-timezone]", "[data-ai-options]", "[data-export-draft]", "[data-brief-mode]", "[data-brief-title]", "[data-brief-criteria]", "[data-brief-objective]", "[data-brief-criteria-other]", "[data-brief-review-share]", "[data-composer-submit]", "[data-composer-label]", "[data-brief-zone-note]"]) elements.set(name, element());
   elements.get("#bounty-composer-form").querySelector = name => elements.get(name);
   const document = { activeElement: null, documentElement: { dataset: {} }, querySelector: (name) => elements.get(name), querySelectorAll: () => [], addEventListener() {} };
   // The creator's device reports Mexico City; the form always reads the deadline in that zone.
@@ -164,6 +164,8 @@ test("saved brief edits reach the shared journey and invalidate an older funding
   assert.notEqual(deadline.value, "", "AI staging updates the deadline even while another field has focus");
   budget.value = "25"; budget.handlers.input();
   assert.equal(client.load().brief.budget_usdc, "25"); assert.equal(client.load().draft_stale, true); assert.equal(invalidations, 1);
+  assert.equal(client.load().brief.review_reward_usdc, "2.50", "the review reward is 10% of the total, never typed");
+  assert.match(elements.get("[data-brief-review-share]").textContent, /10% of the total \(2\.50 USDC\)/);
   assert.ok(client.load().brief.deadline_at, "editing the budget must not erase the deadline");
   document.activeElement = deadline; deadline.value = "2026-12-10T21:00"; deadline.handlers.input();
   assert.equal(client.load().brief.deadline_at, "2026-12-10T21:00:00-06:00", "the picked time is read in the creator's zone");
@@ -177,17 +179,31 @@ test("saved brief edits reach the shared journey and invalidate an older funding
   assert.equal(Date.parse(client.load().brief.deadline_at), Date.parse(newCutoff));
   // A description left empty is generated from the title and criteria. The generated text
   // never returns to the field, so a later criteria edit cannot publish an outdated copy.
-  const helper = win.AgentBountiesPostingBrief, title = elements.get("[data-brief-title]"), criteria = elements.get("[data-brief-criteria]");
+  const helper = win.AgentBountiesPostingBrief, title = elements.get("[data-brief-title]"), criteria = elements.get("[data-brief-criteria]"), other = elements.get("[data-brief-criteria-other]"), objective = elements.get("[data-brief-objective]");
   const generated = helper.fallbackGoal("Landing page", "Loads on mobile");
   document.activeElement = null;
-  client.save({ ...client.load(), goal: generated, draft_stale: false, brief: { ...client.load().brief, goal: generated, title: "Landing page", criteria: "Loads on mobile" }, draft: { ...client.load().draft, title: "Landing page", goal: generated, acceptance_criteria: ["Loads on mobile"] } });
+  // A brief saved before the objective field existed has no objective or description keys.
+  const { objective: _objective, description: _description, ...legacyBrief } = client.load().brief;
+  client.save({ ...client.load(), goal: generated, draft_stale: false, brief: { ...legacyBrief, goal: generated, title: "Landing page", criteria: "Loads on mobile" }, draft: { ...client.load().draft, title: "Landing page", goal: generated, acceptance_criteria: ["Loads on mobile"] } });
   assert.equal(goal.value, "", "the generated description stays out of the field");
   document.activeElement = budget; budget.handlers.input();
   assert.equal(invalidations, before, "an untouched empty description is not a change to the proposal");
-  document.activeElement = criteria; criteria.value = "Loads on mobile\nHas a contact form"; criteria.handlers.input();
+  // Criteria written under "Other" join the checked options, one per line.
+  document.activeElement = other; other.value = "Loads on mobile\nHas a contact form"; other.handlers.input();
+  assert.equal(client.load().brief.criteria, "Loads on mobile\nHas a contact form");
   assert.equal(client.load().brief.goal, "", "the outdated generated text is not kept as the description");
-  assert.equal(helper.manualDraft({ ...client.load().brief, deadline_at: new Date(Date.now() + 86400000).toISOString() }).goal, "Landing page. Done when: Loads on mobile; Has a contact form");
-  assert.equal(client.load().goal, "Landing page. Done when: Loads on mobile; Has a contact form");
+  const tomorrow = new Date(Date.now() + 86400000).toISOString();
+  assert.throws(() => helper.manualDraft({ ...client.load().brief, deadline_at: tomorrow }), /objective/, "the form's own briefs need an objective");
+  // The objective leads the goal; the description is kept apart and follows as details.
+  document.activeElement = objective; objective.value = "Get more customers to contact us"; objective.handlers.input();
+  document.activeElement = goal; goal.value = "Spanish and English"; goal.handlers.input();
+  assert.equal(client.load().brief.description, "Spanish and English");
+  assert.equal(helper.manualDraft({ ...client.load().brief, deadline_at: tomorrow }).goal, "Get more customers to contact us\n\nDetails: Spanish and English");
+  assert.equal(client.load().goal, "Get more customers to contact us\n\nDetails: Spanish and English");
+  document.activeElement = null;
+  client.save({ ...client.load(), updated_at: new Date().toISOString() });
+  assert.equal(goal.value, "Spanish and English", "restoring shows the description, not the composed goal");
+  assert.equal(objective.value, "Get more customers to contact us");
   // Only this form's own drafts are limited to 30 days; AI-prepared drafts keep their own limits.
   const mode = elements.get("[data-brief-mode]");
   mode.value = "ai"; mode.handlers.change();
