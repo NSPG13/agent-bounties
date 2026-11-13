@@ -35,14 +35,14 @@ async function main() {
   try {
     for (const width of [320,390,701,768,900,1280,1440,1920]) {
       const ctx = await browser.newContext({viewport:{width,height:900},reducedMotion:"reduce",colorScheme:"light",locale:"en-US",timezoneId:"America/Los_Angeles"});
-      let mode = "empty", account = "signed_out";
+      let mode = "empty", account = "signed_out", payout = "1000.25";
       await ctx.route("**/*", route => {
         const url = new URL(route.request().url());
         if (/^\/auth\/login\/(google|microsoft|github)$/.test(url.pathname)) return route.fulfill({contentType:"text/html",body:"<!doctype html><title>OAuth handoff fixture</title><p>Provider handoff reached.</p>"});
         if (url.pathname.includes("/auth/session") || url.pathname === "/v1/site-auth/session") return route.fulfill({json:{authenticated:account!=="signed_out",account_status:account,account_complete:account==="ready",providers:{google:true,microsoft:true,github:true},user:account!=="signed_out"?{id:"forest-qa",name:"Preview account",email:"preview@example.test"}:null,posting_drafts_enabled:false}});
         if (["/auth/account","/v1/site-auth/account"].includes(url.pathname)) return route.fulfill({json:{authenticated:true,account_status:account,account_complete:account==="ready",user:{id:"forest-qa",name:"Preview account",email:"preview@example.test"},wallets:account==="ready"?[{address:"0x"+"1".repeat(40),label:"Preview wallet",provider_id:"metamask",wallet_type:"browser",chain_ids:[8453],linked_at:"2026-09-10T00:00:00Z",last_verified_at:"2026-09-10T00:00:00Z"}]:[],data_status:"unavailable",reason:"marketplace_evidence_unavailable"}});
         if (url.pathname.endsWith("/leaderboard")) return route.fulfill({status:mode==="offline"?503:200,json:mode==="invalid"?{}:leaderboard(mode==="ready")});
-        if (url.pathname === "/v1/metrics/platform") return route.fulfill({json:{marketplace_payout_volume:{lifetime:{usdc:"1000.25"},lifetime_settled_rounds:1234},daily:[]}});
+        if (url.pathname === "/v1/metrics/platform") return route.fulfill({json:{marketplace_payout_volume:{lifetime:{usdc:payout},lifetime_settled_rounds:1234},daily:[]}});
         if (url.pathname === "/v1/opportunities") return route.fulfill({json:{schema_version:"agent-bounties/opportunity-projection-v1",network:"base-mainnet",applied_view:"ready_to_earn",degraded:false,source_statuses:[{source_type:"canonical_base",available:true}],items:[]}});
         if (url.pathname === "/phone-wallet-config.js") return route.fulfill({body:"window.agentBountiesPhoneWalletConfig={};",contentType:"text/javascript"});
         if (url.origin !== origin) return route.fulfill({status:503,body:"Isolated fixture"});
@@ -83,7 +83,9 @@ async function main() {
       if (width <= 700) assert.equal(new Set(metrics.map(metric => metric.x)).size, 1, "metrics stack on mobile");
       else if (width < 1100) { assert.equal(new Set(metrics.map(metric => metric.x)).size, 2, "tablet metrics use two columns"); assert.equal(new Set(metrics.map(metric => metric.y)).size, 2, "tablet metrics use two rows"); }
       else assert.equal(new Set(metrics.map(metric => metric.y)).size, 1, "desktop metrics align horizontally");
-      await page.waitForFunction(() => document.querySelector("[data-market-volume]").textContent === "1,000.25");
+      // Payout volume is a USD summary at $1 per USDC face value; the label must say so.
+      await page.waitForFunction(() => document.querySelector("[data-market-volume]").textContent === "$1,000.25");
+      assert.match(await page.locator(".ab-metric", { has: page.locator("[data-market-volume]") }).innerText(), /USD paid out.*USDC payouts at \$1 face value/s);
       assert.equal(await page.locator("[data-completed-bounties]").innerText(), "1,234");
       const metricValues = await page.locator(".ab-metric output, .ab-metric strong").evaluateAll(els => els.map(el => {
         const range = document.createRange(); range.selectNodeContents(el);
@@ -92,6 +94,24 @@ async function main() {
       }));
       assert.ok(metricValues.every(value => value.fits), "populated metric values remain inside their own cell: " + JSON.stringify(metricValues));
       assert.ok(await page.locator(".ab-metrics").evaluate(el => el.scrollWidth <= el.clientWidth), "metrics never need horizontal scrolling");
+      // Regression: a longer total once crossed the divider into the next statistic. Every value
+      // must sit centred inside its cell's padding, at one shared size, however large the total grows.
+      for (const [total, shown] of [["1000.25", "$1,000.25"], ["123456.78", "$123,456.78"], ["1000.25", "$1,000.25"]]) {
+        payout = total;
+        await page.evaluate(() => dispatchEvent(new Event("online")));
+        await page.waitForFunction(value => document.querySelector("[data-market-volume]").textContent === value, shown);
+        const fitted = await page.locator(".ab-metric output, .ab-metric strong").evaluateAll(els => els.map(el => {
+          const range = document.createRange(); range.selectNodeContents(el);
+          const text = range.getBoundingClientRect(), cell = el.closest(".ab-metric"), box = cell.getBoundingClientRect(), css = getComputedStyle(cell);
+          const left = box.left + parseFloat(css.borderLeftWidth) + parseFloat(css.paddingLeft), right = box.right - parseFloat(css.borderRightWidth) - parseFloat(css.paddingRight);
+          return { value: el.textContent, size: getComputedStyle(el).fontSize, inside: text.left >= left - .5 && text.right <= right + .5, centred: Math.abs((text.left + text.right) - (left + right)) <= 2 };
+        }));
+        assert.ok(fitted.every(value => value.inside && value.centred), `metric values stay centred inside their cell padding at ${width}px: ` + JSON.stringify(fitted));
+        // The first cell has no divider border, so its size may differ by a fraction of a pixel.
+        const sizes = fitted.map(value => parseFloat(value.size));
+        assert.ok(Math.max(...sizes) - Math.min(...sizes) < 1, "metric values share one size: " + JSON.stringify(fitted));
+        assert.ok(Math.min(...sizes) >= 24, "metric values stay display-sized: " + JSON.stringify(fitted));
+      }
       for(const selector of [".ab-site-signin", ".ab-site-board"]) await fits(page,selector);
       assert.equal(await page.locator(".ab-orbit-ring, .ab-orbit-sphere").count(),0);
       assert.match(await page.locator("#manifesto-title").innerText(),/If you can define.*done.*make it a bounty/s);
@@ -141,17 +161,26 @@ async function main() {
       await page.goto(origin+"/post.html?task=New%20review%20request");await page.getByRole("button",{name:"Use this new idea",exact:true}).click();assert.equal(await page.locator("#bounty-composer-input").inputValue(),"New review request");
       await page.evaluate(()=>scrollTo(0,0));await capture(page,`post-${width}`);
       await page.goto(origin+"/#login");await page.locator("[data-auth-dialog][open]").waitFor();
-      assert.equal(await page.locator("#auth-title").innerText(),"Create an account");
+      // The #login address and the header Log in link open the dialog for returning users.
+      assert.equal(await page.locator("#auth-title").innerText(),"Sign in","the login address opens sign-in");
       assert.deepEqual(await page.locator("[data-auth-provider]").evaluateAll(els=>els.map(el=>el.dataset.authProvider)),["google","microsoft","github"]);
       assert.equal(await page.locator("[data-auth-form] input, [data-auth-unavailable]").count(),0,"no custom account credentials or dead recovery controls");
-      await capture(page,`register-${width}`);
-      await page.locator("[data-auth-mode-toggle]").click();assert.equal(await page.locator("#auth-title").innerText(),"Sign in");
       assert.equal(await page.getByRole("button",{name:"Sign in with Google",exact:true}).count(),1);
       await capture(page,`signin-${width}`);
+      await page.locator("[data-auth-mode-toggle]").click();assert.equal(await page.locator("#auth-title").innerText(),"Create an account");
+      assert.equal(await page.getByRole("button",{name:"Sign up with Google",exact:true}).count(),1);
+      await capture(page,`register-${width}`);
       await page.locator("[data-auth-close]").click();
+      // The dialog's close event is queued; the login address is cleared when it runs.
+      await page.waitForFunction(()=>location.hash==="");
       await page.locator(".ab-site-login").click();
-      assert.equal(await page.locator("#auth-title").innerText(),"Create an account","reopening defaults to account creation");
+      assert.equal(await page.locator("#auth-title").innerText(),"Create an account","the account button defaults to account creation");
       await page.locator("[data-auth-close]").click();
+      await page.locator(".ab-site-signin").click();
+      await page.locator("[data-auth-dialog][open]").waitFor();
+      assert.equal(await page.locator("#auth-title").innerText(),"Sign in","the header Log in link opens sign-in");
+      await page.locator("[data-auth-close]").click();
+      assert.ok(await page.locator(".ab-site-signin").evaluate(el=>el===document.activeElement),"focus returns to the header Log in link");
       if(width===390) {
         for(const provider of ["google","microsoft","github"]) {
           // Force a fresh document; a late close event on the previous dialog

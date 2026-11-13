@@ -132,7 +132,9 @@ async function journey(browser, origin, width) {
   await page.getByText('Completed bounty history could not load. Try Refresh.').waitFor();
   const separate = page.locator('[data-direct-awards="board"]');
   await separate.getByRole('link', { name: 'View Submissions', exact: true }).waitFor();
-  assert.match(await separate.innerText(), /1 paid award · 15.068098 USDC/);
+  // Summaries show USD at $1 per USDC face value; the exact transfer amount is asserted on the payment record below.
+  assert.match(await separate.innerText(), /1 paid award · \$15\.07 · All time/);
+  assert.match(await separate.innerText(), /\$15\.07 paid separately · Direct creator award/);
   mode = 'ready';
   await page.getByRole('button', { name: 'Refresh', exact: true }).click();
   await page.locator('.opportunity-row[data-phase="completed"]').waitFor();
@@ -155,6 +157,8 @@ async function journey(browser, origin, width) {
   assert.equal(await page.locator('.creator-award-review').count(), 11);
   await page.getByText('Check the payment details', { exact: true }).click();
   assert.match(await page.locator('#award-payment').innerText(), /0xe33c96a42364a992375dc4e62174a326c6069156/);
+  assert.match(await page.locator('#award-payment').innerText(), /Amount\s+15\.068098 USDC/, 'payment record retains exact USDC');
+  assert.match(await page.locator('.submission-overview').innerText(), /15\.068098 USDC paid to /, 'award page states the exact transfer');
   assert.ok(await page.locator('.creator-award-image').evaluate(img => img.complete && img.naturalWidth > 0));
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'award and receipt fit the screen');
   const reviewFeedReads = feedReads;
