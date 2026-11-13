@@ -52,6 +52,8 @@ button.secondary:hover:not(:disabled) { background: var(--soft); }
 button:disabled { opacity: .45; cursor: default; }
 button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px solid var(--amber); outline-offset: 3px; }
 .actions { display: flex; flex-wrap: wrap; gap: 12px; } #managed-next { margin-top: 18px; }
+.consent-note { margin: 12px 0 0; }
+#managed-acceptance { margin-top: 24px; }
 footer { display: flex; flex-wrap: wrap; gap: 24px; border-top: 1px solid var(--line); margin-top: 48px; font-size: .85rem; }
 footer a { color: var(--muted); }
 [hidden] { display: none !important; }
