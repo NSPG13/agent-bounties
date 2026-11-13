@@ -1,4 +1,4 @@
-/* Private order page on the site's forest palette (dark), with no third-party assets. */
+/* Private order page on the site's forest palette (dark, or light when chosen on the site), with no third-party assets. */
 @font-face { font-family: "Cal Sans"; src: url("assets/fonts/CalSans-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
 :root {
   color-scheme: dark;
@@ -9,6 +9,16 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: radial-gradient(1200px 500px at 50% -200px, #1a3a23 0%, transparent 70%), var(--bg); min-height: 100vh; }
+/* Same light palette as the rest of the site (forest-ui.css). */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f7f8f2; --panel: #fff; --soft: #ecf1e5; --ink: #15281c; --muted: #53675a; --line: #d2ddcf;
+  --accent: #8ee46b; --accent-hover: #a4ef83; --on-accent: #07110c; --moss: #326737; --amber: #886015;
+}
+:root[data-theme="light"] body { background: radial-gradient(1200px 500px at 50% -200px, #e0efda 0%, transparent 70%), var(--bg); }
+:root[data-theme="light"] .badge { background: #f6ecd6; border-color: #e2cf9f; }
+:root[data-theme="light"] a:not(.brand) { color: #2f6b34; }
+:root[data-theme="light"] a:not(.brand):hover { color: #1f4f24; }
 header, main, footer { max-width: 1120px; margin: auto; padding: 24px; }
 header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; border-bottom: 1px solid var(--line); font-size: .9rem; }
 .brand { display: inline-flex; align-items: center; gap: 10px; font: 1.35rem var(--display); color: var(--ink); text-decoration: none; letter-spacing: -.01em; }

@@ -1,5 +1,15 @@
 (function () {
   'use strict';
+  // Keep the appearance chosen elsewhere on the site (light, dark or auto). Only the theme key is
+  // read; nothing about the account or the order is stored. This page loads no other site script.
+  (function applyTheme() {
+    let choice = 'dark';
+    try { const saved = window.localStorage.getItem('agent-bounties.theme'); if (['light', 'dark', 'auto'].includes(saved)) choice = saved; } catch (_) { /* Storage can be disabled. */ }
+    let light = choice === 'light';
+    try { if (choice === 'auto') light = window.matchMedia('(prefers-color-scheme: light)').matches; } catch (_) { /* Keep dark. */ }
+    const root = document.documentElement;
+    if (root && root.dataset) root.dataset.theme = light ? 'light' : 'dark';
+  })();
   const core = window.ManagedService, el = id => document.getElementById('managed-' + id);
   const preparationPage = location.search === '' && location.hash === ''; // Before any URL normalization.
   let target, origin, epoch = 0, controller, poll, expiry, polls = 0, account = null, record = null, digest = null, order = null, busy = false, pending = null;
