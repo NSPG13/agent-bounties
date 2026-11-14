@@ -16,7 +16,27 @@
   const zoneNote = document.querySelector("[data-brief-zone-note]");
   const title = document.querySelector("[data-brief-title]");
   const criteria = document.querySelector("[data-brief-criteria]");
-  const reserve = document.querySelector("[data-brief-reserve]");
+  const objective = document.querySelector("[data-brief-objective]");
+  const criteriaOther = document.querySelector("[data-brief-criteria-other]");
+  const criteriaOptions = Array.from(document.querySelectorAll("[data-criteria-options] input[type=checkbox]"));
+  const reviewShare = document.querySelector("[data-brief-review-share]");
+  // The checked options come first, then any criteria written under "Other", one per line.
+  const lines = text => String(text || "").split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  function collectCriteria() {
+    criteria.value = [...criteriaOptions.filter(box => box.checked).map(box => box.value), ...lines(criteriaOther?.value)].join("\n");
+    criteriaOther?.setCustomValidity("");
+  }
+  function showCriteria(text) {
+    const wanted = lines(text), offered = new Set(criteriaOptions.map(box => box.value));
+    for (const box of criteriaOptions) box.checked = wanted.includes(box.value);
+    if (criteriaOther && document.activeElement !== criteriaOther) criteriaOther.value = wanted.filter(line => !offered.has(line)).join("\n");
+    criteria.value = wanted.join("\n");
+  }
+  function showReviewShare() {
+    if (!reviewShare) return;
+    const reward = helper.reviewReward(budget.value);
+    reviewShare.textContent = reward ? `${helper.REVIEW_SHARE_PERCENT}% of the total (${reward} USDC) is your review reward, set automatically.` : `${helper.REVIEW_SHARE_PERCENT}% of the total is your review reward, set automatically.`;
+  }
   const params = new URLSearchParams(window.location.search);
   const protectedHandoff = params.has("parentBounty") || ["ai-app", "chatgpt-app"].includes(params.get("from"));
   const pad = n => String(n).padStart(2, "0");
@@ -108,7 +128,10 @@
     const brief = journey.brief || {};
     const savedDeadline = brief.deadline_at || journey.draft?.delivery_deadline || "";
     if (brief.preparation_mode && !protectedHandoff) mode.value = brief.preparation_mode;
-    if (document.activeElement !== goal) goal.value = ownGoal(brief.goal || journey.draft?.goal || journey.goal || "", journey);
+    // The form keeps the description separately from the composed goal agents read.
+    const ownDescription = brief.preparation_mode === "manual" && Object.prototype.hasOwnProperty.call(brief, "description");
+    if (document.activeElement !== goal) goal.value = ownDescription ? brief.description : ownGoal(brief.goal || journey.draft?.goal || journey.goal || "", journey);
+    if (document.activeElement !== objective) objective.value = brief.objective ?? "";
     if (document.activeElement !== budget) budget.value = brief.budget_usdc || (journey.draft ? String(Number(journey.draft.solver_reward_usdc) + Number(journey.draft.verifier_reward_usdc)) : "");
     timezone.value = detectedTimezone;
     if (document.activeElement !== deadline) {
@@ -122,8 +145,8 @@
       catch (_) { deadline.value = brief.deadline_local || ""; }
     }
     if (document.activeElement !== title) title.value = brief.title ?? journey.draft?.title ?? "";
-    if (document.activeElement !== criteria) criteria.value = brief.criteria ?? journey.draft?.acceptance_criteria?.join("\n") ?? "";
-    if (document.activeElement !== reserve) reserve.value = brief.review_reward_usdc ?? journey.draft?.verifier_reward_usdc ?? "0.10";
+    showCriteria(brief.criteria ?? journey.draft?.acceptance_criteria?.join("\n") ?? "");
+    showReviewShare();
     setMode();
     status.textContent = journey.draft ? "Draft saved on this device. Review the proposal below." : "Brief saved on this device. Complete the details to prepare your proposal.";
     restoring = false;
@@ -133,15 +156,20 @@
     if (restoring) return;
     const current = client.load() || client.start({ role: "post" });
     const result = render();
-    const brief = { preparation_mode: mode.value, title: title.value, criteria: criteria.value, review_reward_usdc: reserve.value, review_consent: mode.value === "manual", goal: ownGoal(goal.value, current), budget_usdc: budget.value, deadline_at: result.iso, deadline_local: deadline.value, timezone: timezone.value.trim() };
+    collectCriteria(); showReviewShare();
+    const manual = mode.value === "manual";
+    const brief = { preparation_mode: mode.value, title: title.value, criteria: criteria.value, review_reward_usdc: helper.reviewReward(budget.value), review_consent: manual,
+      ...(manual ? { objective: objective.value, description: goal.value } : {}),
+      goal: manual ? helper.composeGoal(objective.value, goal.value) : ownGoal(goal.value, current), budget_usdc: budget.value, deadline_at: result.iso, deadline_local: deadline.value, timezone: timezone.value.trim() };
     // Compare decisions, not display formatting, so restoring an old brief
     // does not invalidate approval simply because display fields were added.
     const before = current.brief || {};
     const manualChanged = mode.value === "manual" && (brief.title !== (before.title ?? current.draft?.title ?? "")
       || brief.criteria !== (before.criteria ?? current.draft?.acceptance_criteria?.join("\n") ?? "")
-      || Number(brief.review_reward_usdc) !== Number(before.review_reward_usdc ?? current.draft?.verifier_reward_usdc ?? "0.10")
+      || brief.objective !== (before.objective ?? "")
       || brief.review_consent !== (before.review_consent === true));
-    const changed = manualChanged || brief.goal !== ownGoal(before.goal || current.draft?.goal || current.goal || "", current)
+    const beforeGoal = before.preparation_mode === "manual" && Object.prototype.hasOwnProperty.call(before, "description") ? before.goal : ownGoal(before.goal || current.draft?.goal || current.goal || "", current);
+    const changed = manualChanged || brief.goal !== beforeGoal
       || Number(brief.budget_usdc) !== Number(before.budget_usdc || (current.draft ? Number(current.draft.solver_reward_usdc) + Number(current.draft.verifier_reward_usdc) : ""))
       || (Date.parse(brief.deadline_at) || null) !== (Date.parse(before.deadline_at || current.draft?.delivery_deadline) || null);
     if (changed && current.draft) window.AgentBountiesComposer?.invalidate();
@@ -153,11 +181,17 @@
     window.history?.replaceState?.(null, "", url);
     setMode(); save();
   });
-  for (const input of [goal, budget, deadline, title, criteria, reserve]) input.addEventListener("input", save);
+  for (const input of [goal, budget, deadline, title, objective, criteriaOther]) input?.addEventListener("input", save);
+  for (const box of criteriaOptions) box.addEventListener("change", save);
   // "Edit brief" refills the field from the proposal; keep this form's own label and an empty description empty.
-  document.querySelector("[data-revise-card]")?.addEventListener("click", () => { setMode(); goal.value = ownGoal(goal.value, client.load()); });
+  document.querySelector("[data-revise-card]")?.addEventListener("click", () => {
+    setMode();
+    const brief = client.load()?.brief || {};
+    goal.value = mode.value === "manual" && Object.prototype.hasOwnProperty.call(brief, "description") ? brief.description : ownGoal(goal.value, client.load());
+  });
   form.addEventListener("submit", async (event) => {
     event.preventDefault(); event.stopImmediatePropagation(); save();
+    if (mode.value === "manual" && !criteria.value.trim()) criteriaOther?.setCustomValidity("Check at least one criterion or write your own under Other.");
     if (!form.reportValidity()) return;
     const journey = client.load();
     if (mode.value === "manual") {

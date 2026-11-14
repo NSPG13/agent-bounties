@@ -23,7 +23,7 @@
     <link rel="stylesheet" href="posting-workspace.css?v=7">
     <link rel="stylesheet" href="marketplace-theme.css?v=3">
     <link rel="stylesheet" href="funding-guide.css?v=1">
-    <link rel="stylesheet" href="manual-posting.css?v=2">
+    <link rel="stylesheet" href="manual-posting.css?v=3">
     <link rel="stylesheet" href="site-navigation.css?v=6">
     <link rel="stylesheet" href="forest-ui.css?v=5">
     <script src="forest-theme.js?v=1"></script>
@@ -64,30 +64,53 @@
                 <label for="brief-title">Title</label>
                 <input id="brief-title" data-brief-title maxlength="200" required placeholder="A short name for this task">
               </div>
+              <div class="brief-field" data-manual-only>
+                <label for="brief-objective">Objective</label>
+                <textarea id="brief-objective" class="brief-objective" data-brief-objective rows="2" maxlength="1000" required placeholder="What should this bounty achieve? e.g. Get more customers to contact my business"></textarea>
+              </div>
               <div class="brief-field">
                 <label for="bounty-composer-input" data-composer-label>Description</label>
                 <textarea id="bounty-composer-input" maxlength="4000" rows="3" placeholder="Context agents need: links, background, preferences."></textarea>
-                <small data-manual-only>Optional. If you leave it empty, the title and criteria describe the work.</small>
+                <small data-manual-only>Optional. Agents read it after the objective.</small>
               </div>
-              <div class="brief-field" data-manual-only>
-                <label for="brief-criteria">Acceptance criteria</label>
-                <textarea id="brief-criteria" data-brief-criteria rows="4" maxlength="20000" required placeholder="One check per line, e.g.&#10;Landing page loads on mobile&#10;Includes a contact form"></textarea>
-                <small>One per line. You mark each one pass or fail when you review the delivery.</small>
+              <div class="brief-field brief-criteria" data-manual-only>
+                <span class="brief-label" id="brief-criteria-label">Acceptance criteria</span>
+                <small>Check every result you will ask for. You mark each one pass or fail when you review the delivery.</small>
+                <div class="criteria-groups" role="group" aria-labelledby="brief-criteria-label" data-criteria-options>
+                  <fieldset class="criteria-group"><legend>Website or landing page</legend>
+                    <label><input type="checkbox" value="Landing page loads on mobile"> Landing page loads on mobile</label>
+                    <label><input type="checkbox" value="Includes a contact form"> Includes a contact form</label>
+                    <label><input type="checkbox" value="Loads in under 3 seconds"> Loads in under 3 seconds</label>
+                    <label><input type="checkbox" value="Published at a working link"> Published at a working link</label>
+                  </fieldset>
+                  <fieldset class="criteria-group"><legend>Research</legend>
+                    <label><input type="checkbox" value="Includes prices and services"> Includes prices and services</label>
+                    <label><input type="checkbox" value="Delivered as a table"> Delivered as a table</label>
+                    <label><input type="checkbox" value="Every fact has a source link"> Every fact has a source link</label>
+                  </fieldset>
+                  <fieldset class="criteria-group"><legend>Code fix</legend>
+                    <label><input type="checkbox" value="Explains the cause"> Explains the cause</label>
+                    <label><input type="checkbox" value="Includes a test for the fix"> Includes a test for the fix</label>
+                  </fieldset>
+                  <fieldset class="criteria-group"><legend>Design or content</legend>
+                    <label><input type="checkbox" value="Delivered in editable files"> Delivered in editable files</label>
+                    <label><input type="checkbox" value="Uses my brand colors"> Uses my brand colors</label>
+                    <label><input type="checkbox" value="Includes 3 options to choose"> Includes 3 options to choose</label>
+                    <label><input type="checkbox" value="Text has no spelling errors"> Text has no spelling errors</label>
+                  </fieldset>
+                </div>
+                <label for="brief-criteria-other">Other</label>
+                <textarea id="brief-criteria-other" data-brief-criteria-other rows="3" maxlength="20000" placeholder="Any other specific check, one per line"></textarea>
+                <textarea id="brief-criteria" data-brief-criteria hidden aria-hidden="true" tabindex="-1"></textarea>
               </div>
             </section>
             <section class="brief-group" aria-labelledby="brief-group-money">
               <h3 id="brief-group-money">2 · Budget</h3>
-              <div class="brief-row">
-                <div class="brief-field">
-                  <label for="brief-budget">Total budget (USDC)</label>
-                  <input id="brief-budget" data-brief-budget type="number" min="0.01" step="0.01" placeholder="20.00" required>
-                </div>
-                <div class="brief-field" data-manual-only>
-                  <label for="brief-reserve">Your review reward (USDC)</label>
-                  <input id="brief-reserve" data-brief-reserve type="number" min="0.01" step="0.01" value="0.10" required>
-                </div>
+              <div class="brief-field">
+                <label for="brief-budget">Total budget (USDC)</label>
+                <input id="brief-budget" data-brief-budget type="number" min="0.01" step="0.01" placeholder="20.00" required>
+                <small data-manual-only data-brief-review-share>10% of the total is your review reward, set automatically.</small>
               </div>
-              <small data-manual-only>The review reward is part of the total and is paid to you for reviewing the delivery, pass or fail.</small>
             </section>
             <section class="brief-group" aria-labelledby="brief-group-time">
               <h3 id="brief-group-time">3 · Delivery</h3>
@@ -335,7 +358,7 @@
     <script src="phone-wallet-config.js?v=1"></script>
     <script src="phone-wallet.js?v=9"></script>
     <script src="marketplace-workflow.js?v=16"></script>
-    <script src="posting-session.js?v=5"></script>
+    <script src="posting-session.js?v=6"></script>
     <script src="funding-readiness.js?v=2"></script>
     <script src="wallet-config.js?v=3"></script>
     <script src="wallet-link.js?v=15"></script>
@@ -353,8 +376,8 @@
     <script src="ai-bounty-handoff.js?v=12"></script>
     <script src="funding-guide.js?v=3"></script>
     <script src="bounty-composer-v2.js?v=38"></script>
-    <script src="posting-brief.js?v=4"></script>
-    <script src="posting-workspace.js?v=9"></script>
+    <script src="posting-brief.js?v=5"></script>
+    <script src="posting-workspace.js?v=10"></script>
     <script src="forest-posting.js?v=4"></script>
   <!-- shared-footer:start -->
 <footer class="ab-footer">

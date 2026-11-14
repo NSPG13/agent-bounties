@@ -57,6 +57,7 @@
       preparation_mode: "manual", title: String(original.title || "").slice(0, 200),
       criteria: String(original.criteria || "").slice(0, 20000),
       review_reward_usdc: String(original.review_reward_usdc || "").slice(0, 30),
+      ...(original.objective !== undefined ? { objective: String(original.objective || "").slice(0, 1000), description: String(original.description || "").slice(0, 4000) } : {}),
       review_consent: original.review_consent === true,
     } : {};
     const brief = journey.brief ? { ...manual, goal: String(original.goal || journey.draft?.goal || journey.goal || "").trim(),

@@ -9,10 +9,10 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src https://api.agentizable.ai http://127.0.0.1:3000; base-uri 'none'; form-action 'none'; object-src 'none'">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="canonical" href="https://agentizable.ai/account">
-  <link rel="stylesheet" href="managed-service.css">
+  <link rel="stylesheet" href="managed-service.css?v=20261114">
   <title>Your service order — Agentizable</title>
   <script src="managed-service-core.js?v=20261030" defer></script>
-  <script src="managed-service-page.js?v=20261030" defer></script>
+  <script src="managed-service-page.js?v=20261114" defer></script>
 </head>
 <body>
   <header><a class="brand" href="./"><img src="favicon.svg" alt="" width="26" height="26"><span>Agentizable<span class="brand-tld">.ai</span></span></a><span class="header-note">Private service order</span></header>
@@ -45,9 +45,9 @@
           <div class="total"><strong>Total</strong><strong id="managed-total"></strong></div>
           <p id="managed-expiry" class="small"></p>
           <p id="managed-deposit-note" class="small" hidden></p>
-          <p class="small">This is the complete offered service price; no wallet setup is needed. Stripe may offer payment in your local currency. If you choose conversion, Stripe adds a 2–4% conversion fee and shows the converted total before you pay. You can keep the quoted currency instead; your bank may apply its own conversion charges.</p>
+          <p class="small">Stripe may offer your local currency for an extra 2–4% conversion fee, shown before you pay. You can keep the quoted currency.</p>
           <div id="managed-acceptance" hidden>
-            <label class="consent"><input id="managed-consent" type="checkbox"><span>I accept this deliverable, acceptance criteria, deadline, customer remedies, and full price.</span></label>
+            <p id="managed-consent-note" class="small consent-note">By accepting the quote you accept this deliverable, acceptance criteria, deadline, customer remedies, and full price.</p>
             <button id="managed-accept" type="button" disabled>Accept quote</button>
           </div>
           <button id="managed-checkout" type="button" hidden disabled>Continue to Stripe</button>
