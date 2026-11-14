@@ -61,7 +61,9 @@
 .forest-home .ab-metric:nth-child(n) { position: relative; min-height: 0; padding: 12px 32px; background: none; border-radius: 0; transform: none; color: var(--ab-ink); text-align: center; justify-content: flex-start; }
 .forest-home .ab-metric + .ab-metric { border-left: 1px solid var(--ab-line); }
 .forest-home .ab-metric + .ab-metric::before { content: ""; position: absolute; left: -3px; top: 40%; width: 5px; height: 5px; border-radius: 50%; background: var(--ab-moss); box-shadow: 0 0 18px #8ccd6977; }
-.forest-home .ab-metric strong, .forest-home .ab-metric output { font-size: clamp(36px, 4vw, 64px); color: var(--ab-moss); }
+/* One shared size: the designed size, or smaller when the longest value (counted by solarpunk-home.js) would leave its cell. */
+.forest-home .ab-metric { container-type: inline-size; }
+.forest-home .ab-metric strong, .forest-home .ab-metric output { --ab-metric-size: clamp(36px, 4vw, 64px); font-size: var(--ab-metric-size); font-size: min(var(--ab-metric-size), calc(100cqi / (var(--ab-metric-chars, 1) * .62))); color: var(--ab-moss); }
 .forest-home .ab-metric span { font-size: 17px; margin-top: 14px; }
 .forest-home .ab-metric small { font-size: 13px; line-height: 1.5; color: var(--ab-muted); opacity: 1; }
 .forest-home [data-market-status][hidden] { display: none; }
@@ -133,7 +135,7 @@
   .forest-home .ab-metric:nth-child(n) { padding: 25px 12px; min-height: 0; }
   .forest-home .ab-metric + .ab-metric { border-left: 0; border-top: 1px solid var(--ab-line); }
   .forest-home .ab-metric + .ab-metric::before { top: -3px; left: calc(50% - 2px); }
-  .forest-home .ab-metric strong, .forest-home .ab-metric output { font-size: 42px; }
+  .forest-home .ab-metric strong, .forest-home .ab-metric output { --ab-metric-size: 42px; }
   .forest-home .ab-metric span { font-size: 16px; margin-top: 9px; }
   .forest-home .ab-metric small { font-size: 12px; margin-top: 8px; }
   .ab-manifesto { padding: 78px 30px; }

@@ -919,6 +919,14 @@ ${competitionChildBrief(item)}`;
       win.setTimeout(show, 3500 + Math.round(random() * 5000));
     }
 
+    function fitMetricValues() {
+      // forest-hall.css sizes every statistic from the longest value, so none leaves its cell.
+      const metrics = doc.querySelector(".ab-metrics");
+      if (!metrics?.style?.setProperty) return;
+      const longest = Math.max(1, ...Array.from(metrics.querySelectorAll("output, strong"), (value) => [...value.textContent.trim()].length));
+      metrics.style.setProperty("--ab-metric-chars", String(longest));
+    }
+
     function applyMetricState(snapshot) {
       const formatter = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
       doc.querySelector("[data-market-volume]").textContent = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(snapshot.payout);
@@ -931,6 +939,7 @@ ${competitionChildBrief(item)}`;
       status.textContent = snapshot.coverage.message || (counts.unavailable ? "Open-now total is unconfirmed while some timing is unavailable. See All funded on the board." : "");
       status.hidden = !counts.unavailable && !snapshot.coverage.message;
       status.dataset.state = snapshot.coverage.limited ? "partial" : snapshot.coverage.state !== "complete" ? snapshot.coverage.state : counts.unavailable ? "unavailable" : "ready";
+      fitMetricValues();
     }
 
     function applyUnavailableState(message = "Marketplace evidence is temporarily unavailable.") {
@@ -943,6 +952,7 @@ ${competitionChildBrief(item)}`;
       status.textContent = message;
       status.hidden = false;
       status.dataset.state = "unavailable";
+      fitMetricValues();
     }
 
     async function requestJson(url) {
