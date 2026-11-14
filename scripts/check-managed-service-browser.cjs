@@ -103,6 +103,8 @@ test('WebMCP prepares an account-bound quote visibly without accepting or openin
   // No checkbox: pressing "Accept quote" is the acceptance, and the note under it says what it covers.
   await visible(f.page, 'Review the deliverable'); assert.equal(await f.page.locator('#managed-consent').count(), 0);
   assert.match(await f.page.locator('#managed-consent-note').innerText(), /By accepting the quote you accept this deliverable/);
+  assert.ok(await f.page.locator('#managed-consent-note + #managed-accept').count(), 'the terms note is read before the Accept quote button');
+  assert.equal(await f.page.locator('#managed-deposit-note').isVisible(), false, 'no deposit line, no deposit note');
   assert.equal(f.accepts.length, 0, 'preparing never accepts');
   assert.deepEqual(f.calls.filter(c => c.method === 'POST').map(c => c.path), ['/v1/managed-service/bounty-quotes']);
   assert.match((await prepare(f.page)).error, /current quote/); assert.equal(f.calls.filter(c => c.method === 'POST').length, 1); await f.close();
@@ -122,8 +124,11 @@ test('a fractional USDC reward can display exactly MXN10 with all itemized costs
   assert.equal(result.total_minor,1000); assert.equal(await f.page.locator('#managed-total').innerText(),'MXN 10.00');
   // Review costs share one row and the platform fee shares one with the currency buffer; the rows still add up to the total.
   const rows = await f.page.locator('#managed-lines dt').allInnerTexts();
-  assert.deepEqual(rows, ['Solver reward', 'Review and verification (deposit refundable)', 'Platform fee (7.5%) and currency conversion', 'Card processing']);
+  // A merged row names its refundable part: only the MXN 0.35 deposit of the MXN 2.28 review row is refundable.
+  assert.deepEqual(rows, ['Solver reward', 'Review and verification, including a MXN 0.35 refundable deposit', 'Platform fee and currency conversion buffer', 'Card processing']);
   assert.equal((await f.page.locator('#managed-lines dd').allInnerTexts()).join(' | '), 'MXN 3.44 | MXN 2.28 | MXN 0.32 | MXN 3.96');
+  assert.match(await f.page.locator('#managed-deposit-note').innerText(), /^The MXN 0\.35 review deposit returns to your card when the bounty is paid\. You lose it only if you reject a delivery and an appeal finds it met your criteria/);
+  assert.match(await f.page.locator('.price-card').innerText(), /2–4% conversion fee/);
   assert.equal(f.accepts.length,0); await f.close();
 });
 test('concurrent preparation and a late response after navigation cannot publish twice or expose a quote', async () => {

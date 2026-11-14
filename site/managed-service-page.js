@@ -23,8 +23,8 @@
     pending = null; el('review').hidden = true; el('review-form').hidden = true; el('review-artifact-row').hidden = true;
     el('review-artifact').removeAttribute('href'); el('review-reason').value = ''; el('review-consent').checked = false;
     el('verdict-pass').checked = el('verdict-reject').checked = false;
-    for (const id of ['review-info', 'review-reference', 'review-deposit']) el(id).textContent = '';
-    el('verdict-reject').disabled = el('verdict-pass').disabled = false;
+    for (const id of ['review-info', 'review-reference', 'review-deposit', 'deposit-note']) el(id).textContent = '';
+    el('verdict-reject').disabled = el('verdict-pass').disabled = false; el('deposit-note').hidden = true;
     el('login').hidden = true; el('logout').hidden = true; el('providers').replaceChildren();
     for (const id of ['deliverable', 'criteria', 'deadline', 'remedies', 'version', 'bounty', 'reference', 'mode', 'total', 'expiry', 'next']) el(id).textContent = '';
     el('lines').replaceChildren();
@@ -100,18 +100,23 @@
     el('bounty').textContent = 'Your task becomes a public bounty on ' + network + ' so solvers can work on it. Its description and criteria are public; your identity and price are not.';
     el('bounty-link').href = (b.network === 'base-mainnet' ? 'https://basescan.org' : 'https://sepolia.basescan.org') + '/address/' + b.predicted_bounty;
     el('bounty-link').textContent = 'Its address on Basescan (active once funded)'; el('bounty-link').hidden = false;
+    // The deposit terms are read before acceptance: when it returns, when it is lost, and what is kept.
+    const deposit = q.input.additional_costs.find(c => c.code === 'review_deposit');
+    el('deposit-note').hidden = !deposit;
+    el('deposit-note').textContent = deposit ? 'The ' + core.money(deposit.amount_minor, q.input.currency) + ' review deposit returns to your card when the bounty is paid. You lose it only if you reject a delivery and an appeal finds it met your criteria; it then goes to that solver. Card processing on it is not refunded.' : '';
     el('mode').textContent = q.input.livemode ? 'Service order' : 'Test mode — no real payment';
     el('total').textContent = core.money(q.total_minor, q.input.currency);
     el('expiry').textContent = 'Offer valid until ' + date(q.input.expires_at) + '.';
-    el('lines').replaceChildren(...displayLines(q.lines).map(line => {
+    el('lines').replaceChildren(...displayLines(q.lines, q.input.currency).map(line => {
       const row = document.createElement('div'), label = document.createElement('dt'), value = document.createElement('dd');
       label.textContent = line.label; value.textContent = core.money(line.amount_minor, q.input.currency); row.append(label, value); return row;
     }));
     el('private').hidden = false;
   }
   // The price card shows fewer rows: review costs together, and the platform fee with the currency
-  // buffer. Every charged amount is still in a row, so the rows always add up to the total.
-  function displayLines(lines) {
+  // buffer. Every charged amount is still in a row, so the rows always add up to the total. A merged
+  // row names its refundable part and amount, and never carries a percentage that only one part has.
+  function displayLines(lines, currency) {
     const groups = { verification: 'review', review_deposit: 'review', platform_fee: 'fees', currency_conversion: 'fees' };
     const rows = [], byGroup = {};
     for (const line of lines) {
@@ -120,8 +125,9 @@
       if (!byGroup[group]) { byGroup[group] = { label: line.label, amount_minor: 0, codes: [] }; rows.push(byGroup[group]); }
       byGroup[group].amount_minor += line.amount_minor; byGroup[group].codes.push(line.code);
     }
-    if (byGroup.review) byGroup.review.label = byGroup.review.codes.includes('review_deposit') ? 'Review and verification (deposit refundable)' : 'Review and verification';
-    if (byGroup.fees && byGroup.fees.codes.length > 1) byGroup.fees.label = 'Platform fee (7.5%) and currency conversion';
+    const deposit = lines.find(line => line.code === 'review_deposit');
+    if (byGroup.review && byGroup.review.codes.length > 1) byGroup.review.label = 'Review and verification, including a ' + core.money(deposit.amount_minor, currency) + ' refundable deposit';
+    if (byGroup.fees && byGroup.fees.codes.length > 1) byGroup.fees.label = 'Platform fee and currency conversion buffer';
     return rows;
   }
   function quoteState() {

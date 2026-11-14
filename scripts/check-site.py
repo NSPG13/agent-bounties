@@ -1584,7 +1584,7 @@ def main() -> int:
             # Service terms and prices must stay isolated from analytics and the
             # homepage wallet onboarding. Only these reviewed scripts may run.
             scripts = re.findall(r"<script\b[^>]*>.*?</script\s*>", text, re.IGNORECASE | re.DOTALL)
-            if scripts != ['<script src="managed-service-core.js?v=20261030" defer></script>', '<script src="managed-service-page.js?v=20261030" defer></script>']:
+            if scripts != ['<script src="managed-service-core.js?v=20261030" defer></script>', '<script src="managed-service-page.js?v=20261114" defer></script>']:
                 fail(f"{relative}: only the private managed-service scripts may load")
             if re.search(r"\bon\w+\s*=|shared-navigation:|<(?:iframe|form)\b", text, re.IGNORECASE):
                 fail(f"{relative}: inline handlers, shared journey handlers, forms and frames are forbidden")
@@ -1594,6 +1594,8 @@ def main() -> int:
                 "default-src 'none'", "base-uri 'none'", "form-action 'none'",
                 'id="managed-private" hidden', 'id="managed-consent-note"',
                 "By accepting the quote you accept this deliverable, acceptance criteria, deadline, customer remedies, and full price.",
+                'id="managed-deposit-note"',
+                "Stripe may offer your local currency for an extra 2–4% conversion fee, shown before you pay.",
             ])
         else:
             require_phrases(relative, text, [

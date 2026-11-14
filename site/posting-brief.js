@@ -114,7 +114,8 @@
     if (!title || title.length > 200) throw new Error("Enter a title of up to 200 characters.");
     // Briefs saved before the objective field existed have no objective key; new ones must fill it.
     if (Object.prototype.hasOwnProperty.call(brief, "objective") && (!String(brief.objective || "").trim() || String(brief.objective).trim().length > 1000)) throw new Error("Enter the objective of the bounty in up to 1,000 characters.");
-    if (!goal || goal.length > 4000) throw new Error("Describe the work in up to 4,000 characters.");
+    if (!goal) throw new Error("Describe the work in up to 4,000 characters.");
+    if (goal.length > 4000) throw new Error(Object.prototype.hasOwnProperty.call(brief, "objective") ? "The objective and description together must stay under 4,000 characters. Shorten the description." : "Describe the work in up to 4,000 characters.");
     if (!criteria.length || criteria.length > 20 || criteria.some(s => s.length > 1000)) throw new Error("Add 1–20 acceptance criteria, one per line, with up to 1,000 characters each.");
     const total = cents(brief.budget_usdc), reserve = total === null ? null : reviewRewardCents(total);
     if (total === null || total > 900000000000 || total - reserve < 200) throw new Error(`Enter a total budget of at least 2.22 USDC: the worker receives at least 2 USDC after the ${REVIEW_SHARE_PERCENT}% review reward.`);

@@ -77,5 +77,6 @@ test("manual form preserves explicit terms without an AI and rejects incomplete 
   assert.equal(brief.fallbackGoal("Landing page", ""), "");
   assert.ok(brief.fallbackGoal("Landing page", Array(20).fill("x".repeat(1000)).join("\n")).length <= 4000);
   assert.throws(() => brief.manualDraft({...input, goal:"x".repeat(4001)}, now), /4,000 characters/, "a written description is validated, never shortened silently");
+  assert.throws(() => brief.manualDraft({...input, objective:"Aim", goal:"x".repeat(4001)}, now), /objective and description together/);
   assert.doesNotMatch(brief.resolveDeadline("2026-11-01T01:30", "America/Chicago").error, /UTC offset/, "the form has no offset field to point at");
 });
