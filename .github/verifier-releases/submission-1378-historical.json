@@ -1,0 +1,12 @@
+{
+  "bounty_id": "1378",
+  "competition_id": "0x5817b7742b085d333c7e7831daa62a490c493b56",
+  "proof_type": "sp1_plonk",
+  "submission_timestamp": "2026-10-01T12:00:00Z",
+  "data": {
+    "historical_window_start": "2026-09-07T00:00:00Z",
+    "historical_window_end": "2026-09-21T00:00:00Z",
+    "status": "verification_ready",
+    "note": "Historical proof submission per issue #1378 requirements. Verification hold acknowledged."
+  }
+}
