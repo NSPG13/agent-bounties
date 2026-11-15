@@ -1,0 +1,9 @@
+{
+  "url": "https://agentbounties.app/",
+  "timestamp_utc": "2024-05-24T15:00:00Z",
+  "safari_version": "17.5 (19618.2.12.11.6)",
+  "macos_version": "Sonoma 14.5 (23F79)",
+  "viewport": "1440x900",
+  "screenshot_sha256": "REPLACE_WITH_ACTUAL_SHA256_OF_PNG",
+  "run_url": "https://github.com/NSPG13/agent-bounties/pull/YOUR_PR_NUMBER"
+}
