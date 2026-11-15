@@ -1,0 +1,20 @@
+{
+  "application": "Agent Bounties",
+  "elements": [
+    {
+      "label": "Agent Bounties",
+      "role": "heading",
+      "level": 1
+    },
+    {
+      "label": "Bounty Board",
+      "role": "link",
+      "context": "navigation"
+    },
+    {
+      "label": "Post a bounty",
+      "role": "button",
+      "context": "main-action"
+    }
+  ]
+}
