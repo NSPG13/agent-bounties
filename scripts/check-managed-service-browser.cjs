@@ -10,7 +10,7 @@ const sign = quote => ({ quote, quote_digest: createHash('sha256').update('agent
 const root = path.resolve(__dirname, '../site');
 const server = http.createServer((req, res) => {
   const name = new URL(req.url, 'http://localhost').pathname.slice(1);
-  if (!['account.html', 'managed-service-core.js', 'managed-service-page.js', 'managed-service.css', 'favicon.svg'].includes(name)) { res.writeHead(404).end(); return; }
+  if (!['account.html', 'managed-service-theme.js', 'managed-service-core.js', 'managed-service-page.js', 'managed-service.css', 'favicon.svg'].includes(name)) { res.writeHead(404).end(); return; }
   res.writeHead(200, { 'Content-Type': name.endsWith('.js') ? 'application/javascript' : name.endsWith('.css') ? 'text/css' : name.endsWith('.svg') ? 'image/svg+xml' : 'text/html', 'Cache-Control': 'no-store' });
   res.end(fs.readFileSync(path.join(root, name)));
 });
@@ -130,6 +130,25 @@ test('a fractional USDC reward can display exactly MXN10 with all itemized costs
   assert.match(await f.page.locator('#managed-deposit-note').innerText(), /^The MXN 0\.35 review deposit returns to your card when the bounty is paid\. You lose it only if you reject a delivery and an appeal finds it met your criteria/);
   assert.match(await f.page.locator('.price-card').innerText(), /2–4% conversion fee/);
   assert.equal(f.accepts.length,0); await f.close();
+});
+test('the saved theme is applied before the page body is parsed, with no storage writes', async () => {
+  for (const [saved, scheme, expected] of [['light', 'dark', 'light'], ['dark', 'light', 'dark'], ['auto', 'light', 'light'], ['auto', 'dark', 'dark'], [null, 'light', 'dark'], ['purple', 'light', 'dark']]) {
+    const context = await browser.newContext({ serviceWorkers: 'block', colorScheme: scheme }), page = await context.newPage();
+    await page.addInitScript(value => {
+      if (value !== null) localStorage.setItem('agent-bounties.theme', value);
+      const writes = []; const set = Storage.prototype.setItem; Storage.prototype.setItem = function (...a) { writes.push(a[0]); return set.apply(this, a); };
+      window.__themeWrites = writes;
+      // Record the theme at the moment <body> is inserted: before any of it can paint.
+      new MutationObserver((records, observer) => { if (document.body) { window.__themeAtBody = document.documentElement.dataset.theme || null; observer.disconnect(); } })
+        .observe(document, { childList: true, subtree: true });
+    }, saved);
+    await context.route('**/*', route => new URL(route.request().url()).origin === base ? route.continue() : route.abort());
+    await page.goto(base + '/account.html');
+    assert.equal(await page.evaluate(() => window.__themeAtBody), expected, `saved ${saved}, system ${scheme}`);
+    assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), expected);
+    assert.deepEqual(await page.evaluate(() => window.__themeWrites), [], 'the theme script never writes storage');
+    await context.close();
+  }
 });
 test('concurrent preparation and a late response after navigation cannot publish twice or expose a quote', async () => {
   let finish; const wait = new Promise(resolve => { finish=resolve; });

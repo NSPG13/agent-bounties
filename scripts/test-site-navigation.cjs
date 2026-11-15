@@ -107,7 +107,7 @@ async function main() {
           // journey handlers or analytics may see quote, order or account state.
           await page.goto(`${origin}/${file}`);
           assert.equal(await page.locator("[data-site-header], .ab-footer").count(), 0, "private order page remains isolated");
-          assert.deepEqual(await page.locator("script").evaluateAll(els => els.map(el => el.getAttribute("src"))), ["managed-service-core.js?v=20261030", "managed-service-page.js?v=20261114"]);
+          assert.deepEqual(await page.locator("script").evaluateAll(els => els.map(el => el.getAttribute("src"))), ["managed-service-theme.js?v=20261115", "managed-service-core.js?v=20261030", "managed-service-page.js?v=20261115"]);
           assert.equal(await page.locator('meta[name="robots"]').getAttribute("content"), "noindex, nofollow");
           continue;
         }
