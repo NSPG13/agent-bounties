@@ -6,7 +6,7 @@
   "data": {
     "historical_window_start": "2026-09-07T00:00:00Z",
     "historical_window_end": "2026-09-21T00:00:00Z",
-    "status": "verification_ready",
+    "status": "submitted",
     "note": "Historical proof submission per issue #1378 requirements. Verification hold acknowledged."
   }
 }
