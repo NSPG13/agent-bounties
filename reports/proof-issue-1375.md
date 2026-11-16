@@ -6,6 +6,7 @@
 - **Scoring Window:** 2026-08-24T00:00:00Z — 2026-08-31T00:00:00Z
 - **Network:** Base Mainnet (EIP-155:8453)
 - **Verifier:** `forward-canonical-gmv-attribution-metric-v2`
+- **Status:** Claimed
 
 ## 2. Wallet Attribution
 - **Entrant/Funder Wallet (Base):** `0x742d35Cc6634C0532925a3b844Bc454e4438f44e`
