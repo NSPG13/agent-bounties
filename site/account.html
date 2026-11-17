@@ -45,12 +45,13 @@
           <dl id="managed-lines" class="prices"></dl>
           <div class="total"><strong>Total</strong><strong id="managed-total"></strong></div>
           <p id="managed-expiry" class="small"></p>
+          <!-- Outside the acceptance block: the terms stay available after acceptance, before Stripe. -->
+          <details class="payment-terms">
+            <summary>Payment terms</summary>
+            <p id="managed-deposit-note" class="small" hidden></p>
+            <p class="small">Stripe may offer your local currency for an extra 2–4% conversion fee, shown before you pay. You can keep the quoted currency.</p>
+          </details>
           <div id="managed-acceptance" hidden>
-            <details class="payment-terms">
-              <summary>Payment terms</summary>
-              <p id="managed-deposit-note" class="small" hidden></p>
-              <p class="small">Stripe may offer your local currency for an extra 2–4% conversion fee, shown before you pay. You can keep the quoted currency.</p>
-            </details>
             <p id="managed-consent-note" class="small consent-note">By accepting the quote you accept this deliverable, acceptance criteria, deadline, customer remedies, and full price.</p>
             <button id="managed-accept" type="button" disabled>Accept quote</button>
           </div>
