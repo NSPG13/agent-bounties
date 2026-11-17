@@ -264,7 +264,7 @@
       gasSponsored: state.gasSponsored === true, directWallet: !state.metaParent && !postingSession.canContinue(),
       account: state.account, connected: Boolean(state.provider), balances: state.balances,
       connecting: walletConnecting, busy: postingBusy, approved: state.approved,
-      recorded: Boolean(postingJournal.load()), continuable: postingSession.canContinue(),
+      recorded: Boolean(postingJournal.load()), continuable: postingSession.canContinue(), resumable: v2CreationResumable(),
       canonical: state.canonical, conflict: postingSession.snapshot().conflict,
       fee: state.fundingUsdc && !state.metaParent ? formatUsdc(Number(v2FundingAmounts().fee) / 1e6) : "0.00",
       total: state.fundingUsdc && !state.metaParent ? formatUsdc(Number(v2FundingAmounts().total) / 1e6) : formatUsdc(state.fundingUsdc), solver: state.fundingUsdc ? formatUsdc(Number(currentRewardSplit().solver) / 1e6) : "0.00",
@@ -350,7 +350,7 @@
     ui.approve.disabled = action.disabled || state.approved;
     ui.approve.dataset.approved = String(state.approved);
     ui.approve.textContent = state.approved ? "Terms approved ✓" : action.label;
-    ui.fund.disabled = !state.approved || Boolean(postingJournal.load() && !postingSession.canContinue());
+    ui.fund.disabled = !state.approved || Boolean(postingJournal.load() && !postingSession.canContinue() && !v2CreationResumable());
     if (!state.approved) setStatus(postingAuthMessage(), state.postingAccountStatus === "ready" && state.postingAuthReceipt ? "success" : "pending");
     updatePostingTracker();
   }
@@ -1942,7 +1942,7 @@
     }
     if (!postingSession.canContinue() && (item.provider?.agentBountiesCapabilities?.reviewedPostingOnly
       || item.provider?.agentBountiesCapabilities?.directTransactions === false)) {
-      setPaymentStatus("This wallet does not support V2 direct transactions. Choose an external Base wallet with USDC and ETH for network fees. Your draft is saved.", "pending");
+      setPaymentStatus("This wallet can't post with USDC yet. Choose a browser or phone wallet that holds Base USDC and some Base ETH for network fees, or pay by card if that option is shown. Your draft is saved.", "pending");
       return;
     }
     walletConnecting = true;
@@ -2042,8 +2042,8 @@
     ui.requiredUsdc.textContent = `${window.AgentBountiesFundingReadiness.formatUnits(v2FundingAmounts().total)} USDC`;
     ui.readiness.hidden = false; ui.fundingHelp.hidden = usdcReady && gasAvailable;
     ui.missingUsdc.textContent = `${window.AgentBountiesFundingReadiness.formatUnits(required > usdc ? required - usdc : 0n)} USDC`;
-    ui.fundNow.disabled = !state.approved || !provider || (!postingSession.canContinue() && (!usdcReady || !gasAvailable || Boolean(postingJournal.load()))) || postingSession.snapshot().conflict;
-    ui.fundNow.textContent = postingSession.canContinue() ? "Continue funding" : "Review and post";
+    ui.fundNow.disabled = !state.approved || !provider || (!postingSession.canContinue() && (!usdcReady || !gasAvailable || Boolean(postingJournal.load() && !v2CreationResumable()))) || postingSession.snapshot().conflict;
+    ui.fundNow.textContent = postingSession.canContinue() ? "Continue funding" : v2CreationResumable() ? "Finish posting" : "Review and post";
     walletState.textContent = `${connection} · ${usdcReady ? "USDC available" : "USDC shortfall"}. ${gasAvailable ? "Base ETH is present; your wallet quotes each network fee." : "Base ETH is required for network fees."}`;
     for (const link of ui.onramps) { const url = new URL(link.href); url.searchParams.set("wallet", account); url.searchParams.set("operation_id", window.AgentBountiesWorkflow.createClient(window).load()?.id || ""); link.href = url.href; link.target = "_self"; }
     updatePostingTracker(); updatePostingCost();
@@ -2051,6 +2051,7 @@
     else if (postingSession.canContinue()) setPaymentStatus("Your signed request is saved. Continue funding to reconcile this same payment; no additional funds or new authorization are needed to check its status.", "pending");
     else if (!gasAvailable) setPaymentStatus("This V2 wallet route requires Base ETH for network fees. Your draft is saved. Card payment remains a separate option.", "error");
     else if (!usdcReady) setPaymentStatus("The displayed Base USDC shortfall includes the 7.5% solver-reward fee. This wallet route also requires Base ETH for gas.", "pending");
+    else if (v2CreationResumable()) setPaymentStatus("No USDC has moved yet. Choose Finish posting to create this same bounty; your wallet asks you to confirm it.", "pending");
     else setPaymentStatus("Review the fee-inclusive USDC total and wallet-paid Base network fees. You approve an exact allowance, then create and fund the bounty.", "success");
   }
 
@@ -2070,7 +2071,19 @@
     const done = { draft: Boolean(journey?.draft), approval: state.approved, wallet: Boolean(state.provider && state.account), creation: canonical.creation_confirmed, funding: canonical.funding_confirmed, claimable: canonical.claimable, inventory: canonical.public_inventory_verified };
     for (const item of document.querySelectorAll("[data-posting-step]")) { const complete = done[item.dataset.postingStep] === true; item.dataset.complete = String(complete); item.setAttribute("aria-label", `${item.textContent}: ${complete ? "confirmed" : "pending"}`); }
     const status = document.querySelector("[data-posting-tracker-status]");
-    if (status) status.textContent = canonical.public_inventory_verified ? "This exact bounty is confirmed in public ready-to-earn inventory." : postingSession.canContinue() ? "Your signed request is saved. Continue funding to review its transaction." : postingJournal.load() ? "A wallet operation is recorded. Checking the same operation automatically; do not pay again." : "Draft saved. Publication and funding remain pending.";
+    if (status) status.textContent = canonical.public_inventory_verified ? "This exact bounty is confirmed in public ready-to-earn inventory." : postingSession.canContinue() ? "Your signed request is saved. Continue funding to review its transaction." : v2CreationResumable() ? "Bounty creation was not sent and no USDC has moved. Finish posting to create this same bounty." : postingJournal.load() ? "A wallet operation is recorded. Checking the same operation automatically; do not pay again." : "Draft saved. Publication and funding remain pending.";
+  }
+
+  // Only the creation call moves USDC. After an allowance step, a creation the
+  // wallet never received, refused or reverted leaves this exact bounty safe to
+  // finish; any other creation reply stays uncertain and is only reconciled.
+  const V2_CREATION_PENDING = "v2_creation_pending";
+  function v2CreationResumable() { return postingJournal.load()?.phase === V2_CREATION_PENDING; }
+  async function v2AllowanceCovers(protocol, total) {
+    try {
+      const result = await state.provider.request({ method: "eth_call", params: [{ to: protocol.native_usdc, data: `0xdd62ed3e${addressWord(state.account)}${addressWord(protocol.factory)}` }, "latest"] });
+      return /^0x[0-9a-f]{64}$/i.test(result) && BigInt(result) >= BigInt(total);
+    } catch (_) { return false; }
   }
 
   function assertV2CostConsent() {
@@ -2106,8 +2119,14 @@
   async function sendTransaction(transaction) {
     if (!transaction?.to || !transaction.data || Number(transaction.value_wei || 0) !== 0) throw new Error("The planned transaction is invalid.");
     const continuation = Boolean(state.provider.agentBountiesCapabilities?.reviewedPostingOnly && postingSession.canContinue());
-    if (!continuation) postingJournal.checkpoint("sending", null, "eth_sendTransaction");
     await prepareWalletRequest([transaction]);
+    // "sending" means the wallet may have this request, so record it only after
+    // every pre-wallet check passes, and persist it before the wallet sees it.
+    if (!continuation) {
+      postingJournal.checkpoint("sending", null, "eth_sendTransaction");
+      try { await postingSession.flush({ requireServer: true }); await assertPostingBinding(); }
+      catch (error) { throw Object.assign(error, { walletUnreached: true }); }
+    }
     const hash = await state.provider.request({ method: "eth_sendTransaction", params: [{ from: state.account, to: transaction.to, data: transaction.data, value: "0x0" }],
       ...(state.provider.agentBountiesCapabilities?.reviewedPostingOnly ? { agentBountiesPostingContext: postingBinding.requestContext,
         ...(continuation ? { agentBountiesBeforeSubmit: async () => {
@@ -2116,7 +2135,7 @@
     if (!/^0x[0-9a-fA-F]{64}$/.test(hash)) throw new Error("The wallet response is uncertain. Check the recorded posting before retrying.");
     postingJournal.checkpoint("submitted", hash); await postingSession.flush({ requireServer: true }); return hash;
   }
-  async function waitReceipt(hash,timeoutMs=150000){const started=Date.now();while(Date.now()-started<timeoutMs){const receipt=await state.provider.request({method:"eth_getTransactionReceipt",params:[hash]});if(receipt){if(receipt.status!=="0x1")throw new Error(`The Base transaction reverted: ${hash}`);return receipt;}await new Promise((resolve)=>setTimeout(resolve,1600));}throw new Error("The transaction is still pending. Check the wallet or Base explorer before trying again.");}
+  async function waitReceipt(hash,timeoutMs=150000){const started=Date.now();while(Date.now()-started<timeoutMs){const receipt=await state.provider.request({method:"eth_getTransactionReceipt",params:[hash]});if(receipt){if(receipt.status!=="0x1")throw Object.assign(new Error(`The Base transaction reverted: ${hash}`),{reverted:true});return receipt;}await new Promise((resolve)=>setTimeout(resolve,1600));}throw new Error("The transaction is still pending. Check the wallet or Base explorer before trying again.");}
   async function sendWalletCalls(calls,protocol){
     postingJournal.checkpoint("sending",null,"wallet_sendCalls");
     await prepareWalletRequest(calls);
@@ -2268,7 +2287,8 @@
 
   async function fundApprovedBounty() {
     if (postingBusy) return;
-    if (postingJournal.load()) {
+    const resuming = v2CreationResumable();
+    if (postingJournal.load() && !resuming) {
       if (postingSession.canContinue()) return continueSignedBounty();
       setPaymentStatus("A posting wallet step is already recorded. Your AI can check its canonical status; do not create or fund it again.", "pending");
       return;
@@ -2285,7 +2305,7 @@
     setPaymentStatus("Preparing the exact canonical Base USDC funding request…", "pending");
     try {
       await postingSession.refresh();
-      if (postingJournal.load()) throw new Error("This posting already has a recorded wallet operation. Reconcile it before continuing.");
+      if (postingJournal.load() && !(resuming && v2CreationResumable())) throw new Error("This posting already has a recorded wallet operation. Reconcile it before continuing.");
       await assertPostingBinding();
       await postingSession.flush({ requireServer: true });
       await assertPostingBinding();
@@ -2298,6 +2318,14 @@
       const protocol = await loadProtocol();
       const api = String(protocol.api_base_url).replace(/\/$/, "");
       const rewards = currentRewardSplit();
+      if (resuming) {
+        // Reconcile first: canonical creation outranks the wallet's earlier reply.
+        const recorded = postingJournal.load();
+        if ((await postingSession.reconcile()).creation_confirmed) {
+          await finishPosting(api, { bounty_id: recorded.bounty_id, predicted_bounty_contract: recorded.bounty_contract }, protocol, null);
+          return;
+        }
+      }
       let create, plan, childPlan = null, authorizationValidBefore, checkedV2;
       if (state.metaParent) {
         const parent = await metaChild.resolve(state.metaParent, window.AgentBountiesWorkflow.createClient(window));
@@ -2322,10 +2350,14 @@
       } else {
         const publication = window.AgentBountiesTermsPublication;
         if (!publication) throw new Error("Publication checks could not load. Reload before funding.");
+        // Finishing must reuse the exact published terms and creation nonce.
+        const prior = resuming ? publication.saved(window, "direct") : null;
+        if (resuming && !prior) throw new Error("Finish posting from the browser tab where you approved the USDC allowance. Nothing was sent.");
         const saved = publication.reserve(window, "direct", {
           approval: legalBinding(), rewards: Object.fromEntries(Object.entries(rewards).map(([key, value]) => [key, String(value)])),
           taskWindowDays: state.taskWindowDays, deliveryDeadline: state.deliveryDeadline || null, protocol,
         }, { creator_wallet: state.account, document: termsDocument(contractTerms(protocol, rewards)) });
+        if (resuming && saved.key !== prior.key) throw new Error("The reviewed bounty or wallet changed after the allowance step. Nothing was sent.");
         const committed = saved.payload.document.contract_terms;
         await assertPostingBinding();
         const terms = await publication.publish(window, api, saved,
@@ -2350,7 +2382,11 @@
       if (!state.approved || state.draft !== approvedDraft) throw new Error("The bounty changed during preparation. Review the revised commitment before funding.");
       if (state.account !== approvedAccount || String((await state.provider.request({ method: "eth_accounts" }))[0]).toLowerCase() !== String(approvedAccount).toLowerCase() || String(await state.provider.request({ method: "eth_chainId" })).toLowerCase() !== "0x2105") throw new Error("The wallet or network changed. Reopen the same review before funding.");
       const deferEmbeddedCheckpoint = !checkedV2 && !childPlan && Boolean(state.provider.agentBountiesCapabilities?.reviewedPostingOnly && plan.eip3009_authorization);
-      if (!deferEmbeddedCheckpoint) postingJournal.prepare(plan);
+      if (resuming) {
+        const recorded = postingJournal.load();
+        if (!checkedV2 || recorded?.phase !== V2_CREATION_PENDING || String(recorded.bounty_id).toLowerCase() !== checkedV2.bountyId
+          || String(recorded.bounty_contract).toLowerCase() !== checkedV2.bounty) throw new Error("The saved posting no longer matches the reviewed bounty. Nothing was sent.");
+      } else if (!deferEmbeddedCheckpoint) postingJournal.prepare(plan);
       setPaymentStatus([
         "Review the wallet request carefully.",
         `Exact total funding: ${window.AgentBountiesFundingReadiness.formatUnits(checkedV2?.total || rewards.total)} Base USDC, including the displayed platform fee.`,
@@ -2362,11 +2398,26 @@
       let transactionHash = null;
       if (checkedV2) {
         // Estimate each exact call after its prerequisites confirm. Never retry
-        // an uncertain send or replace a partly completed operation.
-        for (const call of checkedV2.calls) {
-          await assertPostingBinding();
-          transactionHash = await sendTransaction(call);
-          await waitReceipt(transactionHash);
+        // an uncertain creation or replace a partly completed operation.
+        const [allowance, creation] = checkedV2.calls;
+        const calls = resuming && await v2AllowanceCovers(protocol, checkedV2.total) ? [creation] : [allowance, creation];
+        for (const call of calls) {
+          const before = postingJournal.load()?.transactions?.length || 0;
+          let sent = null;
+          try {
+            await assertPostingBinding();
+            sent = await sendTransaction(call);
+            await waitReceipt(sent);
+            transactionHash = sent;
+          } catch (error) {
+            const recorded = postingJournal.load();
+            const submitted = Boolean(sent) || (recorded?.transactions?.length || 0) > before;
+            const unreached = !submitted && (recorded?.phase !== "sending" || error.code === 4001 || error.walletUnreached === true);
+            // reject() below clears a first allowance the wallet never sent.
+            if (call === allowance && unreached && !before) postingJournal.checkpoint("prepared");
+            else if (call === allowance || unreached || error.reverted) postingJournal.checkpoint(V2_CREATION_PENDING);
+            throw error;
+          }
         }
       } else {
         throw new Error("Only the reviewed V2 direct-wallet plan can start a new payment.");
@@ -2377,9 +2428,12 @@
       await postingSession.flush().catch(() => {});
       setPaymentStatus(error.code === 4001 && !postingJournal.load()
         ? "Wallet request cancelled. Your draft is saved. Choose Review and post when you are ready."
-        : error.message || String(error), "error");
-      ui.fundNow.disabled = Boolean(postingJournal.load() && !postingSession.canContinue());
+        : v2CreationResumable()
+          ? `${error.code === 4001 ? "The wallet request was cancelled." : error.message || String(error)} No USDC has moved; an approved allowance for this exact bounty may remain. Choose Finish posting to create this same bounty when ready.`
+          : error.message || String(error), "error");
+      ui.fundNow.disabled = Boolean(postingJournal.load() && !postingSession.canContinue() && !v2CreationResumable());
       if (postingSession.canContinue()) ui.fundNow.textContent = "Continue funding";
+      else if (v2CreationResumable()) ui.fundNow.textContent = "Finish posting";
     } finally {
       postingBusy = false;
       postingBinding = null;
@@ -2652,7 +2706,8 @@
         review_mode: state.draft?.benchmark?.engine === "creator_review_v1" ? "creator" : "automated",
         delivery_deadline: state.deliveryDeadline || null,
         saved_brief: window.AgentBountiesWorkflow.createClient(window).load()?.brief || null,
-        next_action: postingJournal.load() ? "Use agent_bounties_get_posting_status to reconcile the recorded wallet operation. Preserve the journal; do not restage terms or repeat funding."
+        next_action: v2CreationResumable() ? "Bounty creation was not sent and no USDC has moved. Ask the person to choose Finish posting and confirm the same creation in their wallet. Do not restage terms or start another posting."
+          : postingJournal.load() ? "Use agent_bounties_get_posting_status to reconcile the recorded wallet operation. Preserve the journal; do not restage terms or repeat funding."
           : expired ? "Ask for a new agreed delivery deadline, then restage the same posting operation and review its updated terms. Preserve the outcome, criteria and reward split; do not invent a date or repeat a wallet operation."
           : !state.draft || state.reviewStale ? "Prepare or update the proposal using saved_brief. Preserve its outcome, budget and deadline. Ask only for missing business decisions."
           : blocker ? "For non-software work, propose review_mode=creator with the agreed delivery_deadline and no automated benchmark, then stage it for the person’s review. Meta children still require their automated verifier. Never invent benchmark details."
@@ -2719,7 +2774,7 @@
     try {
       await postingSession.refresh();
       if (postingJournal.load()) { state.canonical = await postingSession.reconcile(); updatePostingTracker();
-        if (postingSession.canContinue() && state.provider && state.account) await refreshWalletReadiness();
+        if ((postingSession.canContinue() || v2CreationResumable()) && state.provider && state.account) await refreshWalletReadiness();
       }
       else if (state.provider && state.account) {
         const accounts = await state.provider.request({ method: "eth_accounts" });

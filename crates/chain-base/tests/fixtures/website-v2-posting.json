@@ -1,0 +1,143 @@
+{
+  "schema_version": "agent-bounties/website-v2-posting-fixture-v1",
+  "boundary": "Generated from the real posting page code at a fixed clock. Synthetic creator; never funded. Not payment evidence.",
+  "published_at": "2026-11-17T00:00:00.000Z",
+  "network": "base-mainnet",
+  "factory": "0xc33e2ae33bb9580837ea59df18e57fa1039ae58a",
+  "implementation": "0x8420c9bd1ff8a6b1abc4230b349538612c58f3a6",
+  "platform_fee_bps": 750,
+  "platform_fee_recipient": "0x884834e884d6e93462655a2820140ad03e6747bc",
+  "publication": {
+    "creator_wallet": "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+    "document": {
+      "schema_version": "agent-bounties/terms-v1",
+      "contract_terms": {
+        "protocol_version": "agent-bounties/autonomous-v2",
+        "creator_wallet": "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        "network": "base-mainnet",
+        "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "solver_reward": {
+          "amount": 19600000,
+          "currency": "usdc"
+        },
+        "verifier_reward": {
+          "amount": 400000,
+          "currency": "usdc"
+        },
+        "claim_bond": {
+          "amount": 400000,
+          "currency": "usdc"
+        },
+        "initial_funding": {
+          "amount": 21470000,
+          "currency": "usdc"
+        },
+        "platform_fee_bps": 750,
+        "platform_fee": {
+          "amount": 1470000,
+          "currency": "usdc"
+        },
+        "platform_fee_recipient": "0x884834e884d6e93462655a2820140ad03e6747bc",
+        "funding_deadline": 1797379200,
+        "claim_window_seconds": 604800,
+        "verification_window_seconds": 172800,
+        "creation_nonce": "0x5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+      },
+      "title": "Website v2 posting fixture",
+      "goal": "Deliver one reviewed artifact for the website v2 posting fixture.",
+      "acceptance_criteria": [
+        "The artifact is public over HTTPS.",
+        "Its SHA-256 digest matches the submitted evidence."
+      ],
+      "benchmark": {
+        "acceptance": "all_published_criteria",
+        "delivery_deadline": 1797379200,
+        "engine": "creator_review_v1",
+        "reviewer": "creator"
+      },
+      "evidence_schema": {
+        "properties": {
+          "artifact_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "artifact_url": {
+            "pattern": "^https://",
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifact_url",
+          "artifact_sha256"
+        ],
+        "type": "object"
+      },
+      "verification_policy": {
+        "mechanism": "signed_quorum",
+        "engine": "creator_review_v1",
+        "verifiers": [
+          "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf"
+        ],
+        "threshold": 1,
+        "rubric": "Pass only when every published acceptance criterion is satisfied and canonical submission time is no later than the committed delivery deadline.",
+        "public_disclosure": "The creator reviews every published acceptance check and signs the verdict. This is human review, not independent or automated verification. The verifier reward is paid to the creator on pass or fail; a missed review deadline returns the solver bond. The delivery cutoff is checked against the canonical submission time; the contract's claim timeout remains a separate relative window."
+      },
+      "source_url": "https://agentizable.ai/website-v2-posting-fixture",
+      "discovery_source": "ai_assistant_terms_handoff"
+    }
+  },
+  "terms": {
+    "terms_hash": "0xd62b48a356ae5ba7756c3f80b9363989118972c5123d196135d72eb2f47da1f3",
+    "policy_hash": "0x5d4a1a753819066cdb1156b92f2be52e414b30d79b6ae2e4befc2982b5cfbd02",
+    "acceptance_criteria_hash": "0x337b0d229a421ee93c9be2f748fbf0320903e6630f502bb3bd7c0ba045663b69",
+    "benchmark_hash": "0x5f7655321261e23765356ab3c3a818ba9c74523c7244d5ad41ccf7f73701b43b",
+    "evidence_schema_hash": "0x404e0caede36af0bb066c58ec16e3cdb779213eff948638dcb484422a42f779c"
+  },
+  "create": {
+    "creator": "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+    "solver_reward": {
+      "amount": 19600000,
+      "currency": "usdc"
+    },
+    "verifier_reward": {
+      "amount": 400000,
+      "currency": "usdc"
+    },
+    "terms_hash": "0xd62b48a356ae5ba7756c3f80b9363989118972c5123d196135d72eb2f47da1f3",
+    "policy_hash": "0x5d4a1a753819066cdb1156b92f2be52e414b30d79b6ae2e4befc2982b5cfbd02",
+    "acceptance_criteria_hash": "0x337b0d229a421ee93c9be2f748fbf0320903e6630f502bb3bd7c0ba045663b69",
+    "benchmark_hash": "0x5f7655321261e23765356ab3c3a818ba9c74523c7244d5ad41ccf7f73701b43b",
+    "evidence_schema_hash": "0x404e0caede36af0bb066c58ec16e3cdb779213eff948638dcb484422a42f779c",
+    "funding_deadline": 1797379200,
+    "claim_window_seconds": 604800,
+    "verification_window_seconds": 172800,
+    "verification_mode": "signed_quorum",
+    "verifier_module": null,
+    "verifier_reward_recipient": null,
+    "verifiers": [
+      "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf"
+    ],
+    "threshold": 1,
+    "initial_funding": {
+      "amount": 21470000,
+      "currency": "usdc"
+    },
+    "creation_nonce": "0x5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+  },
+  "expected": {
+    "bounty_id": "0x9d7e749f5916d758ec39e4ef48df5375500478eb3f1989e00e4f3ba33459ee76",
+    "predicted_bounty_contract": "0x0e57a4dc1f28996e19dc406e208706c8fe159992",
+    "platform_fee": "1470000",
+    "target_amount": "21470000",
+    "wallet_calls": [
+      {
+        "to": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "data": "0x095ea7b3000000000000000000000000c33e2ae33bb9580837ea59df18e57fa1039ae58a0000000000000000000000000000000000000000000000000000000001479b30"
+      },
+      {
+        "to": "0xc33e2ae33bb9580837ea59df18e57fa1039ae58a",
+        "data": "0xed6662a200000000000000000000000000000000000000000000000000000000012b12800000000000000000000000000000000000000000000000000000000000061a80d62b48a356ae5ba7756c3f80b9363989118972c5123d196135d72eb2f47da1f35d4a1a753819066cdb1156b92f2be52e414b30d79b6ae2e4befc2982b5cfbd02337b0d229a421ee93c9be2f748fbf0320903e6630f502bb3bd7c0ba045663b695f7655321261e23765356ab3c3a818ba9c74523c7244d5ad41ccf7f73701b43b404e0caede36af0bb066c58ec16e3cdb779213eff948638dcb484422a42f779c000000000000000000000000000000000000000000000000000000006b21d4800000000000000000000000000000000000000000000000000000000000093a80000000000000000000000000000000000000000000000000000000000002a30000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002600000000000000000000000000000000000000000000000000000000001479b305a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a00000000000000000000000000000000000000000000000000000000000000010000000000000000000000007e5f4552091a69125d5dfcb7b8c2659029395bdf"
+      }
+    ]
+  }
+}

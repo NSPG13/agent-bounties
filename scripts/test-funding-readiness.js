@@ -102,7 +102,7 @@ function postingWalletFixture({ balanceFailure = false } = {}) {
       return { wallet, usdc: 0n, eth: 18n, blockNumber: "0x123" };
     } } };
   const context = vm.createContext({ window, document, ui, state, URL,
-    v2FundingAmounts: () => ({ total: 2160000n }), legalBinding: () => "fixture-binding",
+    v2FundingAmounts: () => ({ total: 2160000n }), legalBinding: () => "fixture-binding", v2CreationResumable: () => false,
     walletReadinessVersion: 0, walletConnecting: false, postingBusy: false, renderFundingGuide() {},
     discoverWallets: async () => [{ provider: phone, info: { name: "Phone wallet" } }], providerName: item => item.info?.name || "Wallet",
     loadProtocol: async () => ({ native_usdc: usdc, chain_id_hex: "0x2105" }),

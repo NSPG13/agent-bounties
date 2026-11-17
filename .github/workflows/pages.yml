@@ -73,6 +73,7 @@ jobs:
           node --check site/posting-reference.js
           node --check site/posting-session.js
           node --check site/funding-readiness.js
+          node --check site/posting-v2-plan.js
       - name: Test leaderboard evidence and shared appearance
         run: node --test scripts/test-leaderboard.cjs
       - name: Test the marketplace evidence states

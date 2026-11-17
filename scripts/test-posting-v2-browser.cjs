@@ -48,6 +48,12 @@ const scenarios=['success','changed-plan','second-request-lost','second-request-
    if(u.pathname.includes('creation-relay'))throw Error('Retired relay reached');
    return route.fallback();
   });
+  // Empty, complete canonical evidence on whichever API base the page uses:
+  // nothing was created, so a refused creation may be finished.
+  const protocol_statuses=['autonomous-v1','open-competition-v1','open-competition-v2-beta3','autonomous-v2'].map(protocol=>({protocol,coverage:'complete',item_count:0,error:null}));
+  await context.route('**/v1/base/autonomous-bounties/events?**',route=>route.fulfill({json:[]}));
+  await context.route('**/v1/opportunities?**',route=>route.fulfill({json:{schema_version:'agent-bounties/opportunity-projection-v1',coverage_scope:'inventory_page',coverage:'complete',degraded:false,items:[],
+   source_statuses:[{source_type:'canonical_base',coverage:'complete',available:true,item_count:0,protocol_statuses}]}}));
   await context.addInitScript(({scenario,address})=>{
    window.__v2Requests=[];window.__v2Sends=0;
    window.ethereum={isMetaMask:true,request:async req=>{
@@ -62,7 +68,7 @@ const scenarios=['success','changed-plan','second-request-lost','second-request-
     if(req.method==='eth_getTransactionReceipt')return {status:'0x1',transactionHash:req.params[0]};
     if(req.method==='eth_sendTransaction'){
      window.__v2Sends++;if(window.__v2Sends===2&&scenario==='second-request-lost')throw Error('lost wallet reply');
-     if(window.__v2Sends===2&&scenario==='second-request-rejected')throw Object.assign(Error('User rejected second request'),{code:4001});
+     if(window.__v2Sends===2&&scenario==='second-request-rejected'&&!sessionStorage.getItem('__v2RejectedOnce')){sessionStorage.setItem('__v2RejectedOnce','1');throw Object.assign(Error('User rejected second request'),{code:4001});}
      if(window.__v2Sends===2)window.__v2Finished=true;
      return '0x'+String(window.__v2Sends).repeat(64);
     }
@@ -91,11 +97,33 @@ const scenarios=['success','changed-plan','second-request-lost','second-request-
    const sends=walletCalls.filter(r=>r.method==='eth_sendTransaction');
    assert.equal(walletCalls.some(r=>/signTyped|sendCalls/.test(r.method)),false);
    if(scenario==='changed-plan'){assert.equal(sends.length,0);assert.equal(journal,null);}
-   else if(['account-during-estimate','chain-during-estimate','other-device-during-quote'].includes(scenario)){assert.equal(sends.length,0);}
+   else if(['account-during-estimate','chain-during-estimate','other-device-during-quote'].includes(scenario)){assert.equal(sends.length,0);assert.equal(journal,null,'a request the wallet never received leaves no recorded operation');}
    else {assert.equal(sends.length,2);assert.equal(sends[0].params[0].data,finalPlan.wallet_calls[0].data);assert.equal(sends[1].params[0].data,finalPlan.wallet_calls[1].data);assert.ok(journal);}
-   if(scenario==='second-request-lost'||scenario==='second-request-rejected'){
-    assert.equal(journal.transactions.length,1);assert.equal(await page.locator('[data-fund-now]').isDisabled(),true);
+   if(scenario==='second-request-lost'){
+    // The wallet may have the creation: never offer it again, only reconcile.
+    assert.equal(journal.transactions.length,1);assert.equal(journal.phase,'sending');assert.equal(await page.locator('[data-fund-now]').isDisabled(),true);
     await page.reload();await awaitPosting(page);assert.ok(await page.evaluate(()=>JSON.parse(sessionStorage.getItem('agent-bounties.posting-operation.v1'))));
+   }
+   if(scenario==='second-request-rejected'){
+    // A refused creation moved no USDC: the same bounty can be finished, even after a reload.
+    assert.equal(journal.transactions.length,1);assert.equal(journal.phase,'v2_creation_pending');
+    assert.match(await page.locator('[data-payment-status]').textContent(),/No USDC has moved/);
+    assert.equal(await page.locator('[data-fund-now]').isEnabled(),true);assert.equal(await page.locator('[data-fund-now]').innerText(),'Finish posting');
+    await page.reload();await awaitPosting(page);
+    assert.equal((await page.evaluate(()=>JSON.parse(sessionStorage.getItem('agent-bounties.posting-operation.v1')))).phase,'v2_creation_pending');
+    if(!await page.locator('#funding-dialog[open]').count())await page.locator('[data-open-funding]').click();
+    await page.locator('#funding-dialog[open]').waitFor();
+    await page.getByRole('button',{name:/MetaMask/}).click();
+    await page.locator('[data-fund-now]').filter({hasText:'Finish posting'}).waitFor();
+    // The fee-and-gas acknowledgement is bound to this page session, so it is asked again.
+    await page.locator('[data-v2-cost-consent]').check();
+    await page.locator('[data-fund-now]').click();
+    await page.waitForFunction(()=>window.__v2Requests.filter(r=>r.method==='eth_sendTransaction').length===2||document.querySelector('[data-funding-feedback]')?.dataset.tone==='error');
+    const resumed=(await page.evaluate(()=>window.__v2Requests)).filter(r=>r.method==='eth_sendTransaction');
+    // This mock reports no allowance on Base, so the exact allowance is requested again before the same creation.
+    assert.deepEqual(resumed.map(r=>r.params[0].data),finalPlan.wallet_calls.map(c=>c.data),await page.locator('[data-payment-status]').textContent());
+    assert.equal((await page.evaluate(()=>JSON.parse(sessionStorage.getItem('agent-bounties.posting-operation.v1')))).bounty_contract,journal.bounty_contract);
+    requests.splice(3);
    }
    assert.deepEqual(requests,['terms','quote','plan']);
   }

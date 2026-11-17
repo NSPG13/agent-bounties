@@ -1,8 +1,16 @@
-# Current sponsored posting acceptance
+# Retired V1 sponsored posting acceptance
 
-The current posting flow asks for one funding signature and then uses the creation
-relay. It never asks the customer to send a gas-paid creation transaction. Changes
-to this flow must pass the local browser suite below before release.
+> **Retired flow.** This suite qualifies the autonomous-v1 sponsored relay, which
+> was retired for new creation (the API's V1 creation relay returns 410 Gone on
+> Base mainnet). New website USDC posting uses autonomous-v2 from the creator's
+> own wallet, which pays Base gas; see [website-v2-posting.md](website-v2-posting.md)
+> and its local checks. This suite's required outcome of zero customer
+> `eth_sendTransaction` calls does not apply to that flow, and its results do not
+> qualify it. Keep this suite for a future V2 sponsored relay.
+
+The V1 posting flow asked for one funding signature and then used the creation
+relay. It never asked the customer to send a gas-paid creation transaction.
+Changes to that flow had to pass the local browser suite below before release.
 
 `npm run test:posting-flow --prefix tools/coinbase-embedded-wallet` runs the current
 56-case desktop/phone matrix. The older transaction-dialog flow remains available

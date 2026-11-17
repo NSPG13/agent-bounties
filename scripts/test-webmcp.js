@@ -126,9 +126,13 @@ test("posting options explain both supported checks and preserve campaign econom
   const result = env.tools.get("agent_bounties_get_posting_options").execute();
   assert.deepEqual(result.choices.map(choice => choice.review_mode), ["creator", "automated"]);
   assert.match(result.explanation, /checks the finished work/);
-  assert.equal(result.protocol.id, "agent-bounties/autonomous-v1");
+  assert.equal(result.protocol.id, "agent-bounties/autonomous-v2");
   assert.match(result.campaign_limit, /person's agreement/);
   assert.match(result.costs, /approve that split/);
+  // V2 wallet posting charges the factory fee and Base gas; never disclose either as free.
+  assert.match(result.costs, /7\.5% of the worker reward/);
+  assert.match(result.costs, /Base ETH for network fees/);
+  assert.doesNotMatch(result.costs, /Platform fee: 0|platform-paid gas/);
   assert.equal(env.requests.length, 0);
 });
 
