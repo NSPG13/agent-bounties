@@ -115,7 +115,8 @@ while True: time.sleep(0.05)
         self.assertEqual(v2['BASE_INDEXER_START_BLOCK'], '52275492')
         for environment in [v2, creator]:
             self.assertNotIn('BASE_INDEXER_BOOTSTRAP_ARCHIVE_RPC_URL', environment)
-            self.assertNotIn('BASE_INDEXER_MAX_BLOCKS_PER_QUERY', environment)
+        self.assertEqual(v2['BASE_INDEXER_MAX_BLOCKS_PER_QUERY'], '500')
+        self.assertNotIn('BASE_INDEXER_MAX_BLOCKS_PER_QUERY', creator)
         for environment in [v1, v2, creator]:
             self.assertNotIn('BASE_INDEXER_POLL_SECONDS', environment)
             self.assertNotIn('BASE_INDEXER_CONFIRMATIONS', environment)
@@ -132,7 +133,49 @@ while True: time.sleep(0.05)
         self.assertNotIn('BASE_INDEXER_CONFIRMATIONS', creator)
         v2 = records['autonomous-v2']['env']
         self.assertEqual(v2['BASE_INDEXER_START_BLOCK'], '52275492')
-        self.assertNotIn('BASE_INDEXER_MAX_BLOCKS_PER_QUERY', v2)
+        self.assertEqual(v2['BASE_INDEXER_MAX_BLOCKS_PER_QUERY'], '500')
+
+    def test_configured_read_limits_reach_both_autonomous_children(self):
+        limits = {
+            'BASE_RPC_READ_WIRE_INTERVAL_MS': '1000',
+            'BASE_INDEXER_MAX_BLOCKS_PER_QUERY': '1000',
+            'BASE_INDEXER_RETRY_INITIAL_SECONDS': '5',
+            'BASE_INDEXER_RETRY_MAX_SECONDS': '120',
+            'BASE_INDEXER_EXIT_AFTER_FAILURES': '8',
+        }
+        code, records, _ = self.run_fixture(overrides=limits)
+        self.assertEqual(code, 17)
+        for role in ['autonomous-v1', 'autonomous-v2']:
+            for key, value in limits.items():
+                self.assertEqual(records[role]['env'].get(key), value, (role, key))
+        self.assertFalse(set(limits).intersection(records['binding']))
+        self.assertFalse(set(limits).intersection(records['creator-open-v1']['env']))
+
+    def test_unset_limits_keep_binary_defaults_and_do_not_expand_standby(self):
+        limits = {key: None for key in [
+            'BASE_RPC_READ_WIRE_INTERVAL_MS', 'BASE_INDEXER_MAX_BLOCKS_PER_QUERY',
+            'BASE_INDEXER_RETRY_INITIAL_SECONDS', 'BASE_INDEXER_RETRY_MAX_SECONDS',
+            'BASE_INDEXER_EXIT_AFTER_FAILURES',
+        ]}
+        code, records, _ = self.run_fixture(overrides=limits)
+        self.assertEqual(code, 17)
+        for role in ['autonomous-v1', 'autonomous-v2']:
+            self.assertFalse(set(limits).intersection(records[role]['env']))
+        code, records, _ = self.run_fixture(mode='standby', stop_parent=True,
+            overrides={key: '1000' for key in limits})
+        self.assertEqual(code, 0)
+        self.assertFalse(set(limits).intersection(records['standby']['env']))
+
+    def test_limit_values_are_forwarded_literally_for_binary_validation(self):
+        # The launcher must neither evaluate values nor silently replace invalid
+        # settings with an unlimited/default value. The reader validates them.
+        for value in ['', '1001', '$(exit 29); false']:
+            with self.subTest(value=value):
+                code, records, _ = self.run_fixture(overrides={
+                    'BASE_RPC_READ_WIRE_INTERVAL_MS': value})
+                self.assertEqual(code, 17)
+                for role in ['autonomous-v1', 'autonomous-v2']:
+                    self.assertEqual(records[role]['env']['BASE_RPC_READ_WIRE_INTERVAL_MS'], value)
 
     def test_parent_term_stops_and_reaps_every_reader(self):
         code, records, stopped = self.run_fixture(stop_parent=True)
