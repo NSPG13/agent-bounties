@@ -178,6 +178,7 @@ async function main() {
       assert.equal(await page.locator(".metrics-detail[open]").count(), 0);
       assert.match(await page.locator("[data-dashboard-notice]").innerText(), /incomplete/);
       assert.equal(await page.locator("[data-payout-chart] svg").count(), 1);
+      assert.match(await page.locator("#payout-audit-description").innerText(), /USD paid out … USDC payouts at \$1 face value/);
       if (process.env.NAV_LAYOUT_ARTIFACTS && [1440,390].includes(width)) {
         fs.mkdirSync(process.env.NAV_LAYOUT_ARTIFACTS, { recursive: true });
         await page.screenshot({ path: path.join(process.env.NAV_LAYOUT_ARTIFACTS, `metrics-${width}.png`), fullPage: true });
