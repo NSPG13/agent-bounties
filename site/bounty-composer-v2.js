@@ -1858,6 +1858,35 @@
     return url.href;
   }
 
+  // A wallet that already approved this site answers eth_accounts without any prompt. Use it to
+  // reach a saved address directly instead of asking which wallet app holds it.
+  async function connectedProviderFor(address) {
+    const wanted = String(address || "").toLowerCase();
+    if (!/^0x[0-9a-f]{40}$/.test(wanted)) return null;
+    // Only wallets in this browser: a phone or embedded wallet session is never queried silently.
+    const remote = [window.AgentBountiesPhoneWallet?.provider, window.AgentBountiesCoinbaseEmbeddedWallet?.provider].filter(Boolean);
+    const candidates = (state.providers?.length ? state.providers : await discoverWallets()).filter((item) => !remote.includes(item.provider));
+    for (const item of candidates) {
+      let timer;
+      try {
+        const accounts = await Promise.race([
+          item.provider.request({ method: "eth_accounts" }),
+          new Promise((resolve) => { timer = setTimeout(() => resolve([]), 1500); }),
+        ]);
+        if (Array.isArray(accounts) && accounts.some((value) => String(value).toLowerCase() === wanted)) return item;
+      } catch (_) { /* A wallet that refuses a silent read is simply not used here. */ }
+      finally { clearTimeout(timer); }
+    }
+    return null;
+  }
+
+  async function useSavedWallet(address) {
+    const connected = await connectedProviderFor(address);
+    if (connected) return connectWallet(connected, address);
+    const choice = await window.AgentBountiesWalletLink.select({ prepareContinuation: prepareWalletContinuation });
+    return connectWallet({ ...choice, info: { name: choice.label } }, address);
+  }
+
   async function chooseCryptoWallet() {
     if (postingBusy || walletConnecting) return;
     ui.cryptoMethod.dataset.active="true";
@@ -1876,7 +1905,7 @@
       const use = document.createElement("button"); use.type = "button"; use.className = "button primary guide-primary"; use.textContent = "Use this wallet"; use.hidden = true;
       use.addEventListener("click", async () => {
         if (postingBusy || walletConnecting) return;
-        try { const choice = await window.AgentBountiesWalletLink.select({ prepareContinuation: prepareWalletContinuation }); await connectWallet({ ...choice, info: { name: choice.label } }, wallet.address); }
+        try { await useSavedWallet(wallet.address); }
         catch (error) { setPaymentStatus(error.message, "error"); }
       });
       button.addEventListener("click", async () => {
@@ -1898,7 +1927,10 @@
     renderFundingGuide();
     if (state.linkedWallets.length === 1 && !state.account) {
       state.account = state.linkedWallets[0].address; state.selectedWallet = state.account;
-      void refreshWalletReadiness().catch((error) => setPaymentStatus(error.message, "error"));
+      // One saved wallet that this browser already connected is used at once, with no chooser.
+      const saved = state.account;
+      void connectedProviderFor(saved).then((item) => item && state.account === saved && !state.provider ? connectWallet(item, saved) : refreshWalletReadiness())
+        .catch((error) => setPaymentStatus(error.message, "error"));
     }
   }
 

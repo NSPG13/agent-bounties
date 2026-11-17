@@ -81,7 +81,7 @@
     const notify = () => {
       const detail = snapshot();
       const output = win.document?.querySelector("[data-draft-sync-status]");
-      if (output) output.textContent = message;
+      if (output) { output.textContent = message; output.dataset.state = status; }
       const link = win.document?.querySelector("[data-continue-posting]");
       if (link) { link.hidden = status !== "saved"; if (detail.continuation_url) link.href = detail.continuation_url; }
       win.dispatchEvent?.(new win.CustomEvent("agent-bounties:posting-state", { detail }));

@@ -34,10 +34,8 @@ const server = http.createServer((req, res) => {
       assert.equal(await page.locator("[data-brief-mode]").inputValue(), "manual");
       await page.locator("[data-brief-title]").fill("Research competitors");
       await page.locator("[data-brief-objective]").fill("Compare competitor prices");
-      // Criteria: checked options from the list, then any own checks under "Other".
-      await page.getByLabel("Includes prices and services", { exact: true }).check();
-      await page.getByLabel("Delivered as a table", { exact: true }).check();
-      await page.locator("[data-brief-criteria-other]").fill("Include 20 competitors");
+      // Criteria are written in one box, one per line.
+      await page.locator("[data-brief-criteria]").fill("Includes prices and services\nDelivered as a table\nInclude 20 competitors");
       await page.locator("[data-brief-budget]").fill("20.01");
       assert.equal(await page.locator("[data-brief-reserve]").count(), 0, "the review reward is not a form field");
       assert.match(await page.locator("[data-brief-review-share]").innerText(), /10% of the total \(2\.00 USDC\)/);
@@ -49,6 +47,8 @@ const server = http.createServer((req, res) => {
       await page.locator("[data-composer-submit]").click();
       await page.locator("#bounty-preview:not([hidden])").waitFor();
       await page.waitForFunction(() => document.querySelector("[data-brief-status]").textContent.startsWith("Proposal prepared"));
+      // Routine draft messages and the continuation link stay out of sight; only problems show.
+      for (const quiet of ["[data-brief-status]", "[data-draft-sync-status]", "[data-copy-continuation]", "[data-continue-posting]"]) assert.equal(await page.locator(quiet).isVisible(), false, quiet);
       const draft = await page.evaluate(() => window.AgentBountiesWorkflow.createClient(window).load().draft);
       assert.equal(draft.title, "Research competitors");
       assert.equal(draft.goal, "Compare competitor prices", "with no description the objective is the goal");
@@ -63,7 +63,7 @@ const server = http.createServer((req, res) => {
       await page.waitForFunction(() => document.activeElement?.id === "bounty-composer-input");
       assert.equal(await page.locator("#bounty-composer-input").inputValue(), "");
       assert.equal(await page.locator("[data-composer-label]").innerText(), "Description");
-      await page.locator("[data-brief-criteria-other]").fill("Include 25 competitors");
+      await page.locator("[data-brief-criteria]").fill("Includes prices and services\nDelivered as a table\nInclude 25 competitors");
       assert.equal(await page.evaluate(() => window.AgentBountiesWorkflow.createClient(window).load().draft_stale), true);
       await page.locator("[data-composer-submit]").click();
       await page.waitForFunction(() => document.querySelector("[data-card-criteria]").textContent.includes("25 competitors"));
@@ -71,8 +71,7 @@ const server = http.createServer((req, res) => {
       await page.reload();
       await page.locator("#bounty-preview:not([hidden])").waitFor();
       assert.equal(await page.locator("[data-brief-mode]").inputValue(), "manual");
-      assert.equal(await page.getByLabel("Includes prices and services", { exact: true }).isChecked(), true);
-      assert.equal(await page.locator("[data-brief-criteria-other]").inputValue(), "Include 25 competitors");
+      assert.equal(await page.locator("[data-brief-criteria]").inputValue(), "Includes prices and services\nDelivered as a table\nInclude 25 competitors");
       assert.equal(await page.locator("[data-open-funding]").isDisabled(), true);
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "no horizontal overflow");
       fs.mkdirSync("target/manual-posting", {recursive:true});

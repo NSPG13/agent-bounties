@@ -136,8 +136,8 @@ test("unavailable sponsorship stops before signing and a mismatched relay cannot
 
 test("saved brief edits reach the shared journey and invalidate an older funding proposal", () => {
   const flow = require("../site/marketplace-workflow.js"), records = new Map(), listeners = new Map(), elements = new Map();
-  const element = () => ({ value: "", textContent: "", open: false, hidden: false, required: false, placeholder: "", handlers: {}, setCustomValidity(value) { this.validationMessage = value; }, addEventListener(name, fn) { this.handlers[name] = fn; }, querySelectorAll: () => [] });
-  for (const name of ["#bounty-composer-form", "#bounty-composer-input", "[data-brief-budget]", "[data-brief-deadline]", "[data-brief-status]", "[data-brief-timezone]", "[data-ai-options]", "[data-export-draft]", "[data-brief-mode]", "[data-brief-title]", "[data-brief-criteria]", "[data-brief-objective]", "[data-brief-criteria-other]", "[data-brief-review-share]", "[data-composer-submit]", "[data-composer-label]", "[data-brief-zone-note]"]) elements.set(name, element());
+  const element = () => ({ value: "", textContent: "", open: false, hidden: false, required: false, placeholder: "", dataset: {}, handlers: {}, setCustomValidity(value) { this.validationMessage = value; }, addEventListener(name, fn) { this.handlers[name] = fn; }, querySelectorAll: () => [] });
+  for (const name of ["#bounty-composer-form", "#bounty-composer-input", "[data-brief-budget]", "[data-brief-deadline]", "[data-brief-status]", "[data-brief-timezone]", "[data-ai-options]", "[data-export-draft]", "[data-brief-mode]", "[data-brief-title]", "[data-brief-criteria]", "[data-brief-objective]", "[data-brief-review-share]", "[data-composer-submit]", "[data-composer-label]", "[data-brief-zone-note]"]) elements.set(name, element());
   elements.get("#bounty-composer-form").querySelector = name => elements.get(name);
   const document = { activeElement: null, documentElement: { dataset: {} }, querySelector: (name) => elements.get(name), querySelectorAll: () => [], addEventListener() {} };
   // The creator's device reports Mexico City; the form always reads the deadline in that zone.
@@ -179,7 +179,7 @@ test("saved brief edits reach the shared journey and invalidate an older funding
   assert.equal(Date.parse(client.load().brief.deadline_at), Date.parse(newCutoff));
   // A description left empty is generated from the title and criteria. The generated text
   // never returns to the field, so a later criteria edit cannot publish an outdated copy.
-  const helper = win.AgentBountiesPostingBrief, title = elements.get("[data-brief-title]"), criteria = elements.get("[data-brief-criteria]"), other = elements.get("[data-brief-criteria-other]"), objective = elements.get("[data-brief-objective]");
+  const helper = win.AgentBountiesPostingBrief, title = elements.get("[data-brief-title]"), criteria = elements.get("[data-brief-criteria]"), objective = elements.get("[data-brief-objective]");
   const generated = helper.fallbackGoal("Landing page", "Loads on mobile");
   document.activeElement = null;
   // A brief saved before the objective field existed has no objective or description keys.
@@ -188,8 +188,8 @@ test("saved brief edits reach the shared journey and invalidate an older funding
   assert.equal(goal.value, "", "the generated description stays out of the field");
   document.activeElement = budget; budget.handlers.input();
   assert.equal(invalidations, before, "an untouched empty description is not a change to the proposal");
-  // Criteria written under "Other" join the checked options, one per line.
-  document.activeElement = other; other.value = "Loads on mobile\nHas a contact form"; other.handlers.input();
+  // Criteria are written in one box, one per line.
+  document.activeElement = criteria; criteria.value = "Loads on mobile\nHas a contact form"; criteria.handlers.input();
   assert.equal(client.load().brief.criteria, "Loads on mobile\nHas a contact form");
   assert.equal(client.load().brief.goal, "", "the outdated generated text is not kept as the description");
   const tomorrow = new Date(Date.now() + 86400000).toISOString();

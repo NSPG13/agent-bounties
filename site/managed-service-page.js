@@ -4,7 +4,8 @@
   const core = window.ManagedService, el = id => document.getElementById('managed-' + id);
   const preparationPage = location.search === '' && location.hash === ''; // Before any URL normalization.
   let target, origin, epoch = 0, controller, poll, expiry, polls = 0, account = null, record = null, digest = null, order = null, busy = false, pending = null;
-  const status = message => { el('status').textContent = message; };
+  // The status card shows sign-in, progress and problems; it steps aside while a valid quote is reviewed.
+  const status = message => { el('status').textContent = message; el('status-card').hidden = false; };
   function clear() {
     epoch++; if (controller) controller.abort(); clearTimeout(poll); clearTimeout(expiry);
     account = record = digest = order = null; busy = false;
@@ -126,6 +127,7 @@
     const future = Date.now() < record.input.issued_at * 1000;
     el('heading').textContent = 'Review your quote'; el('reference').textContent = 'Quote ' + record.input.quote_id;
     status(expired ? 'This quote has expired. You can check for an earlier acceptance; a new acceptance will be declined.' : future ? 'This quote is not valid yet. Refresh when its offer period starts.' : 'Review the deliverable, remedies, and full price before accepting.');
+    el('status-card').hidden = !expired && !future;
     el('accept').textContent = expired ? 'Recover earlier acceptance' : 'Accept quote';
     el('acceptance').hidden = future;
     el('next').textContent = 'Accepting saves your agreement. You will choose whether to continue to Stripe in the next step.';

@@ -22,15 +22,13 @@
 .posting-page .brief-details #bounty-composer-input { background: var(--ab-bg); color: var(--ab-ink); border: 1px solid var(--ab-line); border-radius: 10px; padding: 12px 14px; min-height: 96px; font-size: 16px; box-shadow: none; }
 .posting-page .brief-details #bounty-composer-input::placeholder, .posting-page .brief-details textarea::placeholder, .posting-page .brief-details input::placeholder { color: var(--ab-muted); }
 .posting-page .brief-details .brief-objective { min-height: 64px; }
-/* Acceptance criteria: checklist grouped by kind of work, then "Other". */
-.posting-page .brief-label { font-size: 14px; font-weight: 700; color: var(--ab-ink); }
-.posting-page .criteria-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 6px 0 10px; }
-.posting-page .criteria-group { border: 1px solid var(--ab-line); border-radius: 12px; padding: 10px 14px 12px; margin: 0; min-width: 0; background: var(--ab-bg); }
-.posting-page .criteria-group legend { padding: 0 6px; font-size: 13px; font-weight: 700; color: var(--ab-moss, var(--ab-muted)); }
-.posting-page .criteria-group label { display: flex; gap: 10px; align-items: center; min-height: 36px; margin: 0; padding: 2px 0; font-weight: 500; line-height: 1.4; cursor: pointer; color: var(--ab-ink); }
-.posting-page .criteria-group input[type="checkbox"] { width: 18px; height: 18px; min-height: 0; margin: 0; flex: 0 0 auto; accent-color: var(--ab-leaf, #8ee46b); padding: 0; }
 @media (max-width: 640px) {
   .posting-page .brief-details { padding: 6px 14px 16px; }
   .posting-page .brief-row { grid-template-columns: minmax(0, 1fr); gap: 0; }
-  .posting-page .criteria-groups { grid-template-columns: minmax(0, 1fr); }
 }
+/* Draft bookkeeping stays quiet: only problems are shown under the form. */
+.posting-page .chat-composer-form [data-brief-status]:not([data-tone="error"]),
+.posting-page .chat-composer-form [data-draft-sync-status]:not([data-state="conflict"]):not([data-state="unavailable"]),
+.posting-page .chat-composer-form [data-continue-posting],
+.posting-page .chat-composer-form [data-copy-continuation],
+.posting-page .chat-composer-form [data-composer-status]:not([data-tone="error"]):not([data-tone="pending"]) { display: none !important; }

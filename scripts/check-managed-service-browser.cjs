@@ -127,6 +127,10 @@ test('a fractional USDC reward can display exactly MXN10 with all itemized costs
   // A merged row names its refundable part: only the MXN 0.35 deposit of the MXN 2.28 review row is refundable.
   assert.deepEqual(rows, ['Solver reward', 'Review and verification, including a MXN 0.35 refundable deposit', 'Platform fee and currency conversion buffer', 'Card processing']);
   assert.equal((await f.page.locator('#managed-lines dd').allInnerTexts()).join(' | '), 'MXN 3.44 | MXN 2.28 | MXN 0.32 | MXN 3.96');
+  // The deposit and conversion terms sit in "Payment terms" just above the acceptance note, closed until opened.
+  assert.equal(await f.page.locator('.payment-terms').getAttribute('open'), null);
+  assert.equal(await f.page.locator('#managed-status-card').isVisible(), false, 'the status card steps aside while a valid quote is reviewed');
+  await f.page.locator('.payment-terms > summary').click();
   assert.match(await f.page.locator('#managed-deposit-note').innerText(), /^The MXN 0\.35 review deposit returns to your card when the bounty is paid\. You lose it only if you reject a delivery and an appeal finds it met your criteria/);
   assert.match(await f.page.locator('.price-card').innerText(), /2–4% conversion fee/);
   assert.equal(f.accepts.length,0); await f.close();

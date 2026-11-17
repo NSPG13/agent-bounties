@@ -456,3 +456,37 @@ for (const path of ["/post", "/post.html", "/participate", "/competition"]) test
   const { context } = await onrampContext({ returnUrl });
   assert.equal(context.window.AgentBountiesOnramp.status().return_url, returnUrl);
 });
+
+test("a saved wallet that this browser already connected is used without asking which wallet app holds it", async () => {
+  const calls = [];
+  const ext = { request: async ({ method }) => { calls.push(method); if (method === "eth_accounts" || method === "eth_requestAccounts") return [wallet]; if (method === "eth_chainId") return "0x2105"; throw new Error("Unexpected wallet request: " + method); } };
+  // Choosing the saved wallet reuses the browser wallet that already approved this site.
+  const env = postingWalletFixture();
+  Object.assign(env.context, { setTimeout, clearTimeout });
+  env.context.discoverWallets = async () => [{ provider: ext, info: { name: "MetaMask" } }];
+  env.window.AgentBountiesWalletLink.select = async () => { throw new Error("the wallet chooser must not open"); };
+  await env.chooseCryptoWallet();
+  const buttons = env.ui.walletOptions.children;
+  await buttons[0].handlers.click();
+  await buttons.find(button => button.textContent === "Use this wallet").handlers.click();
+  assert.equal(env.state.provider, ext);
+  assert.deepEqual(calls, ["eth_accounts", "eth_requestAccounts", "eth_chainId"], "the silent read never prompts; connecting asks the same wallet once");
+  // With one saved wallet and nothing chosen yet, opening the window connects it directly.
+  const fresh = postingWalletFixture();
+  fresh.state.account = null; Object.assign(fresh.context, { setTimeout, clearTimeout });
+  fresh.context.discoverWallets = async () => [{ provider: ext, info: { name: "MetaMask" } }];
+  fresh.window.AgentBountiesWalletLink.select = async () => { throw new Error("the wallet chooser must not open"); };
+  await fresh.chooseCryptoWallet();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(fresh.state.provider, ext);
+  // A wallet that does not hold the saved address still leads to the chooser.
+  const other = postingWalletFixture();
+  let chooserOpened = false; Object.assign(other.context, { setTimeout, clearTimeout });
+  other.context.discoverWallets = async () => [{ provider: { request: async ({ method }) => method === "eth_accounts" ? [] : other.phone.request({ method }) }, info: { name: "Other" } }];
+  other.window.AgentBountiesWalletLink.select = async () => { chooserOpened = true; return { provider: other.phone, kind: "phone", label: "Phone wallet" }; };
+  await other.chooseCryptoWallet();
+  const choices = other.ui.walletOptions.children;
+  await choices[0].handlers.click();
+  await choices.find(button => button.textContent === "Use this wallet").handlers.click();
+  assert.equal(chooserOpened, true);
+});
