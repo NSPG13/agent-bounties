@@ -28,7 +28,7 @@
 }
 /* Draft bookkeeping stays quiet: only problems are shown under the form. */
 .posting-page .chat-composer-form [data-brief-status]:not([data-tone="error"]),
-.posting-page .chat-composer-form [data-draft-sync-status]:not([data-state="conflict"]):not([data-state="unavailable"]),
+.posting-page .chat-composer-form [data-draft-sync-status]:not([data-tone="error"]),
 .posting-page .chat-composer-form [data-continue-posting],
 .posting-page .chat-composer-form [data-copy-continuation],
-.posting-page .chat-composer-form [data-composer-status]:not([data-tone="error"]):not([data-tone="pending"]) { display: none !important; }
+.posting-page .chat-composer-form [data-composer-status]:not([data-tone="error"]):not([data-tone="pending"]):not([data-tone="success"]) { display: none !important; }

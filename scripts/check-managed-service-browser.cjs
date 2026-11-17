@@ -130,6 +130,7 @@ test('a fractional USDC reward can display exactly MXN10 with all itemized costs
   // The deposit and conversion terms sit in "Payment terms" just above the acceptance note, closed until opened.
   assert.equal(await f.page.locator('.payment-terms').getAttribute('open'), null);
   assert.equal(await f.page.locator('#managed-status-card').isVisible(), false, 'the status card steps aside while a valid quote is reviewed');
+  assert.equal(await f.page.evaluate(() => document.activeElement?.id), 'managed-heading', 'the hidden status message is replaced by focus on the quote heading');
   await f.page.locator('.payment-terms > summary').click();
   assert.match(await f.page.locator('#managed-deposit-note').innerText(), /^The MXN 0\.35 review deposit returns to your card when the bounty is paid\. You lose it only if you reject a delivery and an appeal finds it met your criteria/);
   assert.match(await f.page.locator('.price-card').innerText(), /2–4% conversion fee/);
