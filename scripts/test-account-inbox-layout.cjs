@@ -103,6 +103,11 @@ function sorted(value) { return value && typeof value === "object" ? Array.isArr
         await needs.waitFor();
         await page.waitForFunction(()=>document.querySelector('[data-account-section="wallets"]')?.open===true);
         assert.deepEqual(await sectionsOpen(),{wallets:true,emails:false,settings:true},"remembered after reload");
+        // Linking a wallet from elsewhere (Bounty emails' "Link my verifier wallet" clicks the same
+        // button) opens Linked wallets, so its progress, errors and recovery are visible.
+        await page.evaluate(()=>{document.querySelector('[data-account-section="wallets"]').open=false;document.querySelector("[data-wallet-link]").click();});
+        await page.waitForFunction(()=>document.querySelector('[data-account-section="wallets"]').open===true);
+        await page.keyboard.press("Escape");
         // An account that can't be confirmed shows the setup view, with every section open.
         accountExtra={account_status:"unavailable",account_complete:false};
         await page.reload();
