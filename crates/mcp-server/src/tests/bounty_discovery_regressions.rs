@@ -189,12 +189,19 @@ async fn stored_bounties_and_events_survive_aliases_postgres() {
             assert!(ready.get("content").is_none(), "{ready}");
             assert_eq!(remote_ready["isError"], true, "{remote_ready}");
             assert_eq!(ready["error_code"], "upstream_unavailable", "{ready}");
+            // Since #1795 the outage carries discovery-problem-v1 guidance.
+            let problem = &remote_ready["structuredContent"];
             assert_eq!(
-                remote_ready["structuredContent"],
-                json!({"error_code":"upstream_unavailable"}),
+                problem["error_code"], "upstream_unavailable",
                 "{remote_ready}"
             );
-            assert!(remote_ready["structuredContent"].get("items").is_none());
+            assert_eq!(
+                problem["schema_version"], "agent-bounties/discovery-problem-v1",
+                "{remote_ready}"
+            );
+            assert_eq!(problem["coverage"], "unavailable", "{remote_ready}");
+            assert_eq!(problem["degraded"], true, "{remote_ready}");
+            assert!(problem.get("items").is_none(), "{remote_ready}");
         }
         let remote = remote_feed(state.clone(), network).await;
         assert_ne!(remote["isError"], true, "{remote}");
