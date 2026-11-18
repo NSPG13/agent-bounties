@@ -19,25 +19,23 @@ body.market-page { line-height: 1.55; }
 .market-page .market-button-primary:hover, .market-page .market-post:hover { background: #a4ef83; color: #07110c; }
 .market-page button:disabled { opacity: .55; cursor: default; transform: none; }
 .market-page .market-footer { padding-bottom: 95px; flex-wrap: wrap; }
-.feed-layout { display: grid; grid-template-columns: 190px minmax(0, 640px) 240px; justify-content: center; align-items: start; gap: 38px; max-width: 1260px; margin: 0 auto; padding: 40px 24px 70px; }
-.feed-sidebar, .feed-aside { position: sticky; top: 112px; }
+.feed-layout { display: grid; grid-template-columns: 190px minmax(0, 760px); justify-content: center; align-items: start; gap: 38px; max-width: 1260px; margin: 0 auto; padding: 40px 24px 70px; }
+.feed-sidebar { position: sticky; top: 112px; }
 .feed-sidebar nav { display: grid; gap: 8px; }
 .feed-sidebar nav a { padding: 12px 14px; border-radius: 10px; text-decoration: none; font-size: 15px; font-weight: 650; }
 .feed-sidebar nav a[aria-current] { background: #203021; color: var(--market-green); }
 .feed-sidebar nav a:hover { background: #16271a; }
-.feed-sidebar p, .feed-aside p { color: var(--market-muted); font-size: 13px; }
+.feed-sidebar p { color: var(--market-muted); font-size: 13px; }
 .feed-sidebar p { margin: 36px 14px; }
-.feed-aside h2 { margin: 0 0 10px; font-size: 23px; line-height: 1.2; letter-spacing: -.045em; }
-.feed-aside > section { margin-bottom: 32px; padding-bottom: 28px; border-bottom: 1px solid var(--market-line); }
-.feed-aside .market-button { margin-top: 12px; width: 100%; }
 .feed-column { min-width: 0; }
+.bounty-board-page .board-payment-note { margin: 28px 0 0; color: var(--market-muted); font-size: 12px; line-height: 1.5; }
 .feed-heading { display: flex; justify-content: space-between; align-items: center; margin: 0 0 20px; gap: 12px; }
 .feed-heading h1 { font-size: 30px; line-height: 1.15; letter-spacing: -.05em; margin: 0; }
 .feed-heading p { margin: 5px 0 0; color: var(--market-muted); font-size: 14px; }
 .feed-heading .market-button { white-space: nowrap; }
-.bounty-board-page .market-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(130px, .52fr); gap: 12px; background: transparent; padding: 0; }
+.bounty-board-page .market-toolbar { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1fr); gap: 10px; align-items: end; background: transparent; padding: 0; }
 .bounty-board-page .market-toolbar label { padding: 0; background: transparent; gap: 6px; }
-.bounty-board-page .market-toolbar input, .bounty-board-page .market-toolbar select { padding: 10px 12px; min-height: 46px; border: 1px solid var(--market-line); border-radius: 10px; background: #101e16; font-size: 14px; }
+.bounty-board-page .market-toolbar input, .bounty-board-page .market-toolbar select { box-sizing: border-box; width: 100%; height: 40px; padding: 6px 10px; min-height: 40px; border: 1px solid var(--market-line); border-radius: 10px; background: #101e16; font-size: 14px; }
 .bounty-board-page .market-summary { grid-column: 1 / -1; background: transparent; padding: 0 0 20px; font-size: 12px; text-align: left; }
 .bounty-board-page .market-list { display: grid; gap: 28px; padding: 0; }
 .bounty-board-page .opportunity-row { display: block; padding: 0; border: 1px solid var(--market-line); border-radius: 18px; overflow: hidden; background: #101e16; scroll-margin-top: 100px; animation: feed-enter 360ms ease both; }
@@ -119,7 +117,7 @@ body.market-page { line-height: 1.55; }
 .funded-shell .funded-countdown { margin: 22px 0; font-size: 13px; }
 .funded-countdown button { color: var(--market-green); background: transparent; border: 0; text-decoration: underline; padding: 12px; cursor: pointer; }
 @keyframes feed-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-@media (max-width: 1120px) { .feed-layout { grid-template-columns: 170px minmax(0, 640px); gap: 28px; } .feed-aside { display: none; } }
+@media (max-width: 1120px) { .feed-layout { grid-template-columns: 170px minmax(0, 760px); gap: 28px; } }
 @media (max-width: 760px) {
   .market-page .market-header { min-height: 66px; padding: 12px 16px; }
   .market-page .market-header nav { gap: 14px; }
@@ -144,6 +142,7 @@ body.market-page { line-height: 1.55; }
   .feed-heading h1 { font-size: 26px; }
   .feed-heading .market-button { padding: 10px; }
   .bounty-board-page .market-toolbar { grid-template-columns: 1fr; }
+  .bounty-board-page .market-toolbar input, .bounty-board-page .market-toolbar select { height: 44px; min-height: 44px; }
   .feed-post-header { padding: 14px; }
   .feed-post-body { padding: 18px; }
   .feed-art { aspect-ratio: 1.2; }

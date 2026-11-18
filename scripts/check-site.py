@@ -787,7 +787,7 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
         [
             'data-post-auth-start',
             'posting-auth.js?v=3',
-            'solarpunk-home.js?v=39',
+            'solarpunk-home.js?v=41',
             'bounty-composer-v2.js?v=40',
             'label: "LOG IN TO POST"',
             'credentials: "include"',
@@ -1062,7 +1062,6 @@ def check_marketplace(site_dir: Path) -> None:
             "Bounty board",
             "data-posted-notice",
             "data-new-bounty",
-            "Open work passes the readiness rules for its own settlement mechanism.",
             "data-opportunity-list",
             "data-market-timing",
             '<option value="now" selected>Open now</option>',
