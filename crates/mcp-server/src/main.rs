@@ -1,3 +1,4 @@
+mod discovery_guidance;
 mod managed_payments;
 mod terms_publication;
 mod verification;
@@ -5074,17 +5075,23 @@ async fn get_autonomous_inventory_summary(
         "{}/v1/base/autonomous-bounties/inventory-summary",
         api_upstream_base_url_from_env().trim_end_matches('/')
     );
-    proxy_hosted_json(reqwest::Client::new().get(url).query(&[
-        (
-            "network",
-            args.network.unwrap_or_else(|| "base-mainnet".to_string()),
-        ),
-        (
-            "claimable_only",
-            args.claimable_only.unwrap_or(true).to_string(),
-        ),
-    ]))
-    .await
+    let response = proxy_hosted_json(
+        reqwest::Client::new()
+            .get(url)
+            .timeout(discovery_guidance::REQUEST_TIMEOUT)
+            .query(&[
+                (
+                    "network",
+                    args.network.unwrap_or_else(|| "base-mainnet".to_string()),
+                ),
+                (
+                    "claimable_only",
+                    args.claimable_only.unwrap_or(true).to_string(),
+                ),
+            ]),
+    )
+    .await;
+    discovery_guidance::attach_problem(response, "get_autonomous_inventory_summary")
 }
 
 async fn get_solver_leaderboard(
@@ -8053,12 +8060,14 @@ async fn load_current_autonomous_discovery(api: &str, network: &str) -> Json<ser
         "{}/v1/base/autonomous-bounties/feed",
         api.trim_end_matches('/')
     );
-    proxy_hosted_json(
+    let response = proxy_hosted_json(
         reqwest::Client::new()
             .get(url)
+            .timeout(discovery_guidance::REQUEST_TIMEOUT)
             .query(&[("network", network), ("claimable_only", "true")]),
     )
-    .await
+    .await;
+    discovery_guidance::attach_problem(response, "list_autonomous_bounties")
 }
 
 async fn list_autonomous_bounties(
@@ -8104,7 +8113,14 @@ async fn list_opportunities(Json(args): Json<OpportunityListArgs>) -> Json<serde
         "{}/v1/opportunities",
         api_upstream_base_url_from_env().trim_end_matches('/')
     );
-    let response = proxy_hosted_json(reqwest::Client::new().get(url).query(&args)).await;
+    let response = proxy_hosted_json(
+        reqwest::Client::new()
+            .get(url)
+            .timeout(discovery_guidance::REQUEST_TIMEOUT)
+            .query(&args),
+    )
+    .await;
+    let response = discovery_guidance::attach_problem(response, "list_opportunities");
     attach_mcp_discovery_links(response, "opportunity_list")
 }
 
@@ -10089,6 +10105,9 @@ mod tests {
         assert!(checked.load(std::sync::atomic::Ordering::Relaxed));
         assert!(response.0.get("error").is_some());
         assert!(response.0.get("content").is_none());
+        assert_eq!(response.0["coverage"], "unavailable");
+        assert_eq!(response.0["retry_policy"]["maximum_retries"], 1);
+        assert!(response.0.get("bounties").is_none());
         server.abort();
     }
 

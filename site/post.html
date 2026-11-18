@@ -23,7 +23,7 @@
     <link rel="stylesheet" href="posting-workspace.css?v=7">
     <link rel="stylesheet" href="marketplace-theme.css?v=3">
     <link rel="stylesheet" href="funding-guide.css?v=1">
-    <link rel="stylesheet" href="manual-posting.css?v=4">
+    <link rel="stylesheet" href="manual-posting.css?v=5">
     <link rel="stylesheet" href="site-navigation.css?v=6">
     <link rel="stylesheet" href="forest-ui.css?v=5">
     <script src="forest-theme.js?v=1"></script>
@@ -167,6 +167,15 @@
           <output class="composer-status" data-composer-status aria-live="polite"></output>
           <span data-composer-hint hidden></span><button data-dictate type="button" hidden>Dictate</button>
         </form>
+        <aside class="posting-ai-help" aria-labelledby="posting-ai-help-title">
+          <h2 id="posting-ai-help-title">Get help from an AI extension</h2>
+          <p>A browser extension can read this page with you and help fill the form. Nothing is posted or paid until you approve it here.</p>
+          <ul>
+            <li><a href="https://chromewebstore.google.com/detail/chatgpt/hehggadaopoacecdllhhajmbjkdcmajg" target="_blank" rel="noopener noreferrer">ChatGPT <span class="posting-ai-badge">(recommended)</span></a><small>By OpenAI. Works with the ChatGPT desktop app.</small></li>
+            <li><a href="https://chromewebstore.google.com/detail/claude/fcoeoabgfenejglbffodgkkbkcdhcgfn" target="_blank" rel="noopener noreferrer">Claude</a><small>By Anthropic. Chrome on a computer, with a paid Claude plan.</small></li>
+            <li><a href="https://chromewebstore.google.com/detail/perplexity/pninphncmkphpjgfffammoenglghcjii" target="_blank" rel="noopener noreferrer">Perplexity</a><small>By Perplexity AI. Works with the Perplexity desktop app.</small></li>
+          </ul>
+        </aside>
         <section class="ab-review-placeholder" data-review-placeholder tabindex="-1"><h2>Your proposal will appear here</h2><p>Fill out your brief above. You’ll review the deliverables, checks, and exact costs before funding.</p></section>
         <div class="conversation-log" data-conversation-log aria-live="polite" aria-label="Bounty proposal">
           <section id="bounty-preview" class="bounty-preview conversation-draft" hidden aria-labelledby="bounty-card-title">
@@ -350,9 +359,9 @@
     <script src="creator-review.js?v=3"></script>
     <script src="ai-bounty-handoff.js?v=12"></script>
     <script src="funding-guide.js?v=3"></script>
-    <script src="bounty-composer-v2.js?v=40"></script>
+    <script src="bounty-composer-v2.js?v=41"></script>
     <script src="posting-brief.js?v=5"></script>
-    <script src="posting-workspace.js?v=11"></script>
+    <script src="posting-workspace.js?v=12"></script>
     <script src="forest-posting.js?v=4"></script>
   <!-- shared-footer:start -->
 <footer class="ab-footer">

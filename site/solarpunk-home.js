@@ -1595,6 +1595,9 @@ ${competitionChildBrief(item)}`;
       });
       openButton.addEventListener("click", (event) => {
         event.preventDefault();
+        // A person who opened the dialog from the footer gets focus back there; a scripted open
+        // (header link, #login/#account) or the return from sign-in falls back to the header link.
+        if (!returnFocus && event.isTrusted) returnFocus = openButton;
         if (currentUser && new URLSearchParams(win.location.search).get("postReturn") !== "1") {
           win.history?.replaceState?.(null, "", `${win.location.pathname}${win.location.search}#account`);
         }
@@ -1611,7 +1614,9 @@ ${competitionChildBrief(item)}`;
       closeButton?.addEventListener("click", closeDialog);
       dialog.addEventListener("close", () => {
         openButton.setAttribute("aria-expanded", "false");
-        (returnFocus || openButton).focus();
+        // Never move the page: after signing in, closing the dialog used to focus the footer link
+        // and scroll to the bottom of the home page.
+        (returnFocus || headerLogin || openButton).focus({ preventScroll: true });
         returnFocus = null;
         if (["#login", "#account"].includes(win.location.hash)) win.history?.replaceState?.(null, "", `${win.location.pathname}${win.location.search}`);
       });
@@ -1831,6 +1836,21 @@ ${competitionChildBrief(item)}`;
       const dialog = doc.querySelector("[data-bounty-launcher]");
       const openButtons = Array.from(doc.querySelectorAll("[data-bounty-open], [data-footer-post]"));
       let openButton = openButtons[0];
+      const postingRequest = parseCompetitionPostingRequest(win.location.search);
+      // "Post a bounty" opens the posting form directly. The "Choose how to start" dialog is kept only
+      // for a competition's qualifying bounty, whose prompt binds the verified parent contract.
+      if (!postingRequest.requested) {
+        const formUrl = new URL("post.html?mode=manual#bounty-composer-form", win.location.href).href;
+        for (const button of openButtons) {
+          for (const name of ["aria-haspopup", "aria-controls", "aria-expanded"]) button.removeAttribute(name);
+          button.addEventListener("click", event => { event.preventDefault(); win.location.assign(formUrl); });
+        }
+        // Older links and shared footers still point to #post-a-bounty on this page.
+        const followPostingHash = () => { if (win.location.hash === "#post-a-bounty") win.location.replace(formUrl); };
+        win.addEventListener("hashchange", followPostingHash);
+        followPostingHash();
+        return;
+      }
       if (!dialog || !openButton || typeof dialog.showModal !== "function") return;
       const closeButton = dialog.querySelector("[data-bounty-close]");
       const assistantButtons = Array.from(dialog.querySelectorAll("[data-bounty-assistant]"));
@@ -1842,7 +1862,6 @@ ${competitionChildBrief(item)}`;
       const promptDetails = dialog.querySelector(".bounty-prompt-preview");
       const launcherTitle = dialog.querySelector("#bounty-launcher-title");
       const launcherDescription = dialog.querySelector("#bounty-launcher-description");
-      const postingRequest = parseCompetitionPostingRequest(win.location.search);
       const manualLink = dialog.querySelector("[data-bounty-manual]");
       if (manualLink) manualLink.hidden = postingRequest.requested;
       let launcherPrompt = BOUNTY_POSTING_PROMPT;

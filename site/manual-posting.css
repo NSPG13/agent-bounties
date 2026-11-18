@@ -26,6 +26,21 @@
   .posting-page .brief-details { padding: 6px 14px 16px; }
   .posting-page .brief-row { grid-template-columns: minmax(0, 1fr); gap: 0; }
 }
+/* AI extension help: beside the form on wide screens, below it otherwise. */
+.posting-page .posting-ai-help { border: 1px solid var(--ab-line); border-radius: 16px; padding: 18px 20px; margin: 0 0 24px; background: var(--ab-panel); }
+.posting-page .posting-ai-help h2 { margin: 0 0 8px; font-size: 17px; line-height: 1.3; }
+.posting-page .posting-ai-help p { margin: 0 0 12px; color: var(--ab-muted); font-size: 14px; line-height: 1.5; }
+.posting-page .posting-ai-help ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.posting-page .posting-ai-help li { display: grid; gap: 2px; }
+.posting-page .posting-ai-help a { font-weight: 700; color: var(--ab-ink); text-decoration: underline; text-underline-offset: 3px; }
+.posting-page .posting-ai-help .posting-ai-badge { font-weight: 600; color: var(--ab-moss, var(--ab-muted)); }
+.posting-page .posting-ai-help small { color: var(--ab-muted); font-size: 13px; }
+@media (min-width: 1180px) {
+  .posting-page main.posting-workspace { max-width: 1180px; }
+  .posting-page .conversation-panel { display: grid; grid-template-columns: minmax(0, 1fr) 280px; column-gap: 40px; align-items: start; }
+  .posting-page .conversation-panel > * { grid-column: 1; }
+  .posting-page .conversation-panel > .posting-ai-help { grid-column: 2; grid-row: 1 / span 3; position: sticky; top: 96px; }
+}
 /* Draft bookkeeping stays quiet: only problems are shown under the form. */
 .posting-page .chat-composer-form [data-brief-status]:not([data-tone="error"]),
 .posting-page .chat-composer-form [data-draft-sync-status]:not([data-tone="error"]),

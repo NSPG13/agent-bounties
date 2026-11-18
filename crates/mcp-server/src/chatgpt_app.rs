@@ -2069,6 +2069,15 @@ async fn handle_request(
             );
             if upstream.is_some() {
                 response["error"]["data"] = json!({"error_code": "upstream_unavailable"});
+                if let Some(mut guidance) = params
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .and_then(super::discovery_guidance::unavailable)
+                {
+                    guidance["diagnostic"] = json!(upstream);
+                    response["error"]["message"] = guidance["message"].clone();
+                    response["error"]["data"] = guidance;
+                }
             }
             (status, response)
         }
@@ -2939,7 +2948,7 @@ async fn call_tool(
             }
             Ok(tool_result(value, narration, false))
         }
-        Err(error) => Ok(tool_error(error)),
+        Err(error) => Ok(discovery_tool_error(name, error)),
     }
 }
 
@@ -4564,6 +4573,22 @@ fn tool_error(error: String) -> Value {
         "content": [{"type": "text", "text": error}],
         "isError": true
     })
+}
+
+fn discovery_tool_error(name: &str, error: String) -> Value {
+    if let Some(diagnostic) = error.strip_prefix(UPSTREAM_UNAVAILABLE_PREFIX) {
+        if let Some(mut guidance) = super::discovery_guidance::unavailable(name) {
+            guidance["diagnostic"] = json!(diagnostic);
+            let narration = guidance["message"]
+                .as_str()
+                .expect("guidance message")
+                .to_string();
+            let mut result = tool_result(guidance, &narration, false);
+            result["isError"] = json!(true);
+            return result;
+        }
+    }
+    tool_error(error)
 }
 
 fn read_resource(params: &Value) -> Result<Value, String> {
@@ -6393,6 +6418,37 @@ mod tests {
         assert_eq!(result["content"][0]["text"], "safe fixture failure");
         let ordinary = tool_error("invalid fixture argument".to_string());
         assert!(ordinary.get("structuredContent").is_none());
+    }
+
+    #[test]
+    fn discovery_failure_guidance_reaches_text_only_clients() {
+        let result = discovery_tool_error(
+            "list_autonomous_bounties",
+            format!("{UPSTREAM_UNAVAILABLE_PREFIX}safe fixture failure"),
+        );
+        assert_eq!(result["isError"], true);
+        let guidance = &result["structuredContent"];
+        assert_eq!(guidance["coverage"], "unavailable");
+        assert_eq!(guidance["diagnostic"], "safe fixture failure");
+        assert_eq!(guidance["retry_policy"]["maximum_retries"], 1);
+        assert_eq!(
+            serde_json::from_str::<Value>(result["content"][1]["text"].as_str().unwrap()).unwrap(),
+            *guidance
+        );
+        assert!(result["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("availability is unknown"));
+        assert!(guidance.get("bounties").is_none());
+        assert!(result.get("_meta").is_none());
+        let invalid =
+            discovery_tool_error("list_autonomous_bounties", "invalid network".to_string());
+        assert!(invalid.get("structuredContent").is_none());
+        let claim = discovery_tool_error(
+            "agent_native_claim",
+            format!("{UPSTREAM_UNAVAILABLE_PREFIX}safe fixture failure"),
+        );
+        assert!(claim["structuredContent"].get("retry_policy").is_none());
     }
 
     fn public_tool_test_state() -> SharedState {

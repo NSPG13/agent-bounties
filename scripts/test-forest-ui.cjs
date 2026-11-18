@@ -136,27 +136,18 @@ async function main() {
       assert.equal(await page.locator('button[data-theme-choice="auto"]').getAttribute("aria-pressed"),"true");
       await page.locator('button[data-theme-choice="dark"]').click();
       await page.locator("#post-a-bounty").click();
-      await page.locator("[data-bounty-launcher][open]").waitFor();
-      assert.ok(!(await page.locator("[data-bounty-prompt]").textContent()).includes("My task:"), "posting works without an example");
-      await page.locator("[data-bounty-close]").click();
+      await page.waitForURL("**/post.html?mode=manual#bounty-composer-form");
+      assert.equal(await page.locator("[data-bounty-launcher][open]").count(), 0, "posting opens the form directly, without a chooser");
+      await page.goto(origin);
       const example = page.locator("[data-task-example]").first();
       const task = await example.getAttribute("data-task-example");
       await example.click();
-      await page.locator("[data-bounty-launcher][open]").waitFor();
-      assert.ok((await page.locator("[data-bounty-prompt]").textContent()).includes(await page.locator("#home-task").inputValue()), "AI picker keeps the selected example");
-      assert.equal(new URL(page.url()).pathname, "/", "posting CTA opens the picker in place");
-      await capture(page,`ai-picker-${width}`);
-      await page.locator("[data-bounty-close]").click();
-      await page.goto(origin+"/post.html");
+      await page.waitForURL("**/post.html?mode=manual#bounty-composer-form");
       assert.equal(await page.locator("#bounty-composer-input").inputValue(),task,"first task survives synchronous journey creation");
       await page.reload();assert.equal(await page.locator("#bounty-composer-input").inputValue(),task,"saved after reload");
       assert.equal(await page.locator('[data-stage-target="fund"]').isDisabled(),true);
       await page.goto(origin);await page.locator("[data-task-example]").nth(1).click();
-      await page.locator("[data-bounty-launcher][open]").waitFor();
-      assert.ok((await page.locator("[data-bounty-prompt]").textContent()).includes(await page.locator("#home-task").inputValue()), "AI picker keeps the selected example");
-      assert.equal(new URL(page.url()).pathname, "/", "posting CTA opens the picker in place");
-      await page.locator("[data-bounty-close]").click();
-      await page.goto(origin+"/post.html");
+      await page.waitForURL("**/post.html?mode=manual#bounty-composer-form");
       await page.getByRole("button",{name:"Keep saved brief",exact:true}).click();assert.equal(await page.locator("#bounty-composer-input").inputValue(),task);
       await page.goto(origin+"/post.html?task=New%20review%20request");await page.getByRole("button",{name:"Use this new idea",exact:true}).click();assert.equal(await page.locator("#bounty-composer-input").inputValue(),"New review request");
       await page.evaluate(()=>scrollTo(0,0));await capture(page,`post-${width}`);
@@ -205,6 +196,16 @@ async function main() {
       await capture(page,`leaderboard-populated-${width}`);
       mode="offline";await page.locator("[data-leaderboard-refresh]").click();await page.getByText("Rankings are temporarily unavailable.",{exact:false}).waitFor();assert.equal(await page.locator(".ab-prize").isVisible(),false);
       mode="invalid";await page.locator("[data-leaderboard-refresh]").click();await page.waitForFunction(()=>!document.querySelector("[data-leaderboard-refresh]").disabled);assert.equal(await page.locator("[data-leaderboard-table]").isVisible(),false);
+      // Back from the sign-in provider: closing the account dialog keeps the top of the page in view
+      // and returns focus to the header, never to the footer link at the bottom.
+      account="ready";await page.goto(origin+"/?auth=success&provider=google");await page.locator("[data-auth-dialog][open]").waitFor();
+      await page.locator("[data-auth-close]").click();
+      // The dialog's close event runs after the click; wait for focus to leave the dialog.
+      await page.waitForFunction(()=>!document.querySelector("[data-auth-dialog]").open && !document.activeElement?.closest("[data-auth-dialog]"));
+      assert.equal(await page.evaluate(()=>Math.round(scrollY)),0,"sign-in return stays at the top of the page");
+      assert.equal(new URL(page.url()).hash,"","sign-in return writes no #account");
+      const focused = await page.evaluate(()=>({inHeader:Boolean(document.activeElement?.closest("[data-site-header]")),element:document.activeElement?.outerHTML.slice(0,120)}));
+      assert.equal(focused.inHeader,true,`focus returns to the header, not ${focused.element}`);
       for(const state of ["wallet_required","ready"]) {
         account=state;await page.goto(origin+"/#account");await page.locator("[data-auth-dialog][open]").waitFor();
         // A wallet-less account is ready to post; only solver readiness waits for a wallet.
@@ -247,9 +248,9 @@ async function main() {
     assert.equal(await video.evaluate(el=>el.paused),false,"the actual media repeats across its loop boundary");
     // Pause is persistent, leaves the task intact, and never triggers wallet/account work.
     await animated.emulateMedia({reducedMotion:"reduce"});
-    await animated.locator("[data-task-example]").first().click();
-    const selectedTask = await animated.locator("#home-task").inputValue();
-    await animated.locator("[data-bounty-close]").click();
+    // Examples now open the posting form; set the same task in place to check that pausing keeps it.
+    const selectedTask = await animated.locator("[data-task-example]").first().getAttribute("data-task-example");
+    await animated.evaluate(task=>{const input=document.querySelector("#home-task");input.value=task;input.dispatchEvent(new Event("input",{bubbles:true}));},selectedTask);
     await animated.evaluate(()=>scrollTo(0,0));
     await animated.emulateMedia({reducedMotion:"no-preference"});
     await animated.waitForFunction(()=>!document.querySelector("[data-forest-video]").paused);
@@ -290,11 +291,9 @@ async function main() {
     assert.equal(await fallback.locator("[data-forest-scene]").getAttribute("data-media-state"),"artwork");
     assert.equal(await fallback.locator("[data-forest-video]").isVisible(),false);
     await fallback.emulateMedia({reducedMotion:"reduce"});
+    const fallbackTask = await fallback.locator("[data-task-example]").first().getAttribute("data-task-example");
     await fallback.locator("[data-task-example]").first().click();
-    const fallbackTask = await fallback.locator("#home-task").inputValue();
-    await fallback.locator("[data-bounty-launcher][open]").waitFor();
-    assert.ok((await fallback.locator("[data-bounty-prompt]").textContent()).includes(fallbackTask));
-    await fallback.goto(origin+"/post.html");
+    await fallback.waitForURL("**/post.html?mode=manual#bounty-composer-form");
     assert.equal(await fallback.locator("#bounty-composer-input").inputValue(),fallbackTask);
     await broken.close();
     const blocked = await browser.newContext({ viewport: { width: 1280, height: 900 }, reducedMotion: "no-preference" });
