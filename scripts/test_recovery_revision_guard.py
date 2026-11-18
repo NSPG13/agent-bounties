@@ -23,6 +23,7 @@ class RecoveryRevisionGuardTests(unittest.TestCase):
             "/usr/local/bin/run-recovery-indexers": self.folder / "supervisor",
             "/bin/bash": self.folder / "bash",
             "/usr/local/bin/check-recovery-revision": self.folder / "guard",
+            "/usr/local/bin/recovery-source-revision": self.folder / "source-revision",
         }
         # Fixed production paths are rewritten only in this private test copy.
         # The shipped executable has no runtime path/configuration override.
@@ -64,6 +65,40 @@ class RecoveryRevisionGuardTests(unittest.TestCase):
     def test_plain_command_also_survives_one_provider_shell_dispatch(self):
         self.assertEqual(self.invoke([EXPECTED], EXPECTED, shell=True).returncode, 0)
         self.assertEqual(self.invoke([EXPECTED], "0" * 40, shell=True).returncode, 1)
+
+    def test_built_revision_emits_source_bound_api_and_reader_receipts(self):
+        stamp = self.paths["/usr/local/bin/recovery-source-revision"]
+        stamp.write_text(EXPECTED + "\n")
+        for kind in ("api", "reader"):
+            if kind == "reader":
+                self.reader_fixture()
+            result = self.invoke(["--built-revision"], EXPECTED)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(parse_receipt(result.stdout, EXPECTED, kind)["artifact_kind"], kind)
+            self.assertEqual(self.invoke(["--built-revision"], EXPECTED, shell=True).stdout, result.stdout)
+            for deployed in (None, "", "0" * 40, "a" * 39, "g" * 40, EXPECTED.upper()):
+                failed = self.invoke(["--built-revision"], deployed)
+                self.assertEqual((failed.returncode, failed.stdout), (1, ""))
+
+    def test_built_revision_requires_one_canonical_fixed_stamp(self):
+        stamp = self.paths["/usr/local/bin/recovery-source-revision"]
+        missing = self.invoke(["--built-revision"], EXPECTED)
+        self.assertEqual((missing.returncode, missing.stdout), (1, ""))
+        for value in ("", EXPECTED, EXPECTED + "\n\n", EXPECTED + "\r\n",
+                      EXPECTED.upper() + "\n", "g" * 40 + "\n", "a" * 39 + "\n", "\n" + EXPECTED):
+            with self.subTest(stamp=value):
+                stamp.write_text(value)
+                failed = self.invoke(["--built-revision"], EXPECTED)
+                self.assertEqual((failed.returncode, failed.stdout), (1, ""))
+                if value:
+                    self.assertNotIn(value, failed.stderr)
+        stamp.unlink()
+        target = self.folder / "other-source-revision"
+        target.write_text(EXPECTED + "\n")
+        stamp.symlink_to(target)
+        failed = self.invoke(["--built-revision"], EXPECTED)
+        self.assertEqual((failed.returncode, failed.stdout), (1, ""))
+        self.assertEqual(self.invoke(["--built-revision", EXPECTED], EXPECTED).returncode, 2)
 
     def test_deployed_revision_is_required_valid_and_exact(self):
         for value in (None, "", "0" * 40, "a" * 39, "a" * 41, "g" * 40,

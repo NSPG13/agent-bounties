@@ -11,6 +11,21 @@ invalid_expected() {
 
 [ "$#" -eq 1 ] || invalid_expected
 expected_revision=$1
+if [ "$expected_revision" = --built-revision ]; then
+    # A fixed, root-owned build stamp replaces the emergency literal pin. Never
+    # derive the expected source from runtime environment or shell expansion.
+    source_stamp=/usr/local/bin/recovery-source-revision
+    invalid_built() {
+        printf '%s\n' 'recovery revision guard: built source revision unavailable' >&2
+        exit 1
+    }
+    [ -f "$source_stamp" ] && [ ! -L "$source_stamp" ] && [ -r "$source_stamp" ] || invalid_built
+    stamp_size=$(/usr/bin/wc -c < "$source_stamp") || invalid_built
+    [ "$stamp_size" -eq 41 ] || invalid_built
+    IFS= read -r expected_revision < "$source_stamp" || invalid_built
+    [ "${#expected_revision}" -eq 40 ] || invalid_built
+    case "$expected_revision" in *[!0-9a-f]*) invalid_built ;; esac
+fi
 [ "${#expected_revision}" -eq 40 ] || invalid_expected
 case "$expected_revision" in *[!0-9a-f]*) invalid_expected ;; esac
 

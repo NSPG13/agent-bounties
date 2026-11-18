@@ -27,6 +27,23 @@ without an additional `sh -c`, quotes or environment expansion. The script reads
 malformed or mismatched deployed revisions exit 1; malformed expected revisions
 or argument counts exit 2. Input values are neither evaluated nor printed.
 
+After the recovery changes have been reviewed and merged into `main`, the
+replacement services can use the plain pre-deploy command
+`/usr/local/bin/check-recovery-revision --built-revision`. Both recovery
+Dockerfiles now require the nonsecret `RENDER_GIT_COMMIT` build argument and
+copy it into a fixed root-owned, read-only source stamp in the image. This mode
+requires the runtime platform revision to equal that built source revision and
+emits the same complete artifact receipt. Missing, malformed, symlinked or
+mismatched source stamps fail closed. The literal emergency pin mode remains
+available for a reviewed fixed release. No shell expansion is needed in either
+command.
+
+The built-revision check verifies source/runtime agreement, not branch approval
+or successful CI. Render must separately follow the intended repository's
+`main` branch with its reviewed deployment policy. It must retain the recovery
+Dockerfiles, reader identity/capability checks and selected financial holds.
+Do not restore the suspended service definitions by resuming an old Blueprint.
+
 The first Render attempt used a quoted shell expression that passed local image
 checks but failed with exit 127 when the provider treated the expression as a
 command name. That failure did not establish a revision mismatch or qualify an

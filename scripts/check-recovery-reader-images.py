@@ -103,6 +103,11 @@ def verify(standby, reader_a, reader_b):
         code, out, err = container(image, matching, ['/usr/local/bin/check-recovery-revision', revision])
         assert code == 0, err
         receipt = parse_receipt(out, revision, 'reader')
+        code, built_out, err = container(image, matching, ['/usr/local/bin/check-recovery-revision', '--built-revision'])
+        assert code == 0 and built_out == out, err
+        code, failed_out, _ = container(image, {**matching, 'RENDER_GIT_COMMIT': R2 if revision == R1 else R1},
+                                      ['/usr/local/bin/check-recovery-revision', '--built-revision'])
+        assert code == 1 and failed_out == ''
         code, hashes, err = container(image, {}, ['/usr/bin/sha256sum', BINARY,
             '/usr/local/bin/run-recovery-indexers', '/bin/bash', '/usr/local/bin/check-recovery-revision'])
         assert code == 0, err

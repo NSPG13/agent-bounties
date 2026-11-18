@@ -16,7 +16,8 @@ COPY scripts/check-recovery-reader-build.sh ./scripts/check-recovery-reader-buil
 ARG RENDER_SERVICE_ID
 ARG RENDER_GIT_COMMIT
 ARG RECOVERY_READER_ARTIFACT_CAPABILITY=standby
-RUN /bin/bash scripts/check-recovery-reader-build.sh "$RENDER_SERVICE_ID" "$RENDER_GIT_COMMIT" "$RECOVERY_READER_ARTIFACT_CAPABILITY"
+RUN /bin/bash scripts/check-recovery-reader-build.sh "$RENDER_SERVICE_ID" "$RENDER_GIT_COMMIT" "$RECOVERY_READER_ARTIFACT_CAPABILITY" \
+    && printf '%s\n' "$RENDER_GIT_COMMIT" > /tmp/recovery-source-revision
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/workspace/target,sharing=locked \
     find crates bounties contracts fixtures migrations ops schemas site deployments -type f -exec touch {} + \
@@ -31,6 +32,7 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* && useradd --create-home --uid 10001 app
 COPY --from=builder /tmp/recovery-reader /usr/local/bin/recovery-reader
+COPY --from=builder --chmod=0444 /tmp/recovery-source-revision /usr/local/bin/recovery-source-revision
 COPY --chmod=0555 scripts/run-recovery-indexers.sh /usr/local/bin/run-recovery-indexers
 COPY --chmod=0555 scripts/check-recovery-revision.sh /usr/local/bin/check-recovery-revision
 USER app

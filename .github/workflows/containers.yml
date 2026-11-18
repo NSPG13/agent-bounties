@@ -96,7 +96,7 @@ jobs:
       - name: Build the deployed worker recipe
         env:
           WORKER_DOCKERFILE: ${{ matrix.dockerfile }}
-        run: docker build --file "$WORKER_DOCKERFILE" --tag public-runtime-worker .
+        run: docker build --file "$WORKER_DOCKERFILE" --build-arg RENDER_GIT_COMMIT="$GITHUB_SHA" --tag public-runtime-worker .
       - name: Check recovery image command containment
         if: matrix.dockerfile == 'Dockerfile.recovery-api'
         run: |
@@ -107,7 +107,7 @@ jobs:
           docker run --rm public-runtime-worker /bin/sh -c 'exit 23' || failure_status=$?
           test "$failure_status" -eq 23
           revision_guard=/usr/local/bin/check-recovery-revision
-          expected_revision=1111111111111111111111111111111111111111
+          expected_revision="$GITHUB_SHA"
           expect_exit() {
             expected_status=$1
             shift
@@ -116,6 +116,10 @@ jobs:
             test "$actual_status" -eq "$expected_status"
           }
           docker run --rm --env "RENDER_GIT_COMMIT=$expected_revision" public-runtime-worker "$revision_guard" "$expected_revision" > recovery-api-receipt.txt
+          docker run --rm --env "RENDER_GIT_COMMIT=$expected_revision" public-runtime-worker "$revision_guard" --built-revision > recovery-api-built-receipt.txt
+          cmp recovery-api-receipt.txt recovery-api-built-receipt.txt
+          expect_exit 1 docker run --rm public-runtime-worker "$revision_guard" --built-revision
+          expect_exit 1 docker run --rm --env RENDER_GIT_COMMIT=2222222222222222222222222222222222222222 public-runtime-worker "$revision_guard" --built-revision
           docker run --rm public-runtime-worker /usr/bin/sha256sum /usr/local/bin/agent-bounties-service "$revision_guard" > recovery-api-file-hashes.txt
           python3 scripts/parse_recovery_artifact_receipt.py recovery-api-receipt.txt --expected-revision "$expected_revision" --expected-kind api --file-hashes recovery-api-file-hashes.txt
           # Also qualify a provider's single shell dispatch of the plain path
