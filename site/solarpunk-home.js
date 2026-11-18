@@ -1023,9 +1023,14 @@ ${competitionChildBrief(item)}`;
       const SECTIONS_KEY = "agent-bounties.account-sections.v1";
       const accountSections = [...dialog.querySelectorAll("[data-account-section]")];
       const savedSections = () => { try { return JSON.parse(win.localStorage.getItem(SECTIONS_KEY) || "{}") || {}; } catch (_error) { return {}; } };
+      // Wallet linking reports progress, errors and its "Finish linking" recovery inside Linked
+      // wallets, including when it starts from Bounty emails, so that section opens while it matters.
+      const walletsSection = dialog.querySelector('[data-account-section="wallets"]');
+      const walletsNeedAttention = () => Boolean(dialog.querySelector("[data-wallet-status]")?.textContent.trim() || dialog.querySelector("[data-wallet-finish]"));
+      const revealWallets = () => { if (walletsSection) walletsSection.open = true; };
       const applySections = () => {
         const saved = savedSections(), account = dialog.dataset.view === "account";
-        for (const section of accountSections) section.open = !account || saved[section.dataset.accountSection] === true;
+        for (const section of accountSections) section.open = !account || saved[section.dataset.accountSection] === true || (section === walletsSection && walletsNeedAttention());
       };
       for (const section of accountSections) {
         section.querySelector("summary")?.addEventListener("click", () => win.setTimeout(() => {
@@ -1151,6 +1156,7 @@ ${competitionChildBrief(item)}`;
       };
       const setWalletStatus = (message) => {
         if (walletStatus) walletStatus.textContent = message;
+        if (message) revealWallets();
       };
       const showDialog = () => {
         if (!dialog.open) dialog.showModal();
@@ -1301,6 +1307,7 @@ ${competitionChildBrief(item)}`;
           finish.disabled = Boolean(walletLinkButton?.disabled);
           item.append(address, state, finish);
           walletList.append(item);
+          revealWallets();
         }
         if (walletLinkButton) walletLinkButton.textContent = wallets.length || unverifiedEmbedded ? "Link another" : "Link wallet";
       };
@@ -1655,6 +1662,7 @@ ${competitionChildBrief(item)}`;
         if (!currentUser || walletLinkButton.disabled) return;
         const linkingUser = currentUser;
         walletLinkButton.disabled = true;
+        revealWallets();
         setWalletStatus("");
         let selection;
         try {
