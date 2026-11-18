@@ -393,6 +393,10 @@ pub fn router(service: SiteAuthService) -> Router {
             "/v1/site-auth/posting-drafts/:operation_id/renew",
             post(renew_posting_draft),
         )
+        .route(
+            "/v1/site-auth/posting-drafts/:operation_id/delete",
+            post(delete_posting_draft),
+        )
         .route("/v1/site-auth/login/:provider", get(begin_oauth))
         .route("/v1/site-auth/callback/:provider", get(finish_oauth))
         .route("/v1/site-auth/logout", post(logout))
@@ -413,6 +417,12 @@ struct SavePostingDraftRequest {
     approved_draft_hash: Option<String>,
     #[serde(default = "empty_object")]
     recovery_state: Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeletePostingDraftRequest {
+    expected_revision: i64,
 }
 
 fn empty_object() -> Value {
@@ -612,6 +622,48 @@ async fn save_posting_draft(
     }
 }
 
+/// Deletes the signed-in owner's saved draft from "Your activity". Only a draft that never
+/// reached a wallet step can be deleted; anything with recorded wallet progress is refused
+/// so its recovery path to a created or funded bounty is never lost.
+async fn delete_posting_draft(
+    Extension(service): Extension<SiteAuthService>,
+    headers: HeaderMap,
+    Path(operation_id): Path<Uuid>,
+    Json(request): Json<DeletePostingDraftRequest>,
+) -> Response {
+    if !service.origin_is_allowed(&headers) {
+        return error_json(StatusCode::FORBIDDEN, "origin_not_allowed");
+    }
+    let Some(account_id) = service
+        .current_user(&headers)
+        .and_then(|user| service.account_id(&user))
+    else {
+        return error_json(StatusCode::UNAUTHORIZED, "authentication_required");
+    };
+    if !service.posting_drafts_enabled_for(&account_id) {
+        return error_json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "posting_drafts_not_enabled",
+        );
+    }
+    if request.expected_revision < 1 {
+        return error_json(StatusCode::BAD_REQUEST, "invalid_revision");
+    }
+    let Some(store) = service.inner.store.as_ref() else {
+        return error_json(StatusCode::SERVICE_UNAVAILABLE, "draft_storage_unavailable");
+    };
+    match store
+        .delete_site_posting_draft(&account_id, operation_id, request.expected_revision)
+        .await
+    {
+        Ok(()) => no_store_json(
+            StatusCode::OK,
+            json!({ "operation_id": operation_id, "deleted": true }),
+        ),
+        Err(error) => posting_draft_error(error),
+    }
+}
+
 fn posting_draft_response(service: &SiteAuthService, draft: SitePostingDraft) -> Response {
     let mut payload = serde_json::to_value(&draft).expect("posting draft serializes");
     payload["continuation_url"] = json!(format!(
@@ -635,6 +687,11 @@ fn posting_draft_error(error: PostingDraftError) -> Response {
             StatusCode::BAD_REQUEST,
             "draft_integer_exceeds_browser_safe_range_use_a_string",
         ),
+        PostingDraftError::NotFound => error_json(StatusCode::NOT_FOUND, "draft_not_found"),
+        PostingDraftError::Deleted => error_json(StatusCode::GONE, "draft_deleted"),
+        PostingDraftError::WalletActivity => {
+            error_json(StatusCode::CONFLICT, "draft_has_wallet_activity")
+        }
         PostingDraftError::Database(_) => {
             error_json(StatusCode::SERVICE_UNAVAILABLE, "draft_storage_unavailable")
         }
@@ -1010,6 +1067,7 @@ fn draft_list_payload(
         "payment_state": "unverified",
         "bounty_contract": draft.bounty_contract,
         "bounty_id": draft.bounty_id,
+        "can_delete": draft.can_delete && !draft.needs_reconciliation,
     })).collect::<Vec<_>>();
     json!({"schema_version":"agent-bounties/account-drafts-v1", "status":"available", "items":items,
         "next_offset":next_offset, "generated_at":Utc::now(),
@@ -3876,9 +3934,11 @@ mod tests {
             needs_reconciliation: false,
             bounty_contract: None,
             bounty_id: None,
+            can_delete: true,
         };
         let payload = draft_list_payload("https://agentizable.ai", vec![draft.clone()], 0);
         assert_eq!(payload["items"][0]["group"], "drafts");
+        assert_eq!(payload["items"][0]["can_delete"], true);
         assert_eq!(payload["items"][0]["payment_state"], "unverified");
         assert!(payload["items"][0]["continuation_url"]
             .as_str()
@@ -3893,6 +3953,8 @@ mod tests {
         assert_eq!(payload["next_offset"], 100);
         assert_eq!(payload["items"][0]["group"], "needs_action");
         assert_eq!(payload["items"][0]["payment_state"], "unverified");
+        // An operation that needs reconciliation is never offered for deletion.
+        assert_eq!(payload["items"][0]["can_delete"], false);
     }
 
     #[test]

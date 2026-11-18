@@ -75,6 +75,7 @@
     "0080_nonce_retirement.sql": "5eb44cd74c1818bd6d678a5825bcee76e39dbd7db5c45e45f18a39429bf676ef",
     "0081_retained_nonce_dispatch.sql": "0f65b799d7627d616f83fdd6aebaab756c3983fb2d317e9dc6241dd41884a8cd",
     "0038_invoice_orders.sql": "227fb220cf807c232cf275fe9115fa08c809e15b76241de695156571c34728f2",
-    "0082_autonomous_canonical_checkpoints.sql": "2d57acb8d085c0d081c10923d7478c635a79872e4cf3bde768aa4fe58c7ce7e6"
+    "0082_autonomous_canonical_checkpoints.sql": "2d57acb8d085c0d081c10923d7478c635a79872e4cf3bde768aa4fe58c7ce7e6",
+    "0083_site_posting_draft_tombstones.sql": "883961371cd9bcd21a4b08216c03fc2bd0a6a00dceb2a38d0fc1780225f328c6"
   }
 }
