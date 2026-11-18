@@ -85,8 +85,14 @@ def check_home(body: str) -> Page:
     require(canonical.get("href") == PUBLIC_ORIGIN + "/", "wrong canonical homepage")
     header = page.one("data-site-header")
     require(page.nodes[header][0] == "header", "site header is not a header element")
-    require(any(tag == "a" and attrs.get("href") == "earn.html" and header in parents
-                for tag, attrs, parents in page.nodes), "header has no browse-work link")
+    # The header holds only Log in and Workspace; Browse work lives in the Workspace and the
+    # page still links the board (footer "Find bounties", home metrics).
+    require(any(tag == "a" and attrs.get("href") in ("./workspace", "workspace") and header in parents
+                for tag, attrs, parents in page.nodes), "header has no Workspace link")
+    require(not any(tag == "a" and attrs.get("href") == "earn.html" and header in parents
+                    for tag, attrs, parents in page.nodes), "Browse work must not return to the site header")
+    require(any(tag == "a" and attrs.get("href") == "earn.html" and header not in parents
+                for tag, attrs, parents in page.nodes), "the page no longer links the work board")
     form = page.one("data-home-task")
     tag, attrs, _ = page.nodes[form]
     require(tag == "form" and attrs.get("action") == "post.html"
