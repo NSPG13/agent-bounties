@@ -515,7 +515,8 @@ ${competitionChildBrief(item)}`;
   }
 
   function accountInboxView(payload, origin = "https://agentizable.ai") {
-    const labels = { needs_action: "Needs action", recover_funds: "Recover funds", drafts: "Saved drafts", working: "Working", awaiting_review: "Awaiting review", paid: "Paid", completed: "Past activity" };
+    // Most urgent first; finished work last (shown collapsed).
+    const labels = { needs_action: "Needs action", recover_funds: "Recover funds", working: "Working", awaiting_review: "Awaiting review", drafts: "Saved drafts", paid: "Paid", completed: "Past activity" };
     const groups = Object.entries(labels).map(([id, label]) => ({ id, label, items: [] }));
     const drafts = payload?.saved_drafts, activity = payload?.activity_inbox;
     const knownOrigin = new URL(origin).origin;
@@ -536,7 +537,11 @@ ${competitionChildBrief(item)}`;
         const title = String(item.title || "").trim().slice(0, 160), status = String(item.status || "").slice(0, 100);
         if (!title || !status || (item.group === "paid" && (source !== activity || item.payment_state !== "paid"))) continue;
         seen.add(item.id);
+        const operationId = typeof item.operation_id === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(item.operation_id) ? item.operation_id.toLowerCase() : null;
         group.items.push({ id: item.id, title, status, href,
+          // Only saved drafts with no wallet step (the server's can_delete) offer Delete.
+          deletable: source === drafts && item.group === "drafts" && item.can_delete === true && Boolean(operationId) && Number.isSafeInteger(item.revision) && item.revision > 0,
+          operationId, revision: Number.isSafeInteger(item.revision) ? item.revision : null,
           nextAction: String(item.next_action || "Review the current state.").slice(0, 500),
           nextActor: String(item.next_actor || "you").slice(0, 40),
           updatedAt: Number.isFinite(Date.parse(item.updated_at)) ? new Date(item.updated_at).toISOString() : null,
@@ -546,9 +551,7 @@ ${competitionChildBrief(item)}`;
     }
     return { groups, draftsAvailable: drafts?.status === "available", activityAvailable: activity?.status === "available",
       nextDraftOffset: Number.isSafeInteger(drafts?.next_offset) ? drafts.next_offset : null,
-      message: drafts?.status !== "available" ? "Saved drafts are temporarily unavailable. Your saved work has not been removed."
-        : activity?.status !== "available" ? "Saved drafts are available. Link a wallet or refresh to check canonical task activity."
-          : "Saved drafts and confirmed task activity. A passed deadline does not prove a refund or payment.",
+      message: drafts?.status !== "available" ? "Saved drafts are temporarily unavailable. Your saved work has not been removed." : "",
     };
   }
 
@@ -1282,24 +1285,90 @@ ${competitionChildBrief(item)}`;
         if (walletLinkButton) walletLinkButton.textContent = wallets.length || unverifiedEmbedded ? "Link another" : "Link wallet";
       };
 
+      const relativeTime = (iso) => {
+        const minutes = Math.round((Date.parse(iso) - Date.now()) / 60000);
+        const format = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+        if (Math.abs(minutes) < 60) return format.format(minutes, "minute");
+        if (Math.abs(minutes) < 1440) return format.format(Math.round(minutes / 60), "hour");
+        return format.format(Math.round(minutes / 1440), "day");
+      };
+      const forgetLocalDraft = (operationId) => {
+        // This tab's copy of the deleted draft (its brief and approval) goes too. A wallet
+        // journal is never touched: drafts with any wallet step cannot be deleted.
+        try {
+          const local = JSON.parse(win.sessionStorage.getItem("agent-bounties.guided-journey.v1") || "null");
+          if (String(local?.id || "").toLowerCase() === operationId) {
+            win.sessionStorage.removeItem("agent-bounties.guided-journey.v1");
+            win.sessionStorage.removeItem("agent-bounties.posting-approval.v1");
+          }
+        } catch (_) { /* Storage can be unavailable; the server copy is already gone. */ }
+      };
+      const deleteDraft = async (payload, item, row, status) => {
+        const requestId = accountLoadId;
+        status.textContent = "Deleting…";
+        try {
+          const response = await win.fetch(authApiPath(`/posting-drafts/${item.operationId}/delete`, win.location), {
+            method: "POST", credentials: "include", cache: "no-store",
+            headers: { Accept: "application/json", "content-type": "application/json" },
+            body: JSON.stringify({ expected_revision: item.revision }),
+          });
+          const result = await response.json().catch(() => null);
+          if (requestId !== accountLoadId || !currentUser) return;
+          if (!response.ok) {
+            status.textContent = result?.error === "draft_has_wallet_activity" ? "This draft has a recorded wallet step, so it is kept. Open it to check its status."
+              : result?.error === "revision_conflict" ? "This draft changed on another device. Close and reopen your activity, then try again."
+                : "Couldn’t delete this draft. Try again.";
+            row.querySelector("[data-draft-delete]")?.removeAttribute("hidden");
+            return;
+          }
+          forgetLocalDraft(item.operationId);
+          renderAccountInbox({ ...payload, saved_drafts: { ...payload.saved_drafts, items: (payload.saved_drafts?.items || []).filter(entry => entry?.id !== item.id) } });
+          if (accountInboxStatus) accountInboxStatus.textContent = `Deleted “${item.title}”.`;
+        } catch (_) {
+          if (requestId === accountLoadId) { status.textContent = "Couldn’t delete this draft. Try again."; row.querySelector("[data-draft-delete]")?.removeAttribute("hidden"); }
+        }
+      };
+      const accountInboxStatus = accountInbox && (() => { const output = doc.createElement("p"); output.className = "account-inbox-status"; output.setAttribute("role", "status"); return output; })();
       const renderAccountInbox = (payload) => {
         if (!accountInbox) return;
         const view = accountInboxView(payload, win.location.origin);
-        accountInbox.replaceChildren();
-        const heading = doc.createElement("h3"); heading.textContent = "Continue your work";
-        const note = doc.createElement("p"); note.className = "account-evidence"; note.textContent = view.message;
-        accountInbox.append(heading, note);
+        accountInbox.replaceChildren(accountInboxStatus);
+        accountInboxStatus.textContent = "";
+        if (view.message) { const note = doc.createElement("p"); note.className = "account-evidence"; note.textContent = view.message; accountInbox.append(note); }
         for (const group of view.groups) {
           if (!group.items.length) continue;
           const past = ["paid", "completed"].includes(group.id);
           const section = doc.createElement(past ? "details" : "section"), title = doc.createElement(past ? "summary" : "h4"), list = doc.createElement("ul");
+          section.className = "account-inbox-group"; section.dataset.group = group.id;
           title.textContent = `${group.label} (${group.items.length})`; section.append(title, list);
-          for (const item of group.items) {
-            const row = doc.createElement("li"), link = doc.createElement("a"), status = doc.createElement("strong"), action = doc.createElement("p"), timing = doc.createElement("small");
+          group.items.forEach((item, index) => {
+            const row = doc.createElement("li"), head = doc.createElement("div"), link = doc.createElement("a"), status = doc.createElement("span"), action = doc.createElement("p"), timing = doc.createElement("small");
+            head.className = "account-inbox-row-head"; status.className = "account-inbox-chip";
             link.href = item.href; link.textContent = item.title; status.textContent = item.status;
-            action.textContent = item.nextAction;
-            timing.textContent = `Next: ${item.nextActor}${item.deadline ? ` · Deadline ${new Date(item.deadline).toLocaleString()}` : ""}${item.updatedAt ? ` · Updated ${new Date(item.updatedAt).toLocaleString()}` : ""}`;
-            row.append(link, status, action, timing); list.append(row);
+            action.textContent = `Next: ${item.nextAction}`;
+            timing.textContent = [item.deadline ? `Deadline ${new Date(item.deadline).toLocaleString()}` : "", item.updatedAt ? `Updated ${relativeTime(item.updatedAt)}` : ""].filter(Boolean).join(" · ");
+            head.append(link, status); row.append(head, action);
+            if (timing.textContent) row.append(timing);
+            if (item.deletable) {
+              const tools = doc.createElement("div"), remove = doc.createElement("button"), confirm = doc.createElement("div"), question = doc.createElement("span"), yes = doc.createElement("button"), keep = doc.createElement("button"), feedback = doc.createElement("small");
+              tools.className = "account-inbox-tools"; confirm.className = "account-inbox-confirm"; confirm.hidden = true;
+              remove.type = yes.type = keep.type = "button"; remove.dataset.draftDelete = ""; yes.dataset.draftDeleteConfirm = "";
+              remove.textContent = "Delete"; remove.setAttribute("aria-label", `Delete draft “${item.title}”`);
+              question.textContent = "Delete this draft? This can’t be undone."; yes.textContent = "Delete draft"; keep.textContent = "Keep";
+              feedback.setAttribute("role", "status");
+              remove.addEventListener("click", () => { remove.hidden = true; confirm.hidden = false; keep.focus(); });
+              keep.addEventListener("click", () => { confirm.hidden = true; remove.hidden = false; remove.focus(); });
+              yes.addEventListener("click", () => { confirm.hidden = true; void deleteDraft(payload, item, row, feedback); });
+              confirm.append(question, yes, keep); tools.append(remove, confirm, feedback); row.append(tools);
+            }
+            if (index >= 3) row.hidden = true;
+            list.append(row);
+          });
+          if (group.items.length > 3) {
+            const more = doc.createElement("button"); more.type = "button"; more.className = "account-inbox-more";
+            more.textContent = `Show all (${group.items.length})`;
+            more.addEventListener("click", () => { for (const row of list.children) row.hidden = false; more.remove(); });
+            section.append(more);
           }
           accountInbox.append(section);
         }
