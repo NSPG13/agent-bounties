@@ -98,6 +98,14 @@ async function auditJourney(browser, origin, width) {
   await page.setViewportSize({ width, height: 900 });
   await page.goto(origin + "/earn.html");
   await page.locator(".opportunity-row").first().waitFor();
+  // The board has no right-side panel, and its three filters share one row with one height (stacked on phones).
+  assert.equal(await page.locator(".feed-aside").count(), 0, "the board's right-side panel is removed");
+  const filters = await page.locator(".market-toolbar :is(input, select)").evaluateAll(els => els.map(el => { const r = el.getBoundingClientRect(); return { top: Math.round(r.top), height: Math.round(r.height) }; }));
+  assert.equal(filters.length, 3);
+  if (width >= 640) {
+    assert.equal(new Set(filters.map(box => box.top)).size, 1, `${width}: search, availability and work type share one row`);
+    assert.equal(new Set(filters.map(box => box.height)).size, 1, `${width}: the three filters have one height`);
+  } else assert.ok(filters[1].top > filters[0].top && filters[2].top > filters[1].top, `${width}: filters stack on narrow screens`);
   await page.locator("[data-market-timing]").selectOption("all");
   assert.equal(await page.locator(".opportunity-row").count(), 15);
   for (const state of ["future", "unknown", "degraded", "offline", "empty", "audit"]) {
