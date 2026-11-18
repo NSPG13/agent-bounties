@@ -35,8 +35,28 @@ class PublicRuntimeParityTests(unittest.TestCase):
     def test_environment_selected_source_is_rejected(self):
         (self.roots[0]/'crates/api/src/main.rs').write_text('include!(env!("PRIVATE_SOURCE"));')
         with self.assertRaises(ValueError):guard.compare(*self.roots)
+    def test_recovery_executable_is_a_required_matching_public_input(self):
+        for root in self.roots:
+            p=root/'scripts/check-recovery-revision.sh';p.parent.mkdir(exist_ok=True)
+            p.write_text('#!/bin/sh\nexit 1\n')
+            subprocess.run(['git','-C',str(root),'add',str(p)],check=True)
+        self.assertEqual(guard.compare(*self.roots)['file_count'],4)
+        (self.roots[0]/'scripts/check-recovery-revision.sh').write_text('#!/bin/sh\nexit 0\n')
+        with self.assertRaises(ValueError):guard.compare(*self.roots)
+        (self.roots[1]/'scripts/check-recovery-revision.sh').unlink()
+        with self.assertRaises((ValueError,FileNotFoundError)):guard.compare(*self.roots)
     def test_symlink_input_rejected(self):
         p=self.roots[0]/'fixtures/input.json';p.unlink();p.symlink_to(self.roots[1]/'fixtures/input.json')
         with self.assertRaises((ValueError,RuntimeError)):guard.compare(*self.roots)
+    def test_reader_supervisor_build_guard_and_denylist_are_matching_runtime_inputs(self):
+        for name in ['scripts/run-recovery-indexers.sh', 'scripts/check-recovery-reader-build.sh',
+                     'ops/recovery-reader-denied-services.txt', 'Dockerfile.recovery-indexers']:
+            for root in self.roots:
+                path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text('reviewed\n')
+                subprocess.run(['git','-C',str(root),'add',str(path)],check=True)
+            guard.compare(*self.roots)
+            (self.roots[0]/name).write_text('changed\n')
+            with self.assertRaises(ValueError):guard.compare(*self.roots)
+            (self.roots[0]/name).write_text('reviewed\n')
 
 if __name__=='__main__':unittest.main()

@@ -1,0 +1,43 @@
+# syntax=docker/dockerfile:1
+# Only nonsecret native identity and immutable capability are build arguments.
+FROM rust:1.94-bookworm AS builder
+WORKDIR /workspace
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY bounties ./bounties
+COPY contracts ./contracts
+COPY fixtures ./fixtures
+COPY migrations ./migrations
+COPY ops ./ops
+COPY schemas ./schemas
+COPY site ./site
+COPY deployments/base-mainnet.json ./deployments/base-mainnet.json
+COPY scripts/check-recovery-reader-build.sh ./scripts/check-recovery-reader-build.sh
+ARG RENDER_SERVICE_ID
+ARG RENDER_GIT_COMMIT
+ARG RECOVERY_READER_ARTIFACT_CAPABILITY=standby
+RUN /bin/bash scripts/check-recovery-reader-build.sh "$RENDER_SERVICE_ID" "$RENDER_GIT_COMMIT" "$RECOVERY_READER_ARTIFACT_CAPABILITY"
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/workspace/target,sharing=locked \
+    find crates bounties contracts fixtures migrations ops schemas site deployments -type f -exec touch {} + \
+    && RECOVERY_READER_BOUND_SERVICE_ID="$RENDER_SERVICE_ID" \
+       RECOVERY_READER_BOUND_REVISION="$RENDER_GIT_COMMIT" \
+       RECOVERY_READER_BOUND_CAPABILITY="$RECOVERY_READER_ARTIFACT_CAPABILITY" \
+       CARGO_BUILD_JOBS=2 \
+       cargo build --locked --release -p worker --bin recovery-reader \
+    && cp target/release/recovery-reader /tmp/recovery-reader
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* && useradd --create-home --uid 10001 app
+COPY --from=builder /tmp/recovery-reader /usr/local/bin/recovery-reader
+COPY --chmod=0555 scripts/run-recovery-indexers.sh /usr/local/bin/run-recovery-indexers
+COPY --chmod=0555 scripts/check-recovery-revision.sh /usr/local/bin/check-recovery-revision
+USER app
+ENV RECOVERY_READER_MODE=standby \
+    ENABLE_HOSTED_FINANCIAL_SIGNING=false \
+    ENABLE_BASE_TX_BROADCAST=false \
+    ENABLE_X402_HOSTED_RELAY=false \
+    ENABLE_STRIPE_LIVE_EXECUTION=false
+# No ENTRYPOINT: pre-deploy commands are executable paths, never reader arguments.
+CMD ["/usr/local/bin/run-recovery-indexers"]
