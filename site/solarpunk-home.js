@@ -1526,6 +1526,9 @@ ${competitionChildBrief(item)}`;
       });
       openButton.addEventListener("click", (event) => {
         event.preventDefault();
+        // A person who opened the dialog from the footer gets focus back there; a scripted open
+        // (header link, #login/#account) or the return from sign-in falls back to the header link.
+        if (!returnFocus && event.isTrusted) returnFocus = openButton;
         if (currentUser && new URLSearchParams(win.location.search).get("postReturn") !== "1") {
           win.history?.replaceState?.(null, "", `${win.location.pathname}${win.location.search}#account`);
         }
@@ -1542,7 +1545,9 @@ ${competitionChildBrief(item)}`;
       closeButton?.addEventListener("click", closeDialog);
       dialog.addEventListener("close", () => {
         openButton.setAttribute("aria-expanded", "false");
-        (returnFocus || openButton).focus();
+        // Never move the page: after signing in, closing the dialog used to focus the footer link
+        // and scroll to the bottom of the home page.
+        (returnFocus || headerLogin || openButton).focus({ preventScroll: true });
         returnFocus = null;
         if (["#login", "#account"].includes(win.location.hash)) win.history?.replaceState?.(null, "", `${win.location.pathname}${win.location.search}`);
       });
