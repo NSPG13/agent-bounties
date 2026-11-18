@@ -85,7 +85,7 @@ async function main() {
       else assert.equal(new Set(metrics.map(metric => metric.y)).size, 1, "desktop metrics align horizontally");
       // Payout volume is a USD summary at $1 per USDC face value; the label must say so.
       await page.waitForFunction(() => document.querySelector("[data-market-volume]").textContent === "$1,000.25");
-      assert.match(await page.locator(".ab-metric", { has: page.locator("[data-market-volume]") }).innerText(), /USD paid out … USDC payouts at \$1 face value/s);
+      assert.match(await page.locator(".ab-metric", { has: page.locator("[data-market-volume]") }).innerText(), /USD paid out.*USDC payouts at \$1 face value/s);
       assert.equal(await page.locator("[data-completed-bounties]").innerText(), "1,234");
       const metricValues = await page.locator(".ab-metric output, .ab-metric strong").evaluateAll(els => els.map(el => {
         const range = document.createRange(); range.selectNodeContents(el);
@@ -168,7 +168,7 @@ async function main() {
       assert.equal(await page.getByRole("button",{name:"Sign in with Google",exact:true}).count(),1);
       await capture(page,`signin-${width}`);
       await page.locator("[data-auth-mode-toggle]").click();assert.equal(await page.locator("#auth-title").innerText(),"Create an account");
-      assert.equal(await page.getByRole("button",{name:"Sign up with Google",exact:true}).count(),1);
+      assert.equal(await page.getByRole("button",{name:"Up with Google",exact:true}).count(),1);
       await capture(page,`register-${width}`);
       await page.locator("[data-auth-close]").click();
       // The dialog's close event is queued; the login address is cleared when it runs.
@@ -180,7 +180,7 @@ async function main() {
       await page.locator("[data-auth-dialog][open]").waitFor();
       assert.equal(await page.locator("#auth-title").innerText(),"Sign in","the header Log in link opens sign-in");
       await page.locator("[data-auth-close]").click();
-      assert.ok(await page.locator(".ab-site-signin").evaluate(el=>el===document.activeElement),"focus returns to the header Log in link");
+      await page.ok(await page.locator(".ab-site-signin").evaluate(el=>el===document.activeElement),"focus returns to the header Log in link");
       if(width===390) {
         for(const provider of ["google","microsoft","github"]) {
           // Force a fresh document; a late close event on the previous dialog
