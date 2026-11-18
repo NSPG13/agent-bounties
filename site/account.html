@@ -10,24 +10,24 @@
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="canonical" href="https://agentizable.ai/account">
   <script src="managed-service-theme.js?v=20261115"></script>
-  <link rel="stylesheet" href="managed-service.css?v=20261114">
+  <link rel="stylesheet" href="managed-service.css?v=20261117">
   <title>Your service order — Agentizable</title>
   <script src="managed-service-core.js?v=20261030" defer></script>
-  <script src="managed-service-page.js?v=20261115" defer></script>
+  <script src="managed-service-page.js?v=20261117" defer></script>
 </head>
 <body>
-  <header><a class="brand" href="./"><img src="favicon.svg" alt="" width="26" height="26"><span>Agentizable<span class="brand-tld">.ai</span></span></a><span class="header-note">Private service order</span></header>
+  <header><a class="brand" href="./"><img src="favicon.svg" alt="" width="26" height="26"><span>Agentizable<span class="brand-tld">.ai</span></span></a><span class="header-tools"><span class="header-note">Private service order</span><button id="managed-logout" class="secondary header-button" type="button" hidden>Sign out</button></span></header>
   <main>
     <p class="eyebrow">YOUR DELIVERABLE · YOUR AGREED PRICE</p>
     <h1>Your service order</h1>
     <p class="intro">Agentizable delivers your agreed digital service and is responsible for delivery and customer remedies.</p>
-    <section class="status-card" aria-label="Order access and status">
+    <section id="managed-status-card" class="status-card" aria-label="Order access and status">
       <p id="managed-status" role="status" aria-live="polite">Loading your order…</p>
       <div id="managed-login" hidden><p>Sign in with the account that received this offer.</p><div id="managed-providers" class="actions"></div></div>
-      <div class="actions"><button id="managed-refresh" type="button">Refresh status</button><button id="managed-logout" class="secondary" type="button" hidden>Sign out</button></div>
+      <div class="actions status-actions"><button id="managed-refresh" class="secondary" type="button">Refresh status</button></div>
     </section>
     <section id="managed-private" hidden aria-label="Private service details">
-      <div class="order-heading"><h2 id="managed-heading">Review your quote</h2><span id="managed-mode" class="badge"></span></div>
+      <div class="order-heading"><h2 id="managed-heading" tabindex="-1">Review your quote</h2><span id="managed-mode" class="badge"></span></div>
       <p id="managed-reference" class="reference"></p>
       <div class="order-grid">
         <div class="card">
@@ -45,8 +45,12 @@
           <dl id="managed-lines" class="prices"></dl>
           <div class="total"><strong>Total</strong><strong id="managed-total"></strong></div>
           <p id="managed-expiry" class="small"></p>
-          <p id="managed-deposit-note" class="small" hidden></p>
-          <p class="small">Stripe may offer your local currency for an extra 2–4% conversion fee, shown before you pay. You can keep the quoted currency.</p>
+          <!-- Outside the acceptance block: the terms stay available after acceptance, before Stripe. -->
+          <details class="payment-terms">
+            <summary>Payment terms</summary>
+            <p id="managed-deposit-note" class="small" hidden></p>
+            <p class="small">Stripe may offer your local currency for an extra 2–4% conversion fee, shown before you pay. You can keep the quoted currency.</p>
+          </details>
           <div id="managed-acceptance" hidden>
             <p id="managed-consent-note" class="small consent-note">By accepting the quote you accept this deliverable, acceptance criteria, deadline, customer remedies, and full price.</p>
             <button id="managed-accept" type="button" disabled>Accept quote</button>

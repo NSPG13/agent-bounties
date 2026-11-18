@@ -780,7 +780,7 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
             "data-card-verifier",
             "function renderVerifierTerms",
             "if (!ui.verifierSummary || !ui.verifier) return;",
-            'bounty-composer-v2.js?v=39',
+            'bounty-composer-v2.js?v=41',
             "function verificationReadiness",
             "verificationReadiness(benchmark, state.draft?.evidence_schema)",
             'sourceSnapshotDigest.pattern === "^sha256:[0-9a-f]{64}$"',
@@ -818,7 +818,7 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
             'data-post-auth-start',
             'posting-auth.js?v=3',
             'solarpunk-home.js?v=39',
-            'bounty-composer-v2.js?v=39',
+            'bounty-composer-v2.js?v=41',
             'label: "LOG IN TO POST"',
             'credentials: "include"',
             'account_status === "ready" && payload.account_complete === true',
@@ -1618,7 +1618,7 @@ def main() -> int:
             # homepage wallet onboarding. Only these reviewed scripts may run.
             scripts = re.findall(r"<script\b[^>]*>.*?</script\s*>", text, re.IGNORECASE | re.DOTALL)
             # The theme script runs blocking, before first paint, and only reads the theme key.
-            if scripts != ['<script src="managed-service-theme.js?v=20261115"></script>', '<script src="managed-service-core.js?v=20261030" defer></script>', '<script src="managed-service-page.js?v=20261115" defer></script>']:
+            if scripts != ['<script src="managed-service-theme.js?v=20261115"></script>', '<script src="managed-service-core.js?v=20261030" defer></script>', '<script src="managed-service-page.js?v=20261117" defer></script>']:
                 fail(f"{relative}: only the private managed-service scripts may load")
             if re.search(r"\bon\w+\s*=|shared-navigation:|<(?:iframe|form)\b", text, re.IGNORECASE):
                 fail(f"{relative}: inline handlers, shared journey handlers, forms and frames are forbidden")

@@ -92,7 +92,8 @@ function postingWalletFixture({ balanceFailure = false } = {}) {
   const ui = Object.fromEntries(["cryptoMethod", "walletPanel", "walletOptions", "walletMessage", "fundNow", "account", "requiredUsdc", "usdcBalance", "ethBalance", "readiness", "fundingHelp", "missingUsdc"].map(name => [name, element(name)]));
   ui.onramps = []; ui.dialog = { querySelector: () => null };
   const phone = { request: async ({ method }) => { walletCalls.push(method); if (method === "eth_requestAccounts") return [wallet]; if (method === "eth_chainId") return "0x2105"; throw new Error("Unexpected wallet request: " + method); }, on() {} };
-  const state = { linkedWallets: [{ address: wallet }], account: wallet, provider: null, approved: true, fundingUsdc: 2.01, balances: { usdc: 99999999n } };
+  // The saved wallet in these fixtures was linked from a phone wallet, as the account records it.
+  const state = { linkedWallets: [{ address: wallet, wallet_type: "mobile", provider_id: "walletconnect" }], account: wallet, provider: null, approved: true, fundingUsdc: 2.01, balances: { usdc: 99999999n } };
   const helper = helperContext();
   const window = { AgentBountiesPhoneWallet: { provider: phone }, AgentBountiesWalletLink: { select: async () => ({ provider: phone, kind: "phone", label: "Phone wallet" }) },
     AgentBountiesFundingReadiness: { ...helper, readBalances: async (input) => {
@@ -457,4 +458,97 @@ for (const path of ["/post", "/post.html", "/participate", "/competition"]) test
   const returnUrl = `https://agentizable.ai${path}?operation_id=saved-123#bounty-preview`;
   const { context } = await onrampContext({ returnUrl });
   assert.equal(context.window.AgentBountiesOnramp.status().return_url, returnUrl);
+});
+
+// "Use this wallet" on a saved wallet must use that wallet: the wallet-brand chooser never opens.
+function savedWalletFixture({ record = {}, browser = [], embedded = null } = {}) {
+  const env = postingWalletFixture();
+  Object.assign(env.context, { setTimeout, clearTimeout });
+  Object.assign(env.state.linkedWallets[0], record);
+  env.context.discoverWallets = async () => browser;
+  env.window.AgentBountiesWalletLink.select = async () => { throw new Error("the wallet chooser must not open"); };
+  env.window.AgentBountiesWalletLink.loadEmbedded = async () => { if (!embedded) throw new Error("no embedded wallet in this test"); env.embeddedLoads = (env.embeddedLoads || 0) + 1; return embedded; };
+  env.use = async () => {
+    await env.chooseCryptoWallet();
+    const options = env.ui.walletOptions.children;
+    await options[0].handlers.click();
+    await options.find(button => button.textContent === "Use this wallet").handlers.click();
+  };
+  return env;
+}
+function browserWallet({ authorized = true, account = wallet, isMetaMask = false } = {}) {
+  const calls = [];
+  const provider = { isMetaMask, request: async ({ method }) => {
+    calls.push(method);
+    if (method === "eth_accounts") return authorized ? [account] : [];
+    if (method === "eth_requestAccounts") return [account];
+    if (method === "eth_chainId") return "0x2105";
+    throw new Error("Unexpected wallet request: " + method);
+  } };
+  return { provider, calls, item: { provider, info: { name: isMetaMask ? "MetaMask" : "Browser wallet" } } };
+}
+
+test("saved wallet, case A: a browser wallet that already approved this site is used with no chooser and no extra prompt", async () => {
+  const ext = browserWallet();
+  const env = savedWalletFixture({ record: { wallet_type: "browser", provider_id: "metamask" }, browser: [ext.item] });
+  await env.use();
+  assert.equal(env.state.provider, ext.provider);
+  assert.deepEqual(ext.calls, ["eth_accounts", "eth_requestAccounts", "eth_chainId"], "the silent read never prompts; connecting asks the same wallet once");
+  assert.match(env.statuses.find(text => text.startsWith("Connecting")), /your wallet will ask to switch to Base/, "the network-switch notice comes before connecting");
+});
+
+test("saved wallet, case A without approval yet: only the wallet the account names is asked, and the address is checked", async () => {
+  const other = browserWallet({ authorized: false }), metamask = browserWallet({ authorized: false, isMetaMask: true });
+  const env = savedWalletFixture({ record: { wallet_type: "browser", provider_id: "metamask" }, browser: [other.item, metamask.item] });
+  await env.use();
+  assert.equal(env.state.provider, metamask.provider);
+  assert.equal(other.calls.includes("eth_requestAccounts"), false, "another browser wallet is never asked to connect");
+  // The named wallet is on another account: say which one to switch to instead of opening a chooser.
+  const wrong = browserWallet({ authorized: false, isMetaMask: true, account: "0x" + "9".repeat(40) });
+  const mismatch = savedWalletFixture({ record: { wallet_type: "browser", provider_id: "metamask" }, browser: [wrong.item] });
+  await mismatch.use();
+  assert.equal(mismatch.state.provider, null);
+  assert.match(mismatch.statuses.at(-1), /Switch to 0x[0-9a-f]{4}…[0-9a-f]{4} in your wallet, then press Use this wallet again/);
+});
+
+test("saved wallet, case B: a phone wallet restores its session or shows its own QR pairing, never the chooser", async () => {
+  const env = savedWalletFixture({ record: { wallet_type: "mobile", provider_id: "walletconnect" }, browser: [] });
+  await env.use();
+  assert.equal(env.state.provider, env.phone, "the phone wallet's own connection request handles restore or QR pairing");
+  assert.ok(env.walletCalls.includes("eth_requestAccounts"));
+});
+
+test("saved wallet, case C: an embedded wallet is loaded directly (its sign-in may open), never the chooser, then turned away from wallet-paid USDC posting", async () => {
+  const calls = [];
+  const embedded = { agentBountiesCapabilities: { directTransactions: false, postingTransactions: true }, request: async ({ method }) => {
+    calls.push(method); if (method === "eth_requestAccounts") return [wallet]; if (method === "eth_chainId") return "0x2105"; throw new Error("Unexpected wallet request: " + method); } };
+  const env = savedWalletFixture({ record: { wallet_type: "embedded", provider_id: "coinbase-embedded" }, browser: [], embedded });
+  await env.use();
+  assert.equal(env.embeddedLoads, 1);
+  // V2 USDC posting is sent and paid for by the creator's own wallet; a signature-only wallet can't.
+  assert.equal(env.state.provider, null);
+  assert.deepEqual(calls, [], "the embedded wallet is never asked to connect for this route");
+  assert.match(env.statuses.at(-1), /can't post with USDC yet\. Choose a browser or phone wallet that holds Base USDC and some Base ETH/);
+});
+
+test("saved wallet, case D: nothing in this browser can hold it, so the page says so instead of opening the chooser", async () => {
+  const env = savedWalletFixture({ record: { wallet_type: "browser", provider_id: "injected" }, browser: [] });
+  await env.use();
+  assert.equal(env.state.provider, null);
+  assert.match(env.statuses.at(-1), /isn't available in this browser\. Open the browser or app where you saved it/);
+  const unknown = savedWalletFixture({ record: { wallet_type: "unknown" }, browser: [] });
+  await unknown.use();
+  assert.match(unknown.statuses.at(-1), /isn't available in this browser/);
+});
+
+test("one saved wallet is preselected when the payment window opens; nothing connects until Use this wallet is pressed", async () => {
+  const ext = browserWallet();
+  const env = savedWalletFixture({ record: { wallet_type: "browser" }, browser: [ext.item] });
+  env.state.account = null;
+  await env.chooseCryptoWallet();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(env.state.account, wallet);
+  assert.equal(env.state.provider, null, "opening the window does not connect");
+  assert.equal(ext.calls.includes("eth_requestAccounts"), false, "no wallet prompt before the click");
+  assert.equal(env.ui.walletOptions.children.find(button => button.textContent === "Use this wallet").hidden, false);
 });

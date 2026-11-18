@@ -17,21 +17,7 @@
   const title = document.querySelector("[data-brief-title]");
   const criteria = document.querySelector("[data-brief-criteria]");
   const objective = document.querySelector("[data-brief-objective]");
-  const criteriaOther = document.querySelector("[data-brief-criteria-other]");
-  const criteriaOptions = Array.from(document.querySelectorAll("[data-criteria-options] input[type=checkbox]"));
   const reviewShare = document.querySelector("[data-brief-review-share]");
-  // The checked options come first, then any criteria written under "Other", one per line.
-  const lines = text => String(text || "").split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  function collectCriteria() {
-    criteria.value = [...criteriaOptions.filter(box => box.checked).map(box => box.value), ...lines(criteriaOther?.value)].join("\n");
-    criteriaOther?.setCustomValidity("");
-  }
-  function showCriteria(text) {
-    const wanted = lines(text), offered = new Set(criteriaOptions.map(box => box.value));
-    for (const box of criteriaOptions) box.checked = wanted.includes(box.value);
-    if (criteriaOther && document.activeElement !== criteriaOther) criteriaOther.value = wanted.filter(line => !offered.has(line)).join("\n");
-    criteria.value = wanted.join("\n");
-  }
   function showReviewShare() {
     if (!reviewShare) return;
     const reward = helper.reviewReward(budget.value);
@@ -145,7 +131,7 @@
       catch (_) { deadline.value = brief.deadline_local || ""; }
     }
     if (document.activeElement !== title) title.value = brief.title ?? journey.draft?.title ?? "";
-    showCriteria(brief.criteria ?? journey.draft?.acceptance_criteria?.join("\n") ?? "");
+    if (document.activeElement !== criteria) criteria.value = brief.criteria ?? journey.draft?.acceptance_criteria?.join("\n") ?? "";
     showReviewShare();
     setMode();
     status.textContent = journey.draft ? "Draft saved on this device. Review the proposal below." : "Brief saved on this device. Complete the details to prepare your proposal.";
@@ -156,7 +142,7 @@
     if (restoring) return;
     const current = client.load() || client.start({ role: "post" });
     const result = render();
-    collectCriteria(); showReviewShare();
+    showReviewShare();
     const manual = mode.value === "manual";
     const brief = { preparation_mode: mode.value, title: title.value, criteria: criteria.value, review_reward_usdc: helper.reviewReward(budget.value), review_consent: manual,
       ...(manual ? { objective: objective.value, description: goal.value } : {}),
@@ -174,6 +160,7 @@
       || (Date.parse(brief.deadline_at) || null) !== (Date.parse(before.deadline_at || current.draft?.delivery_deadline) || null);
     if (changed && current.draft) window.AgentBountiesComposer?.invalidate();
     client.save({ ...current, role: "post", goal: brief.goal || (mode.value === "manual" ? helper.fallbackGoal(brief.title, brief.criteria) : ""), brief, draft_stale: current.draft_stale || Boolean(changed && current.draft), updated_at: new Date().toISOString() });
+    status.dataset.tone = result.error ? "error" : "";
     status.textContent = result.error || (changed && current.draft ? "Brief updated. Prepare the updated proposal before approving funding." : "Brief saved. Prepare your proposal when the details are ready.");
   }
   mode.addEventListener("change", () => {
@@ -181,8 +168,7 @@
     window.history?.replaceState?.(null, "", url);
     setMode(); save();
   });
-  for (const input of [goal, budget, deadline, title, objective, criteriaOther]) input?.addEventListener("input", save);
-  for (const box of criteriaOptions) box.addEventListener("change", save);
+  for (const input of [goal, budget, deadline, title, objective, criteria]) input?.addEventListener("input", save);
   // "Edit brief" refills the field from the proposal; keep this form's own label and an empty description empty.
   document.querySelector("[data-revise-card]")?.addEventListener("click", () => {
     setMode();
@@ -191,7 +177,6 @@
   });
   form.addEventListener("submit", async (event) => {
     event.preventDefault(); event.stopImmediatePropagation(); save();
-    if (mode.value === "manual" && !criteria.value.trim()) criteriaOther?.setCustomValidity("Check at least one criterion or write your own under Other.");
     if (!form.reportValidity()) return;
     const journey = client.load();
     if (mode.value === "manual") {
@@ -203,7 +188,7 @@
         await window.AgentBountiesComposer.stage(draft);
         status.textContent = "Proposal prepared from your form. Review the exact terms and costs below before approving.";
         document.querySelector("#bounty-preview").scrollIntoView({ block: "start", behavior: "smooth" });
-      } catch (error) { status.textContent = error.message || "Could not prepare the proposal. Your brief is still saved."; }
+      } catch (error) { status.dataset.tone = "error"; status.textContent = error.message || "Could not prepare the proposal. Your brief is still saved."; }
       finally { submit.disabled = false; }
       return;
     }
