@@ -88,6 +88,7 @@ pub use creator_open::CreatorOpenIndex;
 pub use gas_sponsorship::{
     quote_gas_budget_micro_usdc, GasBudgetStatus, DEFAULT_GAS_BUDGET_MICRO_USDC,
 };
+pub use site_posting_drafts::draft_has_wallet_activity as site_posting_draft_has_wallet_activity;
 pub use site_posting_drafts::draft_hash as site_posting_draft_hash;
 pub use sponsored_actions::SponsoredAction;
 
@@ -1592,6 +1593,7 @@ impl PostgresStore {
                 SITE_POSTING_DRAFTS_MIGRATION,
                 SITE_WALLET_PROVIDER_MIGRATION,
                 include_str!("../../../migrations/0082_autonomous_canonical_checkpoints.sql"),
+                include_str!("../../../migrations/0083_site_posting_draft_tombstones.sql"),
                 SECURITY_PRINCIPALS_MIGRATION,
                 OWNED_MUTATIONS_MIGRATION,
                 VERIFIER_REVIEW_NOTIFICATIONS_MIGRATION,

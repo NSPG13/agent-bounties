@@ -523,3 +523,21 @@ test("saved work stays resumable without wallet statistics and rejects unsafe li
   assert.equal(activity.groups.find(group => group.id === "completed").items[0].deadline, null);
   assert.equal(activity.groups.find(group => group.id === "paid").items.length, 0);
 });
+
+test("your activity lists urgent work first, explains only outages and offers Delete only for drafts with no wallet step", () => {
+  const draft = (id, extra = {}) => ({ id: `draft:${id}`, operation_id: id, title: `Draft ${id.slice(0, 4)}`, group: "drafts", status: "Saved draft",
+    next_actor: "you", next_action: "Continue reviewing this saved draft.", continuation_url: `https://agentizable.ai/post.html?operation_id=${id}`, revision: 2, can_delete: true, ...extra });
+  const clean = "11111111-1111-4111-8111-111111111111", walletStep = "22222222-2222-4222-8222-222222222222", pending = "33333333-3333-4333-8333-333333333333";
+  const view = home.accountInboxView({
+    saved_drafts: { status: "available", items: [draft(clean), draft(walletStep, { can_delete: false }), draft(pending, { group: "needs_action", status: "Check posting status" })] },
+    activity_inbox: { status: "available", items: [] },
+  });
+  assert.deepEqual(view.groups.map(group => group.id), ["needs_action", "recover_funds", "working", "awaiting_review", "drafts", "paid", "completed"]);
+  assert.equal(view.message, "", "routine notes are gone");
+  const drafts = view.groups.find(group => group.id === "drafts").items;
+  assert.deepEqual(drafts.map(item => [item.operationId, item.deletable, item.revision]), [[clean, true, 2], [walletStep, false, 2]]);
+  assert.equal(view.groups.find(group => group.id === "needs_action").items[0].deletable, false, "an operation needing reconciliation is never deletable");
+  const forged = home.accountInboxView({ saved_drafts: { status: "available", items: [draft("not-a-uuid"), draft(clean, { revision: 0 })] } });
+  assert.equal(forged.groups.find(group => group.id === "drafts").items.some(item => item.deletable), false, "malformed ids or revisions are never sent");
+  assert.match(home.accountInboxView({ saved_drafts: { status: "unavailable" } }).message, /temporarily unavailable/);
+});

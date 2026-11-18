@@ -240,6 +240,7 @@
       if (error.status === 409) { conflict = true; status = "conflict"; message = "This draft changed on another device. Reload the saved version before continuing; no wallet action was sent."; }
       else if (error.status === 401) { status = "local"; message = "Your sign-in expired. Sign in again to save this draft; this device still has your copy."; }
       else if (error.status === 403) { status = "local"; message = "This account could not save the draft. Open your account and sign in again, then return to this saved operation."; }
+      else if (error.status === 410) { status = "local"; message = "This draft was deleted from your account. Start a new bounty to post this work."; }
       else { status = "local"; message = "The account draft service could not be reached. Your draft is saved on this device. Keep this tab and retry saving."; }
       notify();
     }

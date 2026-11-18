@@ -2487,3 +2487,15 @@ body .review-email-actions button { padding: 8px 14px; border: 1px solid var(--a
 .account-inbox strong { color: var(--ab-ink, #e9eee3); font-size: .85rem; }
 .account-inbox p, .account-inbox small { margin: 0; color: var(--ab-muted, #b8c6b4); line-height: 1.5; }
 .account-inbox button { margin-top: 12px; padding: 10px 14px; }
+
+/* Your activity: compact rows, a status chip, three per group, Delete with an inline confirm. */
+.account-inbox-status:empty { display: none; }
+.account-inbox-status { margin: 0 0 8px; color: var(--ab-ink, #e9eee3); }
+.account-inbox-group + .account-inbox-group { margin-top: 6px; }
+.account-inbox li { gap: 4px; padding: 12px 0; }
+.account-inbox-row-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 12px; min-width: 0; }
+.account-inbox-chip { flex: 0 0 auto; padding: 2px 10px; border: 1px solid var(--ab-line, rgba(196, 221, 176, .3)); border-radius: 999px; font-size: .78rem; color: var(--ab-ink, #e9eee3); }
+.account-inbox-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.account-inbox-tools button, .account-inbox .account-inbox-more { margin-top: 4px; padding: 6px 12px; min-height: 36px; font-size: .85rem; }
+.account-inbox-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.account-inbox-confirm[hidden], .account-inbox li[hidden] { display: none; }

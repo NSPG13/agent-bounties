@@ -21,7 +21,10 @@ function sorted(value) { return value && typeof value === "object" ? Array.isArr
   try {
     for (const width of [1440,390,320]) {
       const context=await browser.newContext({viewport:{width,height:900}}), page=await context.newPage();
-      const reads=[], errors=[]; page.on("pageerror",error=>errors.push(error.message));
+      const reads=[], errors=[], deletes=[]; page.on("pageerror",error=>errors.push(error.message));
+      // Two extra saved drafts: one never reached a wallet step (deletable), one the server refuses to delete.
+      const removable="26000000-0000-4000-8000-000000000002", kept="27000000-0000-4000-8000-000000000003";
+      let extraDrafts=[];
       const draft={schema:"agent-bounties/posting-draft-v1",id:operation,role:"post",goal:"UX TEST — saved raindrop icon",preferences:"",brief:null,draft:null,draft_stale:false,reference_attachment:null};
       const session={authenticated:true,account_status:"wallet_required",account_complete:false,posting_drafts_enabled:true,providers:{google:true},user:{id:"ab".repeat(32),name:"UX Test",email:"",provider:"google"}};
       const saved={id:`draft:${operation}`,operation_id:operation,title:draft.goal,group:"drafts",status:"Saved draft",next_actor:"you",next_action:"Continue reviewing this saved draft.",continuation_url:`${origin}/post.html?operation_id=${operation}#bounty-preview`,updated_at:"2026-09-25T12:00:00Z",payment_state:"unverified"};
@@ -30,7 +33,14 @@ function sorted(value) { return value && typeof value === "object" ? Array.isArr
         if (["/auth/session","/v1/site-auth/session"].includes(url.pathname)) return route.fulfill({json:session});
         if (["/auth/account","/v1/site-auth/account"].includes(url.pathname)) return route.fulfill({json:{...session,data_status:"unavailable",reason:"marketplace_identity_unlinked",wallets:[],saved_drafts:{status:"available",items:[saved,
           {...saved,id:"unsafe",continuation_url:"https://outside.example/post.html"},
-          {...saved,id:"false-paid",group:"paid",status:"Paid",payment_state:"paid"}],next_offset:null}}});
+          {...saved,id:"false-paid",group:"paid",status:"Paid",payment_state:"paid"},...extraDrafts],next_offset:null}}});
+        const deleting=url.pathname.match(/\/posting-drafts\/([0-9a-f-]{36})\/delete$/);
+        if (deleting && req.method()==="POST") {
+          deletes.push({id:deleting[1],body:req.postDataJSON()});
+          if (deleting[1]===kept) return route.fulfill({status:409,json:{error:"draft_has_wallet_activity"}});
+          extraDrafts=extraDrafts.filter(item=>item.operation_id!==deleting[1]);
+          return route.fulfill({json:{operation_id:deleting[1],deleted:true}});
+        }
         if (url.pathname.endsWith(`/posting-drafts/${operation}`)) {
           reads.push(req.method());
           const envelope=req.method()==="POST" ? req.postDataJSON().draft : draft;
@@ -41,6 +51,29 @@ function sorted(value) { return value && typeof value === "object" ? Array.isArr
         if (url.origin!==origin) return route.abort();
         return route.continue();
       });
+      if (width===1440) {
+        extraDrafts=[removable,kept].map((id,index)=>({id:`draft:${id}`,operation_id:id,title:`Old draft ${index+1}`,group:"drafts",status:"Saved draft",next_actor:"you",next_action:"Continue reviewing this saved draft.",continuation_url:`${origin}/post.html?operation_id=${id}`,revision:3,can_delete:true}));
+        await page.goto(`${origin}/?analytics=off#account`);
+        const panel=page.locator("[data-account-inbox]");
+        await page.getByRole("heading",{name:"Saved drafts (3)"}).waitFor();
+        assert.equal(await panel.getByRole("heading",{name:"Continue your work"}).count(),0,"the Continue your work section is gone");
+        // Delete asks for confirmation inline, sends the revision the person saw and removes the row.
+        await panel.getByRole("button",{name:"Delete draft “Old draft 1”"}).click();
+        assert.equal(deletes.length,0,"the first press only asks for confirmation");
+        await panel.getByRole("button",{name:"Keep"}).first().click();
+        await panel.getByRole("button",{name:"Delete draft “Old draft 1”"}).click();
+        await panel.locator("[data-draft-delete-confirm]:visible").click();
+        await panel.getByRole("heading",{name:"Saved drafts (2)"}).waitFor();
+        assert.deepEqual(deletes,[{id:removable,body:{expected_revision:3}}]);
+        assert.match(await panel.locator(".account-inbox-status").innerText(),/Deleted “Old draft 1”/);
+        // A draft the server refuses to delete stays, with the reason.
+        await panel.getByRole("button",{name:"Delete draft “Old draft 2”"}).click();
+        await panel.locator("[data-draft-delete-confirm]:visible").click();
+        await panel.getByText("This draft has a recorded wallet step, so it is kept.",{exact:false}).waitFor();
+        assert.equal(await panel.getByRole("link",{name:"Old draft 2"}).count(),1);
+        extraDrafts=[];
+        await page.goto("about:blank");
+      }
       await page.goto(`${origin}/?analytics=off#account`);
       const inbox=page.locator("[data-account-inbox]");
       await page.getByRole("heading",{name:"Saved drafts (1)"}).waitFor();
