@@ -11,15 +11,66 @@ or hosted-drafting setup steps below. Those notes describe legacy deployments.
 Canonical domain, DNS, redirect, analytics, and search migration procedures are
 defined in [`domain-portfolio.md`](domain-portfolio.md).
 
-The API and Base indexer worker must share the generated
-`DISCOVERY_WEBHOOK_SIGNING_KEY` through the `agent-bounties-discovery` Render
-environment group. The MCP service must not receive it. The API uses it only to
-derive per-subscription secrets; the worker uses it to sign bounded webhook
-deliveries. See [`discovery-subscriptions.md`](discovery-subscriptions.md).
+The current production API is `agentizable-api-recovery-20261109`
+(`srv-dbp7j78m7kps73a35vm0`). Its dedicated combined reader is
+`agentizable-readers-recovery-20261110` (`srv-dbpjpcpsrm7s73av9ra0`).
+The retired API and reader remain suspended. MCP, the website, and the funding
+worker have separate release boundaries.
 
-The hosted topology is API, MCP, Postgres, and one autonomous Base event-indexer
-worker. The Base contracts are deployed separately and configured only after
-review and verification.
+## Returning the replacement services to main
+
+The root `render.yaml` describes only the two existing replacement services,
+with their dedicated recovery Dockerfiles and `branch: main`. API native deploys
+wait for successful CI (`checksPass`). Reader native deploys remain off until
+its separate financial-containment and full-cycle recovery review has passed:
+a fresh reader heartbeat can unblock overdue reviews and the separate funding
+worker. Changing a branch or passing a build does not authorize that processing.
+
+The pre-deploy command is the plain executable and argument
+`/usr/local/bin/check-recovery-revision --built-revision`. It compares Render's
+selected source revision with the immutable build revision and emits the
+artifact receipt. Do not substitute shell expansion of `RENDER_GIT_COMMIT`,
+remove admission, or keep the emergency `b0f01679` literal pin for normal main
+releases. Both the recovery lineage and the reader launcher correction must be
+present in the released main commit.
+
+No environment variables, secret values, environment-group attachments,
+databases, or domains are declared in this Blueprint. Render preserves existing
+environment variables omitted from a Blueprint; this file does not configure a
+new installation. Preserve current live settings and credential destinations.
+The Blueprint's service names identify existing resources, not immutable IDs,
+so the inventory IDs must also be read-verified before applying any sync.
+
+Keep legacy Blueprint `exs-d97too57vvec73ctvmh0` paused. First push the reviewed
+file, then obtain an adoption/sync plan. It must identify exactly the replacement
+API and reader above, with **zero new or replacement resources**, no old-service
+resume, no secret/group/domain/database changes, and no activation of held
+protocols. Check all defaults against the live service configuration, especially
+build filters: Render clears an existing `buildFilter` when omitted. Reject any
+unintended configuration change. Removing old definitions does not delete the
+old services; keep their suspension independently verified. Do not approve a
+plan based only on the Blueprint's `in_sync` status.
+
+The broad public-runtime transition hold remains in
+`ops/public-runtime-services.json`. The historical all-service release
+controllers cannot be re-enabled by this two-service correction. Before a
+reader release, establish effective containment of API signing/finalizers and
+the separate funding worker, preserve pending order/history/quarantine state,
+then verify the exact reader artifact, monotonic progress, full-cycle freshness,
+and independent canonical agreement. A saved environment edit is not evidence
+that a previous signing-capable process has drained.
+
+Validate the source configuration locally with:
+
+```sh
+python scripts/check-render-blueprint.py
+python scripts/test_check_render_blueprint.py
+```
+
+Also validate with `render blueprints validate render.yaml` when the CLI is
+available, and inspect the provider plan before syncing. Verify deployment IDs,
+terminal `live` state, artifact receipts and runtime revision headers after an
+API release. Do not describe queued builds or source settings as live recovery.
 
 ## Current State
 
@@ -33,9 +84,12 @@ The retired operator-signed escrow is recorded only in
 `deployments/base-mainnet-legacy.json`. Do not configure it in API, MCP, worker,
 website, or wallet flows.
 
-## Render Blueprint
+## Historical Blueprint and release controller
 
-The root `render.yaml` creates:
+The following describes the retired topology, not the current root Blueprint.
+Do not use these instructions to sync or reactivate services during recovery.
+
+The previous `render.yaml` created:
 
 - `agent-bounties-postgres`,
 - `agent-bounties-api`,
