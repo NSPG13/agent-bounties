@@ -21,19 +21,32 @@ function sorted(value) { return value && typeof value === "object" ? Array.isArr
   try {
     for (const width of [1440,390,320]) {
       const context=await browser.newContext({viewport:{width,height:900}}), page=await context.newPage();
+      await context.addInitScript(()=>{
+        const walletCase=new URL(location.href).searchParams.get("walletCase");
+        if (!walletCase) return;
+        const embedded={request:async({method})=>method==="eth_requestAccounts"||method==="eth_accounts"?["0x00000000000000000000000000000000000000b2"]:null,on(){},removeListener(){}};
+        const stub={
+          select:async()=>{ if (walletCase==="reject") throw {code:4001}; return {kind:"embedded",provider:embedded,accounts:["0x00000000000000000000000000000000000000b2"]}; },
+          loadEmbedded:async()=>{ throw {reason:"wallet_selector_unavailable"}; },
+          hasPending:()=>walletCase==="resume", pendingAddress:()=>"0x00000000000000000000000000000000000000b3",
+          beginPending(){}, clearPending(){},
+        };
+        Object.defineProperty(window,"AgentBountiesWalletLink",{configurable:true,get:()=>stub,set(){}});
+      });
       const reads=[], errors=[], deletes=[]; page.on("pageerror",error=>errors.push(error.message));
       // Two extra saved drafts: one never reached a wallet step (deletable), one the server refuses to delete.
       const removable="26000000-0000-4000-8000-000000000002", kept="27000000-0000-4000-8000-000000000003";
-      let extraDrafts=[];
+      let extraDrafts=[], accountExtra={};
       const draft={schema:"agent-bounties/posting-draft-v1",id:operation,role:"post",goal:"UX TEST — saved raindrop icon",preferences:"",brief:null,draft:null,draft_stale:false,reference_attachment:null};
       const session={authenticated:true,account_status:"wallet_required",account_complete:false,posting_drafts_enabled:true,providers:{google:true},user:{id:"ab".repeat(32),name:"UX Test",email:"",provider:"google"}};
       const saved={id:`draft:${operation}`,operation_id:operation,title:draft.goal,group:"drafts",status:"Saved draft",next_actor:"you",next_action:"Continue reviewing this saved draft.",continuation_url:`${origin}/post.html?operation_id=${operation}#bounty-preview`,updated_at:"2026-09-25T12:00:00Z",payment_state:"unverified"};
       await context.route("**/*",async route=>{
         const req=route.request(), url=new URL(req.url());
         if (["/auth/session","/v1/site-auth/session"].includes(url.pathname)) return route.fulfill({json:session});
-        if (["/auth/account","/v1/site-auth/account"].includes(url.pathname)) return route.fulfill({json:{...session,data_status:"unavailable",reason:"marketplace_identity_unlinked",wallets:[],saved_drafts:{status:"available",items:[saved,
+        if (["/auth/account","/v1/site-auth/account"].includes(url.pathname)) return route.fulfill({json:{...session,...accountExtra,data_status:"unavailable",reason:"marketplace_identity_unlinked",wallets:[],saved_drafts:{status:"available",items:[saved,
           {...saved,id:"unsafe",continuation_url:"https://outside.example/post.html"},
           {...saved,id:"false-paid",group:"paid",status:"Paid",payment_state:"paid"},...extraDrafts],next_offset:null}}});
+        if (url.pathname.endsWith("/wallet/challenge")) return route.fulfill({status:503,json:{error:"unavailable"}});
         const deleting=url.pathname.match(/\/posting-drafts\/([0-9a-f-]{36})\/delete$/);
         if (deleting && req.method()==="POST") {
           deletes.push({id:deleting[1],body:req.postDataJSON()});
@@ -82,6 +95,58 @@ function sorted(value) { return value && typeof value === "object" ? Array.isArr
         await panel.locator("[data-draft-delete-confirm]:visible").click();
         await panel.getByText("This draft has a recorded wallet step, so it is kept.",{exact:false}).waitFor();
         assert.equal(await panel.getByRole("link",{name:"Old draft 2"}).count(),1);
+        extraDrafts=[];
+        await page.goto("about:blank");
+        // Sections: Needs action is open when it has items; Linked wallets, Bounty emails and
+        // Settings start closed, and each viewer's choice survives a reload on this device.
+        extraDrafts=[{id:"needs:1",title:"Approve the delivered logo",group:"needs_action",status:"Review due",next_actor:"you",next_action:"Review the submission.",continuation_url:`${origin}/participate.html?bounty=0x1`}];
+        await page.goto(`${origin}/?analytics=off#account`);
+        const needs=page.locator('[data-account-inbox] details[data-group="needs_action"]');
+        await needs.locator("summary h4",{hasText:"Needs action (1)"}).waitFor();
+        assert.equal(await needs.evaluate(el=>el.open),true,"Needs action opens when it has items");
+        const sectionsOpen=()=>page.locator("[data-account-section]").evaluateAll(els=>Object.fromEntries(els.map(el=>[el.dataset.accountSection,el.open])));
+        assert.deepEqual(await sectionsOpen(),{wallets:false,emails:false,settings:false});
+        assert.equal(await page.locator("[data-auth-logout]").isVisible(),false,"Sign out sits in the closed Settings");
+        await page.locator('[data-account-section="wallets"] > summary').click();
+        await page.locator('[data-account-section="settings"] > summary').focus();
+        await page.keyboard.press("Enter");
+        assert.equal(await page.locator("[data-auth-logout]").isVisible(),true,"the keyboard opens Settings");
+        await page.waitForFunction(()=>JSON.parse(localStorage.getItem("agent-bounties.account-sections.v1")||"{}").settings===true);
+        await page.reload();
+        await needs.waitFor();
+        await page.waitForFunction(()=>document.querySelector('[data-account-section="wallets"]')?.open===true);
+        assert.deepEqual(await sectionsOpen(),{wallets:true,emails:false,settings:true},"remembered after reload");
+        // Linking a wallet from elsewhere (Bounty emails' "Link my verifier wallet" clicks the same
+        // button) opens Linked wallets, so its progress, errors and recovery are visible.
+        await page.evaluate(()=>{document.querySelector('[data-account-section="wallets"]').open=false;document.querySelector("[data-wallet-link]").click();});
+        await page.waitForFunction(()=>document.querySelector('[data-account-section="wallets"]').open===true);
+        await page.keyboard.press("Escape");
+        await page.evaluate(()=>localStorage.removeItem("agent-bounties.account-sections.v1"));
+        const walletOutcome=async(walletCase,start)=>{
+          await page.goto(`${origin}/?analytics=off&walletCase=${walletCase}#account`);
+          await needs.waitFor();
+          if (start) await page.evaluate(()=>{const s=document.querySelector('[data-account-section="wallets"]');s.open=false;document.querySelector("[data-wallet-link]").click();});
+          await page.waitForFunction(()=>document.querySelector("[data-wallet-status]")?.textContent.trim().length>0 && !/Restoring|Choose|Preparing/.test(document.querySelector("[data-wallet-status]").textContent));
+          return page.evaluate(()=>{const section=document.querySelector('[data-account-section="wallets"]'),status=document.querySelector("[data-wallet-status]"),finish=document.querySelector("[data-wallet-finish]");
+            return {open:section.open,status:status.textContent.trim(),statusVisible:status.checkVisibility(),finishVisible:Boolean(finish?.checkVisibility())};});
+        };
+        // (1) Bounty emails' "Link my verifier wallet" with the wallet choice rejected: the error is visible.
+        const rejected=await walletOutcome("reject",true);
+        assert.ok(rejected.open&&rejected.statusVisible,JSON.stringify(rejected)); assert.match(rejected.status,/cancelled/);
+        // (2) An embedded wallet is ready but its ownership challenge fails: the error and Finish linking are visible.
+        const unfinished=await walletOutcome("challenge",true);
+        assert.ok(unfinished.open&&unfinished.statusVisible&&unfinished.finishVisible,JSON.stringify(unfinished)); assert.match(unfinished.status,/Finish linking/);
+        // (3) A pending wallet restoration after sign-in fails: the error is visible without anyone opening the section.
+        const resumed=await walletOutcome("resume",false);
+        assert.ok(resumed.open&&resumed.statusVisible,JSON.stringify(resumed));
+        await page.keyboard.press("Escape");
+        // An account that can't be confirmed shows the setup view, with every section open.
+        accountExtra={account_status:"unavailable",account_complete:false};
+        await page.reload();
+        await page.waitForFunction(()=>document.querySelector("[data-auth-dialog]")?.dataset.view==="setup");
+        assert.deepEqual(await sectionsOpen(),{wallets:true,emails:true,settings:true},"nothing is hidden outside the account view");
+        accountExtra={};
+        await page.evaluate(()=>localStorage.removeItem("agent-bounties.account-sections.v1"));
         extraDrafts=[];
         await page.goto("about:blank");
       }

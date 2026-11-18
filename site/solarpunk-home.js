@@ -1012,11 +1012,33 @@ ${competitionChildBrief(item)}`;
       const accountEvidence = dialog.querySelector("[data-account-evidence]");
       const walletLinkButton = dialog.querySelector("[data-wallet-link]");
       const walletList = dialog.querySelector("[data-wallet-list]");
+      const walletCount = dialog.querySelector("[data-wallet-count]");
       const walletStatus = dialog.querySelector("[data-wallet-status]");
       const setupSteps = dialog.querySelector("[data-account-setup-steps]");
       const setupNote = dialog.querySelector("[data-account-setup-note]");
       const setupRetry = dialog.querySelector("[data-account-setup-retry]");
       const reviewEmailSettings = dialog.querySelector("[data-review-email-settings]");
+      // Linked wallets, Bounty emails and Settings collapse. Each viewer's choice is remembered
+      // on this device; outside the ordinary account view (setup, errors) everything stays open.
+      const SECTIONS_KEY = "agent-bounties.account-sections.v1";
+      const accountSections = [...dialog.querySelectorAll("[data-account-section]")];
+      const savedSections = () => { try { return JSON.parse(win.localStorage.getItem(SECTIONS_KEY) || "{}") || {}; } catch (_error) { return {}; } };
+      // Wallet linking reports progress, errors and its "Finish linking" recovery inside Linked
+      // wallets, including when it starts from Bounty emails, so that section opens while it matters.
+      const walletsSection = dialog.querySelector('[data-account-section="wallets"]');
+      const walletsNeedAttention = () => Boolean(dialog.querySelector("[data-wallet-status]")?.textContent.trim() || dialog.querySelector("[data-wallet-finish]"));
+      const revealWallets = () => { if (walletsSection) walletsSection.open = true; };
+      const applySections = () => {
+        const saved = savedSections(), account = dialog.dataset.view === "account";
+        for (const section of accountSections) section.open = !account || saved[section.dataset.accountSection] === true || (section === walletsSection && walletsNeedAttention());
+      };
+      for (const section of accountSections) {
+        section.querySelector("summary")?.addEventListener("click", () => win.setTimeout(() => {
+          if (dialog.dataset.view !== "account") return;
+          const saved = savedSections(); saved[section.dataset.accountSection] = section.open;
+          try { win.localStorage.setItem(SECTIONS_KEY, JSON.stringify(saved)); } catch (_error) { /* Storage is optional. */ }
+        }, 0));
+      }
       const reviewEmailEnabled = dialog.querySelector("[data-review-email-enabled]");
       const reviewEmailAddress = dialog.querySelector("[data-review-email-address]");
       const reviewEmailStatus = dialog.querySelector("[data-review-email-status]");
@@ -1134,6 +1156,7 @@ ${competitionChildBrief(item)}`;
       };
       const setWalletStatus = (message) => {
         if (walletStatus) walletStatus.textContent = message;
+        if (message) revealWallets();
       };
       const showDialog = () => {
         if (!dialog.open) dialog.showModal();
@@ -1148,7 +1171,9 @@ ${competitionChildBrief(item)}`;
       const renderSetup = (state) => {
         accountStatus = state;
         const ready = Boolean(currentUser && state === "ready");
+        const previousView = dialog.dataset.view;
         dialog.dataset.view = currentUser ? ready ? "account" : "setup" : accountMode;
+        if (previousView !== dialog.dataset.view) applySections();
         dialog.dataset.accountStatus = currentUser ? state : "signed_out";
         // Solving needs a verified wallet; posting does not. Wallet-derived stats
         // and settlement history stay hidden until one is linked.
@@ -1212,6 +1237,7 @@ ${competitionChildBrief(item)}`;
       const renderWallets = (wallets, loading = false) => {
         if (!walletList) return;
         if (!loading) verifiedWallets = wallets;
+        if (walletCount) walletCount.textContent = wallets.length ? `(${wallets.length})` : "";
         const unverifiedEmbedded = embeddedAddress && !wallets.some((wallet) => wallet.address === embeddedAddress);
         walletList.replaceChildren();
         if (loading && !wallets.length && !unverifiedEmbedded) {
@@ -1281,6 +1307,7 @@ ${competitionChildBrief(item)}`;
           finish.disabled = Boolean(walletLinkButton?.disabled);
           item.append(address, state, finish);
           walletList.append(item);
+          revealWallets();
         }
         if (walletLinkButton) walletLinkButton.textContent = wallets.length || unverifiedEmbedded ? "Link another" : "Link wallet";
       };
@@ -1337,10 +1364,12 @@ ${competitionChildBrief(item)}`;
         if (view.message) { const note = doc.createElement("p"); note.className = "account-evidence"; note.textContent = view.message; accountInbox.append(note); }
         for (const group of view.groups) {
           if (!group.items.length) continue;
-          const past = ["paid", "completed"].includes(group.id);
-          const section = doc.createElement(past ? "details" : "section"), title = doc.createElement(past ? "summary" : "h4"), list = doc.createElement("ul");
+          const past = ["paid", "completed"].includes(group.id), needsAction = group.id === "needs_action";
+          const section = doc.createElement(past || needsAction ? "details" : "section"), title = doc.createElement(past ? "summary" : "h4"), list = doc.createElement("ul");
           section.className = "account-inbox-group"; section.dataset.group = group.id;
-          title.textContent = `${group.label} (${group.items.length})`; section.append(title, list);
+          title.textContent = `${group.label} (${group.items.length})`;
+          if (needsAction) { const summary = doc.createElement("summary"); summary.append(title); section.open = true; section.append(summary, list); }
+          else section.append(title, list);
           group.items.forEach((item, index) => {
             const row = doc.createElement("li"), head = doc.createElement("div"), link = doc.createElement("a"), status = doc.createElement("span"), action = doc.createElement("p"), timing = doc.createElement("small");
             head.className = "account-inbox-row-head"; status.className = "account-inbox-chip";
@@ -1633,6 +1662,7 @@ ${competitionChildBrief(item)}`;
         if (!currentUser || walletLinkButton.disabled) return;
         const linkingUser = currentUser;
         walletLinkButton.disabled = true;
+        revealWallets();
         setWalletStatus("");
         let selection;
         try {
