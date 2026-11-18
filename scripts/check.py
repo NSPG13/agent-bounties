@@ -117,6 +117,8 @@ def compile_python(platform: str) -> None:
         "scripts/check-migration-history.py", "scripts/check-render-blueprint.py",
         "scripts/check-agent-discovery-contract.py", "scripts/test_check_agent_discovery_contract.py",
         "scripts/test_check_render_blueprint.py",
+        "scripts/release_recovery_api.py", "scripts/test_release_recovery_api.py",
+        "scripts/test_recovery_revision_guard.py",
         "scripts/distribution_dashboard.py", "scripts/test_distribution_dashboard.py",
         "scripts/distribution_gate.py", "scripts/test_distribution_gate.py",
         "scripts/check-distribution-rail-mcp.py", "scripts/test_distribution_rail_mcp.py",
@@ -256,6 +258,8 @@ def main() -> int:
     py("scripts/test_public_runtime_transition.py", "-v")
     py("scripts/test_recovery_inventory.py", "-v")
     py("scripts/test_recovery_reader_boundary.py", "-v")
+    py("scripts/test_recovery_revision_guard.py", "-v")
+    py("scripts/test_release_recovery_api.py", "-v")
     py("scripts/test_bootstrap_repair_admission.py", "-v")
     py("scripts/test_public_runtime_parity.py", "-v")
     py("scripts/test_application_release_gate.py", "-v")
