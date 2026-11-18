@@ -21,6 +21,18 @@ function sorted(value) { return value && typeof value === "object" ? Array.isArr
   try {
     for (const width of [1440,390,320]) {
       const context=await browser.newContext({viewport:{width,height:900}}), page=await context.newPage();
+      await context.addInitScript(()=>{
+        const walletCase=new URL(location.href).searchParams.get("walletCase");
+        if (!walletCase) return;
+        const embedded={request:async({method})=>method==="eth_requestAccounts"||method==="eth_accounts"?["0x00000000000000000000000000000000000000b2"]:null,on(){},removeListener(){}};
+        const stub={
+          select:async()=>{ if (walletCase==="reject") throw {code:4001}; return {kind:"embedded",provider:embedded,accounts:["0x00000000000000000000000000000000000000b2"]}; },
+          loadEmbedded:async()=>{ throw {reason:"wallet_selector_unavailable"}; },
+          hasPending:()=>walletCase==="resume", pendingAddress:()=>"0x00000000000000000000000000000000000000b3",
+          beginPending(){}, clearPending(){},
+        };
+        Object.defineProperty(window,"AgentBountiesWalletLink",{configurable:true,get:()=>stub,set(){}});
+      });
       const reads=[], errors=[], deletes=[]; page.on("pageerror",error=>errors.push(error.message));
       // Two extra saved drafts: one never reached a wallet step (deletable), one the server refuses to delete.
       const removable="26000000-0000-4000-8000-000000000002", kept="27000000-0000-4000-8000-000000000003";
@@ -34,6 +46,7 @@ function sorted(value) { return value && typeof value === "object" ? Array.isArr
         if (["/auth/account","/v1/site-auth/account"].includes(url.pathname)) return route.fulfill({json:{...session,...accountExtra,data_status:"unavailable",reason:"marketplace_identity_unlinked",wallets:[],saved_drafts:{status:"available",items:[saved,
           {...saved,id:"unsafe",continuation_url:"https://outside.example/post.html"},
           {...saved,id:"false-paid",group:"paid",status:"Paid",payment_state:"paid"},...extraDrafts],next_offset:null}}});
+        if (url.pathname.endsWith("/wallet/challenge")) return route.fulfill({status:503,json:{error:"unavailable"}});
         const deleting=url.pathname.match(/\/posting-drafts\/([0-9a-f-]{36})\/delete$/);
         if (deleting && req.method()==="POST") {
           deletes.push({id:deleting[1],body:req.postDataJSON()});
@@ -107,6 +120,25 @@ function sorted(value) { return value && typeof value === "object" ? Array.isArr
         // button) opens Linked wallets, so its progress, errors and recovery are visible.
         await page.evaluate(()=>{document.querySelector('[data-account-section="wallets"]').open=false;document.querySelector("[data-wallet-link]").click();});
         await page.waitForFunction(()=>document.querySelector('[data-account-section="wallets"]').open===true);
+        await page.keyboard.press("Escape");
+        await page.evaluate(()=>localStorage.removeItem("agent-bounties.account-sections.v1"));
+        const walletOutcome=async(walletCase,start)=>{
+          await page.goto(`${origin}/?analytics=off&walletCase=${walletCase}#account`);
+          await needs.waitFor();
+          if (start) await page.evaluate(()=>{const s=document.querySelector('[data-account-section="wallets"]');s.open=false;document.querySelector("[data-wallet-link]").click();});
+          await page.waitForFunction(()=>document.querySelector("[data-wallet-status]")?.textContent.trim().length>0 && !/Restoring|Choose|Preparing/.test(document.querySelector("[data-wallet-status]").textContent));
+          return page.evaluate(()=>{const section=document.querySelector('[data-account-section="wallets"]'),status=document.querySelector("[data-wallet-status]"),finish=document.querySelector("[data-wallet-finish]");
+            return {open:section.open,status:status.textContent.trim(),statusVisible:status.checkVisibility(),finishVisible:Boolean(finish?.checkVisibility())};});
+        };
+        // (1) Bounty emails' "Link my verifier wallet" with the wallet choice rejected: the error is visible.
+        const rejected=await walletOutcome("reject",true);
+        assert.ok(rejected.open&&rejected.statusVisible,JSON.stringify(rejected)); assert.match(rejected.status,/cancelled/);
+        // (2) An embedded wallet is ready but its ownership challenge fails: the error and Finish linking are visible.
+        const unfinished=await walletOutcome("challenge",true);
+        assert.ok(unfinished.open&&unfinished.statusVisible&&unfinished.finishVisible,JSON.stringify(unfinished)); assert.match(unfinished.status,/Finish linking/);
+        // (3) A pending wallet restoration after sign-in fails: the error is visible without anyone opening the section.
+        const resumed=await walletOutcome("resume",false);
+        assert.ok(resumed.open&&resumed.statusVisible,JSON.stringify(resumed));
         await page.keyboard.press("Escape");
         // An account that can't be confirmed shows the setup view, with every section open.
         accountExtra={account_status:"unavailable",account_complete:false};
