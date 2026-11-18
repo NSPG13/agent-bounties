@@ -201,6 +201,10 @@ jobs:
         echo "deploy_mode=${REQUESTED_DEPLOY_MODE}" >> "$GITHUB_OUTPUT"
         echo "deployment_revision=${deployment_revision}" >> "$GITHUB_OUTPUT"
 
+    - name: Check runtime release authority before loading deployment credentials
+      if: steps.target.outputs.deploy == 'true'
+      run: python -c 'from scripts.render_deploy_recovery import enforce_public_runtime_release_authority; enforce_public_runtime_release_authority()'
+
     - name: Deploy and attest exact revision
       if: steps.target.outputs.deploy == 'true'
       shell: bash

@@ -19,6 +19,46 @@ sys.modules[SPEC.name] = recovery
 SPEC.loader.exec_module(recovery)
 
 
+class RuntimeReleaseAuthorityTests(unittest.TestCase):
+    def check_inventory(self, payload):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "inventory.json"
+            if payload is not None:
+                path.write_text(payload, encoding="utf-8")
+            with mock.patch.object(recovery, "PUBLIC_RUNTIME_INVENTORY_PATH", path):
+                recovery.enforce_public_runtime_release_authority()
+
+    def test_any_transition_hold_blocks_legacy_release(self):
+        for value in ('false', 'null', '{}', '"expired"'):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                recovery.RecoveryError, "public_runtime_transition_hold"
+            ):
+                self.check_inventory('{"transition_hold":' + value + '}')
+
+    def test_missing_or_invalid_inventory_fails_closed(self):
+        for value in (None, '{', 'null', '[]'):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                recovery.RecoveryError, "invalid_public_runtime_inventory"
+            ):
+                self.check_inventory(value)
+
+    def test_inventory_without_hold_preserves_existing_release_checks(self):
+        self.check_inventory('{}')
+
+    def test_cli_denies_before_client_or_deploy_and_records_failure(self):
+        with mock.patch.object(sys, 'argv', [str(SCRIPT), '--revision', 'a' * 40]), \
+             mock.patch.object(recovery, 'enforce_public_runtime_release_authority',
+                               side_effect=recovery.RecoveryError('public_runtime_transition_hold')), \
+             mock.patch.object(recovery, 'RenderClient') as client, \
+             mock.patch.object(recovery, 'deploy') as deploy, \
+             mock.patch.object(recovery, 'write_evidence') as evidence:
+            self.assertEqual(recovery.main(), 1)
+            client.assert_not_called()
+            deploy.assert_not_called()
+            self.assertFalse(evidence.call_args.args[1]['success'])
+            self.assertEqual(evidence.call_args.args[1]['error'], 'public_runtime_transition_hold')
+
+
 class PinnedDeploymentSelectionTests(unittest.TestCase):
     """Run the real workflow selector with offline Git/GitHub stand-ins."""
 
