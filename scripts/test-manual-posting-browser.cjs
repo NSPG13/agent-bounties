@@ -44,8 +44,7 @@ const server = http.createServer((req, res) => {
       const help = page.locator(".posting-ai-help");
       assert.deepEqual(await help.locator("a").evaluateAll(links => links.map(link => [link.textContent.trim(), link.href, link.rel, link.target])), [
         ["ChatGPT (recommended)", "https://chromewebstore.google.com/detail/chatgpt/hehggadaopoacecdllhhajmbjkdcmajg", "noopener noreferrer", "_blank"],
-        ["Claude", "https://chromewebstore.google.com/detail/claude/fcoeoabgfenejglbffodgkkbkcdhcgfn", "noopener noreferrer", "_blank"],
-        ["Perplexity", "https://chromewebstore.google.com/detail/perplexity/pninphncmkphpjgfffammoenglghcjii", "noopener noreferrer", "_blank"]]);
+        ["Claude", "https://chromewebstore.google.com/detail/claude/fcoeoabgfenejglbffodgkkbkcdhcgfn", "noopener noreferrer", "_blank"]]);
       const helpBox = await help.boundingBox(), formBox = await page.locator("#bounty-composer-form").boundingBox();
       if (width >= 1180) assert.ok(helpBox.x >= formBox.x + formBox.width && helpBox.y < formBox.y + formBox.height, "the help sits beside the form");
       else assert.ok(helpBox.y >= formBox.y + formBox.height - 1, "the help sits below the form");

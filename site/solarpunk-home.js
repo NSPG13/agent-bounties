@@ -1347,25 +1347,27 @@ ${competitionChildBrief(item)}`;
             link.href = item.href; link.textContent = item.title; status.textContent = item.status;
             action.textContent = `Next: ${item.nextAction}`;
             timing.textContent = [item.deadline ? `Deadline ${new Date(item.deadline).toLocaleString()}` : "", item.updatedAt ? `Updated ${relativeTime(item.updatedAt)}` : ""].filter(Boolean).join(" · ");
-            head.append(link, status); row.append(head, action);
+            // A deletable saved draft shows Delete where the chip would be; the group heading already says "Saved drafts".
+            head.append(link); if (!item.deletable) head.append(status); row.append(head, action);
             if (timing.textContent) row.append(timing);
             if (item.deletable) {
               const tools = doc.createElement("div"), remove = doc.createElement("button"), confirm = doc.createElement("div"), question = doc.createElement("span"), yes = doc.createElement("button"), keep = doc.createElement("button"), feedback = doc.createElement("small");
               tools.className = "account-inbox-tools"; confirm.className = "account-inbox-confirm"; confirm.hidden = true;
               remove.type = yes.type = keep.type = "button"; remove.dataset.draftDelete = ""; yes.dataset.draftDeleteConfirm = "";
+              remove.className = yes.className = "ab-button ab-button--compact ab-button--danger"; keep.className = "ab-button ab-button--compact";
               remove.textContent = "Delete"; remove.setAttribute("aria-label", `Delete draft “${item.title}”`);
               question.textContent = "Delete this draft? This can’t be undone."; yes.textContent = "Delete draft"; keep.textContent = "Keep";
               feedback.setAttribute("role", "status");
               remove.addEventListener("click", () => { remove.hidden = true; confirm.hidden = false; keep.focus(); });
               keep.addEventListener("click", () => { confirm.hidden = true; remove.hidden = false; remove.focus(); });
               yes.addEventListener("click", () => { confirm.hidden = true; void deleteDraft(payload, item, row, feedback); });
-              confirm.append(question, yes, keep); tools.append(remove, confirm, feedback); row.append(tools);
+              confirm.append(question, yes, keep); head.append(remove); tools.append(confirm, feedback); row.append(tools);
             }
             if (index >= 3) row.hidden = true;
             list.append(row);
           });
           if (group.items.length > 3) {
-            const more = doc.createElement("button"); more.type = "button"; more.className = "account-inbox-more";
+            const more = doc.createElement("button"); more.type = "button"; more.className = "account-inbox-more ab-button ab-button--compact";
             more.textContent = `Show all (${group.items.length})`;
             more.addEventListener("click", () => { for (const row of list.children) row.hidden = false; more.remove(); });
             section.append(more);

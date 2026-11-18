@@ -57,6 +57,17 @@ function sorted(value) { return value && typeof value === "object" ? Array.isArr
         const panel=page.locator("[data-account-inbox]");
         await page.getByRole("heading",{name:"Saved drafts (3)"}).waitFor();
         assert.equal(await panel.getByRole("heading",{name:"Continue your work"}).count(),0,"the Continue your work section is gone");
+        // A deletable draft has Delete where the "Saved draft" chip was, in the page's button style.
+        const deletableRow=panel.locator("li",{has:page.getByRole("link",{name:"Old draft 1"})});
+        assert.equal(await deletableRow.locator(".account-inbox-chip").count(),0,"no Saved draft chip beside Delete");
+        assert.equal(await deletableRow.locator(".account-inbox-row-head [data-draft-delete]").count(),1,"Delete sits in the row head");
+        const look=await deletableRow.locator("[data-draft-delete]").evaluate(el=>{const s=getComputedStyle(el),r=el.getBoundingClientRect(),head=el.parentElement.getBoundingClientRect();return {cls:el.className,radius:s.borderTopLeftRadius,height:r.height,right:Math.round(head.right-r.right)};});
+        assert.match(look.cls,/\bab-button\b.*\bab-button--compact\b.*\bab-button--danger\b/);
+        assert.equal(look.radius,"999px"); assert.ok(look.height>=36 && look.height<=40,`compact height ${look.height}`); assert.ok(look.right<=1,"Delete is right-aligned in the row head");
+        // A draft the API doesn't mark deletable keeps its chip and gets no Delete.
+        const plainRow=panel.locator("li",{has:page.getByRole("link",{name:draft.goal})});
+        assert.equal(await plainRow.locator(".account-inbox-chip").innerText(),"Saved draft");
+        assert.equal(await plainRow.locator("[data-draft-delete]").count(),0);
         // Delete asks for confirmation inline, sends the revision the person saw and removes the row.
         await panel.getByRole("button",{name:"Delete draft “Old draft 1”"}).click();
         assert.equal(deletes.length,0,"the first press only asks for confirmation");
