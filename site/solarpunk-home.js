@@ -1767,6 +1767,21 @@ ${competitionChildBrief(item)}`;
       const dialog = doc.querySelector("[data-bounty-launcher]");
       const openButtons = Array.from(doc.querySelectorAll("[data-bounty-open], [data-footer-post]"));
       let openButton = openButtons[0];
+      const postingRequest = parseCompetitionPostingRequest(win.location.search);
+      // "Post a bounty" opens the posting form directly. The "Choose how to start" dialog is kept only
+      // for a competition's qualifying bounty, whose prompt binds the verified parent contract.
+      if (!postingRequest.requested) {
+        const formUrl = new URL("post.html?mode=manual#bounty-composer-form", win.location.href).href;
+        for (const button of openButtons) {
+          for (const name of ["aria-haspopup", "aria-controls", "aria-expanded"]) button.removeAttribute(name);
+          button.addEventListener("click", event => { event.preventDefault(); win.location.assign(formUrl); });
+        }
+        // Older links and shared footers still point to #post-a-bounty on this page.
+        const followPostingHash = () => { if (win.location.hash === "#post-a-bounty") win.location.replace(formUrl); };
+        win.addEventListener("hashchange", followPostingHash);
+        followPostingHash();
+        return;
+      }
       if (!dialog || !openButton || typeof dialog.showModal !== "function") return;
       const closeButton = dialog.querySelector("[data-bounty-close]");
       const assistantButtons = Array.from(dialog.querySelectorAll("[data-bounty-assistant]"));
@@ -1778,7 +1793,6 @@ ${competitionChildBrief(item)}`;
       const promptDetails = dialog.querySelector(".bounty-prompt-preview");
       const launcherTitle = dialog.querySelector("#bounty-launcher-title");
       const launcherDescription = dialog.querySelector("#bounty-launcher-description");
-      const postingRequest = parseCompetitionPostingRequest(win.location.search);
       const manualLink = dialog.querySelector("[data-bounty-manual]");
       if (manualLink) manualLink.hidden = postingRequest.requested;
       let launcherPrompt = BOUNTY_POSTING_PROMPT;

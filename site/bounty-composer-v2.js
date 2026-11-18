@@ -316,7 +316,8 @@
       ui.approve.dataset.nextAction = "blocked";
       ui.approve.textContent = "Update delivery deadline";
       ui.confidence.textContent = "The saved delivery deadline has passed";
-      setStatus("Your draft is saved. Agree a new delivery deadline, then review the updated proposal before funding.", "pending");
+      // The card and its buttons explain the passed deadline; nothing more is repeated under the form.
+      setStatus("");
       return;
     }
     if (!state.draft || !state.imageReady || state.reviewStale) {
