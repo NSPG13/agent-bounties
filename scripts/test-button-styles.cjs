@@ -66,6 +66,8 @@ async function signedInAccount(browser, origin, theme, width) {
   await page.goto(`${origin}/?analytics=off#account`, { waitUntil: "load" });
   const panel = page.locator("[data-account-inbox]");
   await panel.getByRole("link", { name: "Button style draft" }).waitFor();
+  // Collapsed sections hold buttons too: check them open.
+  await page.evaluate(() => { for (const section of document.querySelectorAll("[data-account-dashboard] details")) section.open = true; });
   const hits = await page.evaluate(defaultLookingButtons);
   await panel.locator("[data-draft-delete]").first().click();
   hits.push(...(await page.evaluate(defaultLookingButtons)).filter(hit => !hits.includes(hit)));

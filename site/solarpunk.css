@@ -2503,3 +2503,29 @@ body .review-email-actions button { padding: 8px 14px; border: 1px solid var(--a
 .account-inbox-confirm > span { flex: 1 0 100%; }
 .account-inbox-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .account-inbox-confirm[hidden], .account-inbox li[hidden] { display: none; }
+
+/* Your activity sections: Needs action, Linked wallets, Bounty emails and Settings collapse.
+   The summary keeps its heading, so headings navigation and screen readers still find them. */
+.account-collapsible > summary,
+.account-inbox-group[data-group="needs_action"] > summary { display: flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; list-style: none; }
+.account-collapsible > summary::-webkit-details-marker,
+.account-inbox-group[data-group="needs_action"] > summary::-webkit-details-marker { display: none; }
+.account-collapsible > summary::after,
+.account-inbox-group[data-group="needs_action"] > summary::after { content: ""; flex: 0 0 auto; width: 8px; height: 8px; margin: 0 4px 4px auto; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; color: var(--ab-muted, #b8c6b4); transform: rotate(45deg); transition: transform .15s; }
+.account-collapsible[open] > summary::after,
+.account-inbox-group[data-group="needs_action"][open] > summary::after { margin-bottom: -4px; transform: rotate(-135deg); }
+.account-collapsible > summary h3,
+.account-inbox-group[data-group="needs_action"] > summary h4 { margin: 0; }
+body .account-collapsible > summary h3 { margin: 0; }
+.account-collapsible[open] > summary { margin-bottom: 10px; }
+.account-section-count { color: var(--ab-muted, #b8c6b4); font-size: .85em; }
+.account-collapsible.account-review-emails,
+.account-collapsible.account-settings { padding: 12px 0; border: 0; border-bottom: 1px solid var(--ab-line, rgba(196, 221, 176, .14)); border-radius: 0; background: none; }
+.account-settings > section { padding: 0; border: 0; }
+.account-settings h4 { margin: 0 0 4px; color: var(--ab-ink, #e9eee3); font-size: .95rem; }
+.account-settings .account-signout { margin-top: 16px; }
+@media (prefers-reduced-motion: reduce) { .account-collapsible > summary::after, .account-inbox-group > summary::after { transition: none; } }
+/* The three section headings read as one set, and their containers stay plain. */
+body .auth-dialog .account-collapsible { background: none; }
+body .auth-dialog .account-collapsible > summary h3 { margin: 0; color: var(--ab-ink, #e9eee3); font: 400 1.15rem/1.25 var(--ab-display, system-ui); letter-spacing: -.01em; }
+body .auth-dialog .account-settings > section { background: none; }
