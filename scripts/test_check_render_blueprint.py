@@ -156,10 +156,11 @@ class RecoveryBlueprintTests(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     self.check_document(candidate)
 
-    def test_release_cannot_bypass_ci_admission_or_reader_financial_hold(self) -> None:
+    def test_release_cannot_bypass_controller_or_reader_financial_hold(self) -> None:
         for index, key, value in (
             (0, "branch", "codex/clean-service-recovery-20261110"),
             (0, "autoDeployTrigger", "commit"),
+            (0, "autoDeployTrigger", "checksPass"),
             (1, "autoDeployTrigger", "checksPass"),
             (1, "dockerfilePath", "./Dockerfile"),
             (0, "preDeployCommand", ""),

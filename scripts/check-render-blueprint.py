@@ -409,7 +409,7 @@ def require_recovery_blueprint(text: str, manifest: object) -> None:
     if not isinstance(services, list) or len(services) != 2:
         fail("recovery Blueprint must contain exactly two replacement services")
     specs = (
-        ("agentizable-api-recovery-20261109", "srv-dbp7j78m7kps73a35vm0", "web", "./Dockerfile.recovery-api", "checksPass"),
+        ("agentizable-api-recovery-20261109", "srv-dbp7j78m7kps73a35vm0", "web", "./Dockerfile.recovery-api", "off"),
         ("agentizable-readers-recovery-20261110", "srv-dbpjpcpsrm7s73av9ra0", "worker", "./Dockerfile.recovery-indexers", "off"),
     )
     inventory = manifest.get("services")

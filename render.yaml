@@ -8,7 +8,8 @@ services:
     name: agentizable-api-recovery-20261109
     runtime: docker
     branch: main
-    autoDeployTrigger: checksPass
+    # The API-only GitHub controller deploys exact main after CI and Containers.
+    autoDeployTrigger: 'off'
     dockerfilePath: ./Dockerfile.recovery-api
     dockerContext: .
     preDeployCommand: /usr/local/bin/check-recovery-revision --built-revision

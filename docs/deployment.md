@@ -20,8 +20,11 @@ worker have separate release boundaries.
 ## Returning the replacement services to main
 
 The root `render.yaml` describes only the two existing replacement services,
-with their dedicated recovery Dockerfiles and `branch: main`. API native deploys
-wait for successful CI (`checksPass`). Reader native deploys remain off until
+with their dedicated recovery Dockerfiles and `branch: main`. Native triggers
+remain off: the API-only GitHub release controller deploys the exact current main
+commit after both its CI and Containers workflows succeed. This avoids unrelated
+repository checks or held legacy controllers blocking Render's all-checks trigger.
+Reader deployment remains off until
 its separate financial-containment and full-cycle recovery review has passed:
 a fresh reader heartbeat can unblock overdue reviews and the separate funding
 worker. Changing a branch or passing a build does not authorize that processing.
@@ -50,6 +53,11 @@ build filters: Render clears an existing `buildFilter` when omitted. Reject any
 unintended configuration change. Removing old definitions does not delete the
 old services; keep their suspension independently verified. Do not approve a
 plan based only on the Blueprint's `in_sync` status.
+
+The API-only controller cannot change service settings or deploy workers. It
+validates the replacement API identity, main source, recovery Dockerfile and
+built-revision admission, deploys once, then verifies terminal live and the public
+health revision. It leaves all saved environment values unchanged.
 
 The broad public-runtime transition hold remains in
 `ops/public-runtime-services.json`. The historical all-service release
