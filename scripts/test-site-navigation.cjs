@@ -125,7 +125,10 @@ async function main() {
           const url = new URL(el.href);
           return { text: el.textContent.trim(), href: url.pathname + url.search + url.hash };
         }));
-        assert.deepEqual(links, [{ text: "Log in", href: file === "post.html" ? "/?postReturn=1#login" : "/#login" }, { text: "Workspace", href: "/workspace" }, { text: "Browse work", href: "/earn.html" }], file);
+        assert.deepEqual(links, [{ text: "Log in", href: file === "post.html" ? "/?postReturn=1#login" : "/#login" }, { text: "Workspace", href: "/workspace" }], file);
+        // Signed out, Log in is the one primary (accent) button; Workspace is secondary.
+        const looks = await page.locator(".ab-site-nav a").evaluateAll(els => els.map(el => getComputedStyle(el).backgroundColor));
+        assert.ok(looks[0] !== "rgba(0, 0, 0, 0)" && looks[1] === "rgba(0, 0, 0, 0)", `signed-out primary is Log in: ${file} ${JSON.stringify(looks)}`);
         const appearance = await page.locator("[data-site-header]").evaluate(el => {
           const css = getComputedStyle(el), brand = getComputedStyle(el.querySelector("strong"));
           return { height: el.getBoundingClientRect().height, background: css.backgroundImage, padding: css.padding, brand: brand.font, color: brand.color };
@@ -133,7 +136,7 @@ async function main() {
         if (!reference) reference = appearance;
         assert.deepEqual(appearance, reference, `same homepage header: ${file} at ${width}`);
         assert.equal(await page.locator(".ab-site-menu, [data-site-header] .ab-site-login").count(), 0);
-        for (const n of [1, 2, 3]) await assertFits(page, `.ab-site-nav a:nth-child(${n})`);
+        for (const n of [1, 2]) await assertFits(page, `.ab-site-nav a:nth-child(${n})`);
         if (redirects) {
           assert.equal(await page.locator('meta[http-equiv="refresh"]').getAttribute("content"), `0; url=${workspaceHandoff}`);
           assert.equal(await page.locator('meta[name="robots"]').getAttribute("content"), "noindex, nofollow");
@@ -209,6 +212,22 @@ async function main() {
       assert.equal(await page.locator("[data-overview-ready]").innerText(), "0");
       assert.deepEqual(errors, []);
       console.log(`Metrics overview, periods, proof deep link, scrolling and unavailable/partial/zero passed ${width}x${height}`);
+      await ctx.close();
+    }
+    // Signed in, Workspace becomes the primary button and the account link becomes a secondary "Account".
+    for (const width of [1280, 390]) {
+      const ctx = await context({ viewport: { width, height: 800 } });
+      await ctx.route("**/auth/session", route => route.fulfill({ json: { authenticated: true, user: { id: "ab".repeat(32), name: "Nav Test" }, providers: { google: true } } }));
+      const page = await ctx.newPage();
+      for (const file of ["about.html", "earn.html", "post.html"]) {
+        await page.goto(`${origin}/${file}`);
+        await page.waitForFunction(() => document.querySelector("[data-site-header]")?.dataset.auth === "signed-in");
+        const nav = await page.locator(".ab-site-nav a").evaluateAll(els => els.map(el => ({ text: el.textContent.trim(), background: getComputedStyle(el).backgroundColor })));
+        assert.deepEqual(nav.map(item => item.text), ["Account", "Workspace"], file);
+        assert.ok(nav[0].background === "rgba(0, 0, 0, 0)" && nav[1].background !== "rgba(0, 0, 0, 0)", `signed-in primary is Workspace: ${file} ${JSON.stringify(nav)}`);
+        for (const n of [1, 2]) await assertFits(page, `.ab-site-nav a:nth-child(${n})`);
+      }
+      console.log(`Header: Log in primary when signed out, Workspace primary when signed in, ${width}px`);
       await ctx.close();
     }
   } finally { await browser.close(); }

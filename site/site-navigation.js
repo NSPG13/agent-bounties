@@ -10,6 +10,7 @@
   const renderAccount = (session) => {
     if (typeof session?.authenticated !== "boolean") return;
     const authenticated = session.authenticated && Boolean(session.user?.id);
+    header.dataset.auth = authenticated ? "signed-in" : "signed-out";
     for (const { link, href, label } of accountLinks) {
       link.dataset.authenticated = String(authenticated);
       link.textContent = authenticated ? "Account" : label;
