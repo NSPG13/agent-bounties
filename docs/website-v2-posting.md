@@ -67,8 +67,8 @@ API deploy. A sponsored path would let people without Base ETH post with one
 signature, as the retired V1 flow did. It needs an API change and an owner
 deploy:
 
-1. Add `POST /v1/base/autonomous-bounties/v2/creation-relay`, modelled on
-   `crates/api/src/sponsored_creation.rs`, but built from
+1. Add a `POST` creation-relay route beside the existing v2 creation-plan route,
+   modelled on `crates/api/src/sponsored_creation.rs`, but built from
    `configured_autonomous_v2_planner` and
    `plan_v2_authorized_creation` (`createBountyWithAuthorization`). Keep the
    410 guard on the V1 relay unchanged.
