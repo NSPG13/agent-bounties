@@ -1,9 +1,9 @@
 """
 Unit Test Suite for Issue #648 Evidence Validator Helper
-Tests valid conformance and rigorous negative assertions across all 10 maintainer review controls.
+Tests valid conformance and rigorous negative assertions across all maintainer review controls,
+including exact micro-USDC decimal arithmetic and 10**400 overflow prevention.
 """
 
-import math
 import unittest
 from solution import SolutionHandler
 
@@ -38,6 +38,59 @@ class TestMCPChildBountyValidation(unittest.TestCase):
         self.assertEqual(result["controls_passed"], 4)
         self.assertEqual(result["controls_failed"], 0)
 
+    # --- P2 REGRESSION 1: FLOAT SUBTRACTION PRECISION (MICRO-USDC NORMALIZATION) ---
+    def test_exact_margin_with_float_representation(self):
+        """parent_reward=2.01 and child_target=1.01 yields exact 1 USDC margin without binary float precision artifact."""
+        ev = dict(self.valid_evidence, parent_reward_usdc=2.01, child_target_usdc=1.01)
+        res = self.handler.execute(ev)
+        self.assertTrue(res["all_controls_passed"])
+        c2 = next(c for c in res["controls"] if c["control_id"] == "CONTROL_02_MARGIN_AND_FUNDING")
+        self.assertTrue(c2["passed"])
+
+    def test_exact_margin_boundary_and_one_micro_usdc_below(self):
+        """Exact 1.000000 USDC margin passes; 1 micro-USDC below (0.999999 USDC) fails."""
+        # Exact boundary: 2.00 - 1.00 = 1.000000 USDC -> PASS
+        ev_pass = dict(self.valid_evidence, parent_reward_usdc=2.00, child_target_usdc=1.00)
+        res_pass = self.handler.execute(ev_pass)
+        self.assertTrue(res_pass["all_controls_passed"])
+
+        # 1 micro-USDC below: 2.000000 - 1.000001 = 0.999999 USDC margin -> FAIL
+        ev_fail = dict(self.valid_evidence, parent_reward_usdc=2.000000, child_target_usdc=1.000001)
+        res_fail = self.handler.execute(ev_fail)
+        self.assertFalse(res_fail["all_controls_passed"])
+        c2 = next(c for c in res_fail["controls"] if c["control_id"] == "CONTROL_02_MARGIN_AND_FUNDING")
+        self.assertFalse(c2["passed"])
+        self.assertIn("below required minimum", c2["reason"])
+
+    # --- P2 REGRESSION 2: LARGE JSON INTEGERS (10**400) NO CRASH / OVERFLOWERROR ---
+    def test_large_integer_parent_reward_fails_gracefully(self):
+        """10**400 in parent_reward_usdc returns validation failure without OverflowError."""
+        ev = dict(self.valid_evidence, parent_reward_usdc=10**400)
+        res = self.handler.execute(ev)
+        self.assertFalse(res["all_controls_passed"])
+        c2 = next(c for c in res["controls"] if c["control_id"] == "CONTROL_02_MARGIN_AND_FUNDING")
+        self.assertFalse(c2["passed"])
+        self.assertIn("exceeds maximum bounded limit", c2["reason"])
+
+    def test_large_integer_child_target_fails_gracefully(self):
+        """10**400 in child_target_usdc returns validation failure without OverflowError."""
+        ev = dict(self.valid_evidence, child_target_usdc=10**400)
+        res = self.handler.execute(ev)
+        self.assertFalse(res["all_controls_passed"])
+        c2 = next(c for c in res["controls"] if c["control_id"] == "CONTROL_02_MARGIN_AND_FUNDING")
+        self.assertFalse(c2["passed"])
+        self.assertIn("exceeds maximum bounded limit", c2["reason"])
+
+    def test_large_integer_receipt_amount_fails_gracefully(self):
+        """10**400 in settlement receipt amount_usdc returns validation failure without OverflowError."""
+        sr = dict(self.valid_evidence["settlement_receipt"], amount_usdc=10**400)
+        ev = dict(self.valid_evidence, settlement_receipt=sr)
+        res = self.handler.execute(ev)
+        self.assertFalse(res["all_controls_passed"])
+        c4 = next(c for c in res["controls"] if c["control_id"] == "CONTROL_04_LANE_READINESS_AND_SETTLEMENT")
+        self.assertFalse(c4["passed"])
+        self.assertIn("exceeds maximum bounded limit", c4["reason"])
+
     # --- CONTROL 1: PARTICIPANT INDEPENDENCE & ADDRESS BOUNDS ---
     def test_reject_identical_participants(self):
         """Parent and child solver cannot be identical addresses."""
@@ -46,7 +99,7 @@ class TestMCPChildBountyValidation(unittest.TestCase):
         self.assertFalse(res["all_controls_passed"])
         c1 = next(c for c in res["controls"] if c["control_id"] == "CONTROL_01_PARTICIPANT_INDEPENDENCE")
         self.assertFalse(c1["passed"])
-        self.assertIn("distinct participants", c1["reason"])
+        self.assertIn("distinct supplied addresses", c1["reason"])
 
     def test_reject_all_zero_solver_address(self):
         """All-zero Ethereum addresses are rejected."""
