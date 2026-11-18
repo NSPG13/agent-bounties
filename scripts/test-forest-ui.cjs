@@ -205,6 +205,16 @@ async function main() {
       await capture(page,`leaderboard-populated-${width}`);
       mode="offline";await page.locator("[data-leaderboard-refresh]").click();await page.getByText("Rankings are temporarily unavailable.",{exact:false}).waitFor();assert.equal(await page.locator(".ab-prize").isVisible(),false);
       mode="invalid";await page.locator("[data-leaderboard-refresh]").click();await page.waitForFunction(()=>!document.querySelector("[data-leaderboard-refresh]").disabled);assert.equal(await page.locator("[data-leaderboard-table]").isVisible(),false);
+      // Back from the sign-in provider: closing the account dialog keeps the top of the page in view
+      // and returns focus to the header, never to the footer link at the bottom.
+      account="ready";await page.goto(origin+"/?auth=success&provider=google");await page.locator("[data-auth-dialog][open]").waitFor();
+      await page.locator("[data-auth-close]").click();
+      // The dialog's close event runs after the click; wait for focus to leave the dialog.
+      await page.waitForFunction(()=>!document.querySelector("[data-auth-dialog]").open && !document.activeElement?.closest("[data-auth-dialog]"));
+      assert.equal(await page.evaluate(()=>Math.round(scrollY)),0,"sign-in return stays at the top of the page");
+      assert.equal(new URL(page.url()).hash,"","sign-in return writes no #account");
+      const focused = await page.evaluate(()=>({inHeader:Boolean(document.activeElement?.closest("[data-site-header]")),element:document.activeElement?.outerHTML.slice(0,120)}));
+      assert.equal(focused.inHeader,true,`focus returns to the header, not ${focused.element}`);
       for(const state of ["wallet_required","ready"]) {
         account=state;await page.goto(origin+"/#account");await page.locator("[data-auth-dialog][open]").waitFor();
         // A wallet-less account is ready to post; only solver readiness waits for a wallet.
