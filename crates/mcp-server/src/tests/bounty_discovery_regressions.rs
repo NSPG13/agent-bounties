@@ -189,12 +189,15 @@ async fn stored_bounties_and_events_survive_aliases_postgres() {
             assert!(ready.get("content").is_none(), "{ready}");
             assert_eq!(remote_ready["isError"], true, "{remote_ready}");
             assert_eq!(ready["error_code"], "upstream_unavailable", "{ready}");
+            // The outage reply explains unknown availability to agents but carries no inventory.
+            let structured = &remote_ready["structuredContent"];
             assert_eq!(
-                remote_ready["structuredContent"],
-                json!({"error_code":"upstream_unavailable"}),
+                structured["error_code"], "upstream_unavailable",
                 "{remote_ready}"
             );
-            assert!(remote_ready["structuredContent"].get("items").is_none());
+            assert_eq!(structured["coverage"], "unavailable", "{remote_ready}");
+            assert_eq!(structured["degraded"], true, "{remote_ready}");
+            assert!(structured.get("items").is_none());
         }
         let remote = remote_feed(state.clone(), network).await;
         assert_ne!(remote["isError"], true, "{remote}");
