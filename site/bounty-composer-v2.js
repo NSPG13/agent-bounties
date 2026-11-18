@@ -1858,6 +1858,62 @@
     return url.href;
   }
 
+  // A wallet that already approved this site answers eth_accounts without any prompt. Use it to
+  // reach a saved address directly instead of asking which wallet app holds it.
+  async function connectedProviderFor(address) {
+    const wanted = String(address || "").toLowerCase();
+    if (!/^0x[0-9a-f]{40}$/.test(wanted)) return null;
+    // Only wallets in this browser: a phone or embedded wallet session is never queried silently.
+    const remote = [window.AgentBountiesPhoneWallet?.provider, window.AgentBountiesCoinbaseEmbeddedWallet?.provider].filter(Boolean);
+    const candidates = (state.providers?.length ? state.providers : await discoverWallets()).filter((item) => !remote.includes(item.provider));
+    for (const item of candidates) {
+      let timer;
+      try {
+        const accounts = await Promise.race([
+          item.provider.request({ method: "eth_accounts" }),
+          new Promise((resolve) => { timer = setTimeout(() => resolve([]), 1500); }),
+        ]);
+        if (Array.isArray(accounts) && accounts.some((value) => String(value).toLowerCase() === wanted)) return item;
+      } catch (_) { /* A wallet that refuses a silent read is simply not used here. */ }
+      finally { clearTimeout(timer); }
+    }
+    return null;
+  }
+
+  // "Use this wallet" on a saved wallet uses that wallet. The account records how it was linked
+  // (wallet_type, provider_id), so the page never opens the wallet-brand chooser here.
+  async function savedWalletProvider(address) {
+    const wanted = String(address || "").toLowerCase();
+    const record = state.linkedWallets.find((wallet) => String(wallet.address || "").toLowerCase() === wanted) || {};
+    const type = record.wallet_type || "unknown";
+    // A browser wallet that already approved this site holds the address: no prompt at all.
+    const connected = await connectedProviderFor(address);
+    if (connected) return connected;
+    if (type === "mobile") {
+      // An existing phone session is restored; with none, the wallet shows its QR pairing.
+      const phone = window.AgentBountiesPhoneWallet?.provider;
+      if (phone) return { provider: phone, kind: "phone", info: { name: "your phone wallet" } };
+    } else if (type === "embedded") {
+      // Loading the embedded wallet may open its own sign-in window.
+      const provider = await window.AgentBountiesWalletLink.loadEmbedded();
+      return { provider, kind: "embedded", info: { name: "your embedded wallet" } };
+    } else {
+      // Ask only the browser wallet the account names (or this browser's only or default one).
+      // That wallet shows its own approval; connectWallet then checks the address.
+      const remote = [window.AgentBountiesPhoneWallet?.provider, window.AgentBountiesCoinbaseEmbeddedWallet?.provider].filter(Boolean);
+      const browser = (state.providers?.length ? state.providers : await discoverWallets()).filter((item) => !remote.includes(item.provider));
+      const named = String(record.provider_id || "").toLowerCase() === "metamask"
+        ? browser.find((item) => item.provider.isMetaMask || /metamask/.test(String(item.info?.rdns || "").toLowerCase())) : null;
+      const chosen = named || (browser.length === 1 ? browser[0] : browser.find((item) => item.provider === window.ethereum));
+      if (chosen) return chosen;
+    }
+    throw new Error("This saved wallet isn't available in this browser. Open the browser or app where you saved it, or choose another saved wallet.");
+  }
+
+  async function useSavedWallet(address) {
+    return connectWallet(await savedWalletProvider(address), address);
+  }
+
   async function chooseCryptoWallet() {
     if (postingBusy || walletConnecting) return;
     ui.cryptoMethod.dataset.active="true";
@@ -1866,6 +1922,7 @@
     ui.walletMessage.textContent="Looking for wallets on this device…";
     const providers=await discoverWallets();
     ui.walletMessage.textContent="Choose a saved wallet, or use another wallet.";
+    const savedUse = new Map();
     for (const wallet of state.linkedWallets) {
       if (!/^0x[0-9a-f]{40}$/i.test(wallet.address)) continue;
       const button = document.createElement("button"); button.type = "button"; button.className = "wallet-option";
@@ -1876,7 +1933,7 @@
       const use = document.createElement("button"); use.type = "button"; use.className = "button primary guide-primary"; use.textContent = "Use this wallet"; use.hidden = true;
       use.addEventListener("click", async () => {
         if (postingBusy || walletConnecting) return;
-        try { const choice = await window.AgentBountiesWalletLink.select({ prepareContinuation: prepareWalletContinuation }); await connectWallet({ ...choice, info: { name: choice.label } }, wallet.address); }
+        try { await useSavedWallet(wallet.address); }
         catch (error) { setPaymentStatus(error.message, "error"); }
       });
       button.addEventListener("click", async () => {
@@ -1890,6 +1947,7 @@
         } catch (error) { setPaymentStatus(error.message, "error"); }
       });
       ui.walletOptions.append(button, use);
+      savedUse.set(wallet.address.toLowerCase(), use);
     }
     for(const item of providers){const button=document.createElement("button");button.type="button";button.className="wallet-option";const name=document.createElement("strong");name.textContent=providerName(item);const note=document.createElement("small");note.textContent="Connect and check Base USDC";button.append(name,note);button.addEventListener("click",()=>connectWallet(item));ui.walletOptions.append(button);}
     const other = document.createElement("button"); other.type = "button"; other.className = "wallet-option"; other.textContent = "Choose or recover another wallet";
@@ -1897,7 +1955,10 @@
     ui.walletOptions.append(other);
     renderFundingGuide();
     if (state.linkedWallets.length === 1 && !state.account) {
+      // One saved wallet is preselected; nothing connects until "Use this wallet" is pressed.
       state.account = state.linkedWallets[0].address; state.selectedWallet = state.account;
+      const use = savedUse.get(state.account.toLowerCase());
+      if (use) use.hidden = false;
       void refreshWalletReadiness().catch((error) => setPaymentStatus(error.message, "error"));
     }
   }
@@ -1922,12 +1983,12 @@
     walletConnecting = true;
     walletReadinessVersion++;
     state.balances = null; ui.fundNow.disabled = true;
-    setPaymentStatus(`Connecting ${providerName(item)}…`, "pending");
+    setPaymentStatus(`Connecting ${providerName(item)}… If it is on another network, your wallet will ask to switch to Base.`, "pending");
     try {
       const protocol = await loadProtocol();
       const accounts = await item.provider.request({ method: "eth_requestAccounts" });
       if (!accounts?.[0] || !/^0x[0-9a-f]{40}$/i.test(accounts[0])) throw new Error("The wallet did not return a valid account.");
-      if (expectedAddress && accounts[0].toLowerCase() !== expectedAddress.toLowerCase()) throw new Error("This signing session belongs to another address. Choose the verified wallet you selected; no payment was requested.");
+      if (expectedAddress && accounts[0].toLowerCase() !== expectedAddress.toLowerCase()) throw new Error(`This wallet is using another account. Switch to ${expectedAddress.slice(0, 6)}…${expectedAddress.slice(-4)} in your wallet, then press Use this wallet again. No payment was requested.`);
       state.provider = item.provider; state.providerKind = item.kind; state.account = accounts[0]; state.selectedWallet = state.account;
       state.provider.on?.("accountsChanged", (values) => {
         if (state.provider !== item.provider) return;

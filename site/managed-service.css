@@ -66,3 +66,22 @@ footer a { color: var(--muted); }
 #managed-review-form textarea { display: block; width: 100%; min-height: 96px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; font: inherit; color: var(--ink); background: var(--bg); resize: vertical; }
 @media (max-width: 760px) { .order-grid { grid-template-columns: minmax(0, 1fr); } header, main, footer { padding: 20px; } .card, .status-card { padding: 20px; } }
 @media (max-width: 360px) { header, main, footer { padding: 16px; } .card, .status-card { padding: 16px; } .prices div { gap: 8px; font-size: .9rem; } .total { font-size: 1rem; } }
+
+/* Sign-in choices: centered, equal buttons that respond to hover and press. */
+#managed-login { text-align: center; }
+#managed-login > p { margin-bottom: 18px; }
+#managed-providers { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; max-width: 920px; margin: 0 auto 6px; }
+#managed-providers > * { width: 100%; text-align: center; transition: transform .12s ease, box-shadow .12s ease, background .12s ease; }
+#managed-providers > *:hover { transform: translateY(-2px); box-shadow: 0 8px 22px rgba(0, 0, 0, .22); }
+#managed-providers > *:active { transform: translateY(0); box-shadow: none; }
+#managed-status-card:has(#managed-login:not([hidden])) #managed-status { text-align: center; }
+#managed-status-card:has(#managed-login:not([hidden])) .status-actions { justify-content: center; margin-top: 10px; }
+/* Payment terms open on demand just above the acceptance note. */
+.payment-terms { margin: 18px 0 6px; border: 1px solid var(--line); border-radius: 14px; padding: 10px 16px; background: var(--soft); }
+.payment-terms summary { cursor: pointer; font-weight: 700; font-size: .92rem; }
+.payment-terms[open] summary { margin-bottom: 10px; }
+.payment-terms p:last-child { margin-bottom: 4px; }
+#managed-heading:focus { outline: none; }
+#managed-heading:focus-visible { outline: 3px solid var(--amber); outline-offset: 3px; }
+.header-tools { display: inline-flex; align-items: center; gap: 14px; }
+.header-button { padding: 7px 16px; font-size: .85rem; }

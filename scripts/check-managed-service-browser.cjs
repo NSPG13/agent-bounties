@@ -127,9 +127,45 @@ test('a fractional USDC reward can display exactly MXN10 with all itemized costs
   // A merged row names its refundable part: only the MXN 0.35 deposit of the MXN 2.28 review row is refundable.
   assert.deepEqual(rows, ['Solver reward', 'Review and verification, including a MXN 0.35 refundable deposit', 'Platform fee and currency conversion buffer', 'Card processing']);
   assert.equal((await f.page.locator('#managed-lines dd').allInnerTexts()).join(' | '), 'MXN 3.44 | MXN 2.28 | MXN 0.32 | MXN 3.96');
+  // The deposit and conversion terms sit in "Payment terms" just above the acceptance note, closed until opened.
+  assert.equal(await f.page.locator('.payment-terms').getAttribute('open'), null);
+  assert.equal(await f.page.locator('#managed-status-card').isVisible(), false, 'the status card steps aside while a valid quote is reviewed');
+  assert.equal(await f.page.evaluate(() => document.activeElement?.id), 'managed-heading', 'the hidden status message is replaced by focus on the quote heading');
+  await f.page.locator('.payment-terms > summary').click();
   assert.match(await f.page.locator('#managed-deposit-note').innerText(), /^The MXN 0\.35 review deposit returns to your card when the bounty is paid\. You lose it only if you reject a delivery and an appeal finds it met your criteria/);
   assert.match(await f.page.locator('.price-card').innerText(), /2–4% conversion fee/);
   assert.equal(f.accepts.length,0); await f.close();
+});
+test('payment terms stay available during review, after acceptance and after reload, before Stripe', async () => {
+  // The MXN 10 quote with a refundable review deposit (same amounts as the fractional-reward scenario).
+  const f = await setup(), q = f.state.quote.quote;
+  q.input.solver_reward_micro_usdc = 178000; q.input.verifier_reserve_micro_usdc = 100000;
+  q.platform_fee_micro_usdc = 13350; q.bounty_target_micro_usdc = 291350;
+  const amounts = [[178000,344],[100000,193],[13350,26]];
+  q.lines = q.lines.slice(0,3).map((line,i) => ({ ...line, amount_micro_usdc: amounts[i][0], amount_minor: amounts[i][1] }));
+  q.input.additional_costs = [ { code: 'currency_conversion', label: 'Currency conversion buffer (1.00%)', amount_minor: 6 },
+    { code: 'review_deposit', label: 'Review deposit (refundable, 10% of solver reward)', amount_minor: 35 },
+    { code: 'payment_processing', label: 'Card processing', amount_minor: 396 } ];
+  q.lines.push(...q.input.additional_costs.map(line => ({ ...line, amount_micro_usdc: null }))); q.total_minor = 1000; f.state.quote = sign(q);
+  const terms = async (stage, { opened = false } = {}) => {
+    assert.equal(await f.page.locator('.payment-terms').isVisible(), true, stage + ': Payment terms is offered');
+    if (!opened) {
+      assert.equal(await f.page.locator('.payment-terms').getAttribute('open'), null, stage + ': closed by default');
+      await f.page.locator('.payment-terms > summary').click();
+    }
+    assert.match(await f.page.locator('#managed-deposit-note').innerText(), /^The MXN 0\.35 review deposit returns to your card when the bounty is paid\. You lose it only if you reject a delivery and an appeal finds it met your criteria/, stage);
+    assert.match(await f.page.locator('.payment-terms').innerText(), /2–4% conversion fee/, stage);
+  };
+  await f.go(); await visible(f.page, 'Review the deliverable');
+  await terms('quote review');
+  await f.page.click('#managed-accept'); await visible(f.page, 'Payment is not confirmed');
+  assert.equal(await f.page.locator('#managed-checkout').isVisible(), true, 'Continue to Stripe is offered after acceptance');
+  assert.equal(await f.page.locator('#managed-acceptance').isVisible(), false);
+  await terms('after acceptance', { opened: true });
+  await f.page.reload(); await visible(f.page, 'Payment is not confirmed');
+  assert.equal(await f.page.locator('#managed-checkout').isVisible(), true);
+  await terms('accepted order after reload');
+  assert.equal(f.accepts.length, 1); await f.close();
 });
 test('the saved theme is applied before the page body is parsed, with no storage writes', async () => {
   for (const [saved, scheme, expected] of [['light', 'dark', 'light'], ['dark', 'light', 'dark'], ['auto', 'light', 'light'], ['auto', 'dark', 'dark'], [null, 'light', 'dark'], ['purple', 'light', 'dark']]) {

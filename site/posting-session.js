@@ -77,11 +77,13 @@
     const flow = win.AgentBountiesWorkflow, client = flow.createClient(win);
     let authenticated = false, owner = null, revision = 0, remoteId = null, lastSaved = null, lastRecovery = null, adopting = false, conflict = false, epoch = 0;
     let status = "local", message = "Saved on this device. Sign in to continue on another device.", timer, queue = Promise.resolve(), remoteApproval = null;
+    // "error" while the message reports a failed save or restore; the posting form keeps those visible.
+    let tone = "";
     const read = (key) => { try { return JSON.parse(win.sessionStorage.getItem(key) || "null"); } catch (_) { return null; } };
     const notify = () => {
       const detail = snapshot();
       const output = win.document?.querySelector("[data-draft-sync-status]");
-      if (output) output.textContent = message;
+      if (output) { output.textContent = message; output.dataset.state = status; output.dataset.tone = tone; }
       const link = win.document?.querySelector("[data-continue-posting]");
       if (link) { link.hidden = status !== "saved"; if (detail.continuation_url) link.href = detail.continuation_url; }
       win.dispatchEvent?.(new win.CustomEvent("agent-bounties:posting-state", { detail }));
@@ -229,11 +231,12 @@
       lastRecovery = journal(value.recovery_state);
       rememberSync(hash);
       if (required && (stable(envelope(client.load())) !== lastSaved || stable(recoveryEnvelope(client.load())) !== stable(recovery))) throw new Error("Posting progress changed while saving. Save this same operation again before a wallet request.");
-      status = "saved"; message = "Saved to your account. Continue on another device with the same account.";
+      status = "saved"; tone = ""; message = "Saved to your account. Continue on another device with the same account.";
       notify(); return value;
     }
     function failure(error) {
       if (error.stale) return;
+      tone = "error";
       if (error.status === 409) { conflict = true; status = "conflict"; message = "This draft changed on another device. Reload the saved version before continuing; no wallet action was sent."; }
       else if (error.status === 401) { status = "local"; message = "Your sign-in expired. Sign in again to save this draft; this device still has your copy."; }
       else if (error.status === 403) { status = "local"; message = "This account could not save the draft. Open your account and sign in again, then return to this saved operation."; }
@@ -291,7 +294,7 @@
         if (remoteApproval === value.draft_hash && !journey.draft_stale) win.sessionStorage.setItem(APPROVAL, JSON.stringify({ owner, operation_id: remoteId, hash: remoteApproval }));
         else win.sessionStorage.removeItem(APPROVAL);
         rememberSync(value.draft_hash);
-        conflict = false; status = "saved"; message = "Saved draft restored. Your unchanged terms approval is preserved; wallet confirmations remain yours.";
+        conflict = false; status = "saved"; tone = ""; message = "Saved draft restored. Your unchanged terms approval is preserved; wallet confirmations remain yours.";
         win.dispatchEvent?.(new win.CustomEvent("agent-bounties:posting-restored", { detail: journey }));
       } finally { adopting = false; notify(); }
       return value;
@@ -302,7 +305,7 @@
       owner = nextOwner; authenticated = Boolean(nextOwner);
       if (!authenticated) { status = "local"; notify(); return null; }
       const requested = new URL(win.location.href).searchParams.get("operation_id");
-      if (requested && !UUID.test(requested)) { conflict = true; status = "unavailable"; message = "This continuation link has an invalid posting identifier."; notify(); return null; }
+      if (requested && !UUID.test(requested)) { conflict = true; status = "unavailable"; tone = "error"; message = "This continuation link has an invalid posting identifier."; notify(); return null; }
       const journey = client.load();
       const id = requested && UUID.test(requested) ? requested : journey?.id;
       if (!id) { status = "local"; notify(); return null; }
@@ -330,7 +333,7 @@
         if (error.stale) return null;
         if (error.status === 409) { failure(error); return null; }
         if (error.status === 404 && (!requested || (journey?.id === requested && journey.draft))) { remoteId = id; revision = 0; return flush(); }
-        status = "unavailable"; message = error.status === 404 ? "This draft is unavailable to this account or has expired. Your other local draft remains saved." : "Could not restore your account draft. Keep this tab open and retry.";
+        status = "unavailable"; tone = "error"; message = error.status === 404 ? "This draft is unavailable to this account or has expired. Your other local draft remains saved." : "Could not restore your account draft. Keep this tab open and retry.";
         conflict = Boolean(requested); notify(); return null;
       }
     }

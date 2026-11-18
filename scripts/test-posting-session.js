@@ -500,3 +500,19 @@ test("native form inputs survive account synchronization and changes revoke appr
   edit(two.win, value => { value.brief.criteria = "Thirty sources"; });
   assert.equal(await two.session.approved(), false);
 });
+
+test("a failed account save marks its message as an error so the posting form keeps it visible", async () => {
+  const { server, win, session } = await ready();
+  const output = { textContent: "", dataset: {} };
+  win.document.querySelector = (selector) => selector === "[data-draft-sync-status]" ? output : null;
+  edit(win, (value) => { value.draft.title = "Saved before the sign-in expires"; });
+  await session.flush();
+  assert.equal(output.dataset.state, "saved"); assert.equal(output.dataset.tone, "", "a successful save is routine bookkeeping");
+  win.user = null; // The server now answers 401: the sign-in expired.
+  edit(win, (value) => { value.draft.title = "Edited after the sign-in expired"; });
+  await session.flush().catch(() => {});
+  assert.match(output.textContent, /sign-in expired/);
+  assert.equal(output.dataset.state, "local", "the session logic still treats the draft as local");
+  assert.equal(output.dataset.tone, "error", "the failure is marked so the form does not hide it");
+  assert.ok(server.requests.some((request) => !request.owner), "the failing save reached the server");
+});
