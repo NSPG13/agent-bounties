@@ -61,7 +61,8 @@
     form.querySelector("[data-composer-submit]").textContent = manual ? "Review draft" : "Continue with my AI →";
   }
   const saved = client.load();
-  mode.value = protectedHandoff ? "ai" : params.get("mode") === "manual" ? "manual" : saved?.brief?.preparation_mode || (saved?.draft ? "ai" : "manual");
+  const requestedMode = ["manual", "ai"].includes(params.get("mode")) ? params.get("mode") : null;
+  mode.value = protectedHandoff ? "ai" : requestedMode || saved?.brief?.preparation_mode || (saved?.draft ? "ai" : "manual");
   mode.disabled = protectedHandoff;
   setMode();
   const deadlineSummary = document.querySelector("[data-brief-deadline-summary]");
@@ -211,7 +212,7 @@
     link.href = url; link.download = "agent-bounties-draft.json"; link.click(); URL.revokeObjectURL(url);
   });
   restore(client.load());
-  if (params.get("mode") === "manual" && !protectedHandoff) { mode.value = "manual"; setMode(); }
+  if (requestedMode && !protectedHandoff) { mode.value = requestedMode; setMode(); }
   window.setInterval(() => { if (!document.hidden) render(); }, 30000);
   document.addEventListener("visibilitychange", render);
   // Canonical completion belongs to the shared posting operation tracker.

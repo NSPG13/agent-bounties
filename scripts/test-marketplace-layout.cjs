@@ -234,8 +234,8 @@ async function main() {
           window.AgentBountiesWorkflow.createClient(window).start({ role: "post", goal: "Previous completed task" });
         }, { contract, id: item.bounty_id });
         await page.locator(".feed-heading [data-new-bounty]").click();
-        await page.waitForURL("**/#post-a-bounty");
-        await page.locator("[data-bounty-launcher][open]").waitFor();
+        // "+ Post a bounty" reaches the posting form directly (via the home page's #post-a-bounty redirect).
+        await page.waitForURL("**/post.html?mode=manual#bounty-composer-form");
         await page.goto(`${origin}/post.html`);
         assert.equal(await page.evaluate(() => window.AgentBountiesWorkflow.createPostingJournal(window).load()), null);
         assert.equal(await page.evaluate(() => window.AgentBountiesWorkflow.createClient(window).load().goal), "");
@@ -246,8 +246,8 @@ async function main() {
         }, { contract, id: item.bounty_id });
         await page.goto(`${origin}/earn.html`);
         await page.locator(".feed-heading [data-new-bounty]").click();
-        await page.waitForURL("**/#post-a-bounty");
-        await page.locator("[data-bounty-launcher][open]").waitFor();
+        // "+ Post a bounty" reaches the posting form directly (via the home page's #post-a-bounty redirect).
+        await page.waitForURL("**/post.html?mode=manual#bounty-composer-form");
         await page.goto(`${origin}/post.html`);
         await page.locator("[data-recorded-posting]").waitFor();
         assert.equal(await page.evaluate(() => window.AgentBountiesWorkflow.createPostingJournal(window).load().phase), "authorized");

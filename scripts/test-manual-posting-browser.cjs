@@ -25,12 +25,30 @@ const server = http.createServer((req, res) => {
         return route.fulfill({status:503,body:"Isolated browser test"});
       });
       const page = await context.newPage(); page.on("pageerror", e => errors.push(e.message));
-      await page.goto(origin);
+      // A competition's qualifying bounty still opens the "Choose how to start" dialog in place.
+      await page.goto(origin + "/?parentCompetition=0x" + "1".repeat(40) + "&network=base-mainnet");
       await page.locator("#post-a-bounty").click();
-      assert.equal(await page.locator("#bounty-launcher-title").innerText(), "Choose how to start");
-      assert.equal(await page.locator("[data-bounty-manual]").evaluate(el => getComputedStyle(el).marginTop), "22px", "the home launcher keeps its button layout");
-      await page.locator("[data-bounty-manual]").click();
+      await page.locator("[data-bounty-launcher][open]").waitFor();
+      assert.equal(new URL(page.url()).pathname, "/", "the competition flow keeps its dialog");
+      assert.equal(await page.locator("[data-bounty-manual]").isVisible(), false, "the competition dialog offers no unbound manual form");
+      await page.waitForFunction(() => /parent competition|could not be verified/.test(document.querySelector("[data-bounty-launch-status]").textContent));
+      // Older links to #post-a-bounty go straight to the form.
+      await page.goto(origin + "/#post-a-bounty");
       await page.waitForURL("**/post.html?mode=manual#bounty-composer-form");
+      // "Post a bounty" opens the posting form directly, with no chooser dialog.
+      await page.goto(origin);
+      assert.equal(await page.locator("#post-a-bounty").getAttribute("aria-haspopup"), null, "the button no longer announces a dialog");
+      await page.locator("#post-a-bounty").click();
+      await page.waitForURL("**/post.html?mode=manual#bounty-composer-form");
+      // AI browser extensions are recommended beside the form (below it on narrow screens), linking to official pages.
+      const help = page.locator(".posting-ai-help");
+      assert.deepEqual(await help.locator("a").evaluateAll(links => links.map(link => [link.textContent.trim(), link.href, link.rel, link.target])), [
+        ["ChatGPT (recommended)", "https://chromewebstore.google.com/detail/chatgpt/hehggadaopoacecdllhhajmbjkdcmajg", "noopener noreferrer", "_blank"],
+        ["Claude", "https://chromewebstore.google.com/detail/claude/fcoeoabgfenejglbffodgkkbkcdhcgfn", "noopener noreferrer", "_blank"],
+        ["Perplexity", "https://chromewebstore.google.com/detail/perplexity/pninphncmkphpjgfffammoenglghcjii", "noopener noreferrer", "_blank"]]);
+      const helpBox = await help.boundingBox(), formBox = await page.locator("#bounty-composer-form").boundingBox();
+      if (width >= 1180) assert.ok(helpBox.x >= formBox.x + formBox.width && helpBox.y < formBox.y + formBox.height, "the help sits beside the form");
+      else assert.ok(helpBox.y >= formBox.y + formBox.height - 1, "the help sits below the form");
       assert.equal(await page.locator("[data-brief-mode]").inputValue(), "manual");
       await page.locator("[data-brief-title]").fill("Research competitors");
       await page.locator("[data-brief-objective]").fill("Compare competitor prices");
