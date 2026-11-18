@@ -24,6 +24,20 @@ TERMINAL_FAILURE={'build_failed','update_failed','pre_deploy_failed','canceled',
 
 class ReleaseError(RuntimeError):pass
 
+def enforce_transition_hold(manifest):
+    if not isinstance(manifest,dict):raise ReleaseError('invalid_public_runtime_inventory')
+    # Presence is the barrier. False, null, malformed or expired-looking metadata
+    # must never reopen the ordinary deployment path.
+    if 'transition_hold' in manifest:raise ReleaseError('public_runtime_transition_hold')
+
+def load_release_inventory():
+    try:
+        manifest=json.loads((ROOT/'ops/public-runtime-services.json').read_text())
+    except (OSError,UnicodeError,ValueError):
+        raise ReleaseError('invalid_public_runtime_inventory') from None
+    enforce_transition_hold(manifest)
+    return manifest
+
 class NoPublicRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,*args,**kwargs):return None
 
@@ -119,6 +133,7 @@ def validate_blueprints(client, manifest):
             raise ReleaseError('Blueprint identity, ownership or automatic-sync policy changed')
 
 def prepare(client, manifest, migrate, bootstrap=False):
+    enforce_transition_hold(manifest)
     if manifest.get('repository')!=PUBLIC or manifest.get('branch')!='main':raise ReleaseError('invalid public source policy')
     bootstrap_id=manifest.get('autonomous_bootstrap_service_id')
     if bootstrap and (not migrate or sum(row.get('id')==bootstrap_id and row.get('type')=='background_worker'
@@ -188,6 +203,7 @@ def reader_readiness(manifest, revision=None, allow_legacy_revision=False):
         raise ReleaseError('marketplace readiness is unavailable; investigate before restarting readers') from None
 
 def prepare_release(client, manifest, migrate, bootstrap=False, preflight_record=None):
+    enforce_transition_hold(manifest)
     # Deploying a worker also restarts it. Never use a routine source release to
     # bypass a reader's integrity halt or an unresolved lag/health incident.
     observation=reader_readiness(manifest,allow_legacy_revision=migrate)
@@ -195,6 +211,7 @@ def prepare_release(client, manifest, migrate, bootstrap=False, preflight_record
     return prepare(client, manifest, migrate, bootstrap)
 
 def repair_inventory(client, manifest):
+    enforce_transition_hold(manifest)
     # This incident is already on public source. Inspection must never migrate
     # repository settings or admit another service into the mutation boundary.
     if (manifest.get('repository')!=PUBLIC or manifest.get('branch')!='main'
@@ -253,6 +270,7 @@ def main():
         help='Exact expiring manually reviewed incident; never permits full promotion or source migration')
     parser.add_argument('--evidence-dir',type=Path,required=True)
     args=parser.parse_args()
+    manifest=load_release_inventory()
     approved=os.environ.get('APPROVED_REVISION','')
     event=os.environ.get('RELEASE_EVENT','')
     validate_release_approval(args.revision,os.environ.get('PRODUCTION_EXPECTED_REVISION',''),approved,event)
@@ -264,7 +282,6 @@ def main():
             or not re.fullmatch(r'dep-[a-z0-9]+',args.accepted_autonomous_deploy_id)):
         raise ReleaseError('accepted reader reuse requires an exact approved manual full release')
     public_ci_revision(args.revision)
-    manifest=json.loads((ROOT/'ops/public-runtime-services.json').read_text())
     if args.accepted_autonomous_deploy_id and sum(row.get('id')==manifest.get('autonomous_bootstrap_service_id')
             and row.get('type')=='background_worker' and row.get('dockerfile')=='./Dockerfile.posting-indexers'
             for row in manifest['services'])!=1:

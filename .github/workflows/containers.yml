@@ -3,6 +3,8 @@ name: Containers
 on:
   pull_request:
     paths:
+      - ".github/workflows/containers.yml"
+      - "scripts/recovery-funding-ci/**"
       - ".dockerignore"
       - ".env.example"
       - "Cargo.lock"
@@ -10,6 +12,12 @@ on:
       - "bounties/**"
       - "Dockerfile*"
       - "scripts/run-posting-*.sh"
+      - "scripts/run-recovery-indexers.sh"
+      - "scripts/check-recovery-reader-build.sh"
+      - "scripts/check-recovery-reader-images.py"
+      - "scripts/check-recovery-revision.sh"
+      - "scripts/test_recovery_revision_guard.py"
+      - "scripts/parse_recovery_artifact_receipt.py"
       - "deployments/**"
       - "contracts/**"
       - "crates/**"
@@ -37,6 +45,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  recovery-reader-image-controls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Build inert and reader artifacts with sequential shared-cache identities
+        run: |
+          docker build --file Dockerfile.recovery-indexers --tag recovery-reader-standby \
+            --build-arg RENDER_SERVICE_ID=srv-aaaaaaaaaaaaaaaaaaaa \
+            --build-arg RENDER_GIT_COMMIT=1111111111111111111111111111111111111111 \
+            --build-arg RECOVERY_READER_ARTIFACT_CAPABILITY=standby .
+          docker build --file Dockerfile.recovery-indexers --tag recovery-reader-a \
+            --build-arg RENDER_SERVICE_ID=srv-aaaaaaaaaaaaaaaaaaaa \
+            --build-arg RENDER_GIT_COMMIT=1111111111111111111111111111111111111111 \
+            --build-arg RECOVERY_READER_ARTIFACT_CAPABILITY=reader .
+          docker build --file Dockerfile.recovery-indexers --tag recovery-reader-b \
+            --build-arg RENDER_SERVICE_ID=srv-bbbbbbbbbbbbbbbbbbbb \
+            --build-arg RENDER_GIT_COMMIT=2222222222222222222222222222222222222222 \
+            --build-arg RECOVERY_READER_ARTIFACT_CAPABILITY=reader .
+      - name: Exercise actual image binding and capability controls
+        run: python3 scripts/check-recovery-reader-images.py --standby-image recovery-reader-standby --reader-a-image recovery-reader-a --reader-b-image recovery-reader-b
+
   production-compose-smoke:
     runs-on: ubuntu-latest
     steps:
@@ -55,12 +87,101 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        dockerfile: [Dockerfile.posting-indexers, Dockerfile.posting-spenders]
+        dockerfile: [Dockerfile.posting-indexers, Dockerfile.posting-spenders, Dockerfile.recovery-api]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+      - name: Test recovery revision executable
+        if: matrix.dockerfile == 'Dockerfile.recovery-api'
+        run: python3 -m unittest scripts.test_recovery_revision_guard
       - name: Build the deployed worker recipe
         env:
           WORKER_DOCKERFILE: ${{ matrix.dockerfile }}
         run: docker build --file "$WORKER_DOCKERFILE" --tag public-runtime-worker .
+      - name: Check recovery image command containment
+        if: matrix.dockerfile == 'Dockerfile.recovery-api'
+        run: |
+          test "$(docker image inspect public-runtime-worker --format '{{json .Config.Entrypoint}}')" = 'null'
+          test "$(docker image inspect public-runtime-worker --format '{{json .Config.Cmd}}')" = '["/usr/local/bin/agent-bounties-service"]'
+          docker run --rm public-runtime-worker /bin/sh -c 'test "$API_BOOT_MODE" = recovery-health-only && test "$ENABLE_HOSTED_FINANCIAL_SIGNING" = false'
+          failure_status=0
+          docker run --rm public-runtime-worker /bin/sh -c 'exit 23' || failure_status=$?
+          test "$failure_status" -eq 23
+          revision_guard=/usr/local/bin/check-recovery-revision
+          expected_revision=1111111111111111111111111111111111111111
+          expect_exit() {
+            expected_status=$1
+            shift
+            actual_status=0
+            "$@" || actual_status=$?
+            test "$actual_status" -eq "$expected_status"
+          }
+          docker run --rm --env "RENDER_GIT_COMMIT=$expected_revision" public-runtime-worker "$revision_guard" "$expected_revision" > recovery-api-receipt.txt
+          docker run --rm public-runtime-worker /usr/bin/sha256sum /usr/local/bin/agent-bounties-service "$revision_guard" > recovery-api-file-hashes.txt
+          python3 scripts/parse_recovery_artifact_receipt.py recovery-api-receipt.txt --expected-revision "$expected_revision" --expected-kind api --file-hashes recovery-api-file-hashes.txt
+          # Also qualify a provider's single shell dispatch of the plain path
+          # and argument. The pre-deploy payload contains no shell expressions.
+          docker run --rm --env "RENDER_GIT_COMMIT=$expected_revision" public-runtime-worker /bin/sh -c "$revision_guard $expected_revision" > recovery-api-shell-receipt.txt
+          cmp recovery-api-receipt.txt recovery-api-shell-receipt.txt
+          expect_exit 1 docker run --rm public-runtime-worker "$revision_guard" "$expected_revision"
+          for wrong_revision in '' 2222222222222222222222222222222222222222 invalid '1111111111111111111111111111111111111111; exit 0'; do
+            expect_exit 1 docker run --rm --env "RENDER_GIT_COMMIT=$wrong_revision" public-runtime-worker "$revision_guard" "$expected_revision"
+          done
+          expect_exit 2 docker run --rm public-runtime-worker "$revision_guard"
+          expect_exit 2 docker run --rm public-runtime-worker "$revision_guard" "$expected_revision" extra
+          for wrong_expected in '' short AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA '1111111111111111111111111111111111111111; exit 0'; do
+            expect_exit 2 docker run --rm --env "RENDER_GIT_COMMIT=$expected_revision" public-runtime-worker "$revision_guard" "$wrong_expected"
+          done
+
+  # PRIVATE DRAFT: proposed new job under existing containers.yml jobs.
+  # No workflow file in a Git worktree has been changed by this draft.
+  recovery-funding-image-controls:
+    if: github.repository == 'NSPG13/agent-bounties' && github.event.repository.private == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: funding
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: a9a023bae517338963f8aaa89ab8ecf0225cf11a
+          path: predecessor
+          persist-credentials: false
+      - name: Qualify exact shipping funding image in isolated fixtures
+        timeout-minutes: 56
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 3300s python3 \
+            funding/scripts/recovery-funding-ci/qualify.py \
+            --source "$GITHUB_WORKSPACE/funding" \
+            --predecessor "$GITHUB_WORKSPACE/predecessor" \
+            --output "$RUNNER_TEMP/funding-image-evidence" \
+            --head "$EXPECTED_HEAD"
+      - name: Verify owned cleanup and package bounded evidence
+        id: funding_evidence
+        if: always()
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=5s 100s python3 \
+            funding/scripts/recovery-funding-ci/finalize.py \
+            --output "$RUNNER_TEMP/funding-image-evidence"
+      - name: Retain receipts and logs only
+        if: always() && steps.funding_evidence.outputs.archive_ready == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: recovery-funding-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/funding-image-evidence.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0

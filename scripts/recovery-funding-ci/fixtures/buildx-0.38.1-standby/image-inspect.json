@@ -1,0 +1,63 @@
+[
+    {
+        "Id": "sha256:3ec6662d6275e36b5bf85dd3d13ebcf7e2f4a66d904aa41aed8aaf25d0e72c76",
+        "RepoTags": [
+            "ab-funding-ci-79aa8fe4f6809118a7711cc82c9f35f299ab8f292e6395ef:standby"
+        ],
+        "RepoDigests": [
+            "ab-funding-ci-79aa8fe4f6809118a7711cc82c9f35f299ab8f292e6395ef@sha256:3ec6662d6275e36b5bf85dd3d13ebcf7e2f4a66d904aa41aed8aaf25d0e72c76"
+        ],
+        "Comment": "buildkit.dockerfile.v0",
+        "Created": "2026-11-10T12:08:50.509917715Z",
+        "Config": {
+            "User": "app",
+            "Env": [
+                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "RECOVERY_READER_MODE=standby",
+                "ENABLE_HOSTED_FINANCIAL_SIGNING=false",
+                "ENABLE_BASE_TX_BROADCAST=false",
+                "ENABLE_X402_HOSTED_RELAY=false",
+                "ENABLE_STRIPE_LIVE_EXECUTION=false"
+            ],
+            "Cmd": [
+                "/usr/local/bin/run-recovery-indexers"
+            ],
+            "Labels": {
+                "ab.recovery.owner": "79aa8fe4f6809118a7711cc82c9f35f299ab8f292e6395ef"
+            },
+            "ArgsEscaped": true
+        },
+        "Architecture": "amd64",
+        "Os": "linux",
+        "Size": 36215411,
+        "RootFS": {
+            "Type": "layers",
+            "Layers": [
+                "sha256:1d7b9dd8778ebc4d9bf2f64436dd358640718cb349f5640b33bebaea4ffd62c2",
+                "sha256:d519b3fdb58a807b7523fa27dfd8f8581536c08ae1366d44868fbfbf07cedb25",
+                "sha256:c407b939427f4b8a41fd26693560ac29afe4fbdfc2ff17a70ff88acea95ab5a6",
+                "sha256:a918c19315e674a09fd36fcb0920938cc01ded087f496326292609dc781bb963",
+                "sha256:3dab347582e3caf170af1be6bc838659af483fa11347b3c033024544bae7da6e"
+            ]
+        },
+        "Metadata": {
+            "LastTagTime": "2026-11-10T12:08:51.029631998Z"
+        },
+        "Descriptor": {
+            "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+            "digest": "sha256:3ec6662d6275e36b5bf85dd3d13ebcf7e2f4a66d904aa41aed8aaf25d0e72c76",
+            "size": 1290,
+            "annotations": {
+                "config.digest": "sha256:06a84bd97e85370a3b5d3aeddb16ca8dedd434d506e4bc1fbfcd7a3e5aa856e9"
+            }
+        },
+        "Identity": {
+            "Build": [
+                {
+                    "Ref": "he9mc1l5k4hcrc9g8d2s4eneu",
+                    "CreatedAt": "2026-11-10T12:08:51.169225057Z"
+                }
+            ]
+        }
+    }
+]

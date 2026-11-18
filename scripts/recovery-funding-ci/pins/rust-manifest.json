@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.manifest.v1+json",
+  "config": {
+    "mediaType": "application/vnd.oci.image.config.v1+json",
+    "digest": "sha256:1c3316753323aa5edd4c2be762323794f4aa9f4335635dc4c7964ee99cb986d2",
+    "size": 4720
+  },
+  "layers": [
+    {
+      "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+      "digest": "sha256:c150dd3f5fc91eabd1818cc30298a4a956782621583cadfd369c4d327584008e",
+      "size": 48488823
+    },
+    {
+      "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+      "digest": "sha256:c2c3414b1d6b49c54c305584faac46aad75c67644cf4f8495e8145206d28e416",
+      "size": 24038269
+    },
+    {
+      "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+      "digest": "sha256:de73ef470b7b271fede6f98a4c8376971bd059ce04ebc13b9f86e34e534b89ae",
+      "size": 64396012
+    },
+    {
+      "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+      "digest": "sha256:b267853a2602be02c651d45a79ece242837985d07267fe166ad1109a4b3baa39",
+      "size": 211533439
+    },
+    {
+      "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+      "digest": "sha256:5b2cfb71264fc5d467d6d3245474095c6366c6bd3b43f32bd29503dcd9540a72",
+      "size": 213027020
+    }
+  ],
+  "annotations": {
+    "com.docker.official-images.bashbrew.arch": "amd64",
+    "org.opencontainers.image.base.digest": "sha256:d614367698d35c88580c6bc21ffc4e9bc1b9526184e0bf4e8d0440fe4e017ff7",
+    "org.opencontainers.image.base.name": "buildpack-deps:bookworm",
+    "org.opencontainers.image.created": "2026-04-07T05:02:33Z",
+    "org.opencontainers.image.revision": "20c358f05538dc34ab5e2e586bd8f9229c49d51d",
+    "org.opencontainers.image.source": "https://github.com/rust-lang/docker-rust.git#20c358f05538dc34ab5e2e586bd8f9229c49d51d:stable/bookworm",
+    "org.opencontainers.image.url": "https://hub.docker.com/_/rust",
+    "org.opencontainers.image.version": "1-bookworm"
+  }
+}

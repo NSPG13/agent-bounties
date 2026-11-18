@@ -1,5 +1,10 @@
 {
   "schema": "agentizable/public-runtime-services-v1",
+  "transition_hold": {
+    "schema": "agentizable/public-runtime-transition-hold-v1",
+    "case_id": "reader-api-recovery-20261110",
+    "reason": "Separate recovery admission is required before public runtime deployment."
+  },
   "workspace_id": "tea-d4tk87f5r7bs73au55lg",
   "repository": "https://github.com/NSPG13/agent-bounties",
   "branch": "main",

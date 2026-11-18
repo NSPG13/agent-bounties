@@ -1,0 +1,41 @@
+# syntax=docker/dockerfile:1
+# Use only after the NEW service has an independently accepted immutable inert
+# predecessor. This image's financial admission is separate from reader/API.
+FROM rust:1.94-bookworm AS builder
+WORKDIR /workspace
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY bounties ./bounties
+COPY contracts ./contracts
+COPY fixtures ./fixtures
+COPY migrations ./migrations
+COPY ops ./ops
+COPY schemas ./schemas
+COPY site ./site
+COPY deployments/base-mainnet.json ./deployments/base-mainnet.json
+COPY scripts/check-recovery-funding-build.sh ./scripts/check-recovery-funding-build.sh
+ARG RENDER_SERVICE_ID
+ARG RENDER_GIT_COMMIT
+RUN /bin/bash scripts/check-recovery-funding-build.sh "$RENDER_SERVICE_ID" "$RENDER_GIT_COMMIT"
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/workspace/target,sharing=locked \
+    find crates bounties contracts fixtures migrations ops schemas site deployments -type f -exec touch {} + \
+    && RECOVERY_FUNDING_BOUND_SERVICE_ID="$RENDER_SERVICE_ID" \
+       RECOVERY_FUNDING_BOUND_REVISION="$RENDER_GIT_COMMIT" \
+       CARGO_BUILD_JOBS=2 \
+       cargo build --locked --release -p worker --bin worker --bin managed-funding-launcher \
+    && cp target/release/worker /tmp/managed-funding-worker \
+    && cp target/release/managed-funding-launcher /tmp/managed-funding-launcher
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* && useradd --create-home --uid 10001 app
+COPY --from=builder /tmp/managed-funding-worker /usr/local/bin/managed-funding-worker
+COPY --from=builder /tmp/managed-funding-launcher /usr/local/bin/managed-funding-launcher
+COPY --chmod=0555 scripts/check-recovery-revision.sh /usr/local/bin/check-recovery-revision
+USER app
+ENV RECOVERY_FUNDING_MODE=held \
+    ENABLE_HOSTED_FINANCIAL_SIGNING=false \
+    RUST_LOG=info
+# No ENTRYPOINT: the plain predeploy executable cannot become worker arguments.
+CMD ["/usr/local/bin/managed-funding-launcher"]
