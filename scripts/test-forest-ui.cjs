@@ -50,6 +50,7 @@ async function main() {
       });
       const page=await ctx.newPage(), errors=[];page.on("pageerror", e=>errors.push(e.message));
       await page.goto(origin);
+      await page.waitForLoadState("networkidle");
       await page.evaluate(()=>document.fonts.ready);
       assert.equal(await page.locator("html").getAttribute("data-theme"),"dark","default ignores OS until Auto selected");
       assert.ok(await page.evaluate(()=>document.fonts.check('32px "Cal Sans"') && document.fonts.check('16px Satoshi')));
