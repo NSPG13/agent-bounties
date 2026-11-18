@@ -23,6 +23,7 @@ SCHEMA = "agent-bounties/render-deploy-evidence-v1"
 REPOSITORY = "github.com/nspg13/agent-bounties"
 PROTOCOL = "agent-bounties/autonomous-v1"
 BLUEPRINT_PATH = "render.yaml"
+PUBLIC_RUNTIME_INVENTORY_PATH = Path(__file__).resolve().parents[1] / "ops/public-runtime-services.json"
 BLUEPRINT_RECOVERABLE_SERVICE_NAMES = frozenset(
     {"agent-bounties-open-competition-v1-indexer"}
 )
@@ -167,6 +168,20 @@ SITE_AUTH_INPUT_KEYS = (
 
 class RecoveryError(RuntimeError):
     pass
+
+
+def enforce_public_runtime_release_authority() -> None:
+    """Keep the legacy deploy authority inert throughout recovery admission."""
+    try:
+        inventory = json.loads(PUBLIC_RUNTIME_INVENTORY_PATH.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        raise RecoveryError("invalid_public_runtime_inventory") from None
+    if not isinstance(inventory, dict):
+        raise RecoveryError("invalid_public_runtime_inventory")
+    # Presence is authoritative, including false, null, or malformed metadata.
+    # The replacement API/readers release through native main-branch deploys.
+    if "transition_hold" in inventory:
+        raise RecoveryError("public_runtime_transition_hold")
 
 
 class RenderServiceMissing(RecoveryError):
@@ -3113,6 +3128,7 @@ def main() -> int:
         "error": None,
     }
     try:
+        enforce_public_runtime_release_authority()
         revision = validate_revision(args.revision)
         specs = list(SERVICE_SPECS)
         specs[0] = ServiceSpec(specs[0].name, specs[0].service_type, args.api_url)

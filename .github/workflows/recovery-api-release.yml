@@ -1,0 +1,56 @@
+name: Recovery API Main Release
+
+on:
+  workflow_run:
+    workflows: ["CI", "Containers"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: recovery-api-main-release
+  cancel-in-progress: false
+
+jobs:
+  release-api:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.repository == 'NSPG13/agent-bounties'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Verify bounded API release controller
+        run: python3 -m unittest scripts.test_release_recovery_api -v
+      - name: Require both checks on current protected main
+        id: qualify
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release_recovery_api.py qualify --evidence target/operations/recovery-api-qualification.json
+      - name: Deploy exact main API revision
+        if: steps.qualify.outputs.deploy == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        run: python3 scripts/release_recovery_api.py deploy --evidence target/operations/recovery-api-release.json
+      - name: Retain credential-free release evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: recovery-api-main-release-${{ github.run_id }}
+          path: target/operations/recovery-api-*.json
+          if-no-files-found: warn
+          retention-days: 30

@@ -85,6 +85,23 @@ def inspect(payload, now=None):
 
     if not isinstance(payload, dict) or payload.get('schema') != 'agent-bounties/marketplace-readiness-v1':
         return invalid('schema_invalid')
+    # This endpoint observes Base mainnet only. Legacy responses omitted the
+    # network and limits; they retain the stricter 20-block policy. Never accept
+    # an arbitrary server-selected relaxation or apply mainnet cadence elsewhere.
+    if 'network' in payload and payload['network'] != 'base-mainnet':
+        return invalid('network_invalid')
+    lag_limit = 20
+    if 'limits' in payload:
+        limits = payload['limits']
+        if (not isinstance(limits, dict)
+                or set(limits) != {'heartbeat_age_seconds', 'lag_blocks'}
+                or type(limits['heartbeat_age_seconds']) is not int
+                or limits['heartbeat_age_seconds'] != 90
+                or type(limits['lag_blocks']) is not int
+                or limits['lag_blocks'] not in (20, 200)
+                or (limits['lag_blocks'] == 200 and payload.get('network') != 'base-mainnet')):
+            return invalid('limits_invalid')
+        lag_limit = limits['lag_blocks']
     try:
         checked = datetime.fromisoformat(payload['checked_at'].replace('Z', '+00:00'))
         if checked.tzinfo is None:
@@ -138,7 +155,7 @@ def inspect(payload, now=None):
             healthy = (not missing_heads and r['ready'] and blocker is None
                        and type(age) is int and 0 <= age <= 90
                        and type(cursor) is int and 0 <= cursor <= latest
-                       and type(lag) is int and 0 <= lag <= 20
+                       and type(lag) is int and 0 <= lag <= lag_limit
                        and lag == max(0, safe - cursor))
             checks.append({'protocol': r['protocol'], 'ready': healthy,
                            'blocker': blocker, 'heartbeat_age_seconds': age,
@@ -148,7 +165,7 @@ def inspect(payload, now=None):
         elif payload.get('ready') is True and all(r['ready'] for r in checks):
             result = {'state': 'healthy', 'restartable': False, 'blocker': None, 'readers': checks}
         elif any((r['heartbeat_age_seconds'] is not None and r['heartbeat_age_seconds'] > 90)
-                 or (r['lag_blocks'] is not None and r['lag_blocks'] > 20)
+                 or (r['lag_blocks'] is not None and r['lag_blocks'] > lag_limit)
                  or r['blocker'] == 'reader_stale_or_behind' for r in checks):
             result = {'state': 'stale', 'restartable': False,
                       'blocker': 'marketplace_reader_not_ready', 'readers': checks}

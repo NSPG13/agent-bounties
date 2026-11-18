@@ -201,8 +201,32 @@ jobs:
         echo "deploy_mode=${REQUESTED_DEPLOY_MODE}" >> "$GITHUB_OUTPUT"
         echo "deployment_revision=${deployment_revision}" >> "$GITHUB_OUTPUT"
 
-    - name: Deploy and attest exact revision
+    - name: Check runtime release authority before loading deployment credentials
+      id: authority
       if: steps.target.outputs.deploy == 'true'
+      run: |
+        python - <<'PY'
+        import os
+        from pathlib import Path
+        from scripts.render_deploy_recovery import RecoveryError, enforce_public_runtime_release_authority
+
+        try:
+            enforce_public_runtime_release_authority()
+        except RecoveryError as error:
+            if str(error) != "public_runtime_transition_hold":
+                raise
+            allowed = False
+        else:
+            allowed = True
+        with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+            output.write(f"allowed={str(allowed).lower()}\n")
+        if not allowed:
+            with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as summary:
+                summary.write("Legacy Render deployment intentionally skipped: the public runtime transition hold is active. Replacement services use their own main-branch release settings.\n")
+        PY
+
+    - name: Deploy and attest exact revision
+      if: steps.target.outputs.deploy == 'true' && steps.authority.outputs.allowed == 'true'
       shell: bash
       env:
         RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
@@ -241,7 +265,7 @@ jobs:
           --output target/operations/render-deploy.json
 
     - name: Publish deployment evidence summary
-      if: always() && steps.target.outputs.deploy == 'true'
+      if: always() && steps.target.outputs.deploy == 'true' && steps.authority.outputs.allowed == 'true'
       shell: bash
       run: |
         python - <<'PY'
@@ -302,7 +326,7 @@ jobs:
         PY
 
     - name: Upload redacted deployment evidence
-      if: always() && steps.target.outputs.deploy == 'true'
+      if: always() && steps.target.outputs.deploy == 'true' && steps.authority.outputs.allowed == 'true'
       uses: actions/upload-artifact@v7.0.2
       with:
         name: render-deploy-${{ github.run_id }}

@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import re
 import sys
-import yaml
 from pathlib import Path
+
+import yaml
 
 from render_deploy_recovery import OPEN_COMPETITION_WORKER_ENVIRONMENT
 
@@ -380,9 +381,70 @@ def load_open_competition_mainnet_release(repo_root: Path) -> dict[str, object]:
     return release
 
 
+def require_recovery_blueprint(text: str, manifest: object) -> None:
+    """Limit recovery syncs to the two exact replacement service definitions.
+
+    Configuration, secrets and domains stay outside this release change. In
+    particular, adding a legacy environment group must not silently restore a
+    signing-capable service or enable a held protocol during a Blueprint sync.
+    """
+    if not isinstance(manifest, dict):
+        fail("public runtime service manifest must be an object")
+    hold = manifest.get("transition_hold")
+    if not isinstance(hold, dict) or hold.get("schema") != "agentizable/public-runtime-transition-hold-v1":
+        fail("recovery Blueprint requires the explicit public runtime transition hold")
+    if (
+        manifest.get("workspace_id") != "tea-d4tk87f5r7bs73au55lg"
+        or manifest.get("branch") != "main"
+        or manifest.get("repository") != "https://github.com/NSPG13/agent-bounties"
+    ):
+        fail("recovery Blueprint workspace and branch must match the reviewed inventory")
+    try:
+        document = yaml.safe_load(text)
+    except yaml.YAMLError as error:
+        fail(f"invalid recovery Blueprint YAML: {error}")
+    if not isinstance(document, dict) or set(document) != {"services"}:
+        fail("recovery Blueprint may define only replacement services")
+    services = document["services"]
+    if not isinstance(services, list) or len(services) != 2:
+        fail("recovery Blueprint must contain exactly two replacement services")
+    specs = (
+        ("agentizable-api-recovery-20261109", "srv-dbp7j78m7kps73a35vm0", "web", "./Dockerfile.recovery-api", "off"),
+        ("agentizable-readers-recovery-20261110", "srv-dbpjpcpsrm7s73av9ra0", "worker", "./Dockerfile.recovery-indexers", "off"),
+    )
+    inventory = manifest.get("services")
+    if not isinstance(inventory, list):
+        fail("recovery Blueprint requires the exact replacement service inventory")
+    for service, (name, service_id, service_type, dockerfile, trigger) in zip(services, specs):
+        expected = {
+            "type": service_type,
+            "name": name,
+            "runtime": "docker",
+            "branch": "main",
+            "autoDeployTrigger": trigger,
+            "dockerfilePath": dockerfile,
+            "dockerContext": ".",
+            "preDeployCommand": "/usr/local/bin/check-recovery-revision --built-revision",
+        }
+        if service_type == "web":
+            expected["healthCheckPath"] = "/health"
+        if service != expected:
+            fail(f"{name} must match the constrained recovery release configuration")
+        matches = [item for item in inventory if isinstance(item, dict) and item.get("name") == name]
+        if len(matches) != 1 or matches[0].get("id") != service_id or matches[0].get("dockerfile") != dockerfile:
+            fail(f"{name} must map to its exact replacement service ID and artifact")
+
+
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     require_docker_compile_time_assets(repo_root)
+    manifest_path = repo_root / "ops/public-runtime-services.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if isinstance(manifest, dict) and "transition_hold" in manifest:
+        text = (repo_root / "render.yaml").read_text(encoding="utf-8")
+        require_recovery_blueprint(text, manifest)
+        print("render recovery blueprint ok; reader deployment and legacy sync remain held")
+        return 0
     deployment = load_mainnet_deployment(repo_root)
     open_competition_release = load_open_competition_mainnet_release(repo_root)
     rpc_url = str(deployment["rpc_url"])
