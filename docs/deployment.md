@@ -68,6 +68,14 @@ then verify the exact reader artifact, monotonic progress, full-cycle freshness,
 and independent canonical agreement. A saved environment edit is not evidence
 that a previous signing-capable process has drained.
 
+If a candidate build fails, the current API instance remains the production
+fallback; inspect the failed deployment before requesting another attempt.
+For a code rollback, preserve the built-revision guard and create a reviewed
+forward repair or revert on main, then pass the same gates. An older image such
+as `b0f01679` lacks the built source stamp and cannot use the new admission
+command without a separately reviewed emergency rollback procedure. Never use
+the retired API as a rollback target.
+
 Validate the source configuration locally with:
 
 ```sh

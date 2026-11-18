@@ -2,7 +2,7 @@
 
 For the current replacement API, follow
 [returning the replacement services to main](deployment.md#returning-the-replacement-services-to-main).
-The scoped `Recovery API Release` workflow deploys exact protected main after
+The scoped `Recovery API Main Release` workflow deploys exact protected main after
 its CI and Containers checks succeed. The reader and historical broad
 controllers remain held. The older all-service procedure below is historical
 during this transition; do not clear its hold or resume retired services.

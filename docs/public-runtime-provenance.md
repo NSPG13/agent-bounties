@@ -5,7 +5,7 @@
 The November 10 replacement API and combined reader use dedicated recovery
 artifacts. The current two-service definitions and containment requirements are
 in [Deployment](deployment.md#returning-the-replacement-services-to-main).
-`Recovery API Release` is the only automatic API deployment authority: it waits
+`Recovery API Main Release` is the only automatic API deployment authority: it waits
 for the exact current protected-main revision's `CI` and `Containers` workflows,
 then verifies the fixed replacement API identity, deploys that revision once,
 and verifies terminal live state and its health revision. It never writes
