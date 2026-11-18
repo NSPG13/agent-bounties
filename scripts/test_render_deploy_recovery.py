@@ -20,11 +20,13 @@ SPEC.loader.exec_module(recovery)
 
 
 class RuntimeReleaseAuthorityTests(unittest.TestCase):
-    def workflow_authority(self, error=None):
-        workflow = yaml.safe_load((SCRIPT.parent.parent / '.github/workflows/render-deploy-recovery.yml').read_text())
-        steps = workflow['jobs']['deploy-exact-main-revision']['steps']
+    def workflow_authority(self, error=None, *, public_runtime=False):
+        workflow_name = 'public-runtime-release.yml' if public_runtime else 'render-deploy-recovery.yml'
+        workflow = yaml.safe_load((SCRIPT.parent.parent / '.github/workflows' / workflow_name).read_text())
+        steps = workflow['jobs']['release' if public_runtime else 'deploy-exact-main-revision']['steps']
         step = next(item for item in steps if item.get('id') == 'authority')
-        deploy = next(item for item in steps if item.get('name') == 'Deploy and attest exact revision')
+        deploy_name = 'Deploy exact public revision' if public_runtime else 'Deploy and attest exact revision'
+        deploy = next(item for item in steps if item.get('name') == deploy_name)
         self.assertLess(steps.index(step), steps.index(deploy))
         self.assertNotIn('env', step)
         self.assertIn("steps.authority.outputs.allowed == 'true'", deploy['if'])
@@ -56,6 +58,22 @@ class RuntimeReleaseAuthorityTests(unittest.TestCase):
 
     def test_workflow_allows_only_authorized_release_inventory(self):
         result, output, _ = self.workflow_authority()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output, 'allowed=true\n')
+
+    def test_public_workflow_transition_hold_is_successful_noop_without_secret_step(self):
+        result, output, summary = self.workflow_authority('public_runtime_transition_hold', public_runtime=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output, 'allowed=false\n')
+        self.assertIn('intentionally skipped', summary)
+
+    def test_public_workflow_malformed_inventory_still_fails_closed(self):
+        result, output, _ = self.workflow_authority('invalid_public_runtime_inventory', public_runtime=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('allowed=true', output)
+
+    def test_public_workflow_allows_only_authorized_release_inventory(self):
+        result, output, _ = self.workflow_authority(public_runtime=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(output, 'allowed=true\n')
 
