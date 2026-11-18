@@ -19,6 +19,103 @@ sys.modules[SPEC.name] = recovery
 SPEC.loader.exec_module(recovery)
 
 
+class RuntimeReleaseAuthorityTests(unittest.TestCase):
+    def workflow_authority(self, error=None, *, public_runtime=False):
+        workflow_name = 'public-runtime-release.yml' if public_runtime else 'render-deploy-recovery.yml'
+        workflow = yaml.safe_load((SCRIPT.parent.parent / '.github/workflows' / workflow_name).read_text())
+        steps = workflow['jobs']['release' if public_runtime else 'deploy-exact-main-revision']['steps']
+        step = next(item for item in steps if item.get('id') == 'authority')
+        deploy_name = 'Deploy exact public revision' if public_runtime else 'Deploy and attest exact revision'
+        deploy = next(item for item in steps if item.get('name') == deploy_name)
+        self.assertLess(steps.index(step), steps.index(deploy))
+        self.assertNotIn('env', step)
+        self.assertIn("steps.authority.outputs.allowed == 'true'", deploy['if'])
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'scripts').mkdir()
+            (root / 'scripts/__init__.py').write_text('')
+            # Exercise the actual workflow shell with an offline authority result.
+            (root / 'scripts/render_deploy_recovery.py').write_text(
+                'class RecoveryError(RuntimeError): pass\n'
+                'def enforce_public_runtime_release_authority():\n' +
+                ('    raise RecoveryError(' + repr(error) + ')\n' if error else '    pass\n'))
+            output, summary = root / 'output', root / 'summary'
+            result = subprocess.run(['/bin/bash', '-euo', 'pipefail', '-c', step['run']],
+                cwd=root, env={**os.environ, 'GITHUB_OUTPUT': str(output),
+                               'GITHUB_STEP_SUMMARY': str(summary)}, capture_output=True, text=True)
+            return result, output.read_text() if output.exists() else '', summary.read_text() if summary.exists() else ''
+
+    def test_workflow_transition_hold_is_successful_noop_without_secret_step(self):
+        result, output, summary = self.workflow_authority('public_runtime_transition_hold')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output, 'allowed=false\n')
+        self.assertIn('intentionally skipped', summary)
+
+    def test_workflow_malformed_inventory_still_fails_closed(self):
+        result, output, _ = self.workflow_authority('invalid_public_runtime_inventory')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('allowed=true', output)
+
+    def test_workflow_allows_only_authorized_release_inventory(self):
+        result, output, _ = self.workflow_authority()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output, 'allowed=true\n')
+
+    def test_public_workflow_transition_hold_is_successful_noop_without_secret_step(self):
+        result, output, summary = self.workflow_authority('public_runtime_transition_hold', public_runtime=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output, 'allowed=false\n')
+        self.assertIn('intentionally skipped', summary)
+
+    def test_public_workflow_malformed_inventory_still_fails_closed(self):
+        result, output, _ = self.workflow_authority('invalid_public_runtime_inventory', public_runtime=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('allowed=true', output)
+
+    def test_public_workflow_allows_only_authorized_release_inventory(self):
+        result, output, _ = self.workflow_authority(public_runtime=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output, 'allowed=true\n')
+
+    def check_inventory(self, payload):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "inventory.json"
+            if payload is not None:
+                path.write_text(payload, encoding="utf-8")
+            with mock.patch.object(recovery, "PUBLIC_RUNTIME_INVENTORY_PATH", path):
+                recovery.enforce_public_runtime_release_authority()
+
+    def test_any_transition_hold_blocks_legacy_release(self):
+        for value in ('false', 'null', '{}', '"expired"'):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                recovery.RecoveryError, "public_runtime_transition_hold"
+            ):
+                self.check_inventory('{"transition_hold":' + value + '}')
+
+    def test_missing_or_invalid_inventory_fails_closed(self):
+        for value in (None, '{', 'null', '[]'):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                recovery.RecoveryError, "invalid_public_runtime_inventory"
+            ):
+                self.check_inventory(value)
+
+    def test_inventory_without_hold_preserves_existing_release_checks(self):
+        self.check_inventory('{}')
+
+    def test_cli_denies_before_client_or_deploy_and_records_failure(self):
+        with mock.patch.object(sys, 'argv', [str(SCRIPT), '--revision', 'a' * 40]), \
+             mock.patch.object(recovery, 'enforce_public_runtime_release_authority',
+                               side_effect=recovery.RecoveryError('public_runtime_transition_hold')), \
+             mock.patch.object(recovery, 'RenderClient') as client, \
+             mock.patch.object(recovery, 'deploy') as deploy, \
+             mock.patch.object(recovery, 'write_evidence') as evidence:
+            self.assertEqual(recovery.main(), 1)
+            client.assert_not_called()
+            deploy.assert_not_called()
+            self.assertFalse(evidence.call_args.args[1]['success'])
+            self.assertEqual(evidence.call_args.args[1]['error'], 'public_runtime_transition_hold')
+
+
 class PinnedDeploymentSelectionTests(unittest.TestCase):
     """Run the real workflow selector with offline Git/GitHub stand-ins."""
 

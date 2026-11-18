@@ -1,5 +1,28 @@
 # Public runtime provenance
 
+## Replacement API releases during recovery
+
+The November 10 replacement API and combined reader use dedicated recovery
+artifacts. The current two-service definitions and containment requirements are
+in [Deployment](deployment.md#returning-the-replacement-services-to-main).
+`Recovery API Main Release` is the only automatic API deployment authority: it waits
+for the exact current protected-main revision's `CI` and `Containers` workflows,
+then verifies the fixed replacement API identity, deploys that revision once,
+and verifies terminal live state and its health revision. It never writes
+service settings or environments and cannot deploy any worker. Native Render
+triggers stay off. The reader's branch can be main while its automatic release
+remains held pending the separately reviewed financial-containment procedure.
+
+The public-runtime transition hold remains authoritative for both older broad
+controllers. Their workflows skip deliberately during this hold; direct
+controller invocations still fail closed. Do not clear the hold to release the
+replacement API or resume the retired signing-capable services. Blueprint sync
+remains paused until a reviewed plan maps exactly the replacement service IDs
+without unintended changes. The historical release and provenance design below
+does not authorize held-reader or financial processing.
+
+## Historical broad release controller
+
 Production application releases originate from `NSPG13/agent-bounties` main. The public repository contains the runtime implementation, including managed payment paths and all advertised MCP tools. Internal operational notes may remain private; executable runtime source may not.
 
 `python scripts/check_public_runtime_parity.py --published` fetches public main from the fixed repository and compares source content, Cargo manifests/lockfile, migrations, contracts, programs, Dockerfile, Cargo configuration and embedded workspace Rust inputs. Missing, extra or changed build inputs fail the check. A local `--public-root` comparison is review assistance, never deployment evidence. A private runtime checkout must publish matching source before it can pass the release gate.

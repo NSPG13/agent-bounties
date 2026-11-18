@@ -54,6 +54,13 @@ button:disabled { cursor: default; }
 .ab-button:hover { transform: translateY(-2px); background: var(--ab-soft); }
 .ab-button--primary { color: var(--ab-on-accent); background: var(--ab-accent); border-color: transparent; }
 .ab-button--primary:hover { background: var(--ab-accent-hover); }
+/* Variants: the plain .ab-button is the secondary style. Compact fits rows and dialogs;
+   danger is for delete or revoke and uses the theme's own danger colour in light and dark. */
+.ab-button--compact { gap: 6px; padding: 7px 16px; min-height: 36px; font-size: .85rem; }
+.ab-button--danger { color: var(--ab-danger); border-color: color-mix(in srgb, var(--ab-danger) 55%, transparent); }
+.ab-button--danger:hover { background: color-mix(in srgb, var(--ab-danger) 14%, var(--ab-panel)); }
+.ab-button:disabled { opacity: .55; cursor: default; transform: none; }
+@media (prefers-reduced-motion: reduce) { .ab-button:hover { transform: none; } }
 .ab-arrow { font: 700 17px/1 var(--ab-body); width: 18px; height: 18px; border-radius: 50%; background: currentColor; position: relative; }
 .ab-arrow::after { content: "➜"; position: absolute; inset: 0; color: var(--ab-accent); font-size: 13px; display: grid; place-items: center; }
 .ab-overline { font-size: 14px; font-weight: 700; letter-spacing: .04em; color: var(--ab-muted); }
