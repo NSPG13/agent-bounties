@@ -28,6 +28,8 @@ pub struct SitePostingDraftSummary {
     pub needs_reconciliation: bool,
     pub bounty_contract: Option<String>,
     pub bounty_id: Option<String>,
+    /// The same rule as `delete_site_posting_draft`: no wallet step recorded.
+    pub can_delete: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -42,6 +44,22 @@ pub enum PostingDraftError {
     Invalid,
     #[error("draft_integer_exceeds_browser_safe_range_use_a_string")]
     NonCanonicalJson,
+    #[error("draft_not_found")]
+    NotFound,
+    #[error("draft_deleted")]
+    Deleted,
+    #[error("draft_has_wallet_activity")]
+    WalletActivity,
+}
+
+/// A saved draft may be deleted only while its recovery state records no wallet step at all:
+/// no signed continuation, submission, transaction, creation or funding. The only key a
+/// draft carries before any wallet step is its display time zone.
+pub fn draft_has_wallet_activity(recovery_state: &Value) -> bool {
+    match recovery_state.as_object() {
+        Some(object) => object.keys().any(|key| key != "display_context"),
+        None => true,
+    }
 }
 
 // RFC8785 uses ECMAScript number formatting and UTF-16 property ordering, matching
@@ -160,7 +178,7 @@ impl PostgresStore {
         account_id: &str,
         offset: u32,
     ) -> Result<Vec<SitePostingDraftSummary>, PostingDraftError> {
-        let rows = sqlx::query("SELECT operation_id, left(COALESCE(NULLIF(draft->'draft'->>'title', ''), NULLIF(draft->>'goal', ''), 'Untitled bounty'), 160) AS title, updated_at, expires_at, revision, recovery_state ? 'bounty_id' AS needs_reconciliation, recovery_state->>'bounty_contract' AS bounty_contract, recovery_state->>'bounty_id' AS bounty_id FROM site_posting_drafts WHERE account_id = $1 AND NOT EXISTS (SELECT 1 FROM posting_authorization_retirements r WHERE r.account_id=site_posting_drafts.account_id AND r.operation_id=site_posting_drafts.operation_id) AND (expires_at > now() OR recovery_state ? 'bounty_id') ORDER BY updated_at DESC, operation_id DESC LIMIT 51 OFFSET $2")
+        let rows = sqlx::query("SELECT operation_id, left(COALESCE(NULLIF(draft->'draft'->>'title', ''), NULLIF(draft->>'goal', ''), 'Untitled bounty'), 160) AS title, updated_at, expires_at, revision, recovery_state ? 'bounty_id' AS needs_reconciliation, recovery_state->>'bounty_contract' AS bounty_contract, recovery_state->>'bounty_id' AS bounty_id, (recovery_state - 'display_context') = '{}'::jsonb AS can_delete FROM site_posting_drafts WHERE account_id = $1 AND NOT EXISTS (SELECT 1 FROM posting_authorization_retirements r WHERE r.account_id=site_posting_drafts.account_id AND r.operation_id=site_posting_drafts.operation_id) AND (expires_at > now() OR recovery_state ? 'bounty_id') ORDER BY updated_at DESC, operation_id DESC LIMIT 51 OFFSET $2")
             .bind(account_id).bind(i64::from(offset)).fetch_all(&self.pool).await?;
         rows.into_iter()
             .map(|row| {
@@ -173,10 +191,57 @@ impl PostgresStore {
                     needs_reconciliation: row.try_get("needs_reconciliation")?,
                     bounty_contract: row.try_get("bounty_contract")?,
                     bounty_id: row.try_get("bounty_id")?,
+                    can_delete: row.try_get("can_delete")?,
                 })
             })
             .collect::<Result<Vec<_>, sqlx::Error>>()
             .map_err(Into::into)
+    }
+
+    /// Deletes a saved draft that never reached a wallet step, at the revision the person saw,
+    /// and records a tombstone in the same transaction so no device can recreate it.
+    /// Repeating a completed delete succeeds without another change.
+    pub async fn delete_site_posting_draft(
+        &self,
+        account_id: &str,
+        operation_id: Uuid,
+        expected_revision: i64,
+    ) -> Result<(), PostingDraftError> {
+        let mut tx = self.pool.begin().await?;
+        // Same per-owner lock as saving, so a save and a delete cannot interleave.
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 3671))")
+            .bind(account_id)
+            .execute(&mut *tx)
+            .await?;
+        let existing = sqlx::query("SELECT operation_id, draft, recovery_state, draft_hash, approved_draft_hash, revision, updated_at, expires_at FROM site_posting_drafts WHERE account_id = $1 AND operation_id = $2 FOR UPDATE")
+            .bind(account_id).bind(operation_id).fetch_optional(&mut *tx).await?
+            .map(from_row).transpose()?;
+        let Some(existing) = existing else {
+            let deleted: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM site_posting_draft_tombstones WHERE account_id=$1 AND operation_id=$2)")
+                .bind(account_id).bind(operation_id).fetch_one(&mut *tx).await?;
+            return if deleted {
+                Ok(())
+            } else {
+                Err(PostingDraftError::NotFound)
+            };
+        };
+        let retired: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM posting_authorization_retirements WHERE account_id=$1 AND operation_id=$2)")
+            .bind(account_id).bind(operation_id).fetch_one(&mut *tx).await?;
+        if retired || draft_has_wallet_activity(&existing.recovery_state) {
+            return Err(PostingDraftError::WalletActivity);
+        }
+        if existing.revision != expected_revision {
+            return Err(PostingDraftError::Conflict);
+        }
+        sqlx::query("DELETE FROM site_posting_drafts WHERE account_id = $1 AND operation_id = $2")
+            .bind(account_id)
+            .bind(operation_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("INSERT INTO site_posting_draft_tombstones (account_id, operation_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
+            .bind(account_id).bind(operation_id).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(())
     }
 
     pub async fn get_site_posting_draft(
@@ -219,6 +284,12 @@ impl PostgresStore {
             .bind(account_id).bind(operation_id).fetch_one(&mut *tx).await?;
         if retired {
             return Err(PostingDraftError::Conflict);
+        }
+        // A device that still holds a deleted draft cannot bring it back with a later save.
+        let deleted: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM site_posting_draft_tombstones WHERE account_id=$1 AND operation_id=$2)")
+            .bind(account_id).bind(operation_id).fetch_one(&mut *tx).await?;
+        if deleted {
+            return Err(PostingDraftError::Deleted);
         }
         sqlx::query("DELETE FROM site_posting_drafts WHERE expires_at <= now() AND NOT (recovery_state ? 'bounty_id')")
             .execute(&mut *tx)
@@ -314,6 +385,26 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn only_drafts_without_any_wallet_step_can_be_deleted() {
+        assert!(!draft_has_wallet_activity(&json!({})));
+        assert!(!draft_has_wallet_activity(
+            &json!({"display_context": {"timezone": "America/Mexico_City"}})
+        ));
+        for recorded in [
+            json!({"phase": "prepared"}),
+            json!({"continuation_hash": "0xabc"}),
+            json!({"submission_attempt_id": "attempt"}),
+            json!({"transactions": []}),
+            json!({"authorizationIssued": true}),
+            json!({"bounty_id": "0x1", "bounty_contract": "0x2", "display_context": {"timezone": "UTC"}}),
+            json!(null),
+            json!([]),
+        ] {
+            assert!(draft_has_wallet_activity(&recorded), "{recorded}");
+        }
+    }
+
+    #[test]
     fn approval_hash_binds_nested_terms_and_is_key_order_independent() {
         let first: Value = serde_json::from_str(
             r#"{"title":"Video","image":{"sha256":"abc","url":"https://example.com"}}"#,
@@ -349,6 +440,108 @@ mod tests {
                 Err(PostingDraftError::NonCanonicalJson)
             ));
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn deleting_a_draft_needs_its_revision_refuses_wallet_activity_and_cannot_be_undone_by_a_stale_save(
+    ) {
+        let store =
+            PostgresStore::connect(&std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap())
+                .await
+                .unwrap();
+        store.migrate().await.unwrap();
+        let owner = Uuid::new_v4().to_string();
+        let id = Uuid::new_v4();
+        let draft = json!({"id":id,"schema":"agent-bounties/posting-draft-v1","draft":{"title":"Delete me"}});
+        let display = json!({"display_context":{"timezone":"America/Mexico_City"}});
+        let saved = store
+            .save_site_posting_draft(&owner, id, &draft, 0, None, &display)
+            .await
+            .unwrap();
+        // Another account, a stale revision and an unknown draft change nothing.
+        assert!(matches!(
+            store
+                .delete_site_posting_draft("other", id, saved.revision)
+                .await,
+            Err(PostingDraftError::NotFound)
+        ));
+        assert!(matches!(
+            store
+                .delete_site_posting_draft(&owner, id, saved.revision + 1)
+                .await,
+            Err(PostingDraftError::Conflict)
+        ));
+        assert!(matches!(
+            store
+                .delete_site_posting_draft(&owner, Uuid::new_v4(), 1)
+                .await,
+            Err(PostingDraftError::NotFound)
+        ));
+        store
+            .delete_site_posting_draft(&owner, id, saved.revision)
+            .await
+            .unwrap();
+        // The draft is gone from reads and listings, and a repeated delete succeeds.
+        assert!(store
+            .get_site_posting_draft(&owner, id)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(store
+            .list_site_posting_drafts(&owner, 0)
+            .await
+            .unwrap()
+            .iter()
+            .all(|summary| summary.operation_id != id));
+        let listed = Uuid::new_v4();
+        let listed_draft = json!({"id":listed,"schema":"agent-bounties/posting-draft-v1","draft":{"title":"Listed"}});
+        store
+            .save_site_posting_draft(&owner, listed, &listed_draft, 0, None, &display)
+            .await
+            .unwrap();
+        assert!(store
+            .list_site_posting_drafts(&owner, 0)
+            .await
+            .unwrap()
+            .iter()
+            .any(|summary| summary.operation_id == listed && summary.can_delete));
+        store
+            .delete_site_posting_draft(&owner, id, saved.revision)
+            .await
+            .unwrap();
+        // A device that still holds the draft cannot recreate it.
+        assert!(matches!(
+            store
+                .save_site_posting_draft(&owner, id, &draft, 0, None, &display)
+                .await,
+            Err(PostingDraftError::Deleted)
+        ));
+        // A draft with any recorded wallet step is never deleted.
+        let funded = Uuid::new_v4();
+        let funded_draft = json!({"id":funded,"schema":"agent-bounties/posting-draft-v1","draft":{"title":"Funded"}});
+        let recovery = json!({"bounty_id":format!("0x{}", "22".repeat(32)),"bounty_contract":format!("0x{}", "11".repeat(20)),"phase":"funding_confirmed"});
+        let kept = store
+            .save_site_posting_draft(&owner, funded, &funded_draft, 0, None, &recovery)
+            .await
+            .unwrap();
+        assert!(matches!(
+            store
+                .delete_site_posting_draft(&owner, funded, kept.revision)
+                .await,
+            Err(PostingDraftError::WalletActivity)
+        ));
+        assert!(store
+            .get_site_posting_draft(&owner, funded)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(store
+            .list_site_posting_drafts(&owner, 0)
+            .await
+            .unwrap()
+            .iter()
+            .any(|summary| summary.operation_id == funded && !summary.can_delete));
     }
 
     #[tokio::test]
