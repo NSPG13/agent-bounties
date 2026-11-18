@@ -173,7 +173,69 @@ mod diagnostics_tests {
         task.abort();
     }
 
-    // Spawned alone with API_UPSTREAM_BASE_URL aimed at a closed loopback port.
+    #[tokio::test]
+    async fn diagnostics_discovery_failure_wire_contract() {
+        async fn run_fixture(api: String, expected: &'static str) {
+            // Isolate environment configuration from the parallel test suite.
+            let output = tokio::task::spawn_blocking(move || {
+                std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "tests::diagnostics_tests::diagnostics_direct_and_remote_failure_fixture",
+                        "--ignored",
+                        "--nocapture",
+                    ])
+                    .env("API_UPSTREAM_BASE_URL", api)
+                    .env("CHATGPT_APP_SANDBOX_MODE", "false")
+                    .env("AGENT_BOUNTIES_DIAGNOSTIC_FIXTURE", "local-only")
+                    .env("AGENT_BOUNTIES_DIAGNOSTIC_EXPECTED_FAILURE", expected)
+                    .output()
+                    .unwrap()
+            })
+            .await
+            .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        run_fixture(format!("http://{address}"), "request_transport_unavailable").await;
+
+        for json_body in [false, true] {
+            let app = axum::Router::new().fallback(move || async move {
+                if json_body {
+                    (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Json(json!({"error":"reader_unavailable"})),
+                    )
+                        .into_response()
+                } else {
+                    (StatusCode::SERVICE_UNAVAILABLE, "private-response-marker").into_response()
+                }
+            });
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            run_fixture(
+                format!("http://{address}"),
+                if json_body {
+                    "reader_unavailable"
+                } else {
+                    "response_json_invalid"
+                },
+            )
+            .await;
+            server.abort();
+        }
+    }
+
+    // Spawned alone by diagnostics_discovery_failure_wire_contract.
     #[tokio::test]
     #[ignore = "isolated diagnostics fixture process only"]
     async fn diagnostics_direct_and_remote_failure_fixture() {
@@ -219,6 +281,8 @@ mod diagnostics_tests {
         let body: serde_json::Value = response.json().await.unwrap();
         assert_eq!(body["error"]["code"], -32603);
         assert_eq!(body["error"]["data"]["error_code"], "upstream_unavailable");
+        assert_eq!(body["error"]["data"]["coverage"], "unavailable");
+        assert_eq!(body["error"]["data"]["retry_policy"]["maximum_retries"], 1);
         assert!(body.to_string().contains(&expected), "{body}");
         assert_private(&body);
         let response = client.post(format!("http://{address}/mcp"))
@@ -231,6 +295,7 @@ mod diagnostics_tests {
         let body: serde_json::Value = response.json().await.unwrap();
         assert_eq!(body["error"]["code"], -32603);
         assert_eq!(body["error"]["data"]["error_code"], "upstream_unavailable");
+        assert_eq!(body["error"]["data"]["coverage"], "unavailable");
         assert!(body.to_string().contains(&expected), "{body}");
         assert_private(&body);
         // A real argument error must keep the protocol's invalid-params code.
@@ -240,6 +305,37 @@ mod diagnostics_tests {
         let body: serde_json::Value = response.json().await.unwrap();
         assert_eq!(body["error"]["code"], -32602);
         assert!(body["error"].get("data").is_none());
+
+        // Installed compatibility clients receive an MCP tool error, not a
+        // JSON-RPC error. The same guidance must survive that separate path.
+        for modern in [false, true] {
+            let mut request = client.post(format!("http://{address}/mcp"));
+            let mut params = json!({"name":"list_autonomous_bounties", "arguments":{"claimable_only":true, "network":"base-mainnet"}});
+            if modern {
+                request = request
+                    .header("mcp-protocol-version", "2026-07-28")
+                    .header("mcp-method", "tools/call")
+                    .header("mcp-name", "list_autonomous_bounties");
+                params["_meta"] = json!({"io.modelcontextprotocol/protocolVersion":"2026-07-28", "io.modelcontextprotocol/clientCapabilities":{}});
+            }
+            let response = request
+                .json(&json!({"jsonrpc":"2.0", "id":10, "method":"tools/call", "params":params}))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body: serde_json::Value = response.json().await.unwrap();
+            let result = &body["result"];
+            assert_eq!(result["isError"], true, "{body}");
+            assert_eq!(result["structuredContent"]["coverage"], "unavailable");
+            assert_eq!(
+                result["structuredContent"]["retry_policy"]["maximum_retries"],
+                1
+            );
+            assert!(result["structuredContent"].get("bounties").is_none());
+            assert!(body.to_string().contains(&expected), "{body}");
+            assert_private(&body);
+        }
         task.abort();
     }
 }
