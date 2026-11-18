@@ -46,7 +46,7 @@
         ]
       }
     </script>
-    <link rel="stylesheet" href="solarpunk.css?v=20">
+    <link rel="stylesheet" href="solarpunk.css?v=21">
     <link rel="stylesheet" href="phone-wallet.css?v=5">
     <link rel="stylesheet" href="wallet-link.css?v=5">
     <link rel="stylesheet" href="wallet-adapters.css?v=6">
@@ -178,15 +178,14 @@
             <span data-auth-email></span>
             <small data-auth-provider-name></small>
           </div>
-          <button type="button" data-auth-logout>Sign out</button>
         </div>
 
         <section class="account-inbox" data-account-inbox aria-label="Your saved drafts and activity" aria-live="polite"></section>
 
-        <section class="account-wallets" aria-labelledby="linked-wallets-title">
+        <details class="account-wallets account-collapsible" data-account-section="wallets">
+          <summary><h3 id="linked-wallets-title">Linked wallets <span class="account-section-count" data-wallet-count></span></h3></summary>
           <header>
             <div>
-              <h3 id="linked-wallets-title">Linked wallets</h3>
               <p>Needed only to solve bounties and receive payouts. Posting and paying by card need no wallet. Use a phone wallet, a browser wallet, or create one here.</p>
             </div>
             <button type="button" data-wallet-link>Link wallet</button>
@@ -196,18 +195,10 @@
           </ul>
           <p class="wallet-proof-note">Ownership proof only—this signature cannot move funds, approve tokens, or post a bounty.</p>
           <p class="wallet-status" data-wallet-status aria-live="polite"></p>
-        </section>
+        </details>
 
-        <section class="account-review-emails" aria-labelledby="push-notifications-title">
-          <h3 id="push-notifications-title">Browser notifications</h3>
-          <p>Receive claims and review reminders on this device, including when this page is closed. Your browser’s push service handles encrypted delivery.</p>
-          <p data-push-status aria-live="polite">Sign in to manage browser notifications.</p>
-          <button type="button" data-push-enable disabled>Enable on this device</button>
-          <button type="button" data-push-disable hidden>Turn off this device</button>
-          <button type="button" data-push-test hidden>Send a test notification</button>
-        </section>
-        <section class="account-review-emails" data-review-email-settings aria-labelledby="review-email-title" aria-busy="true">
-          <h3 id="review-email-title">Bounty emails</h3>
+        <details class="account-review-emails account-collapsible" data-review-email-settings data-account-section="emails" aria-busy="true">
+          <summary><h3 id="review-email-title">Bounty emails</h3></summary>
           <label><input type="checkbox" data-review-email-enabled disabled> <span>Email me about claims on my bounties and solutions needing my review</span></label>
           <p data-review-email-address></p>
           <p data-review-email-status aria-live="polite">Checking review email settings…</p>
@@ -216,7 +207,20 @@
             <button type="button" data-review-email-wallet hidden>Link my verifier wallet</button>
             <button type="button" data-review-email-retry hidden>Try again</button>
           </div>
+        </details>
+
+        <details class="account-settings account-collapsible" data-account-section="settings">
+          <summary><h3 id="account-settings-title">Settings</h3></summary>
+        <section class="account-review-emails" aria-labelledby="push-notifications-title">
+          <h4 id="push-notifications-title">Browser notifications</h4>
+          <p>Receive claims and review reminders on this device, including when this page is closed. Your browser’s push service handles encrypted delivery.</p>
+          <p data-push-status aria-live="polite">Sign in to manage browser notifications.</p>
+          <button type="button" data-push-enable disabled>Enable on this device</button>
+          <button type="button" data-push-disable hidden>Turn off this device</button>
+          <button type="button" data-push-test hidden>Send a test notification</button>
         </section>
+          <button class="ab-button ab-button--compact account-signout" type="button" data-auth-logout>Sign out</button>
+        </details>
 
         <p class="account-setup-note" data-account-setup-note aria-live="polite">Checking your account setup…</p>
         <button class="account-setup-retry" type="button" data-account-setup-retry hidden>Check again</button>
@@ -366,7 +370,7 @@
     <script src="analytics.js?v=7"></script>
     <script src="posting-prompt.js?v=7"></script>
     <script src="creator-push.js?v=3"></script>
-  <script src="solarpunk-home.js?v=45"></script>
+  <script src="solarpunk-home.js?v=46"></script>
     <script src="forest-home.js?v=8"></script>
     <script src="forest-hall.js?v=4"></script>
   <!-- shared-footer:start -->
