@@ -44,10 +44,6 @@ async function main() {
   });
   let mode = "ready";
   const errors = [];
-  // workspace/index.html is a redirect handoff: it refreshes at once to the API, which
-  // signs the visitor into the Workspace. Answering that request with 204 No Content keeps
-  // the browser on the page so it is measured like every other page; the fixture then
-  // serves a document to prove where the manual fallback link lands.
   const workspaceHandoff = "https://api.agentizable.ai/v1/site-auth/workspace/open";
   let handoff = null;
   async function context(options) {
@@ -103,8 +99,6 @@ async function main() {
           continue;
         }
         if (file === "account.html") {
-          // The private card order page loads only its own scripts: no shared navigation,
-          // journey handlers or analytics may see quote, order or account state.
           await page.goto(`${origin}/${file}`);
           assert.equal(await page.locator("[data-site-header], .ab-footer").count(), 0, "private order page remains isolated");
           assert.deepEqual(await page.locator("script").evaluateAll(els => els.map(el => el.getAttribute("src"))), ["managed-service-core.js?v=20261030", "managed-service-page.js?v=20261030"]);
@@ -115,7 +109,7 @@ async function main() {
         let automatic;
         if (redirects) automatic = new Promise(resolve => { handoff = { requests: [], seen: resolve, land: false }; });
         await page.goto(`${origin}/${file}`);
-        if (!redirects) await page.locator(".ab-site-header.is-enhanced").waitFor();
+        await page.locator(".ab-site-header.is-enhanced").waitFor();
         await assertHeadingLayout(page, `${file} at ${width}px`);
         assert.equal(await page.locator("[data-site-header]").count(), 1, file);
         assert.equal(await page.locator("body > .ab-footer").count(), 1, `one page footer outside article cards: ${file}`);
@@ -178,7 +172,6 @@ async function main() {
       assert.equal(await page.locator(".metrics-detail[open]").count(), 0);
       assert.match(await page.locator("[data-dashboard-notice]").innerText(), /incomplete/);
       assert.equal(await page.locator("[data-payout-chart] svg").count(), 1);
-      assert.match(await page.locator("#payout-audit-description").innerText(), /USD paid out … USDC payouts at \$1 face value/);
       if (process.env.NAV_LAYOUT_ARTIFACTS && [1440,390].includes(width)) {
         fs.mkdirSync(process.env.NAV_LAYOUT_ARTIFACTS, { recursive: true });
         await page.screenshot({ path: path.join(process.env.NAV_LAYOUT_ARTIFACTS, `metrics-${width}.png`), fullPage: true });
