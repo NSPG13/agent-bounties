@@ -17,8 +17,8 @@ from regression_verifier_source_guard import _compile_time_inputs, _rust_tokens
 ROOT = Path(__file__).resolve().parents[1]
 PUBLIC = "https://github.com/NSPG13/agent-bounties.git"
 PREFIXES = ("crates/", "migrations/", "contracts/", "programs/", ".cargo/", "Dockerfile", "bounties/", "fixtures/", "ops/", "schemas/", "site/", "deployments/")
-FILES = {".dockerignore", "scripts/run-posting-indexers.sh", "scripts/run-posting-spender.sh", "scripts/run-posting-mcp-canary.sh", "Cargo.toml", "Cargo.lock", "Dockerfile", "rust-toolchain.toml", "rust-toolchain",
-         "scripts/check_public_runtime_parity.py", "scripts/regression_verifier_source_guard.py"}
+FILES = {".dockerignore", "scripts/run-recovery-indexers.sh", "scripts/check-recovery-reader-build.sh", "scripts/run-posting-indexers.sh", "scripts/run-posting-spender.sh", "scripts/run-posting-mcp-canary.sh", "Cargo.toml", "Cargo.lock", "Dockerfile", "rust-toolchain.toml", "rust-toolchain",
+         "scripts/check_public_runtime_parity.py", "scripts/regression_verifier_source_guard.py", "scripts/check-recovery-revision.sh"}
 
 
 def git(root: Path, *args: str) -> str:

@@ -29,7 +29,6 @@ impl SecurityAuthState {
         state.site_auth = Some(site_auth);
         state
     }
-    #[cfg(test)]
     pub fn disabled() -> Self {
         Self {
             site_auth: None,

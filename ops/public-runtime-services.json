@@ -1,5 +1,10 @@
 {
   "schema": "agentizable/public-runtime-services-v1",
+  "transition_hold": {
+    "schema": "agentizable/public-runtime-transition-hold-v1",
+    "case_id": "reader-api-recovery-20261110",
+    "reason": "Separate recovery admission is required before public runtime deployment."
+  },
   "workspace_id": "tea-d4tk87f5r7bs73au55lg",
   "repository": "https://github.com/NSPG13/agent-bounties",
   "branch": "main",
@@ -16,11 +21,11 @@
   },
   "services": [
     {
-      "name": "agent-bounties-api",
-      "id": "srv-d982ftu7r5hc73ar4stg",
+      "name": "agentizable-api-recovery-20261109",
+      "id": "srv-dbp7j78m7kps73a35vm0",
       "type": "web_service",
       "health_url": "https://api.agentizable.ai/health",
-      "dockerfile": "./Dockerfile"
+      "dockerfile": "./Dockerfile.recovery-api"
     },
     {
       "name": "agent-bounties-mcp",
@@ -30,10 +35,10 @@
       "dockerfile": "./Dockerfile"
     },
     {
-      "name": "agent-bounties-base-indexer",
-      "id": "srv-d982ftu7r5hc73ar4st0",
+      "name": "agentizable-readers-recovery-20261110",
+      "id": "srv-dbpjpcpsrm7s73av9ra0",
       "type": "background_worker",
-      "dockerfile": "./Dockerfile.posting-indexers"
+      "dockerfile": "./Dockerfile.recovery-indexers"
     },
     {
       "name": "agent-bounties-open-competition-v1-indexer",
