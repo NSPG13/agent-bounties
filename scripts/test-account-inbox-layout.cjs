@@ -106,11 +106,14 @@ function sorted(value) { return value && typeof value === "object" ? Array.isArr
         assert.equal(await needs.evaluate(el=>el.open),true,"Needs action opens when it has items");
         const sectionsOpen=()=>page.locator("[data-account-section]").evaluateAll(els=>Object.fromEntries(els.map(el=>[el.dataset.accountSection,el.open])));
         assert.deepEqual(await sectionsOpen(),{wallets:false,emails:false,settings:false});
-        assert.equal(await page.locator("[data-auth-logout]").isVisible(),false,"Sign out sits in the closed Settings");
+        // Sign out sits on the right of the profile row, always visible, in the page's button style.
+        const signOut=await page.locator("[data-auth-logout]").evaluate(el=>{const row=el.closest(".account-identity"),r=el.getBoundingClientRect(),h=row.getBoundingClientRect(),name=row.querySelector("[data-auth-name]").getBoundingClientRect();
+          return {inRow:Boolean(row),visible:el.checkVisibility(),right:Math.round(h.right-r.right),rightOfName:r.left>=name.right,ab:el.classList.contains("ab-button"),radius:getComputedStyle(el).borderTopLeftRadius};});
+        assert.deepEqual({...signOut,right:signOut.right<=1},{inRow:true,visible:true,right:true,rightOfName:true,ab:true,radius:"999px"},JSON.stringify(signOut));
         await page.locator('[data-account-section="wallets"] > summary').click();
         await page.locator('[data-account-section="settings"] > summary').focus();
         await page.keyboard.press("Enter");
-        assert.equal(await page.locator("[data-auth-logout]").isVisible(),true,"the keyboard opens Settings");
+        assert.equal(await page.locator("#push-notifications-title").isVisible(),true,"the keyboard opens Settings");
         await page.waitForFunction(()=>JSON.parse(localStorage.getItem("agent-bounties.account-sections.v1")||"{}").settings===true);
         await page.reload();
         await needs.waitFor();
