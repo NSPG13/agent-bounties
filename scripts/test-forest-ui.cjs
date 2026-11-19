@@ -169,7 +169,7 @@ async function main() {
       assert.equal(await page.getByRole("button",{name:"Sign in with Google",exact:true}).count(),1);
       await capture(page,`signin-${width}`);
       await page.locator("[data-auth-mode-toggle]").click();assert.equal(await page.locator("#auth-title").innerText(),"Create an account");
-      assert.equal(await page.getByRole("button",{name:"Up with Google",exact:true}).count(),1);
+      assert.equal(await page.getByRole("button",{name:"Sign up with Google",exact:true}).count(),1);
       await capture(page,`register-${width}`);
       await page.locator("[data-auth-close]").click();
       // The dialog's close event is queued; the login address is cleared when it runs.
@@ -181,7 +181,7 @@ async function main() {
       await page.locator("[data-auth-dialog][open]").waitFor();
       assert.equal(await page.locator("#auth-title").innerText(),"Sign in","the header Log in link opens sign-in");
       await page.locator("[data-auth-close]").click();
-      await page.ok(await page.locator(".ab-site-signin").evaluate(el=>el===document.activeElement),"focus returns to the header Log in link");
+      assert.ok(await page.locator(".ab-site-signin").evaluate(el=>el===document.activeElement),"focus returns to the header Log in link");
       if(width===390) {
         for(const provider of ["google","microsoft","github"]) {
           // Force a fresh document; a late close event on the previous dialog
