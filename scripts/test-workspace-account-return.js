@@ -3,7 +3,7 @@
 // Builds on the approach proposed in #1742.
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { workspaceAccountReturn, workspaceReturnTarget, workspaceReturnNeedsWallet } = require("../site/solarpunk-home.js");
+const { workspaceAccountReturn, workspaceLoginPath, workspaceReturnTarget, workspaceReturnNeedsWallet } = require("../site/solarpunk-home.js");
 
 const ORIGIN = "https://agentizable.ai";
 const PROJECT = "0988a16c-3d9a-4c16-8c7d-d5664aee2961";
@@ -119,4 +119,23 @@ test("storage failures fail closed", () => {
   assert.equal(workspaceAccountReturn(win, "remember", { now: 1 }), null);
   assert.equal(workspaceAccountReturn(win, "complete", { now: 2 }), null);
   assert.deepEqual(win.navigations, []);
+});
+
+test("sign-in started from the Workspace finishes at the Workspace, not on the home page", () => {
+  assert.equal(workspaceLoginPath("https://api.agentizable.ai/v1/site-auth/login/google"),
+    "https://api.agentizable.ai/v1/site-auth/login/google?return_to=workspace");
+  assert.equal(workspaceLoginPath("/auth/login/github?x=1"), "/auth/login/github?x=1&return_to=workspace");
+  const win = browser("/workspace/");
+  workspaceAccountReturn(win, "remember", { now: 1_000 });
+  // Choosing a provider hands off: no navigation here (OAuth navigates), the return counts as made.
+  assert.deepEqual(workspaceAccountReturn(win, "handoff", { now: 1_500 }), { target: "/workspace/", bounced: false });
+  assert.deepEqual(win.navigations, []);
+  assert.equal(workspaceAccountReturn(win, "pending", { now: 1_600 }), null, "nothing left to resume on the home page");
+  // A Workspace refusal (e.g. no wallet) sends the person back at once: a bounce, never an automatic loop.
+  arrive(win, "/workspace/");
+  assert.deepEqual(workspaceAccountReturn(win, "remember", { now: 30_000 }), { target: "/workspace/", bounced: true });
+  assert.equal(workspaceAccountReturn(win, "complete", { now: 30_001 }), null);
+  assert.deepEqual(win.navigations, []);
+  // Without a pending Workspace return there is nothing to hand off.
+  assert.equal(workspaceAccountReturn(browser(undefined), "handoff", { now: 1 }), null);
 });

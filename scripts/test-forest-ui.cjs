@@ -182,6 +182,12 @@ async function main() {
           await page.locator(`[data-auth-provider="${provider}"]`).click();
           await page.waitForURL(`**/auth/login/${provider}`);
         }
+        // Sign-in started from the Workspace asks the API to finish at the Workspace (no home page in between).
+        await page.goto(origin+`/?workspaceReturn=${encodeURIComponent("/workspace/")}&providerFixture=google#login`);
+        await page.locator("[data-auth-dialog][open]").waitFor();
+        await page.waitForFunction(()=>document.querySelector('[data-auth-provider="google"]').getAttribute("aria-disabled")==="false");
+        await page.locator('[data-auth-provider="google"]').click();
+        await page.waitForURL(url=>url.pathname==="/auth/login/google"&&url.searchParams.get("return_to")==="workspace");
       }
       await page.goto(origin+"/leaderboard.html");await page.getByText("No qualifying completions yet this period.",{exact:false}).waitFor();
       assert.equal(await page.locator("[data-leaderboard-table]").isVisible(),false);assert.match(await page.locator("[data-prize-title]").innerText(),/26 USDC weekly/);

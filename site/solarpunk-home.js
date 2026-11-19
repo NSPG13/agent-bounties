@@ -83,6 +83,7 @@
         return null;
       }
       const pending = { target, bounced: intent.bounced === true };
+      if (action === "handoff") { storage.setItem(WORKSPACE_RETURN_KEY, JSON.stringify({ returnedAt: now })); return pending; }
       if (action !== "complete") return pending;
       if (pending.bounced && !manual) return null;
       storage.setItem(WORKSPACE_RETURN_KEY, JSON.stringify({ returnedAt: now }));
@@ -211,6 +212,14 @@
     return Object.hasOwn(AUTH_PROVIDER_LABELS, key)
       ? authApiPath(`/login/${key}`, locationLike)
       : null;
+  }
+
+  // Sign-in started from the Workspace finishes there: the API signs the state with
+  // `return_to=workspace` and its callback hands the proof straight to the Workspace,
+  // so the home page never renders in between.
+  function workspaceLoginPath(path) {
+    if (typeof path !== "string" || !path) return path;
+    return `${path}${path.includes("?") ? "&" : "?"}return_to=workspace`;
   }
 
   async function fetchAuthSession(win) {
@@ -1821,7 +1830,8 @@ ${competitionChildBrief(item)}`;
           }
           button.setAttribute("aria-busy", "true");
           setStatus(`Opening ${label} sign-in…`);
-          win.location.assign(path);
+          const viaWorkspace = !currentUser && workspaceAccountReturn(win, "handoff");
+          win.location.assign(viaWorkspace ? workspaceLoginPath(path) : path);
         });
       });
       logoutButton?.addEventListener("click", async () => {
@@ -2105,6 +2115,7 @@ ${competitionChildBrief(item)}`;
   return {
     BOUNTY_POSTING_PROMPT,
     workspaceAccountReturn,
+    workspaceLoginPath,
     workspaceReturnTarget,
     workspaceReturnNeedsWallet,
     accountDashboardView,
