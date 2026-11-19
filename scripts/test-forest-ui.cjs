@@ -59,7 +59,7 @@ async function main() {
       assert.equal(await page.locator("[data-forest-video]").getAttribute("src"),null,"reduced motion does not fetch the background video");
       assert.equal(await page.locator("[data-forest-pause]").isVisible(),false,"reduced motion uses the static artwork");
       assert.ok(await page.locator(".ab-forest-poster").evaluate(image=>image.currentSrc.includes(innerWidth<=700?"agent-hall-loop-poster-small-v2.webp":"agent-hall-loop-poster-v2.webp")),"responsive forest artwork");
-      assert.deepEqual(await page.locator(".ab-site-nav a").allTextContents(), ["Log in", "Workspace", "Browse work"]);
+      assert.deepEqual(await page.locator(".ab-site-nav a").allTextContents(), ["Log in", "Workspace"]);
       assert.equal(await page.locator(".ab-site-menu, [data-site-header] .ab-site-login").count(), 0);
       assert.equal(await page.locator("#hero-title mark").innerText(), "what yours is missing");
       const titleLines = await page.locator(".ab-title-line").evaluateAll(els => els.map(el => ({ height: el.getBoundingClientRect().height, line: parseFloat(getComputedStyle(el).lineHeight), width: el.clientWidth, scroll: el.scrollWidth })));
@@ -112,7 +112,7 @@ async function main() {
         assert.ok(Math.max(...sizes) - Math.min(...sizes) < 1, "metric values share one size: " + JSON.stringify(fitted));
         assert.ok(Math.min(...sizes) >= 24, "metric values stay display-sized: " + JSON.stringify(fitted));
       }
-      for(const selector of [".ab-site-signin", ".ab-site-board"]) await fits(page,selector);
+      for(const selector of [".ab-site-signin", ".ab-site-workspace"]) await fits(page,selector);
       assert.equal(await page.locator(".ab-orbit-ring, .ab-orbit-sphere").count(),0);
       assert.match(await page.locator("#manifesto-title").innerText(),/If you can define.*done.*make it a bounty/s);
       assert.equal(await page.locator(".ab-ticker").count(),1,"one row of use cases");
@@ -182,6 +182,12 @@ async function main() {
           await page.locator(`[data-auth-provider="${provider}"]`).click();
           await page.waitForURL(`**/auth/login/${provider}`);
         }
+        // Sign-in started from the Workspace asks the API to finish at the Workspace (no home page in between).
+        await page.goto(origin+`/?workspaceReturn=${encodeURIComponent("/workspace/")}&providerFixture=google#login`);
+        await page.locator("[data-auth-dialog][open]").waitFor();
+        await page.waitForFunction(()=>document.querySelector('[data-auth-provider="google"]').getAttribute("aria-disabled")==="false");
+        await page.locator('[data-auth-provider="google"]').click();
+        await page.waitForURL(url=>url.pathname==="/auth/login/google"&&url.searchParams.get("return_to")==="workspace");
       }
       await page.goto(origin+"/leaderboard.html");await page.getByText("No qualifying completions yet this period.",{exact:false}).waitFor();
       assert.equal(await page.locator("[data-leaderboard-table]").isVisible(),false);assert.match(await page.locator("[data-prize-title]").innerText(),/26 USDC weekly/);

@@ -817,7 +817,7 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
         [
             'data-post-auth-start',
             'posting-auth.js?v=3',
-            'solarpunk-home.js?v=46',
+            'solarpunk-home.js?v=47',
             'bounty-composer-v2.js?v=42',
             'label: "LOG IN TO POST"',
             'credentials: "include"',
@@ -997,8 +997,8 @@ def check_homepage(site_dir: Path) -> None:
     if 'type="password"' in page or 'data-auth-unavailable' in page or 'Or start with your AI' in page:
         fail("homepage must not restore custom sign-up or competing posting controls")
     header_markup = page[header_start:header_end]
-    if 'Log in' not in header_markup or 'Browse work' not in header_markup or 'How it works' in header_markup or 'ab-site-menu' in header_markup or 'ab-site-login' in header_markup or 'data-auth-open' in header_markup:
-        fail("shared header must keep only Log in, Workspace and Browse work; the footer link owns the account dialog")
+    if 'Log in' not in header_markup or 'Workspace' not in header_markup or 'Browse work' in header_markup or 'How it works' in header_markup or 'ab-site-menu' in header_markup or 'ab-site-login' in header_markup or 'data-auth-open' in header_markup:
+        fail("shared header must keep only Log in and Workspace (Browse work lives in the Workspace and the page links); the footer link owns the account dialog")
     if "town hall" in page.lower():
         fail("homepage must not use the retired town-hall language")
     for removed in ("how-it-works.html",):

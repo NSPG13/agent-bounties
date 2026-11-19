@@ -82,6 +82,19 @@ class PublicSiteCanaryTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.run_canary()
 
+    def test_header_keeps_workspace_and_leaves_browse_work_to_the_page(self):
+        cases = {
+            "header has no Workspace link": self.home.replace('class="ab-site-workspace" href="./workspace"', 'class="ab-site-workspace" href="./old-workspace"'),
+            "Browse work must not return": self.home.replace("</nav>", '<a class="ab-site-board" href="earn.html">Browse work</a></nav>', 1),
+            "no longer links the work board": self.home.replace('href="earn.html"', 'href="old-board.html"'),
+        }
+        for message, home in cases.items():
+            with self.subTest(message=message):
+                self.assertNotEqual(home, self.home)
+                self.overrides["index.html"] = home.encode()
+                with self.assertRaisesRegex(ValueError, message):
+                    self.run_canary()
+
     def test_payout_metric_in_header_fails(self):
         home = self.home.replace("data-market-volume", "data-old-volume")
         home = home.replace("</header>", '<output data-market-volume>0</output></header>', 1)

@@ -68,7 +68,8 @@
         const params = new URLSearchParams(win.location.search);
         if (!params.has("workspaceReturn")) return workspaceAccountReturn(win, "pending", { now });
         const target = workspaceReturnTarget(params.get("workspaceReturn"), win.location.origin);
-        const returnedAt = Number.isFinite(intent.returnedAt) && intent.returnedAt <= now ? intent.returnedAt : null;
+        const lastReturn = Math.max(...[intent.returnedAt, intent.handedOffAt].filter(value => Number.isFinite(value) && value <= now), -Infinity);
+        const returnedAt = Number.isFinite(lastReturn) ? lastReturn : null;
         intent = target ? { target, at: now, bounced: returnedAt !== null && now - returnedAt < WORKSPACE_BOUNCE_WINDOW_MS } : {};
         if (target) storage.setItem(WORKSPACE_RETURN_KEY, JSON.stringify(intent));
         else storage.removeItem(WORKSPACE_RETURN_KEY);
@@ -82,7 +83,11 @@
         if (intent.target !== undefined || intent.at !== undefined) storage.removeItem(WORKSPACE_RETURN_KEY);
         return null;
       }
-      const pending = { target, bounced: intent.bounced === true };
+      // After a handoff the home page never sends the person on by itself: either OAuth finished at the
+      // Workspace, or it was cancelled or failed and the person retries sign-in (which hands off again).
+      const handedOff = Number.isFinite(intent.handedOffAt) && intent.handedOffAt <= now;
+      const pending = { target, bounced: intent.bounced === true || handedOff };
+      if (action === "handoff") { storage.setItem(WORKSPACE_RETURN_KEY, JSON.stringify({ ...intent, target, handedOffAt: now })); return { target, bounced: pending.bounced }; }
       if (action !== "complete") return pending;
       if (pending.bounced && !manual) return null;
       storage.setItem(WORKSPACE_RETURN_KEY, JSON.stringify({ returnedAt: now }));
@@ -211,6 +216,14 @@
     return Object.hasOwn(AUTH_PROVIDER_LABELS, key)
       ? authApiPath(`/login/${key}`, locationLike)
       : null;
+  }
+
+  // Sign-in started from the Workspace finishes there: the API signs the state with
+  // `return_to=workspace` and its callback hands the proof straight to the Workspace,
+  // so the home page never renders in between.
+  function workspaceLoginPath(path) {
+    if (typeof path !== "string" || !path) return path;
+    return `${path}${path.includes("?") ? "&" : "?"}return_to=workspace`;
   }
 
   async function fetchAuthSession(win) {
@@ -1821,7 +1834,8 @@ ${competitionChildBrief(item)}`;
           }
           button.setAttribute("aria-busy", "true");
           setStatus(`Opening ${label} sign-in…`);
-          win.location.assign(path);
+          const viaWorkspace = !currentUser && workspaceAccountReturn(win, "handoff");
+          win.location.assign(viaWorkspace ? workspaceLoginPath(path) : path);
         });
       });
       logoutButton?.addEventListener("click", async () => {
@@ -2105,6 +2119,7 @@ ${competitionChildBrief(item)}`;
   return {
     BOUNTY_POSTING_PROMPT,
     workspaceAccountReturn,
+    workspaceLoginPath,
     workspaceReturnTarget,
     workspaceReturnNeedsWallet,
     accountDashboardView,

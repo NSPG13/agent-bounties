@@ -3,7 +3,7 @@
 // Builds on the approach proposed in #1742.
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { workspaceAccountReturn, workspaceReturnTarget, workspaceReturnNeedsWallet } = require("../site/solarpunk-home.js");
+const { workspaceAccountReturn, workspaceLoginPath, workspaceReturnTarget, workspaceReturnNeedsWallet } = require("../site/solarpunk-home.js");
 
 const ORIGIN = "https://agentizable.ai";
 const PROJECT = "0988a16c-3d9a-4c16-8c7d-d5664aee2961";
@@ -119,4 +119,37 @@ test("storage failures fail closed", () => {
   assert.equal(workspaceAccountReturn(win, "remember", { now: 1 }), null);
   assert.equal(workspaceAccountReturn(win, "complete", { now: 2 }), null);
   assert.deepEqual(win.navigations, []);
+});
+
+test("sign-in started from the Workspace finishes at the Workspace, not on the home page", () => {
+  assert.equal(workspaceLoginPath("https://api.agentizable.ai/v1/site-auth/login/google"),
+    "https://api.agentizable.ai/v1/site-auth/login/google?return_to=workspace");
+  assert.equal(workspaceLoginPath("/auth/login/github?x=1"), "/auth/login/github?x=1&return_to=workspace");
+  const win = browser("/workspace/");
+  workspaceAccountReturn(win, "remember", { now: 1_000 });
+  // Choosing a provider hands off: no navigation here (OAuth navigates).
+  assert.deepEqual(workspaceAccountReturn(win, "handoff", { now: 1_500 }), { target: "/workspace/", bounced: false });
+  assert.deepEqual(win.navigations, []);
+  // The home page never sends the person on by itself after a handoff...
+  assert.deepEqual(workspaceAccountReturn(win, "pending", { now: 1_600 }), { target: "/workspace/", bounced: true });
+  assert.equal(workspaceAccountReturn(win, "complete", { now: 1_601 }), null);
+  assert.deepEqual(win.navigations, []);
+  // ...but if OAuth was cancelled or failed (back on /?auth=error, no new workspaceReturn), a retry
+  // still has the target, so sign-in still finishes at the Workspace.
+  win.location.search = "?auth=error";
+  workspaceAccountReturn(win, "remember", { now: 5_000 });
+  assert.deepEqual(workspaceAccountReturn(win, "handoff", { now: 5_001 }), { target: "/workspace/", bounced: true });
+  // The person can still choose "Return to Workspace" themselves.
+  assert.deepEqual(workspaceAccountReturn(win, "complete", { now: 5_002, manual: true }), { target: "/workspace/", bounced: true });
+  assert.deepEqual(win.navigations, [["assign", "/workspace/"]]);
+  win.navigations.length = 0;
+  workspaceAccountReturn(win, "remember", { now: 6_000 });
+  workspaceAccountReturn(win, "handoff", { now: 6_001 });
+  // A Workspace refusal (e.g. no wallet) sends the person back at once: a bounce, never an automatic loop.
+  arrive(win, "/workspace/");
+  assert.deepEqual(workspaceAccountReturn(win, "remember", { now: 30_000 }), { target: "/workspace/", bounced: true });
+  assert.equal(workspaceAccountReturn(win, "complete", { now: 30_001 }), null);
+  assert.deepEqual(win.navigations, []);
+  // Without a pending Workspace return there is nothing to hand off.
+  assert.equal(workspaceAccountReturn(browser(undefined), "handoff", { now: 1 }), null);
 });
