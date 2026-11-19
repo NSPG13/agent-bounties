@@ -34,6 +34,8 @@
     win.sessionStorage.setItem(name, JSON.stringify(saved));
     return saved;
   }
+  // Read-only: the publication this tab already reserved for a scope, if any.
+  function saved(win, scope) { return JSON.parse(win.sessionStorage.getItem(PREFIX + scope) || "null"); }
   // Match AutonomousBountyTermsDocument serde and validate_claim_metadata.
   // Only the expected readback is normalized; the saved wire request stays exact.
   function normalizeDocument(document) {
@@ -98,5 +100,5 @@
       throw stopped;
     }
   }
-  return { canonical, reserve, validate, existingPath, publish };
+  return { canonical, reserve, saved, validate, existingPath, publish };
 });

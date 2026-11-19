@@ -149,7 +149,7 @@
           <output data-onramp-output aria-live="off"></output>
           <div data-return-status hidden><p data-return-status-copy></p></div>
           <p>Public checkout cannot prefill or cryptographically bind your wallet, so we do not open it. Direct MoonPay checkout requires a live signed link for your chosen wallet and Base asset.</p>
-          <p>Buying crypto does not fund the bounty. Signed new-bounty creation uses platform-paid gas when the live sponsor is available. Only the matching confirmed <code>FundingAdded</code> event proves bounty funding.</p>
+          <p>Buying crypto does not fund the bounty. V2 wallet posting requires Base ETH for network fees as well as the full quoted USDC amount. Only the matching confirmed <code>FundingAdded</code> event proves bounty funding.</p>
         </details>
       </section>
     </main>
@@ -174,7 +174,7 @@
     <script src="guild-shell.js?v=4"></script>
     <script src="funding-readiness.js?v=1"></script>
     <script src="topup-guide.js?v=6"></script>
-    <script src="moonpay-onramp.js?v=7"></script>
+    <script src="moonpay-onramp.js?v=8"></script>
     <script src="moonpay-direct-fallback.js?v=5"></script>
   </body>
 </html>
