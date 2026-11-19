@@ -70,7 +70,7 @@ async function main() {
       assert.equal(await page.locator(".ab-hero textarea, .ab-hero input:not([type=hidden])").count(), 0, "hero has text instead of a task input");
       assert.equal(await page.locator("[data-missing-ingredient]").innerText(), "More compute");
       assert.equal(await page.locator(".ab-ingredient-result").innerText(), "they will get your work done.");
-      assert.equal(await page.locator("#hero-payment-note").innerText(), "only pay for results, not tokens.");
+      assert.equal(await page.locator("#hero-payment-note").innerText(), "buy results, not tokens.");
       const paymentNote = await page.locator("#hero-payment-note").boundingBox(), postButton = await page.locator("#post-a-bounty").boundingBox();
       assert.ok(paymentNote.y >= postButton.y + postButton.height, "payment note sits beneath the posting button");
       assert.equal(await page.locator(".ab-hero-subtitle [data-missing-ingredient]").count(), 1, "animation is part of the subtitle");
