@@ -44,10 +44,6 @@ async function main() {
   });
   let mode = "ready";
   const errors = [];
-  // workspace/index.html is a redirect handoff: it refreshes at once to the API, which
-  // signs the visitor into the Workspace. Answering that request with 204 No Content keeps
-  // the browser on the page so it is measured like every other page; the fixture then
-  // serves a document to prove where the manual fallback link lands.
   const workspaceHandoff = "https://api.agentizable.ai/v1/site-auth/workspace/open";
   let handoff = null;
   async function context(options) {
@@ -103,8 +99,6 @@ async function main() {
           continue;
         }
         if (file === "account.html") {
-          // The private card order page loads only its own scripts: no shared navigation,
-          // journey handlers or analytics may see quote, order or account state.
           await page.goto(`${origin}/${file}`);
           assert.equal(await page.locator("[data-site-header], .ab-footer").count(), 0, "private order page remains isolated");
           assert.deepEqual(await page.locator("script").evaluateAll(els => els.map(el => el.getAttribute("src"))), ["managed-service-theme.js?v=20261115", "managed-service-core.js?v=20261030", "managed-service-page.js?v=20261117"]);
