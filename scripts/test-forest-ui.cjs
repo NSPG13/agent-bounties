@@ -11,7 +11,7 @@ const server = http.createServer((req, res) => {
   catch { res.writeHead(404).end(); }
 });
 function leaderboard(populated) {
-  const data = period => ({ reward_usdc: period === "daily" ? "3" : "26", reward_funding_status: "partially_funded", reward_payout_status: "not_paid", ranking: { period: { kind: period, starts_at: "2026-09-10T00:00:00Z", ends_at: period === "daily" ? "2026-09-11T00:00:00Z" : "2026-09-17T00:00:00Z" }, rules: ["Rank by qualifying confirmed completions."], entries: populated ? [3,1,2].map(rank => ({ rank, solver_wallet: `0x${String(rank).repeat(40)}`, prize_eligible_bounties: 10 - rank, eligible_solver_rewards_usdc_base_units: `${(10-rank)*1000000}` })) : [] } });
+  const data = period => ({ reward_usdc: period === "daily" ? "3" : "26", reward_funding_status: "partially_funded", reward_payout_status: "not_paid", ranking: { period: { kind: period, starts_at: "2026-09-10T00:00:00Z", ends_at: period === "daily" ? "2026-09-11T00:00:00Z" : "2026-09-17T00:00:00Z" }, rules: ["Rank by qualifying completions."], entries: populated ? [3,1,2].map(rank => ({ rank, solver_wallet: `0x${String(rank).repeat(40)}`, prize_eligible_bounties: 10 - rank, eligible_solver_rewards_usdc_base_units: `${(10-rank)*1000000}` })) : [] } });
   return { schema_version: "agent-bounties/solver-leaderboard-v1", network: "base-mainnet", daily: data("daily"), weekly: data("weekly") };
 }
 async function capture(page, name) {
@@ -84,7 +84,6 @@ async function main() {
       if (width <= 700) assert.equal(new Set(metrics.map(metric => metric.x)).size, 1, "metrics stack on mobile");
       else if (width < 1100) { assert.equal(new Set(metrics.map(metric => metric.x)).size, 2, "tablet metrics use two columns"); assert.equal(new Set(metrics.map(metric => metric.y)).size, 2, "tablet metrics use two rows"); }
       else assert.equal(new Set(metrics.map(metric => metric.y)).size, 1, "desktop metrics align horizontally");
-      // Payout volume is a USD summary at $1 per USDC face value; the label must say so.
       await page.waitForFunction(() => document.querySelector("[data-market-volume]").textContent === "$1,000.25");
       assert.match(await page.locator(".ab-metric", { has: page.locator("[data-market-volume]") }).innerText(), /USD paid out.*USDC payouts at \$1 face value/s);
       assert.equal(await page.locator("[data-completed-bounties]").innerText(), "1,234");
@@ -95,8 +94,6 @@ async function main() {
       }));
       assert.ok(metricValues.every(value => value.fits), "populated metric values remain inside their own cell: " + JSON.stringify(metricValues));
       assert.ok(await page.locator(".ab-metrics").evaluate(el => el.scrollWidth <= el.clientWidth), "metrics never need horizontal scrolling");
-      // Regression: a longer total once crossed the divider into the next statistic. Every value
-      // must sit centred inside its cell's padding, at one shared size, however large the total grows.
       for (const [total, shown] of [["1000.25", "$1,000.25"], ["123456.78", "$123,456.78"], ["1000.25", "$1,000.25"]]) {
         payout = total;
         await page.evaluate(() => dispatchEvent(new Event("online")));
@@ -108,7 +105,6 @@ async function main() {
           return { value: el.textContent, size: getComputedStyle(el).fontSize, inside: text.left >= left - .5 && text.right <= right + .5, centred: Math.abs((text.left + text.right) - (left + right)) <= 2 };
         }));
         assert.ok(fitted.every(value => value.inside && value.centred), `metric values stay centred inside their cell padding at ${width}px: ` + JSON.stringify(fitted));
-        // The first cell has no divider border, so its size may differ by a fraction of a pixel.
         const sizes = fitted.map(value => parseFloat(value.size));
         assert.ok(Math.max(...sizes) - Math.min(...sizes) < 1, "metric values share one size: " + JSON.stringify(fitted));
         assert.ok(Math.min(...sizes) >= 24, "metric values stay display-sized: " + JSON.stringify(fitted));
@@ -162,7 +158,6 @@ async function main() {
       await page.goto(origin+"/post.html?task=New%20review%20request");await page.getByRole("button",{name:"Use this new idea",exact:true}).click();assert.equal(await page.locator("#bounty-composer-input").inputValue(),"New review request");
       await page.evaluate(()=>scrollTo(0,0));await capture(page,`post-${width}`);
       await page.goto(origin+"/#login");await page.locator("[data-auth-dialog][open]").waitFor();
-      // The #login address and the header Log in link open the dialog for returning users.
       assert.equal(await page.locator("#auth-title").innerText(),"Sign in","the login address opens sign-in");
       assert.deepEqual(await page.locator("[data-auth-provider]").evaluateAll(els=>els.map(el=>el.dataset.authProvider)),["google","microsoft","github"]);
       assert.equal(await page.locator("[data-auth-form] input, [data-auth-unavailable]").count(),0,"no custom account credentials or dead recovery controls");
@@ -172,7 +167,6 @@ async function main() {
       assert.equal(await page.getByRole("button",{name:"Sign up with Google",exact:true}).count(),1);
       await capture(page,`register-${width}`);
       await page.locator("[data-auth-close]").click();
-      // The dialog's close event is queued; the login address is cleared when it runs.
       await page.waitForFunction(()=>location.hash==="");
       await page.locator(".ab-site-login").click();
       assert.equal(await page.locator("#auth-title").innerText(),"Create an account","the account button defaults to account creation");
@@ -184,8 +178,6 @@ async function main() {
       assert.ok(await page.locator(".ab-site-signin").evaluate(el=>el===document.activeElement),"focus returns to the header Log in link");
       if(width===390) {
         for(const provider of ["google","microsoft","github"]) {
-          // Force a fresh document; a late close event on the previous dialog
-          // can otherwise remove the hash during same-document navigation.
           await page.goto(origin+`/?providerFixture=${provider}#login`);
           await page.locator("[data-auth-dialog][open]").waitFor();
           await page.waitForFunction(key=>document.querySelector(`[data-auth-provider="${key}"]`).getAttribute("aria-disabled")==="false",provider);
@@ -205,10 +197,9 @@ async function main() {
       assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth <= innerWidth),"leaderboard fits");
       await capture(page,`leaderboard-populated-${width}`);
       mode="offline";await page.locator("[data-leaderboard-refresh]").click();await page.getByText("Rankings are temporarily unavailable.",{exact:false}).waitFor();assert.equal(await page.locator(".ab-prize").isVisible(),false);
-      mode="invalid";await page.locator("[data-leaderboard-refresh]").click();await page.waitForFunction(()=>!document.querySelector("[data-leaderboard-refresh]").disabled);assert.equal(await page.locator("[data-leaderboard-table]").isVisible(),false);
+      mode="invalid";await page.locator("[data-leaderboard-refresh]").click();await page.waitForFunction(()=>!document.querySelector("[data-leaderboard-refresh]").disabled);assert.equal(await page.locator(".ab-prize").isVisible(),false);
       for(const state of ["wallet_required","ready"]) {
         account=state;await page.goto(origin+"/#account");await page.locator("[data-auth-dialog][open]").waitFor();
-        // A wallet-less account is ready to post; only solver readiness waits for a wallet.
         await page.waitForFunction(expected=>{const d=document.querySelector("[data-auth-dialog]").dataset;return d.accountStatus==="ready"&&d.solverStatus===expected;},state);
         await capture(page,`account-${state}-${width}`);
         await page.locator("[data-auth-close]").click();
@@ -246,7 +237,6 @@ async function main() {
     await video.evaluate(el=>{el.currentTime=el.duration-.25;});
     await animated.waitForFunction(()=>document.querySelector("[data-forest-video]").currentTime<1);
     assert.equal(await video.evaluate(el=>el.paused),false,"the actual media repeats across its loop boundary");
-    // Pause is persistent, leaves the task intact, and never triggers wallet/account work.
     await animated.emulateMedia({reducedMotion:"reduce"});
     await animated.locator("[data-task-example]").first().click();
     const selectedTask = await animated.locator("#home-task").inputValue();
