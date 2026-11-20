@@ -35,7 +35,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Download the isolated quarantine artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: open-competition-v2-beta3-mainnet-canary-proofs-32623224167-1
           path: ${{ runner.temp }}/open-competition-v2-beta3-mainnet-canary-proofs

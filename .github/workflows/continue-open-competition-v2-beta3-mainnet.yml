@@ -58,13 +58,13 @@ jobs:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         ref: ${{ env.RELEASE_SOURCE_COMMIT }}
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: open-competition-v2-beta3-mainnet-deployment-${{ env.RELEASE_SOURCE_COMMIT }}
         path: target/mainnet-source
         github-token: ${{ github.token }}
         run-id: ${{ inputs.release_run_id }}
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: open-competition-v2-beta3-release-assets-${{ env.RELEASE_SOURCE_COMMIT }}
         path: target/release-assets
@@ -158,7 +158,7 @@ jobs:
       with:
         ref: ${{ github.sha }}
         path: .release-control
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: open-competition-v2-beta3-mainnet-deployment-continuation
         path: target/mainnet-deployment
@@ -258,7 +258,7 @@ jobs:
     - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: "3.12"
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: open-competition-v2-beta3-mainnet-deployment-continuation
         path: target/mainnet-deployment
@@ -381,17 +381,17 @@ jobs:
     - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: "3.12"
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: open-competition-v2-beta3-mainnet-deployment-continuation
         path: target/mainnet-deployment
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: open-competition-v2-beta3-production-control-plane-continuation
         path: target/production-control-plane
     - name: Download the exact quarantined proof workspace for recovery
       if: inputs.preserved_canary_proof_run_id != ''
-      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: open-competition-v2-beta3-mainnet-canary-proofs-32623224167-1
         path: target/preserved-mainnet-canary-proofs
@@ -653,15 +653,15 @@ jobs:
     - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: "3.12"
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: open-competition-v2-beta3-mainnet-canaries-continuation
         path: target/mainnet-canaries
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: open-competition-v2-beta3-production-control-plane-continuation
         path: target/production-control-plane
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: open-competition-v2-beta3-mainnet-deployment-continuation
         path: target/mainnet-deployment
