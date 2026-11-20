@@ -1,0 +1,1 @@
+{"schema":"mcp-tool-registry/v1","transport":"https://mcp.agentbounties.app/mcp","tools":["list_autonomous_bounties","list_opportunities","prepare_agent_to_earn","prepare_bounty_post","get_bounty_detail"]}
