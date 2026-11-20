@@ -197,7 +197,7 @@ async function main() {
       assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth <= innerWidth),"leaderboard fits");
       await capture(page,`leaderboard-populated-${width}`);
       mode="offline";await page.locator("[data-leaderboard-refresh]").click();await page.getByText("Rankings are temporarily unavailable.",{exact:false}).waitFor();assert.equal(await page.locator(".ab-prize").isVisible(),false);
-      mode="invalid";await page.locator("[data-leaderboard-refresh]").click();await page.waitForFunction(()=>!document.querySelector("[data-leaderboard-refresh]").disabled);assert.equal(await page.locator(".ab-prize").isVisible(),false);
+      mode="invalid";await page.locator("[data-leaderboard-refresh]").click();await page.waitForFunction(()=>!document.querySelector("[data-leaderboard-refresh]").disabled);assert.equal(await page.locator(".ab-prize").isVisible(),false);assert.equal(await page.locator("[data-leaderboard-table]").isVisible(),false);
       for(const state of ["wallet_required","ready"]) {
         account=state;await page.goto(origin+"/#account");await page.locator("[data-auth-dialog][open]").waitFor();
         await page.waitForFunction(expected=>{const d=document.querySelector("[data-auth-dialog]").dataset;return d.accountStatus==="ready"&&d.solverStatus===expected;},state);
