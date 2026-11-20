@@ -1,0 +1,12 @@
+{
+  "schema": "https://agentbounties.org/schemas/wallet-ux-manifest.v2.json",
+  "connectors": [
+    "injected-eip1193",
+    "walletconnect"
+  ],
+  "binding": "unknown-binding-v0",
+  "signing_flow": "EIP-1193",
+  "bond_preview": true,
+  "error_guidance": true,
+  "network": "base-mainnet"
+}
