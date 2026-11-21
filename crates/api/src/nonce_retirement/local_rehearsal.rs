@@ -50,6 +50,21 @@ impl Fork {
         assert!(r.get("error").is_none(), "local {method}: {r}");
         r["result"].clone()
     }
+    /// A timestamp a minute behind the wall clock, never before the latest block.
+    /// Since Anvil 1.10, `anvil_mine` with a zero interval still advances block
+    /// time (about one second per five blocks). Starting behind keeps every mined
+    /// block in the past and within the 90-second freshness bound the retirement
+    /// evidence requires; the launcher starts Anvil with a genesis an hour back.
+    async fn next_timestamp(&self) -> i64 {
+        let latest = self
+            .rpc("eth_getBlockByNumber", json!(["latest", false]))
+            .await;
+        let latest = latest["timestamp"]
+            .as_str()
+            .and_then(|hex| i64::from_str_radix(hex.trim_start_matches("0x"), 16).ok())
+            .expect("latest block timestamp");
+        (Utc::now().timestamp() - 60).max(latest + 1)
+    }
     async fn bounty(&self) -> Value {
         let mut state = serde_json::Map::new();
         for sig in ["status()", "round()", "fundedAmount()", "timeoutBondPool()"] {
@@ -236,8 +251,11 @@ async fn run_rehearsal(retained: bool) {
     io.rpc("anvil_setBalance", json!([sender, "0x8ac7230489e80000"]))
         .await;
     io.rpc("anvil_setNonce", json!([sender, "0x4d"])).await;
-    io.rpc("evm_setNextBlockTimestamp", json!([Utc::now().timestamp()]))
-        .await;
+    io.rpc(
+        "evm_setNextBlockTimestamp",
+        json!([io.next_timestamp().await]),
+    )
+    .await;
     io.rpc("anvil_mine", json!(["0x41", "0x0"])).await;
     let envelope = TransactionRequest::default()
         .with_to(BOUNTY.parse::<Address>().unwrap())
@@ -307,8 +325,11 @@ async fn run_rehearsal(retained: bool) {
     ] {
         io.rpc("anvil_setCode", json!([addr, code])).await;
     }
-    io.rpc("evm_setNextBlockTimestamp", json!([Utc::now().timestamp()]))
-        .await;
+    io.rpc(
+        "evm_setNextBlockTimestamp",
+        json!([io.next_timestamp().await]),
+    )
+    .await;
     io.rpc("anvil_mine", json!(["0x41", "0x0"])).await;
     let before = io.bounty().await;
     let policy = chain_base::timeout_recovery::TimeoutRevalidationPolicy {
