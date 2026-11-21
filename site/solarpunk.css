@@ -624,49 +624,6 @@ html[data-scene-ready="false"] .scene-plate {
   color: #d9ed9b;
 }
 
-.analytics-consent {
-  position: fixed;
-  z-index: 80;
-  right: 18px;
-  bottom: 18px;
-  width: min(410px, calc(100vw - 36px));
-  padding: 16px;
-  border: 1px solid rgba(202, 225, 177, .3);
-  border-radius: 14px 3px 14px 3px;
-  background: rgba(4, 13, 9, .96);
-  color: #dbe4d6;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, .55);
-  font-size: .78rem;
-}
-
-.analytics-consent p {
-  margin: 0;
-  line-height: 1.45;
-}
-
-.analytics-consent .actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.analytics-consent .button {
-  min-height: 38px;
-  padding: 0 14px;
-  border: 1px solid rgba(206, 229, 178, .35);
-  border-radius: 3px 12px 3px 12px;
-  background: transparent;
-  color: #e4eadf;
-}
-
-.analytics-consent .button.primary {
-  background: #9bc444;
-  color: #0c160d;
-  font-weight: 800;
-}
-
 .noscript-note {
   position: fixed;
   z-index: 90;
