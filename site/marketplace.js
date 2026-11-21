@@ -190,14 +190,14 @@
       if (loading) return;
       if (failure) {
         list.setAttribute("aria-busy", "false");
-        list.innerHTML = '<div class="market-empty"><h2>The board couldn’t refresh.</h2><p>We couldn’t load this view. Use Refresh to try again.</p></div>';
-        if (summary) summary.textContent = selectedView() === "completed" ? "Completed bounty history could not load. Try Refresh." : "Live inventory unavailable. No stale bounties shown.";
+        list.innerHTML = '<div class="market-empty"><h2>We can’t load the list right now.</h2><p>Availability is unknown. This doesn’t mean there are no bounties. Use Refresh to try again.</p></div>';
+        if (summary) summary.textContent = selectedView() === "completed" ? "Completed bounty history could not load. Try Refresh." : "We can’t load the list right now. Availability is unknown; no old listings are shown.";
         if (notice) notice.hidden = true;
         return;
       }
       const counts = workflow.inventoryCounts(selectedView() === "completed" ? [] : items, nowMs);
       const visible = filterItems(items, search?.value, timing?.value || "now", nowMs, kind?.value || "all");
-      list.innerHTML = visible.length ? visible.map((item, index) => renderOpportunity(item, index, nowMs)).join("") : coverage.state !== "complete" ? `<div class="market-empty"><h2>Some listings could not load.</h2><p>${text(coverage.message)}</p></div>` : emptyState(kind?.value, counts.unavailable);
+      list.innerHTML = visible.length ? visible.map((item, index) => renderOpportunity(item, index, nowMs)).join("") : coverage.state !== "complete" ? `<div class="market-empty"><h2>${coverage.state === "unavailable" ? "We can’t load the list right now." : "We can’t load the full list right now."}</h2><p>${text(coverage.detail || coverage.message)} This doesn’t mean there are no bounties.</p></div>` : emptyState(kind?.value, counts.unavailable);
       list.querySelector?.("[data-market-clear]")?.addEventListener("click", () => {
         if (search) search.value = "";
         if (kind) kind.value = "all";

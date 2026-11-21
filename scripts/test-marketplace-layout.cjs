@@ -112,7 +112,7 @@ async function auditJourney(browser, origin, width) {
     mode = state;
     await page.goto(origin);
     if (["degraded", "offline"].includes(state)) {
-      await page.waitForFunction(() => document.querySelector("[data-live-weekly]").textContent.includes("inventory unavailable"));
+      await page.waitForFunction(() => document.querySelector("[data-live-weekly]").textContent.includes("Availability unknown"));
       assert.equal(await page.locator("[data-live-bounties]").innerText(), "—");
     } else if (state === "unknown") {
       await page.waitForFunction(() => document.querySelector("[data-live-weekly]").textContent.includes("timing unavailable"));
@@ -124,7 +124,7 @@ async function auditJourney(browser, origin, width) {
     await page.waitForFunction(() => document.querySelector("[data-opportunity-list]").getAttribute("aria-busy") === "false");
     const summary = await page.locator("[data-market-summary]").innerText();
     if (["degraded", "offline"].includes(state)) {
-      assert.match(summary, /Live inventory unavailable/);
+      assert.match(summary, /can’t load the list right now\. Availability is unknown/);
       assert.doesNotMatch(summary, /0 open/);
     } else if (state === "unknown") assert.match(summary, /Timing unavailable for 1; open-now total unconfirmed/);
     assert.equal(await page.locator(".opportunity-row").count(), ["degraded", "offline", "empty"].includes(state) ? 0 : state === "future" ? 2 : 3);
@@ -182,7 +182,8 @@ async function main() {
       await page.locator(".opportunity-row").waitFor();
       mode = "offline";
       await page.locator("[data-market-refresh]").click();
-      await page.getByText("The board couldn’t refresh.").waitFor();
+      await page.locator("[data-opportunity-list]").getByText("We can’t load the list right now.").waitFor();
+      assert.match(await page.locator("[data-opportunity-list]").innerText(), /doesn’t mean there are no bounties/);
       assert.equal(await page.locator(".opportunity-row").count(), 0);
       mode = "ready";
       await page.locator("[data-market-refresh]").click();
