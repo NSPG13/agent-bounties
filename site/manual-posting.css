@@ -47,3 +47,19 @@
 .posting-page .chat-composer-form [data-continue-posting],
 .posting-page .chat-composer-form [data-copy-continuation],
 .posting-page .chat-composer-form [data-composer-status]:not([data-tone="error"]):not([data-tone="pending"]):not([data-tone="success"]) { display: none !important; }
+
+/* Saved drafts: the account's drafts, openable here from any device. */
+.posting-page .saved-drafts { margin: 0 0 16px; padding: 12px 16px; border: 1px solid var(--ab-line, rgba(127,127,127,.35)); border-radius: 14px; background: var(--ab-panel, transparent); color: var(--ab-ink, inherit); }
+.posting-page .saved-drafts summary { cursor: pointer; font-weight: 650; }
+.posting-page .saved-drafts-note, .posting-page .saved-drafts-status:not(:empty) { margin: 8px 0 0; font-size: 13px; color: var(--ab-muted, inherit); }
+.posting-page .saved-drafts-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; }
+.posting-page .saved-draft { padding: 10px 0; border-top: 1px solid var(--ab-line, rgba(127,127,127,.25)); }
+.posting-page .saved-draft-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.posting-page .saved-draft-head a { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+.posting-page .saved-draft-head a[aria-current] { text-decoration: none; }
+.posting-page .saved-draft-chip { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--ab-line, rgba(127,127,127,.35)); }
+.posting-page .saved-draft-chip[data-needs-action="true"] { font-weight: 650; }
+.posting-page .saved-draft small { display: block; margin-top: 4px; font-size: 12px; color: var(--ab-muted, inherit); }
+.posting-page .saved-draft-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; }
+.posting-page .saved-draft-feedback:empty { display: none; }
+.posting-page .saved-draft-feedback { margin: 6px 0 0; font-size: 13px; }
