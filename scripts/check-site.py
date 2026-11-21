@@ -1544,7 +1544,7 @@ def main() -> int:
         if re.search(r"Agent Bounties|AgentBounties\.app|agentbounties\.app", text, re.I):
             fail(f"{relative} contains retired public branding or an active legacy URL")
         prefix = "../" * (len(PurePosixPath(relative).parts) - 1)
-        analytics_version = 7
+        analytics_version = 8
         parser = PageParser()
         parser.feed(text)
         # Match the clean URL that Cloudflare Pages serves after redirecting
