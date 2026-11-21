@@ -29,3 +29,10 @@ test("confirmed funding does not imply current readiness or solver payment; amou
   assert.equal(formatAmount("2000000"), "2.00 USDC");
   assert.equal(formatAmount("9007199254740993000001"), "9007199254740993.000001 USDC");
 });
+
+test("the share link is the public bounty page for a validated address only", () => {
+  const { shareUrl } = require("../site/funded.js");
+  const contract = "0x" + "AB".repeat(20);
+  assert.equal(shareUrl("https://agentizable.ai", contract), `https://agentizable.ai/participate.html?bountyContract=0x${"ab".repeat(20)}&network=base-mainnet`);
+  for (const bad of ["", "0x123", "javascript:alert(1)", "0x" + "ab".repeat(20) + "&x=1"]) assert.equal(shareUrl("https://agentizable.ai", bad), "");
+});

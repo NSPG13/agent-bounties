@@ -23,6 +23,7 @@ async function setup(options = {}) {
   const page = await context.newPage(), calls = [], requests = [], errors = [], accepts = [];
   await page.addInitScript(() => { document.modelContext = { registerTool(tool) { window.testCardQuoteTool = tool; } }; });
   const q = structuredClone(fixture.quote), now = Math.floor(Date.now() / 1000);
+  if (options.network) { q.input.bounty.network = options.network; q.input.livemode = options.network === 'base-mainnet'; }
   Object.assign(q.input, { issued_at: now - 10, expires_at: now + 7200 }); q.input.price_basis.valid_until = now + 7200; q.input.terms.delivery_deadline = now + 86400; q.input.bounty.funding_deadline = now + 86400;
   const state = { account, quote: sign(q), status: 'awaiting_payment', verdicts: [], ...options };
   state.review = state.review || { order_id: orderId, network: 'base-sepolia', bounty_contract: q.input.bounty.predicted_bounty, bounty_status: 'submitted', reviews: [],
@@ -457,7 +458,8 @@ test('funding statuses never offer cancellation and always link the exact commit
   for (const [state, text] of [['funding_reserved', 'being funded'], ['funding_broadcast', 'transaction was sent'], ['funding_reconciliation_required', 'needs our attention']]) {
     const f = await setup({ status: state }); await f.go('managed_order'); await visible(f.page, text);
     assert.equal(await f.page.locator('#managed-refund-form').isVisible(), false); assert.equal(await f.page.locator('#managed-checkout').isVisible(), false);
-    assert.match(await f.page.locator('#managed-bounty-link').innerText(), /active once funded/); assert.equal(f.calls.some(c => c.method === 'POST'), false); await f.close();
+    assert.match(await f.page.locator('#managed-bounty-link').innerText(), /active once funded/); assert.equal(f.calls.some(c => c.method === 'POST'), false);
+    assert.equal(await f.page.locator('#managed-share').isVisible(), false, 'No share link before confirmed funding'); await f.close();
   }
   const f = await setup({ status: 'funding_broadcast' }); await f.page.clock.install(); await f.go('managed_order'); await visible(f.page, 'transaction was sent');
   assert.match(await f.page.locator('#managed-next').innerText(), /not confirmed funding/);
@@ -465,9 +467,18 @@ test('funding statuses never offer cancellation and always link the exact commit
   const bounty = f.state.quote.quote.input.bounty;
   assert.equal(await f.page.locator('#managed-bounty-link').getAttribute('href'), 'https://sepolia.basescan.org/address/' + bounty.predicted_bounty);
   assert.equal(await f.page.locator('#managed-bounty-link').innerText(), 'View your funded bounty on Basescan');
+  assert.equal(await f.page.locator('#managed-share').isVisible(), false, 'A test-network bounty has no public page to share');
   assert.equal(await f.page.locator('#managed-refund-form').isVisible(), false);
   const reads = f.calls.filter(c => c.path.includes('/orders/')).length; await f.page.clock.runFor(60000);
   assert.equal(f.calls.filter(c => c.path.includes('/orders/')).length, reads); assert.equal(f.calls.some(c => c.method === 'POST'), false); await f.close();
+});
+test('a funded mainnet order returns the public bounty link to share', async () => {
+  const f = await setup({ status: 'funded', network: 'base-mainnet' }); await f.go('managed_order'); await visible(f.page, 'funded on Base');
+  const bounty = f.state.quote.quote.input.bounty;
+  const url = base + '/participate.html?bountyContract=' + bounty.predicted_bounty.toLowerCase() + '&network=base-mainnet';
+  assert.equal(await f.page.locator('#managed-share-link').getAttribute('href'), url);
+  assert.equal(await f.page.locator('#managed-share-link').innerText(), url);
+  assert.ok(await f.page.locator('#managed-share').isVisible()); await f.close();
 });
 test('a funded order reviews only its committed submission and sends an exact, reasoned verdict', async () => {
   const f = await setup({ status: 'funded' }); await f.go('managed_order'); await visible(f.page, 'funded on Base');
