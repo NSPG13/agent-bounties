@@ -409,6 +409,9 @@
       state.accountSession = null;
       state.linkedWallets = [];
       state.postingAccountStatus = "unavailable";
+      // Only a check that never answered changes the draft status line; a
+      // restoration error keeps its own message.
+      postingSession.accountUnavailable();
       syncPrimaryAction();
     }
     return state.postingAccountStatus;
@@ -2698,10 +2701,23 @@
       if (state.draft && !blocker) { try { supportedVerificationPolicy(); } catch (error) { blocker = error.message; } }
       const expired = expiredDeliveryDeadline();
       if (expired) blocker = "The saved delivery deadline has passed. Agree a new deadline and review the updated terms before funding.";
+      const recorded = Boolean(postingJournal.load());
+      const approvedTerms = state.approved === true && !state.reviewStale;
+      // One machine-readable next step; it never claims funding is possible before approval.
+      const next_required_action = state.bountyContract ? "check_canonical_funding"
+        : recorded ? "reconcile_wallet_operation"
+        : expired ? "agree_new_delivery_deadline"
+        : !state.draft || state.reviewStale ? "prepare_terms"
+        : blocker ? "resolve_blocker"
+        : state.postingAccountStatus === "checking" || state.postingAccountStatus === "restoring" ? "wait_for_account_check"
+        : state.postingAccountStatus !== "ready" ? "sign_in"
+        : !approvedTerms ? "approve_terms"
+        : "fund_with_wallet";
       return {
         status: state.bountyContract ? "created_check_canonical_funding" : state.draft ? "staged" : "no_staged_bounty",
         explicitly_approved: state.approved === true,
-        funding_ready: Boolean(state.draft && !blocker),
+        funding_ready: next_required_action === "fund_with_wallet",
+        next_required_action,
         blocker,
         recovery_code: expired ? "delivery_deadline_expired" : null,
         saved_draft: expired ? window.AgentBountiesWorkflow.createClient(window).load()?.draft || null : null,

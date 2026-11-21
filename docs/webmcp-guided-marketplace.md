@@ -130,6 +130,12 @@ requires a new review. Merely reopening the same review does not.
    an immutable public source commit/subdirectory, and a complete pinned
    sandbox runner. Backend validation remains authoritative. Do not fabricate
    digests or label arbitrary work executable.
+   `funding_ready` is true only once the person has approved these exact terms
+   on the card while signed in. Follow `next_required_action`, the single next
+   step: `prepare_terms`, `resolve_blocker`, `agree_new_delivery_deadline`,
+   `wait_for_account_check`, `sign_in`, `approve_terms`, `fund_with_wallet`,
+   `reconcile_wallet_operation` or `check_canonical_funding`. None of them
+   means the bounty is funded; only confirmed canonical events do.
 4. The person's card approval opens funding review directly. The agent can
    reopen an already approved review with `agent_bounties_open_funding_review`.
    Neither tool approves or accesses the wallet.
