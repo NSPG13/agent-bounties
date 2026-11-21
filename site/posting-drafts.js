@@ -76,6 +76,8 @@
         }
         forgetLocal(item.operationId);
         items = items.filter((entry) => entry.operationId !== item.operationId);
+        // The server pages with OFFSET: one fewer row before the next page moves it back by one.
+        if (nextOffset !== null) nextOffset = Math.max(0, nextOffset - 1);
         render(`Deleted “${item.title}”.`);
       } catch (_) {
         feedback.textContent = "Couldn’t delete this draft. Try again.";

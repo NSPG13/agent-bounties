@@ -34,9 +34,13 @@ const drafts = (origin) => ({ schema_version: "agent-bounties/account-drafts-v1"
         : { authenticated: false, providers: { google: true } } });
       if (url.origin === origin) return route.continue();
       if (url.origin === "http://127.0.0.1:3000" && url.pathname.startsWith("/v1/site-auth/posting-drafts")) {
-        calls.push({ method: request.method(), path: url.pathname, body: request.postData() });
+        calls.push({ method: request.method(), path: url.pathname, search: url.search, body: request.postData() });
         if (!signedIn) return route.fulfill({ status: 401, json: { error: "authentication_required" } });
         if (request.method() === "POST" && url.pathname === `/v1/site-auth/posting-drafts/${A}/delete`) return route.fulfill({ json: { deleted: true } });
+        if (url.pathname === "/v1/site-auth/posting-drafts" && list === "paged") {
+          const all = drafts(origin);
+          return route.fulfill({ json: url.search === "?offset=49" ? { ...all, items: [{ ...all.items[1], id: "draft:older", title: "An older draft" }], next_offset: null } : { ...all, items: [all.items[0]], next_offset: 50 } });
+        }
         if (url.pathname === "/v1/site-auth/posting-drafts") return list === "ok" ? route.fulfill({ json: drafts(origin) }) : route.fulfill({ status: 503, json: { status: "unavailable", items: [] } });
         return route.fulfill({ status: 404, json: { error: "draft_not_found" } });
       }
@@ -78,6 +82,20 @@ const drafts = (origin) => ({ schema_version: "agent-bounties/account-drafts-v1"
         assert.equal(await panel.locator(`[data-operation-id="${B}"] [data-saved-draft-delete]`).count(), 0, "the open draft is never deleted from the list");
       }
       assert.deepEqual(errors, []);
+      await context.close();
+    }
+    {
+      // Deleting a loaded draft shifts the server's OFFSET pages; "Load older drafts" must not skip one.
+      const { context, page, calls } = await open({ width: 1440, list: "paged" });
+      const panel = page.locator("[data-saved-drafts]");
+      await panel.locator(".saved-draft").first().waitFor();
+      await panel.getByRole("button", { name: "Delete draft “Research three competitors”" }).click();
+      await panel.getByRole("button", { name: "Delete draft", exact: true }).click();
+      await page.waitForFunction(() => /Deleted/.test(document.querySelector("[data-saved-drafts-status]").textContent));
+      await panel.getByRole("button", { name: "Load older drafts" }).click();
+      await panel.getByRole("link", { name: "An older draft" }).waitFor();
+      assert.equal(await panel.locator(".saved-draft").count(), 1);
+      assert.deepEqual(calls.filter((call) => call.method === "GET").map((call) => call.search), ["", "?offset=49"]);
       await context.close();
     }
     {
