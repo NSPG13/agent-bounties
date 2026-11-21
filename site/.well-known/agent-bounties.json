@@ -47,6 +47,9 @@
   },
   "protocol": {
     "version": "agent-bounties/autonomous-v1",
+    "status": "recovery_only",
+    "status_scope": "recovery_only applies only to autonomous-v1 bounties: existing v1 bounties can still be inspected, cancelled, expired and refunded, but no new v1 bounty can be created, funded or claimed. It does not mean the network is closed. New bounties use agent-bounties/autonomous-v2.",
+    "new_bounties_protocol": "agent-bounties/autonomous-v2",
     "status_url": "https://agentizable.ai/protocol.json",
     "network": "base-mainnet",
     "chain_id": 8453,
