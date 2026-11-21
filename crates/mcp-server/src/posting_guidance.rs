@@ -177,7 +177,7 @@ pub(super) async fn status(headers: HeaderMap, Json(args): Json<PostingStatusArg
             Ok(response) if response.status().is_success() => {
                 match response.json::<Vec<Value>>().await {
                     Ok(feed) => {
-                        value["canonical_bounty"] = feed
+                        let item = feed
                             .into_iter()
                             .find(|item| {
                                 item["bounty_contract"]
@@ -185,6 +185,17 @@ pub(super) async fn status(headers: HeaderMap, Json(args): Json<PostingStatusArg
                                     .is_some_and(|address| address.eq_ignore_ascii_case(&contract))
                             })
                             .unwrap_or(Value::Null);
+                        let confirmed = funding_confirmed(&item, &contract);
+                        value["funding_confirmed"] = json!(confirmed);
+                        value["status_label"] = json!(if confirmed {
+                            "Funded"
+                        } else {
+                            "Not funded yet"
+                        });
+                        if confirmed {
+                            value["share_url"] = json!(share_url(&contract));
+                        }
+                        value["canonical_bounty"] = item;
                     }
                     _ => value["canonical_status"] = json!("unavailable"),
                 }
@@ -193,6 +204,91 @@ pub(super) async fn status(headers: HeaderMap, Json(args): Json<PostingStatusArg
         }
     }
     mcp_json(value)
+}
+
+fn amount(value: &Value) -> Option<u128> {
+    match value {
+        Value::String(text) if !text.is_empty() && text.bytes().all(|c| c.is_ascii_digit()) => {
+            text.parse().ok()
+        }
+        Value::Number(number) => number.as_u64().map(u128::from),
+        _ => None,
+    }
+}
+
+fn is_hash(value: &Value) -> bool {
+    value.as_str().is_some_and(|hash| {
+        hash.len() == 66
+            && hash.starts_with("0x")
+            && hash[2..].bytes().all(|c| c.is_ascii_hexdigit())
+    })
+}
+
+/// "Funded" is said only with indexed canonical evidence for this exact bounty:
+/// valid terms, full funding, and its creation, FundingAdded and
+/// BountyBecameClaimable events. A wallet response or transaction hash is not enough.
+fn funding_confirmed(item: &Value, contract: &str) -> bool {
+    let same = |value: &Value| {
+        value
+            .as_str()
+            .is_some_and(|address| address.eq_ignore_ascii_case(contract))
+    };
+    let (Some(target), Some(funded)) = (
+        amount(&item["target_amount"]),
+        amount(&item["funded_amount"]),
+    ) else {
+        return false;
+    };
+    if !same(&item["bounty_contract"])
+        || !is_hash(&item["bounty_id"])
+        || item["terms_valid"] != json!(true)
+        || item["validation_errors"]
+            .as_array()
+            .is_some_and(|errors| !errors.is_empty())
+        || !matches!(
+            item["status"].as_str(),
+            Some("claimable" | "claimed" | "submitted" | "paid")
+        )
+        || target == 0
+        || funded < target
+    {
+        return false;
+    }
+    let events: Vec<&Value> = item["events"]
+        .as_array()
+        .map(|events| {
+            events
+                .iter()
+                .filter(|event| {
+                    event["bounty_id"] == item["bounty_id"]
+                        && is_hash(&event["tx_hash"])
+                        && event["block_number"]
+                            .as_u64()
+                            .is_some_and(|block| block > 0)
+                        && event["log_index"].as_u64().is_some()
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let created = events.iter().any(|event| {
+        event["kind"] == "canonical_bounty_created" && same(&event["data"]["bounty_contract"])
+    });
+    let funding = events.iter().any(|event| {
+        event["kind"] == "funding_added"
+            && same(&event["contract_address"])
+            && amount(&event["data"]["funded_amount"]).is_some_and(|value| value >= target)
+    });
+    let claimable = events.iter().any(|event| {
+        event["kind"] == "bounty_became_claimable" && same(&event["contract_address"])
+    });
+    created && funding && claimable
+}
+
+fn share_url(contract: &str) -> String {
+    format!(
+        "https://agentizable.ai/participate.html?bountyContract={}&network=base-mainnet",
+        contract.to_ascii_lowercase()
+    )
 }
 
 fn draft_summary(draft: &Value) -> Value {
@@ -220,6 +316,61 @@ fn draft_summary(draft: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn confirmed_item(contract: &str) -> Value {
+        let id = format!("0x{}", "1".repeat(64));
+        let event = |kind: &str, data: Value| json!({"kind":kind,"bounty_id":id,"contract_address":contract,"tx_hash":format!("0x{}", "2".repeat(64)),"block_number":10,"log_index":0,"data":data});
+        json!({"bounty_contract":contract,"bounty_id":id,"terms_valid":true,"validation_errors":[],"status":"claimable",
+            "target_amount":"2220000","funded_amount":"2220000","events":[
+                event("canonical_bounty_created", json!({"bounty_contract":contract})),
+                event("funding_added", json!({"funded_amount":"2220000"})),
+                event("bounty_became_claimable", json!({}))]})
+    }
+
+    #[test]
+    fn funded_and_share_link_only_with_full_canonical_evidence() {
+        let contract = format!("0x{}", "ab".repeat(20));
+        let item = confirmed_item(&contract);
+        assert!(funding_confirmed(
+            &item,
+            &contract.to_uppercase().replace("0X", "0x")
+        ));
+        assert_eq!(share_url(&contract), format!("https://agentizable.ai/participate.html?bountyContract={contract}&network=base-mainnet"));
+        let other = format!("0x{}", "cd".repeat(20));
+        assert!(
+            !funding_confirmed(&item, &other),
+            "another bounty's record never confirms this one"
+        );
+        for (path, broken) in [
+            ("funded_amount", json!("2219999")),
+            ("status", json!("funding")),
+            ("terms_valid", json!(false)),
+            ("validation_errors", json!(["bad terms"])),
+            ("target_amount", json!("0")),
+        ] {
+            let mut copy = item.clone();
+            copy[path] = broken;
+            assert!(
+                !funding_confirmed(&copy, &contract),
+                "{path} must block Funded"
+            );
+        }
+        for index in 0..3 {
+            let mut copy = item.clone();
+            copy["events"].as_array_mut().unwrap().remove(index);
+            assert!(
+                !funding_confirmed(&copy, &contract),
+                "every canonical event is required"
+            );
+        }
+        let mut unconfirmed = item.clone();
+        unconfirmed["events"][1]["block_number"] = json!(0);
+        assert!(
+            !funding_confirmed(&unconfirmed, &contract),
+            "an unmined transaction is not funding"
+        );
+        assert!(!funding_confirmed(&Value::Null, &contract));
+    }
     #[test]
     fn private_status_never_infers_approval_or_returns_recovery_authority() {
         assert_eq!(draft_summary(&json!({}))["status"], "unavailable");
