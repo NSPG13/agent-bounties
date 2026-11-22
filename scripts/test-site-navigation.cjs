@@ -184,6 +184,7 @@ async function main() {
       assert.equal(await page.locator("#payment-records").getAttribute("open"), "");
       await page.locator("#payout-audit-title").scrollIntoViewIfNeeded();
       assert.equal(await page.locator("#payout-audit-title").isVisible(), true);
+      assert.match(await page.locator("#payout-audit").innerText(), /USD paid out.*USDC payouts at \$1 face value/s);
       for (const id of ["participation", "funding-trends", "discovery-details", "data-sources"]) await page.locator(`#${id} > summary`).click();
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `no page clipping with all details open at ${width}`);
       await page.locator("[data-period='28d']").click();
