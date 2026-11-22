@@ -10,7 +10,7 @@ It does NOT constitute canonical on-chain verification or authorize bounty settl
 import re
 import math
 import logging
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, Overflow, DecimalException
 from typing import Dict, Any, List, Optional
 
 logging.basicConfig(level=logging.INFO)
@@ -25,7 +25,7 @@ class SolutionHandler:
     """
     Offline payload-shape and policy constraint validator for MCP child-bounties.
     Enforces strict boolean/integer types, exact micro-USDC integer arithmetic,
-    numeric overflow boundaries, and checks immutable policy hash and receipt structures.
+    numeric overflow boundaries, exact decimal precision, and checks immutable policy hash.
     """
 
     EXPECTED_ROUTER = "0x380c1af742593dd88b6f20387e9ee693a0536731"
@@ -33,9 +33,11 @@ class SolutionHandler:
     
     # Micro-USDC integer constants (1 USDC = 1,000,000 micro-USDC)
     MICRO_USDC_PER_USDC = 1_000_000
+    DECIMAL_MICRO_PER_USDC = Decimal(1_000_000)
     MIN_CHILD_TARGET_MICRO = 1 * MICRO_USDC_PER_USDC
     MIN_PARENT_MARGIN_MICRO = 1 * MICRO_USDC_PER_USDC
-    MAX_BOUNDED_MICRO = 1_000_000 * MICRO_USDC_PER_USDC  # 1M USDC cap
+    MAX_BOUNDED_USDC = Decimal(1_000_000)
+    MAX_BOUNDED_MICRO = 1_000_000 * MICRO_USDC_PER_USDC
     
     MIN_QUORUM_THRESHOLD = 2
 
@@ -46,17 +48,15 @@ class SolutionHandler:
         """
         Safely parses and validates a monetary field to integer micro-USDC.
         Guards against booleans, non-numerics, large integers (OverflowError),
-        NaN, and infinities without crashing.
+        fractional micro-USDC truncation (requiring exact integral micro-USDC),
+        Decimal('1e1000000') overflows, and bounds (0 <= val <= 1,000,000).
         """
         if isinstance(val, bool):
             return {"valid": False, "reason": f"Boolean value is strictly invalid for {field_name}"}
 
-        if not isinstance(val, (int, float, Decimal)):
-            return {"valid": False, "reason": f"{field_name} must be a strict numeric type, got '{type(val).__name__}'"}
-
-        # Guard against huge integers (e.g. 10**400) before any float or math operation
+        # Guard against huge raw integers before any conversion
         if isinstance(val, int):
-            if abs(val) > 1_000_000:  # Exceeds max bounded USDC in base units
+            if abs(val) > 1_000_000:
                 return {"valid": False, "reason": f"{field_name} exceeds maximum bounded limit (1,000,000 USDC)"}
 
         # Guard against NaN and infinities for floats
@@ -67,18 +67,42 @@ class SolutionHandler:
             except OverflowError:
                 return {"valid": False, "reason": f"{field_name} exceeds numeric bounds"}
 
-        # Exact decimal conversion to integer micro-USDC to avoid float binary subtraction errors
+        # Parse to Decimal safely handling DecimalException / exponent overflow
         try:
             d_val = Decimal(str(val))
-            micro_val = int(d_val * self.MICRO_USDC_PER_USDC)
-        except (InvalidOperation, OverflowError, ValueError):
-            return {"valid": False, "reason": f"{field_name} could not be parsed to exact decimal micro-USDC"}
+        except (InvalidOperation, OverflowError, ValueError, DecimalException):
+            return {"valid": False, "reason": f"{field_name} could not be parsed to valid decimal"}
 
-        if micro_val < 0:
-            return {"valid": False, "reason": f"{field_name} cannot be negative"}
+        # Check exponent size to avoid Decimal('1e1000000') overflow
+        try:
+            if d_val.as_tuple().exponent > 10:
+                return {"valid": False, "reason": f"{field_name} exceeds maximum bounded limit (1,000,000 USDC)"}
+        except Exception:
+            return {"valid": False, "reason": f"{field_name} exceeds numeric bounds"}
 
-        if micro_val > self.MAX_BOUNDED_MICRO:
-            return {"valid": False, "reason": f"{field_name} exceeds maximum bounded limit (1,000,000 USDC)"}
+        # Exact decimal bounds check BEFORE multiplication
+        try:
+            if d_val < Decimal(0):
+                return {"valid": False, "reason": f"{field_name} cannot be negative (got {d_val})"}
+            if d_val > self.MAX_BOUNDED_USDC:
+                return {"valid": False, "reason": f"{field_name} exceeds maximum bounded limit (1,000,000 USDC, got {d_val})"}
+        except (DecimalException, OverflowError):
+            return {"valid": False, "reason": f"{field_name} exceeds numeric bounds"}
+
+        # Multiply by 1,000,000 in Decimal arithmetic
+        try:
+            micro_dec = d_val * self.DECIMAL_MICRO_PER_USDC
+        except (DecimalException, OverflowError):
+            return {"valid": False, "reason": f"{field_name} calculation overflowed"}
+
+        # Require exact integral micro-USDC: reject fractional micro-USDC instead of truncating
+        if micro_dec % Decimal(1) != Decimal(0):
+            return {"valid": False, "reason": f"{field_name} has fractional micro-USDC (precision beyond 6 decimal places is unsupported)"}
+
+        micro_val = int(micro_dec)
+
+        if micro_val < 0 or micro_val > self.MAX_BOUNDED_MICRO:
+            return {"valid": False, "reason": f"{field_name} exceeds bounded limits"}
 
         return {"valid": True, "micro_usdc": micro_val}
 
@@ -201,7 +225,6 @@ class SolutionHandler:
                 "reason": f"Verifier framework must be strict string 'sandboxed_regression_v1', got '{verifier_framework}'"
             }
 
-        # Strict integer check: reject bool, float, str, None, and large integers
         if isinstance(raw_quorum, bool) or not isinstance(raw_quorum, int):
             return {
                 "control_id": "CONTROL_03_VERIFIER_QUORUM",
@@ -311,7 +334,6 @@ class SolutionHandler:
                 "reason": f"Settlement receipt requires valid non-zero child contract EVM address: '{child_contract}'"
             }
 
-        # Safe parsing of receipt amount using micro-USDC parser
         parsed_amount = self._parse_to_micro_usdc(amount_raw, "amount_usdc")
         if not parsed_amount["valid"]:
             return {
