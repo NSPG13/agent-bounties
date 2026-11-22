@@ -110,6 +110,7 @@ async function main() {
         if (redirects) automatic = new Promise(resolve => { handoff = { requests: [], seen: resolve, land: false }; });
         await page.goto(`${origin}/${file}`);
         await assertHeadingLayout(page, `${file} at ${width}px`);
+        await page.waitForLoadState("networkidle");
         assert.equal(await page.locator("[data-site-header]").count(), 1, file);
         assert.equal(await page.locator("body > .ab-footer").count(), 1, `one page footer outside article cards: ${file}`);
         assert.equal(await page.locator(".ab-footer").count(), 1, file);
