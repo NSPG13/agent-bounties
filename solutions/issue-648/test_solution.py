@@ -1,9 +1,10 @@
 """
 Unit Test Suite for Issue #648 Evidence Validator Helper
 Tests valid conformance and rigorous negative assertions across all maintainer review controls,
-including exact micro-USDC decimal arithmetic and 10**400 overflow prevention.
+including exact micro-USDC decimal arithmetic, fractional micro-USDC rejection, and Decimal overflow guards.
 """
 
+from decimal import Decimal
 import unittest
 from solution import SolutionHandler
 
@@ -38,6 +39,43 @@ class TestMCPChildBountyValidation(unittest.TestCase):
         self.assertEqual(result["controls_passed"], 4)
         self.assertEqual(result["controls_failed"], 0)
 
+    # --- REVIEW 4 REGRESSIONS: FRACTIONAL MICRO-USDC & STRICT BOUNDS ---
+    def test_reject_fractional_micro_usdc_sub_cent(self):
+        """parent=2.0 and child=1.0000009 has fractional micro-USDC precision and sub-$1 margin; assert rejected."""
+        ev = dict(self.valid_evidence, parent_reward_usdc=2.0, child_target_usdc="1.0000009")
+        res = self.handler.execute(ev)
+        self.assertFalse(res["all_controls_passed"])
+        c2 = next(c for c in res["controls"] if c["control_id"] == "CONTROL_02_MARGIN_AND_FUNDING")
+        self.assertFalse(c2["passed"])
+        self.assertIn("fractional micro-USDC", c2["reason"])
+
+    def test_reject_sub_zero_negative_amount(self):
+        """-0.0000001 is negative and cannot be accepted as zero."""
+        ev = dict(self.valid_evidence, child_target_usdc="-0.0000001")
+        res = self.handler.execute(ev)
+        self.assertFalse(res["all_controls_passed"])
+        c2 = next(c for c in res["controls"] if c["control_id"] == "CONTROL_02_MARGIN_AND_FUNDING")
+        self.assertFalse(c2["passed"])
+        self.assertIn("cannot be negative", c2["reason"])
+
+    def test_reject_exceeds_max_boundary_precision(self):
+        """1000000.0000001 exceeds maximum bounded limit and cannot be accepted as maximum."""
+        ev = dict(self.valid_evidence, parent_reward_usdc="1000000.0000001")
+        res = self.handler.execute(ev)
+        self.assertFalse(res["all_controls_passed"])
+        c2 = next(c for c in res["controls"] if c["control_id"] == "CONTROL_02_MARGIN_AND_FUNDING")
+        self.assertFalse(c2["passed"])
+        self.assertIn("exceeds maximum bounded limit", c2["reason"])
+
+    def test_decimal_exponent_overflow_guard(self):
+        """Decimal('1e1000000') fails gracefully without DecimalException or OverflowError."""
+        ev = dict(self.valid_evidence, parent_reward_usdc=Decimal("1e1000000"))
+        res = self.handler.execute(ev)
+        self.assertFalse(res["all_controls_passed"])
+        c2 = next(c for c in res["controls"] if c["control_id"] == "CONTROL_02_MARGIN_AND_FUNDING")
+        self.assertFalse(c2["passed"])
+        self.assertIn("exceeds", c2["reason"])
+
     # --- P2 REGRESSION 1: FLOAT SUBTRACTION PRECISION (MICRO-USDC NORMALIZATION) ---
     def test_exact_margin_with_float_representation(self):
         """parent_reward=2.01 and child_target=1.01 yields exact 1 USDC margin without binary float precision artifact."""
@@ -49,13 +87,11 @@ class TestMCPChildBountyValidation(unittest.TestCase):
 
     def test_exact_margin_boundary_and_one_micro_usdc_below(self):
         """Exact 1.000000 USDC margin passes; 1 micro-USDC below (0.999999 USDC) fails."""
-        # Exact boundary: 2.00 - 1.00 = 1.000000 USDC -> PASS
         ev_pass = dict(self.valid_evidence, parent_reward_usdc=2.00, child_target_usdc=1.00)
         res_pass = self.handler.execute(ev_pass)
         self.assertTrue(res_pass["all_controls_passed"])
 
-        # 1 micro-USDC below: 2.000000 - 1.000001 = 0.999999 USDC margin -> FAIL
-        ev_fail = dict(self.valid_evidence, parent_reward_usdc=2.000000, child_target_usdc=1.000001)
+        ev_fail = dict(self.valid_evidence, parent_reward_usdc=2.000000, child_target_usdc="1.000001")
         res_fail = self.handler.execute(ev_fail)
         self.assertFalse(res_fail["all_controls_passed"])
         c2 = next(c for c in res_fail["controls"] if c["control_id"] == "CONTROL_02_MARGIN_AND_FUNDING")
@@ -112,12 +148,12 @@ class TestMCPChildBountyValidation(unittest.TestCase):
 
     # --- CONTROL 2: STRICT NUMERIC & BOUNDED USDC AMOUNTS ---
     def test_reject_string_and_boolean_funding_amounts(self):
-        """Boolean values (True/False) or raw strings as funding amounts are rejected."""
+        """Boolean values (True/False) or raw non-numeric strings as funding amounts are rejected."""
         ev1 = dict(self.valid_evidence, child_target_usdc=True)
         res1 = self.handler.execute(ev1)
         self.assertFalse(res1["all_controls_passed"])
 
-        ev2 = dict(self.valid_evidence, parent_reward_usdc="2.00")
+        ev2 = dict(self.valid_evidence, parent_reward_usdc="invalid-number")
         res2 = self.handler.execute(ev2)
         self.assertFalse(res2["all_controls_passed"])
 
