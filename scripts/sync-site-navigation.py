@@ -51,7 +51,7 @@ def sync(check=False):
         home_atmosphere = '    <link rel="stylesheet" href="forest-hall.css?v=17">\n' if relative.as_posix() == "index.html" else ""
         assets = f'''    <link rel="stylesheet" href="{prefix}site-navigation.css?v=7">
     <link rel="stylesheet" href="{prefix}forest-ui.css?v=6">
-{home_atmosphere}    <script src="{prefix}forest-theme.js?v=1"></script>
+{home_atmosphere}    <script src="{prefix}forest-theme.js?v=2"></script>
     <script src="{prefix}site-navigation.js?v=7" defer></script>
 '''
         result = re.sub(r"[ \t]*</head>", lambda _: assets + "  </head>", result)
