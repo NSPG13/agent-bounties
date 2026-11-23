@@ -198,8 +198,12 @@ async function main() {
       }
       await page.goto(`${origin}/funded.html?bountyContract=${contract}&network=base-mainnet`);
       await page.getByRole("heading", { name: "Bounty funded." }).waitFor();
-      await page.locator("[data-funded-stay]").click();
       assert.equal(await page.locator("[data-funded-amount]").innerText(), "17.068098 USDC");
+      // Confirmed funding returns the public link to share, and the page stays put so it can be copied.
+      assert.equal(await page.locator("[data-funded-share-url]").inputValue(), `${origin}/participate.html?bountyContract=${contract.toLowerCase()}&network=base-mainnet`);
+      assert.ok(await page.locator("[data-funded-share-copy]").isVisible());
+      await page.waitForTimeout(1500);
+      assert.equal(new URL(page.url()).pathname, "/funded.html", "No timed navigation away from the share link");
       await layout(page); await bounds(page, "[data-funded-board]"); await bounds(page, "[data-funded-workspace]");
       if (process.env.MARKET_LAYOUT_ARTIFACTS && width === 1440) await page.screenshot({ path: path.join(process.env.MARKET_LAYOUT_ARTIFACTS, "funded.png"), fullPage: true });
       mode = "pending";
@@ -208,7 +212,6 @@ async function main() {
         await page.reload();
         await page.getByText(/Funding is confirmed, but the bounty is not ready for work/).waitFor();
         assert.match(await page.locator("[data-funded-status]").innerText(), /benchmark not approved/);
-        assert.equal(await page.locator("[data-funded-redirect]").isVisible(), false);
         await page.goto(`${origin}/participate.html?bountyContract=${contract}&network=base-mainnet`);
         await page.getByText(/Funded · waiting for verification readiness/).waitFor();
         assert.equal(await page.locator("[data-work-prepare]").isVisible(), false);
@@ -217,15 +220,13 @@ async function main() {
       }
       await page.reload(); await page.getByRole("heading", { name: "Funding is still being checked." }).waitFor();
       assert.equal(await page.locator("[data-funded-receipt]").isVisible(), false);
+      assert.equal(await page.locator("[data-funded-share-url]").isVisible(), false, "No share link before confirmed funding");
       mode = "offline";
       await page.locator("[data-funded-recheck]").click(); await page.getByRole("heading", { name: "We couldn’t check funding." }).waitFor();
       mode = "ready";
       await page.locator("[data-funded-recheck]").click(); await page.getByRole("heading", { name: "Bounty funded." }).waitFor();
-      // Offline recovery deliberately stays in place for review.
-      assert.equal(await page.locator("[data-funded-redirect]").isVisible(), false);
       if (width === 1440) {
-        await page.reload();
-        await page.waitForURL(`**/earn.html?posted=${contract}`);
+        await Promise.all([page.waitForURL(`**/earn.html?posted=${contract}`), page.locator("[data-funded-board]").click()]);
         await page.locator(".opportunity-row").waitFor();
         // A confirmed journal is archived only by choosing another posting task.
         await page.evaluate(({ contract, id }) => {

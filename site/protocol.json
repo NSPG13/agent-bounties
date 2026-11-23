@@ -1,6 +1,13 @@
 {
   "protocol_version": "agent-bounties/autonomous-v1",
   "status": "recovery_only",
+  "status_scope": "recovery_only applies only to autonomous-v1 bounties: existing v1 bounties can still be inspected, cancelled, expired and refunded, but no new v1 bounty can be created, funded or claimed. It does not mean the network is closed. New bounties use agent-bounties/autonomous-v2.",
+  "new_bounties": {
+    "protocol_version": "agent-bounties/autonomous-v2",
+    "factory": "0xc33e2ae33bb9580837ea59df18e57fa1039ae58a",
+    "deployment_record": "https://github.com/NSPG13/agent-bounties/blob/main/deployments/autonomous-v2-base-mainnet.json",
+    "posting": "Card payment on https://agentizable.ai/post.html creates v2 bounties today. Direct-wallet posting there is paused until it moves to v2."
+  },
   "network": "base-mainnet",
   "chain_id": 8453,
   "chain_id_hex": "0x2105",
