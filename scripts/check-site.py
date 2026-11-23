@@ -754,7 +754,7 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
             "data-card-verifier",
             "function renderVerifierTerms",
             "if (!ui.verifierSummary || !ui.verifier) return;",
-            'bounty-composer-v2.js?v=43',
+            'bounty-composer-v2.js?v=44',
             "function verificationReadiness",
             "verificationReadiness(benchmark, state.draft?.evidence_schema)",
             'sourceSnapshotDigest.pattern === "^sha256:[0-9a-f]{64}$"',
@@ -792,7 +792,7 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
             'data-post-auth-start',
             'posting-auth.js?v=3',
             'solarpunk-home.js?v=48',
-            'bounty-composer-v2.js?v=43',
+            'bounty-composer-v2.js?v=44',
             'label: "LOG IN TO POST"',
             'credentials: "include"',
             'account_status === "ready" && payload.account_complete === true',
@@ -1548,7 +1548,7 @@ def main() -> int:
         if re.search(r"Agent Bounties|AgentBounties\.app|agentbounties\.app", text, re.I):
             fail(f"{relative} contains retired public branding or an active legacy URL")
         prefix = "../" * (len(PurePosixPath(relative).parts) - 1)
-        analytics_version = 7
+        analytics_version = 8
         parser = PageParser()
         parser.feed(text)
         # Match the clean URL that Cloudflare Pages serves after redirecting

@@ -12,6 +12,17 @@
   const CONTINUATION = "agent-bounties.posting-continuation.v1";
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const sessions = new WeakMap();
+  // Status copy claims only what is known: account state after the check
+  // answers, and approval only when the exact saved terms carry it.
+  const MESSAGES = Object.freeze({
+    checking: "Checking your account…",
+    signedOut: "Saved on this device. Sign in to continue on another device.",
+    signedInEmpty: "Signed in. Your draft saves to your account as you write.",
+    accountUnknown: "We couldn’t confirm your account. Your draft is saved on this device; refresh to try again.",
+    restoredApproved: "Saved draft restored. Your approval of these exact terms is kept; wallet confirmations remain yours.",
+    restoredNeedsApproval: "Saved draft restored. Review and approve the terms before funding.",
+    restoredBrief: "Saved draft restored. Finish the brief, then review the terms.",
+  });
   function stable(value) {
     if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
     if (value && typeof value === "object") return `{${Object.keys(value).sort().filter((key) => value[key] !== undefined).map((key) => `${JSON.stringify(key)}:${stable(value[key])}`).join(",")}}`;
@@ -76,7 +87,8 @@
     if (sessions.has(win)) return sessions.get(win);
     const flow = win.AgentBountiesWorkflow, client = flow.createClient(win);
     let authenticated = false, owner = null, revision = 0, remoteId = null, lastSaved = null, lastRecovery = null, adopting = false, conflict = false, epoch = 0;
-    let status = "local", message = "Saved on this device. Sign in to continue on another device.", timer, queue = Promise.resolve(), remoteApproval = null;
+    // Until the account check answers, no sign-in state is claimed either way.
+    let status = "checking", message = MESSAGES.checking, timer, queue = Promise.resolve(), remoteApproval = null;
     // "error" while the message reports a failed save or restore; the posting form keeps those visible.
     let tone = "";
     const read = (key) => { try { return JSON.parse(win.sessionStorage.getItem(key) || "null"); } catch (_) { return null; } };
@@ -295,7 +307,9 @@
         if (remoteApproval === value.draft_hash && !journey.draft_stale) win.sessionStorage.setItem(APPROVAL, JSON.stringify({ owner, operation_id: remoteId, hash: remoteApproval }));
         else win.sessionStorage.removeItem(APPROVAL);
         rememberSync(value.draft_hash);
-        conflict = false; status = "saved"; tone = ""; message = "Saved draft restored. Your unchanged terms approval is preserved; wallet confirmations remain yours.";
+        // Approval is reported as kept only when the server copy carries it for these exact terms.
+        conflict = false; status = "saved"; tone = "";
+        message = win.sessionStorage.getItem(APPROVAL) ? MESSAGES.restoredApproved : journey.draft ? MESSAGES.restoredNeedsApproval : MESSAGES.restoredBrief;
         win.dispatchEvent?.(new win.CustomEvent("agent-bounties:posting-restored", { detail: journey }));
       } finally { adopting = false; notify(); }
       return value;
@@ -304,12 +318,12 @@
       const nextOwner = account?.authenticated ? String(account.user?.id || "") : null;
       if (owner !== nextOwner) { epoch++; win.clearTimeout(timer); changeAccount(nextOwner); revision = 0; remoteId = null; lastSaved = null; lastRecovery = null; conflict = false; }
       owner = nextOwner; authenticated = Boolean(nextOwner);
-      if (!authenticated) { status = "local"; notify(); return null; }
+      if (!authenticated) { status = "local"; tone = ""; message = MESSAGES.signedOut; notify(); return null; }
       const requested = new URL(win.location.href).searchParams.get("operation_id");
       if (requested && !UUID.test(requested)) { conflict = true; status = "unavailable"; tone = "error"; message = "This continuation link has an invalid posting identifier."; notify(); return null; }
       const journey = client.load();
       const id = requested && UUID.test(requested) ? requested : journey?.id;
-      if (!id) { status = "local"; notify(); return null; }
+      if (!id) { status = "local"; tone = ""; message = MESSAGES.signedInEmpty; notify(); return null; }
       if (remoteId === id && revision) return snapshot();
       const expectedEpoch = epoch, before = stable(envelope(journey || { id })), localJournal = stable(read(JOURNAL));
       try {
@@ -337,6 +351,11 @@
         status = "unavailable"; tone = "error"; message = error.status === 404 ? "This draft is unavailable to this account or has expired. Your other local draft remains saved." : "Could not restore your account draft. Keep this tab open and retry.";
         conflict = Boolean(requested); notify(); return null;
       }
+    }
+    // The account check failed or timed out: neither signed in nor signed out is known.
+    function accountUnavailable() {
+      if (status !== "checking") return snapshot();
+      status = "local"; tone = ""; message = MESSAGES.accountUnknown; notify(); return snapshot();
     }
     async function refresh() {
       if (!authenticated || !remoteId || !revision || conflict || win.document?.hidden) return;
@@ -480,9 +499,9 @@
     }
     win.addEventListener?.("agent-bounties:journey", schedule);
     win.addEventListener?.("agent-bounties:posting-journal", schedule);
-    const api = { snapshot, approvalChanges, approved, approve, invalidate, hydrate, refresh, flush, reconcile, canContinue, saveContinuation, loadContinuation, reserveSubmission, renewExpiredAuthorization, beginAfterArchive, reload: async () => { try { return await adopt(await request("GET", remoteId)); } catch (error) { failure(error); throw error; } } };
+    const api = { snapshot, accountUnavailable, approvalChanges, approved, approve, invalidate, hydrate, refresh, flush, reconcile, canContinue, saveContinuation, loadContinuation, reserveSubmission, renewExpiredAuthorization, beginAfterArchive, reload: async () => { try { return await adopt(await request("GET", remoteId)); } catch (error) { failure(error); throw error; } } };
     sessions.set(win, api);
     return api;
   }
-  return { stable, envelope, validateHashInput, digest, create };
+  return { stable, envelope, validateHashInput, digest, create, MESSAGES };
 });

@@ -885,14 +885,6 @@ body.guild-interior footer a:hover {
   color: var(--guild-lime-bright);
 }
 
-body.guild-interior .analytics-consent {
-  border-color: var(--guild-line);
-  border-radius: 16px;
-  background: rgba(5, 18, 12, 0.97);
-  color: var(--guild-text);
-  box-shadow: var(--guild-shadow);
-}
-
 body.guild-interior main > section,
 body.guild-interior main.policy {
   animation: guild-enter 420ms ease both;
