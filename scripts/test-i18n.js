@@ -41,3 +41,29 @@ test("the board group translates the live board summary, with and without option
     i18n.translate("3 confirmed open now (2 direct tasks · 1 competitions · 0 child-funding tasks) · 1 scoring closed · 0 upcoming · 6 funded · Timing unavailable for 2; open-now total unconfirmed · 1 past deadline"),
     "3 confirmadas abiertas ahora (2 tareas directas · 1 competencias · 0 tareas de financiamiento derivado) · 1 con puntuación cerrada · 0 próximas · 6 financiadas · Horario no disponible para 2; total abierto ahora sin confirmar · 1 con plazo vencido");
 });
+
+test("the posting group translates the review card's templated lines", () => {
+  globalThis.AgentBountiesI18nQueue = undefined;
+  require("../site/i18n/es-post.js");
+  for (const group of [].concat(globalThis.AgentBountiesI18nQueue)) i18n.extend(group.entries, group.patterns);
+  assert.equal(i18n.translate("10.00 USDC (9.00 solver + 1.00 creator-review reserve)"), "10.00 USDC (9.00 para quien resuelva + 1.00 de reserva para tu revisión)");
+  assert.equal(i18n.translate("10.00 USDC (9.00 solver + 1.00 verifier reward)"), "10.00 USDC (9.00 para quien resuelva + 1.00 de recompensa de verificación)");
+  assert.equal(i18n.translate("3 checks"), "3 verificaciones");
+  assert.equal(i18n.translate("1 check"), "1 verificación");
+  assert.equal(i18n.translate("Saturday, November 28 at 7:26 PM · 5d 0h remaining"), "Saturday, November 28 at 7:26 PM · quedan 5 d 0 h");
+  assert.match(i18n.translate("Bounty budget — rewards: 10.00 USDC + platform fee: 0.00 USDC. Gas sponsorship is checked before signing. Posting pauses if it is unavailable; you will not be asked to pay gas."), /^Presupuesto de la recompensa — recompensas: 10\.00 USDC \+ comisión de la plataforma: 0\.00 USDC\./);
+});
+
+test("the info group translates the onramp states reached after choosing a wallet", () => {
+  globalThis.AgentBountiesI18nQueue = undefined;
+  require("../site/i18n/es-info.js");
+  for (const group of [].concat(globalThis.AgentBountiesI18nQueue)) i18n.extend(group.entries, group.patterns);
+  for (const state of ["Add money to your wallet", "Waiting for money", "Your wallet has enough USDC", "Balance unavailable",
+    "MoonPay wallet cannot approve this bounty here yet. Do not buy more there for this bounty.",
+    "Wait for the existing purchase; do not buy again."]) {
+    assert.ok(i18n.translate(state), `${state} has Spanish`);
+  }
+  assert.equal(i18n.translate("In your Base app (Coinbase Wallet), tap Buy. Choose USDC on Base. Use the address above. Return here when it arrives."),
+    "En tu app de Base (Coinbase Wallet), toca Comprar. Elige USDC en Base. Usa la dirección de arriba. Vuelve aquí cuando llegue.");
+  assert.equal(i18n.translate("MetaMask was opened for this wallet. Purchase status is unverified."), "Se abrió MetaMask para esta billetera. El estado de la compra no está verificado.");
+});
