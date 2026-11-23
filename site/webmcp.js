@@ -195,7 +195,6 @@
       review_mode: input.review_mode === "creator" ? "creator" : "automated",
       delivery_deadline: input.delivery_deadline || null,
       posting_operation_id: input.posting_operation_id || null,
-      reference_attachment: input.reference_attachment ? flow.publicJson(input.reference_attachment) : client.load()?.reference_attachment || null,
       ...(input.image ? { image: flow.publicJson(input.image), image_required: input.image_required === true } : {}),
       source_url: sourceUrl,
       crowdfund: false,
@@ -504,7 +503,6 @@
         review_mode: { type: "string", enum: ["automated", "creator"], description: "For design work without a supported automated benchmark, explicitly propose creator review: the poster signs the completion verdict. It is not automatic or independent verification. Meta children still require automated review." },
         delivery_deadline: { type: "string", description: "Exact agreed ISO timestamp with timezone offset. Required for creator review; preserve the person’s calendar deadline." },
         posting_operation_id: { type: "string", format: "uuid" },
-        reference_attachment: { type: "object", description: "Exact timestamped and hashed frozen reference returned by capture_homepage_reference." },
         image: { type: "object", description: "Preserve the person's approved bounty cover image and its complete metadata." },
         image_required: { type: "boolean" },
         source_url: { type: ["string", "null"], maxLength: 2048 },
@@ -813,20 +811,6 @@
   }
   register({ name: "agent_bounties_get_journey", title: "Continue my marketplace task", description: "Resume the current posting or earning journey. Returns the saved outcome and one next action; do not restart the interview or repeat earlier approvals.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, untrustedContentHint: true }, async execute() { await waitForPostingRestoration(); return journeyResult(client.load()); } });
-  if (isPost) register({ name: "agent_bounties_capture_homepage_reference", title: "Freeze a homepage background reference",
-    description: "Read and hash the selected actual homepage background image, attach its immutable copy and timestamp to this draft, and invalidate changed terms approval. This captures the background asset, not the page text or animated effects. No publication or wallet request.",
-    inputSchema: { type: "object", properties: { phase: { type: "string", enum: ["dawn", "day", "dusk", "night"] }, variant: { type: "string", enum: ["desktop", "mobile"] } }, required: ["phase", "variant"], additionalProperties: false },
-    annotations: { readOnlyHint: false, untrustedContentHint: false }, async execute(input) {
-      if (flow.createPostingJournal(window).load()) throw new Error("Reconcile the current wallet operation before changing its reference.");
-      const helper = await waitFor(() => window.AgentBountiesPostingReference, 8000);
-      if (!helper) throw new Error("The reference capture controls are not ready.");
-      const reference = await helper.captureHomepage(input, window), journey = client.load() || client.start({ role: "post" });
-      window.AgentBountiesComposer?.invalidate();
-      let draft = journey.draft;
-      if (draft) { const schema = { ...draft.evidence_schema }; delete schema["x-agent-bounties-reference-attachment"]; draft = { ...draft, reference_attachment: reference, evidence_schema: helper.withEvidence(schema, reference) }; }
-      client.save({ ...journey, reference_attachment: reference, draft, draft_stale: Boolean(draft) });
-      return { status: "reference_saved_not_published", reference_attachment: reference, next_action: "Restage and review the exact draft with this reference." };
-    } });
   register({ name: "agent_bounties_inspect_opportunity", title: "Explain this opportunity", description: "Read the current canonical opportunity, costs, bond, deadline, exact terms and evidence requirements. Translate these into a short recommendation for the person. No claim, publication or spending.",
     inputSchema: { type: "object", properties: { opportunity_id: { type: "string", minLength: 1, maxLength: 240 } }, required: ["opportunity_id"], additionalProperties: false }, annotations: { readOnlyHint: true, untrustedContentHint: true },
     execute(input) { return client.inspect(input.opportunity_id); } });

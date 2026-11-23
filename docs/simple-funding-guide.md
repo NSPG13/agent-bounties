@@ -18,7 +18,7 @@ PR #1451 still owns saved provider quotes and its separate hosted-runtime interf
 
 ## Verification and rollback
 
-- `node --test scripts/test-posting-auth.js scripts/test-posting-reference.js scripts/test-posting-session.js scripts/test-funding-readiness.js scripts/test-phone-wallet.js scripts/test-wallet-link.js scripts/test-marketplace-ui.js scripts/test-webmcp.js`: 166 passed.
+- `node --test scripts/test-posting-auth.js scripts/test-posting-session.js scripts/test-funding-readiness.js scripts/test-phone-wallet.js scripts/test-wallet-link.js scripts/test-marketplace-ui.js scripts/test-webmcp.js`: 166 passed.
 - `node scripts/test-posting-layout.cjs`: seven viewports, keyboard/scroll, phone choices, unchanged approved draft/reference recovery, pending canonical recovery, and three guide viewports covering wallet tutorial, card review, blocked popup, pending purchase and exact return; no wallet writes.
 - `POSTING_LAYOUT_GUIDE_ONLY=1 node scripts/test-posting-layout.cjs`: focused guide verification. Optional `POSTING_LAYOUT_SCREENSHOTS` captures only synthetic non-QR layout screens.
 - `python3 scripts/check-site.py`: site, asset budgets and navigation pass.

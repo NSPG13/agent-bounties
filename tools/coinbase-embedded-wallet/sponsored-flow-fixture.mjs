@@ -158,7 +158,6 @@ export async function setup(options={}) {
   state.nativeWebMCP=await page.evaluate(()=>window.testNativeWebMCP);
   await page.evaluate(()=>window.localPageTools.get('agent_bounties_get_posting_options').execute({work_type:'outreach'}));
   const draft={title:'Local company response test',goal:'Deliver one company response with a concrete digital task.',acceptance_criteria:['Provide a company domain and a dated response describing a specific task.'],solver_reward_usdc:'2.00',verifier_reward_usdc:'0.01',task_window_days:30,review_mode:'creator',delivery_deadline:new Date(Date.now()+30*86400000-6*3600000).toISOString().replace('Z','-06:00')};
-  if(options.reference){const frozen=await page.evaluate(()=>window.localPageTools.get('agent_bounties_capture_homepage_reference').execute({phase:'day',variant:'desktop'}));draft.reference_attachment=frozen.reference_attachment;}
   await page.evaluate(draft=>window.localPageTools.get('agent_bounties_stage_funded_bounty').execute(draft),draft);
   return {context,page,state,draft};
 }

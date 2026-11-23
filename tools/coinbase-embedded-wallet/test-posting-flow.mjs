@@ -36,7 +36,7 @@ test('same-tab WebMCP sign-in preserves the operation, amounts, deadline and una
     await h.page.waitForFunction(()=>window.AgentBountiesComposer);
     const after=await h.page.evaluate(()=>window.AgentBountiesWorkflow.createClient(window).load());
     assert.equal(after.id,before.id);
-    for(const field of ['title','goal','acceptance_criteria','solver_reward_usdc','verifier_reward_usdc','task_window_days','review_mode','delivery_deadline','reference_attachment','meta_child'])assert.deepEqual(after.draft[field],before.draft[field],field);
+    for(const field of ['title','goal','acceptance_criteria','solver_reward_usdc','verifier_reward_usdc','task_window_days','review_mode','delivery_deadline','meta_child'])assert.deepEqual(after.draft[field],before.draft[field],field);
     assert.equal(await h.page.evaluate(()=>window.AgentBountiesComposer.review().explicitly_approved),false);
     assert.equal(h.context.pages().length,1);assert.equal(h.state.signed,0);assert.equal(h.state.sent,0);
   }finally{await h.context.close();}

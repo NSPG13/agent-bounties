@@ -7,7 +7,7 @@ import path from 'node:path';
 import {setup,connect,signFunding} from './posting-flow-fixture.mjs';
 
 const results=[];
-const fields=['id','goal','acceptance_criteria','solver_reward_usdc','verifier_reward_usdc','task_window_days','review_mode','delivery_deadline','reference_attachment'];
+const fields=['id','goal','acceptance_criteria','solver_reward_usdc','verifier_reward_usdc','task_window_days','review_mode','delivery_deadline'];
 const cases=['normal','sign_in','cancel_signature','cancel_signature_reload','cancel_transaction','cancel_transaction_reload','usdc_topup','usdc_topup_reload','eth_topup','eth_topup_reload','gas_topup','gas_topup_reload','lost_reply'];
 const tool=(page,name,input={})=>page.evaluate(({name,input})=>window.localPageTools.get(name).execute(input),{name,input});
 async function snapshot(page){return page.evaluate(()=>{const j=window.AgentBountiesWorkflow.createClient(window).load();return {...j.draft,id:j.id};});}
@@ -23,7 +23,7 @@ async function reconnect(h){
 async function send(h){await h.page.getByRole('button',{name:'Send transaction',exact:true}).click();await h.page.waitForURL('**/funded.html?**');}
 
 for(const mobile of [false,true])for(const scenario of cases)test(`${mobile?'phone':'desktop'}: ${scenario} completes and preserves the operation`,async()=>{
-  const options={mobile,reference:true,authenticated:scenario!=='sign_in',lostReply:scenario==='lost_reply',...(scenario.startsWith('usdc_')?{usdc:'0x0'}:{}),...(scenario.startsWith('eth_')?{eth:'0x0'}:{}),...(scenario.startsWith('gas_')?{eth:'0x1'}:{})};
+  const options={mobile,authenticated:scenario!=='sign_in',lostReply:scenario==='lost_reply',...(scenario.startsWith('usdc_')?{usdc:'0x0'}:{}),...(scenario.startsWith('eth_')?{eth:'0x0'}:{}),...(scenario.startsWith('gas_')?{eth:'0x1'}:{})};
   const row={scenario,viewport:mobile?'phone':'desktop',started_at:new Date().toISOString(),completion:false,recovery:!['normal','sign_in'].includes(scenario),continuity:[],tool_invocations:[],fallbacks:[{action:'credential and wallet confirmation controls',reason:'human-owned approvals; no tool may approve on behalf of a user'}],error:null};
   results.push(row);let h;
   try{

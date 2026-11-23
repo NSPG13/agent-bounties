@@ -210,7 +210,6 @@
     linkedWallets: [],
     accountSession: null,
     selectedWallet: null,
-    referenceAttachment: null,
     sourceUrl: null,
     canonical: null,
   };
@@ -692,13 +691,8 @@
       ? window.AgentBountyAI.parseDraft(value)
       : value;
     if (!prepared || typeof prepared !== "object") throw new Error("The prepared bounty draft is invalid.");
-    prepared.reference_attachment ||= window.AgentBountiesWorkflow.createClient(window).load()?.reference_attachment || null;
 
     prepared = window.AgentBountiesCreatorReview[restoring ? "display" : "prepare"](prepared);
-    if (prepared.reference_attachment) {
-      prepared.reference_attachment = window.AgentBountiesPostingReference.validate(prepared.reference_attachment);
-      prepared.evidence_schema = window.AgentBountiesPostingReference.withEvidence(prepared.evidence_schema || {}, prepared.reference_attachment);
-    }
     const days = Number(prepared.task_window_days || MAX_TASK_DAYS);
     const parentContext = prepared.meta_child || (new URLSearchParams(window.location.search).has("parentBounty") ? state.metaParent : null);
     const metaParent = parentContext ? await metaChild.resolve(parentContext, window.AgentBountiesWorkflow.createClient(window)) : null;
@@ -744,7 +738,6 @@
     state.preparedRewards = preparedRewards;
     state.metaParent = metaParent;
     state.bountyImage = bountyImage;
-    state.referenceAttachment = prepared.reference_attachment || null;
     state.sourceUrl = prepared.source_url || null;
     state.approved = false;
     ui.input.value = prepared.goal;
@@ -756,7 +749,7 @@
     const client = window.AgentBountiesWorkflow.createClient(window);
     const journey = client.load() || client.start({ role: "post" });
     const operationId = prepared.posting_operation_id || new URLSearchParams(window.location.search).get("operation_id");
-    if (!restoring) client.save({ ...journey, ...(operationId && window.AgentBountiesWorkflow.UUID.test(operationId) ? { id: operationId } : {}), role: "post", goal: prepared.goal, draft: prepared, draft_stale: false, reference_attachment: prepared.reference_attachment || null, brief: { ...journey.brief, goal: prepared.goal, budget_usdc: String(total), deadline_at: prepared.delivery_deadline || journey.brief?.deadline_at || null } });
+    if (!restoring) client.save({ ...journey, ...(operationId && window.AgentBountiesWorkflow.UUID.test(operationId) ? { id: operationId } : {}), role: "post", goal: prepared.goal, draft: prepared, draft_stale: false, brief: { ...journey.brief, goal: prepared.goal, budget_usdc: String(total), deadline_at: prepared.delivery_deadline || journey.brief?.deadline_at || null } });
     await renderPreview();
     state.approved = await postingSession.approved();
     syncPrimaryAction();
@@ -1078,15 +1071,6 @@
       ui.criteria.append(item);
     }
     renderVerifierTerms();
-    const reference = document.querySelector("[data-card-reference]");
-    if (reference) {
-      reference.replaceChildren(); reference.hidden = !state.referenceAttachment;
-      if (state.referenceAttachment) {
-        const link = document.createElement("a"); link.href = state.referenceAttachment.asset_url; link.target = "_blank"; link.rel = "noopener noreferrer"; link.textContent = "Frozen reference image";
-        const detail = document.createElement("p"); detail.textContent = `Captured ${state.referenceAttachment.captured_at} · ${state.referenceAttachment.sha256}`;
-        reference.append(link, detail);
-      }
-    }
     ui.risks.replaceChildren();
     const risks = [...(state.draft.risk_flags || [])];
     if (expiredDeliveryDeadline()) risks.unshift("Agree a new delivery deadline and review the updated terms before funding.");
@@ -2560,7 +2544,6 @@
           review_mode: params.get("reviewMode") || "automated",
           delivery_deadline: params.get("deliveryDeadline"),
           posting_operation_id: params.get("operation_id"),
-          reference_attachment: parseHandoffJson("referenceAttachment"),
           crowdfund: params.get("crowdfund") === "true",
           discovery_source: params.get("discoverySource") || "AI assistant via MCP",
           benchmark: parseHandoffJson("benchmark"),
@@ -2738,36 +2721,18 @@
     },
   });
 
-  const referenceContainer = document.querySelector("[data-posting-reference]");
-  const referenceUi = referenceContainer ? window.AgentBountiesPostingReference.mount(referenceContainer, {
-    window,
-    getReference: () => window.AgentBountiesWorkflow.createClient(window).load()?.reference_attachment || null,
-    onChange: async (reference) => {
-      if (postingBusy || postingJournal.load()) throw new Error("The reference is fixed while a wallet operation is pending.");
-      const client = window.AgentBountiesWorkflow.createClient(window), journey = client.load() || client.start({ role: "post" });
-      window.AgentBountiesComposer.invalidate();
-      let draft = journey.draft;
-      if (draft) {
-        const schema = { ...draft.evidence_schema }; delete schema["x-agent-bounties-reference-attachment"];
-        draft = { ...draft, reference_attachment: reference, evidence_schema: window.AgentBountiesPostingReference.withEvidence(schema, reference) };
-      }
-      client.save({ ...journey, reference_attachment: reference, draft, draft_stale: Boolean(draft) });
-      setStatus("Reference saved. Review the updated proposal before approving it.", "pending");
-    },
-  }) : null;
   let restoringPosting = false, pollingPosting = false;
   async function restorePosting(journey) {
     if (restoringPosting || postingBusy) return;
     restoringPosting = true;
     try {
       restorationError = null;
-      referenceUi?.update(journey?.reference_attachment || null);
       if (journey?.draft) {
         const stale = journey.draft_stale;
         await importPreparedDraft(journey.draft, { restoring: true });
         if (stale) window.AgentBountiesComposer.invalidate();
       } else {
-        state.draft = null; state.initialDraft = null; state.approved = false; state.bountyImage = null; state.referenceAttachment = null;
+        state.draft = null; state.initialDraft = null; state.approved = false; state.bountyImage = null;
         state.provider = null; state.account = null; state.balances = null; state.canonical = null;
         ui.preview.hidden = true; ui.readiness.hidden = true; ui.fund.disabled = true; ui.fundNow.disabled = true;
       }

@@ -258,8 +258,8 @@ body .posting-wallet button { border-color: var(--ab-line); color: var(--ab-ink)
 .posting-page .chat-composer-form :is(input,textarea) { color: var(--ab-ink); background: var(--ab-panel); border: 1px solid var(--ab-line); border-radius: 12px; }
 .posting-page .chat-composer-form textarea { padding: 20px; min-height: 145px; font: 500 17px/1.55 var(--ab-body); }
 .posting-page .brief-fields { gap: 22px; }
-.posting-page .posting-reference, .posting-page [data-ai-options] { border: 1px solid var(--ab-line); border-radius: 14px; padding: 18px; margin-top: 24px; background: var(--ab-panel); }
-.posting-page .posting-reference summary, .posting-page [data-ai-options] > summary { color: var(--ab-muted); }
+.posting-page [data-ai-options] { border: 1px solid var(--ab-line); border-radius: 14px; padding: 18px; margin-top: 24px; background: var(--ab-panel); }
+.posting-page [data-ai-options] > summary { color: var(--ab-muted); }
 .posting-page .bounty-card { background: var(--ab-panel); border: 1px solid var(--ab-line); border-radius: 24px; overflow: visible; padding: 0; }
 .posting-page .bounty-card-body { padding: 30px; }
 .posting-page .bounty-card-visual { display: none; }
