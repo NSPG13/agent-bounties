@@ -143,7 +143,7 @@ const server = http.createServer((req, res) => {
     const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
     await context.route("**/*", (route) => new URL(route.request().url()).origin === origin ? route.continue() : route.fulfill({ status: 503, body: "" }));
     const page = await context.newPage();
-    for (const file of ["post.html", "earn.html", "about.html", "blog/"]) {
+    for (const file of ["post.html", "earn.html", "about.html", "blog/", "blog/check-agent-work-before-committing-funds.html"]) {
       await page.goto(`${origin}/${file}?lang=es`);
       const control = page.locator(".ab-footer .ab-footer-controls > .ab-lang-control");
       assert.equal(await control.count(), 1, `${file} has the language switch in the footer`);
