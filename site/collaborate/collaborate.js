@@ -22,7 +22,7 @@
     if (!value.items.length) results.appendChild(node("p", "No opportunities were returned in this sample. You can still contribute an integration, a task brief or a reproducible usability report below."));
     value.items.forEach(item => {
       const card = node("article", undefined, "opportunity-card");
-      card.appendChild(node("h3", item.title));
+      const title = node("h3", item.title); title.setAttribute("data-i18n-skip", ""); card.appendChild(title);
       card.appendChild(node("p", item.assessment === "inspect_terms" ? "Next: inspect the terms" : "Needs a fresh check", "result-label"));
       const facts = node("dl");
       [["Solver reward", item.reward.display], ["Refundable bond", item.refundable_bond.display],

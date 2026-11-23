@@ -91,6 +91,13 @@ test("human cards retain proof boundaries and copy only on explicit action", asy
   assert.equal(writes[0], shareText(data.records[0]));
   assert.match(contents(d.container), /nothing was posted/);
 });
+test("a contributor's title, name and review summary are never translated", () => {
+  const d = dom(), data = fixture();
+  render(d.doc, d.container, data, undefined);
+  const skipped = all(d.container).filter(e => "data-i18n-skip" in e.attributes).map(e => e.textContent);
+  const row = data.records[0];
+  for (const own of [row.artifact.title, row.display_name, ...row.evidence.map(item => item.summary)]) assert.ok(skipped.includes(own), own);
+});
 test("clipboard failure offers focused selectable text without publishing", async () => {
   const d = dom(); render(d.doc, d.container, fixture(), undefined);
   const fallback = all(d.container).find(e => e.tagName === "textarea");
