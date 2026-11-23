@@ -932,7 +932,18 @@ fn build_prepared_form_handoff(
     }
 
     // The link carries the approved posting-form names; the person reviews and
-    // publishes on that form.
+    // publishes on that form. Compatibility period: the legacy names (goal,
+    // criterion, solverReward, verifierReward, taskWindowDays,
+    // deliveryDeadline, evidenceSchema) are emitted alongside them and stay
+    // until every deployed post.html reads the new ones.
+    let encoded_evidence_schema = args
+        .evidence_schema
+        .as_ref()
+        .map(|evidence_schema| {
+            serde_json::to_string(evidence_schema)
+                .map_err(|_| "evidence_schema could not be encoded for browser review".to_string())
+        })
+        .transpose()?;
     let mut post_url = Url::parse(POST_PAGE_URL).expect("static post URL is valid");
     {
         let mut query = post_url.query_pairs_mut();
@@ -941,6 +952,7 @@ fn build_prepared_form_handoff(
         query.append_pair("reviewMode", review_mode);
         if let Some(deadline) = &args.delivery_deadline {
             query.append_pair("delivery_deadline", deadline);
+            query.append_pair("deliveryDeadline", deadline);
         }
         if let Some(timezone) = &timezone {
             query.append_pair("timezone", timezone);
@@ -961,19 +973,22 @@ fn build_prepared_form_handoff(
         if let Some(description) = &description {
             query.append_pair("description", description);
         }
+        query.append_pair("goal", &goal);
         for criterion in &acceptance_criteria {
             query.append_pair("acceptance_criteria", criterion);
         }
+        for criterion in &acceptance_criteria {
+            query.append_pair("criterion", criterion);
+        }
         query.append_pair("total_budget_usdc", &total_budget_usdc);
+        // The platform split, or for a meta child the exact policy split the
+        // site stages instead of applying the platform split.
+        query.append_pair("solverReward", &format_usdc(solver_reward));
+        query.append_pair("verifierReward", &format_usdc(verifier_reward));
         if args.delivery_deadline.is_none() {
             query.append_pair("task_window_days", &task_window_days.to_string());
         }
-        if meta_child.is_some() {
-            // The site stages a qualifying child from this exact policy split
-            // instead of applying the platform split.
-            query.append_pair("solverReward", &format_usdc(solver_reward));
-            query.append_pair("verifierReward", &format_usdc(verifier_reward));
-        }
+        query.append_pair("taskWindowDays", &task_window_days.to_string());
         query.append_pair("crowdfund", if args.crowdfund { "true" } else { "false" });
         if let Some(source_url) = &source_url {
             query.append_pair("sourceUrl", source_url);
@@ -991,13 +1006,9 @@ fn build_prepared_form_handoff(
                     .map_err(|_| "benchmark could not be encoded for browser review".to_string())?,
             );
         }
-        if let Some(evidence_schema) = args.evidence_schema.as_ref() {
-            query.append_pair(
-                "evidence_schema",
-                &serde_json::to_string(evidence_schema).map_err(|_| {
-                    "evidence_schema could not be encoded for browser review".to_string()
-                })?,
-            );
+        if let Some(evidence_schema) = &encoded_evidence_schema {
+            query.append_pair("evidence_schema", evidence_schema);
+            query.append_pair("evidenceSchema", evidence_schema);
         }
         if let Some(image) = image {
             query.append_pair("imageUrl", &image.asset_url);
@@ -6071,6 +6082,7 @@ mod tests {
             handoff["next_action"],
             service_runtime::verifier_readiness::UNAVAILABLE
         );
+        assert_legacy_params_consistent(&handoff);
         assert_eq!(handoff["target_usdc"], "2.22");
         assert_eq!(handoff["initial_funding_usdc"], "2.22");
         assert_eq!(handoff["total_budget_usdc"], "2.22");
@@ -6463,6 +6475,58 @@ mod tests {
         error[1..error.find(']').unwrap()].to_string()
     }
 
+    /// During the compatibility period every handoff carries the legacy link
+    /// names too, and each must agree with its approved name and the response.
+    fn assert_legacy_params_consistent(handoff: &Value) {
+        let pairs = query_pairs(handoff);
+        let all = |name: &str| {
+            pairs
+                .iter()
+                .filter(|(key, _)| key == name)
+                .map(|(_, value)| value.clone())
+                .collect::<Vec<_>>()
+        };
+        let one = |name: &str| {
+            let values = all(name);
+            assert!(values.len() <= 1, "{name} repeated");
+            values.into_iter().next()
+        };
+        assert_eq!(one("goal").as_deref(), handoff["goal"].as_str());
+        let criteria = handoff["acceptance_criteria"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(all("criterion"), criteria);
+        assert_eq!(all("acceptance_criteria"), criteria);
+        assert_eq!(
+            one("solverReward").as_deref(),
+            handoff["solver_reward_usdc"].as_str()
+        );
+        assert_eq!(
+            one("verifierReward").as_deref(),
+            handoff["verifier_reward_usdc"].as_str()
+        );
+        assert_eq!(
+            one("taskWindowDays"),
+            Some(handoff["task_window_days"].to_string())
+        );
+        assert_eq!(one("deliveryDeadline"), one("delivery_deadline"));
+        assert_eq!(
+            one("deliveryDeadline").as_deref(),
+            handoff["delivery_deadline"].as_str()
+        );
+        assert_eq!(one("evidenceSchema"), one("evidence_schema"));
+        assert_eq!(
+            one("evidenceSchema").is_some(),
+            !handoff["evidence_schema"].is_null()
+        );
+        if handoff["delivery_deadline"].is_null() {
+            assert_eq!(one("task_window_days"), one("taskWindowDays"));
+        }
+    }
+
     #[test]
     fn platform_split_matches_the_posting_form() {
         let split = |total: &str| {
@@ -6557,19 +6621,19 @@ mod tests {
                 "A regression test covers the prior failure."
             ]
         );
-        for legacy in [
-            "goal",
-            "criterion",
-            "solverReward",
-            "verifierReward",
-            "taskWindowDays",
-            "task_window_days",
-            "deliveryDeadline",
-            "evidenceSchema",
-            "referenceAttachment",
-        ] {
-            assert!(value(legacy).is_none(), "legacy param {legacy} emitted");
-        }
+        // Legacy names ride alongside for the deployed post.html.
+        assert_legacy_params_consistent(&handoff);
+        assert_eq!(
+            value("goal"),
+            Some("Make the committed regression test pass.\n\nDetails: Use the staging branch.")
+        );
+        assert_eq!(value("solverReward"), Some("4.54"));
+        assert_eq!(value("verifierReward"), Some("0.51"));
+        assert_eq!(value("taskWindowDays"), Some("2"));
+        assert_eq!(value("deliveryDeadline"), Some(deadline.as_str()));
+        // Creator mode sends only the legacy window; the retired reference never.
+        assert!(value("task_window_days").is_none());
+        assert!(value("referenceAttachment").is_none());
 
         // Without a description the objective alone is the goal and the
         // optional params are omitted.
@@ -6627,15 +6691,21 @@ mod tests {
         assert!(pairs
             .iter()
             .any(|(key, value)| key == "task_window_days" && value == "7"));
-        for legacy in [
-            "goal",
-            "criterion",
-            "solverReward",
-            "verifierReward",
-            "taskWindowDays",
+        // Legacy names carry the platform split, not the caller's split.
+        assert_legacy_params_consistent(&handoff);
+        for (name, expected) in [
+            ("goal", "Create a deterministic release checklist."),
+            ("solverReward", "9"),
+            ("verifierReward", "1"),
+            ("taskWindowDays", "7"),
         ] {
-            assert!(!pairs.iter().any(|(key, _)| key == legacy));
+            assert!(pairs
+                .iter()
+                .any(|(key, value)| key == name && value == expected));
         }
+        assert!(!pairs
+            .iter()
+            .any(|(key, _)| key == "deliveryDeadline" || key == "evidenceSchema"));
 
         // A legacy goal is the already-composed goal: up to 4,000 characters,
         // sent to the form as the objective.
@@ -6650,6 +6720,7 @@ mod tests {
         assert!(query_pairs(&handoff)
             .iter()
             .any(|(key, value)| key == "task_window_days" && value == "30"));
+        assert_legacy_params_consistent(&handoff);
 
         // When both names are sent, the approved name wins.
         let mut args = plain_args();
@@ -6877,6 +6948,7 @@ mod tests {
             assert!(pairs
                 .iter()
                 .any(|(key, value)| key == "verifierReward" && *value == verifier));
+            assert_legacy_params_consistent(&handoff);
         }
         // Non-qualifying children are still rejected as today.
         for (solver, verifier) in [("0.99", "0.02"), ("0.995", "0.005"), ("1.50", "0.50")] {
@@ -6904,11 +6976,17 @@ mod tests {
         assert!(pairs
             .iter()
             .any(|(key, value)| key == "verifierReward" && value == "0.1"));
-        // Ordinary bounties never carry the legacy split params.
+        assert_legacy_params_consistent(&handoff);
+        // Ordinary bounties carry the platform split in the legacy params.
         let ordinary = build_bounty_post_handoff(&plain_args(), None).unwrap();
-        assert!(!query_pairs(&ordinary)
+        assert_legacy_params_consistent(&ordinary);
+        let pairs = query_pairs(&ordinary);
+        assert!(pairs
             .iter()
-            .any(|(key, _)| key == "solverReward" || key == "verifierReward"));
+            .any(|(key, value)| key == "solverReward" && value == "2"));
+        assert!(pairs
+            .iter()
+            .any(|(key, value)| key == "verifierReward" && value == "0.22"));
         args.total_budget_usdc = Some("1.50".to_string());
         assert_eq!(error_code(&args), "min_total_budget");
         // Without a parent binding a 1 USDC total is below the minimum.

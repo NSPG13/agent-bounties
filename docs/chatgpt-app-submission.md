@@ -133,6 +133,13 @@ ChatGPT and twenty-eight-tool core catalogs:
 | `delivery_deadline` | For creator review, the exact agreed ISO calendar timestamp with its timezone offset, in the future and within 30 days. Never replace it with days after claim. Automated review rejects a calendar deadline. |
 | `timezone` | Optional IANA name (for example `Europe/Paris`) or offset (for example `+02:00`), used only to display the deadline. |
 
+For a compatibility period the `post_url` also carries the legacy link names
+alongside the approved ones: `goal` (the composed goal), one `criterion` per
+criterion, `solverReward` and `verifierReward` (the platform split, or the
+`meta_child` policy split), `taskWindowDays`, `deliveryDeadline` and
+`evidenceSchema`. They stay until every deployed `post.html` reads the new
+names.
+
 These older names remain accepted as deprecated aliases and are converted on
 input; the response lists a `warnings` entry when one is used:
 
