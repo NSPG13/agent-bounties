@@ -101,6 +101,18 @@ const server = http.createServer((req, res) => {
       await motion.close();
     }
     {
+      // Board and bounty pages load their own Spanish dictionary.
+      const board = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
+      await board.route("**/*", (route) => new URL(route.request().url()).origin === origin ? route.continue() : route.fulfill({ status: 503, body: "" }));
+      const page = await board.newPage();
+      for (const [file, heading] of [["earn.html", "Tablero de recompensas"], ["participate.html", "Tu espacio de la recompensa"], ["competition.html", "Espacio de la competencia"], ["leaderboard.html", "Cómo funciona la clasificación"], ["recover-bounty.html", "Recuperar los fondos de una recompensa"], ["check-work.html", "Antes de entregar"]]) {
+        await page.goto(`${origin}/${file}?lang=es`);
+        await page.getByText(heading, { exact: true }).first().waitFor();
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${file} fits at 390px in Spanish`);
+      }
+      await board.close();
+    }
+    {
       // A bounty titled with a dictionary phrase keeps its own words in Spanish mode.
       const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
       await ctx.route("**/*", (route) => new URL(route.request().url()).origin === origin ? route.continue() : route.fulfill({ status: 503, body: "" }));
@@ -110,6 +122,17 @@ const server = http.createServer((req, res) => {
       await page.waitForTimeout(200);
       assert.equal(await page.locator("[data-card-title]").textContent(), "Research", "user titles are never translated");
       assert.equal(await page.locator("[data-card-criteria] li").textContent(), "Pass the regression tests", "user criteria are never translated");
+      // A creator's terms on creator-open stay as written, even when they match a board phrase.
+      await page.goto(origin + "/creator-open.html?lang=es");
+      await page.evaluate(() => {
+        document.querySelector("#open-bounty-title").textContent = "First accepted result wins";
+        document.querySelector("#open-goal").textContent = "First accepted result wins";
+        document.querySelector("#open-criteria").innerHTML = "<li>First accepted result wins</li>";
+      });
+      await page.waitForTimeout(200);
+      for (const selector of ["#open-bounty-title", "#open-goal", "#open-criteria li"]) {
+        assert.equal(await page.locator(selector).textContent(), "First accepted result wins", `${selector} keeps the creator's words`);
+      }
       await ctx.close();
     }
     // Every page offers the switch, and the shared header and footer follow the choice.

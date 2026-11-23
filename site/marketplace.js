@@ -247,7 +247,7 @@
       if (notice && postedContract && selectedView() !== "completed") {
         const match = items.find((item) => item.source_id.toLowerCase() === postedContract);
         notice.hidden = false;
-        notice.innerHTML = match ? `On the board: <strong>${text(match.title)}</strong><a href="${text(detailUrl(match))}">View bounty →</a>`
+        notice.innerHTML = match ? `On the board: <strong data-i18n-skip>${text(match.title)}</strong><a href="${text(detailUrl(match))}">View bounty →</a>`
           : `This bounty isn’t in the current open feed. <a href="participate.html?bountyContract=${postedContract}&amp;network=base-mainnet">Check its progress →</a>`;
       }
     };

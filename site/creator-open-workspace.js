@@ -67,7 +67,7 @@
     if (hash !== lower(commitment)) throw new Error("The artifact details do not match the signed evidence hash.");
     const link = doc.createElement("a"); link.textContent = document.artifact_url; link.href = document.artifact_url; link.target = "_blank"; link.rel = "noopener noreferrer";
     const digest = doc.createElement("p"); digest.textContent = `Artifact checksum: ${document.artifact_sha256}`;
-    const notes = doc.createElement("p"); notes.textContent = document.notes;
+    const notes = doc.createElement("p"); notes.textContent = document.notes; notes.setAttribute("data-i18n-skip", "");
     parent.append(link, digest, notes);
   }
   function facts(values) {

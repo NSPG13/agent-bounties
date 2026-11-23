@@ -379,6 +379,11 @@
   ];
 
   const normalize = (text) => String(text).replace(/\s+/g, " ").trim();
+  // Page groups add their own entries (site/i18n/es-*.js) so no page loads the whole site's text.
+  function extend(entries = {}, patterns = []) {
+    for (const [en, es] of Object.entries(entries)) if (typeof es === "string" && es.trim()) ES[normalize(en)] = es;
+    for (const pattern of patterns) if (Array.isArray(pattern) && pattern[0] instanceof RegExp) PATTERNS.unshift(pattern);
+  }
   function translate(text) {
     const key = normalize(text);
     if (!key) return null;
@@ -478,6 +483,9 @@
       try { win.localStorage.setItem(KEY, next); } catch (_) { /* Keep this page's choice. */ }
       apply(next);
     }
+    // Dictionaries that loaded before this script queued themselves; later ones call extend.
+    for (const group of [].concat(win.AgentBountiesI18nQueue || [])) extend(group.entries, group.patterns);
+    win.AgentBountiesI18nQueue = { push: (group) => { extend(group.entries, group.patterns); if (lang === "es") apply("es"); } };
     const initial = resolve(win);
     if (initial.persist) { try { win.localStorage.setItem(KEY, initial.lang); } catch (_) { /* Keep this page's choice. */ } }
     const ready = () => {
@@ -490,8 +498,8 @@
     doc.documentElement.lang = initial.lang;
     if (doc.readyState === "loading") doc.addEventListener("DOMContentLoaded", ready, { once: true });
     else ready();
-    win.AgentBountiesI18n = { choose, current: () => lang, translate };
+    win.AgentBountiesI18n = { choose, current: () => lang, translate, extend: (entries, patterns) => { extend(entries, patterns); if (lang === "es") apply("es"); } };
   }
 
-  return { ES, PATTERNS, translate, resolve, start, KEY };
+  return { ES, PATTERNS, translate, resolve, start, extend, KEY };
 });
