@@ -962,7 +962,7 @@ ${competitionChildBrief(item)}`;
       ["[data-market-volume]", "[data-live-bounties]", "[data-completed-bounties]"].forEach((selector) => {
         doc.querySelector(selector).textContent = "—";
       });
-      doc.querySelector("[data-live-weekly]").textContent = "Open-now inventory unavailable";
+      doc.querySelector("[data-live-weekly]").textContent = "Availability unknown right now";
       doc.querySelector("[data-completed-weekly]").textContent = "Canonical settlement history unavailable";
       const status = doc.querySelector("[data-market-status]");
       status.textContent = message;
