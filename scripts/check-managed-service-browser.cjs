@@ -168,7 +168,7 @@ test('payment terms stay available during review, after acceptance and after rel
   assert.equal(f.accepts.length, 1); await f.close();
 });
 test('the saved theme is applied before the page body is parsed, with no storage writes', async () => {
-  for (const [saved, scheme, expected] of [['light', 'dark', 'light'], ['dark', 'light', 'dark'], ['auto', 'light', 'light'], ['auto', 'dark', 'dark'], [null, 'light', 'dark'], ['purple', 'light', 'dark']]) {
+  for (const [saved, scheme, expected] of [['light', 'dark', 'light'], ['dark', 'light', 'dark'], ['auto', 'light', 'light'], ['auto', 'dark', 'dark'], [null, 'light', 'light'], [null, 'dark', 'dark'], ['purple', 'light', 'light']]) {
     const context = await browser.newContext({ serviceWorkers: 'block', colorScheme: scheme }), page = await context.newPage();
     await page.addInitScript(value => {
       if (value !== null) localStorage.setItem('agent-bounties.theme', value);

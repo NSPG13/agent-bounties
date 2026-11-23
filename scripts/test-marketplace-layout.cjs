@@ -31,7 +31,7 @@ async function layout(page) {
   assert.notEqual(await page.evaluate(() => getComputedStyle(document.documentElement).scrollbarWidth), "none");
 }
 async function auditJourney(browser, origin, width) {
-  const context = await browser.newContext({ viewport: { width, height: 900 }, reducedMotion: "reduce" });
+  const context = await browser.newContext({ viewport: { width, height: 900 }, reducedMotion: "reduce", colorScheme: "dark" });
   let mode = "audit";
   await context.route("**/*", route => {
     const url = new URL(route.request().url());
@@ -151,7 +151,7 @@ async function main() {
   });
   try {
     for (const [width, height] of [[1440,900],[946,838],[640,480],[390,600],[320,480],[768,320],[480,360]]) {
-      const context = await browser.newContext({ viewport: { width, height }, reducedMotion: "reduce" });
+      const context = await browser.newContext({ viewport: { width, height }, reducedMotion: "reduce", colorScheme: "dark" });
       const page = await context.newPage(), errors = [];
       let mode = "ready";
       page.on("pageerror", e => errors.push(e.message));
