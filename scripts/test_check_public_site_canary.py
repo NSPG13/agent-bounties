@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import shutil
 import tempfile
 import threading
@@ -225,8 +226,10 @@ class PublicSiteCanaryTests(unittest.TestCase):
 
     def test_valid_beacon_preserves_original_asset_order_and_bytes(self):
         home = self.with_beacon()
-        reordered = home.replace("forest-theme.js?v=1", "__swap__").replace(
-            "site-navigation.js?v=4", "forest-theme.js?v=1").replace("__swap__", "site-navigation.js?v=4")
+        theme = re.search(r"forest-theme\.js\?v=\d+", home).group(0)
+        navigation = re.search(r"site-navigation\.js\?v=\d+", home).group(0)
+        reordered = home.replace(theme, "__swap__").replace(navigation, theme).replace("__swap__", navigation)
+        self.assertNotEqual(reordered, home)
         self.overrides["index.html"] = reordered.encode()
         with self.assertRaisesRegex(ValueError, "scripts/styles differ"):
             self.run_canary()
@@ -236,7 +239,8 @@ class PublicSiteCanaryTests(unittest.TestCase):
 
     def test_valid_beacon_preserves_original_script_attributes_and_inline_content(self):
         home = self.with_beacon()
-        mutations = [home.replace('src="forest-theme.js?v=1"', 'src="forest-theme.js?v=1" onload="bad()"'),
+        theme = re.search(r'src="forest-theme\.js\?v=\d+"', home).group(0)
+        mutations = [home.replace(theme, theme + ' onload="bad()"'),
                      home.replace('"@context": "https://schema.org"', '"@context": "https://evil.invalid"')]
         for changed in mutations:
             self.assertNotEqual(changed, home)
