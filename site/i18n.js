@@ -453,6 +453,8 @@
         else { restore(doc.body); doc.title = title.en; }
       } finally { applying = false; }
       for (const button of doc.querySelectorAll("button[data-lang-choice]")) button.setAttribute("aria-pressed", String(button.dataset.langChoice === lang));
+      // Scripts that write their own text (such as the hero phrase) re-render in the new language.
+      if (typeof win.CustomEvent === "function") win.dispatchEvent(new win.CustomEvent("agent-bounties:language", { detail: { lang } }));
       if (lang === "es" && !observer && typeof win.MutationObserver === "function") {
         observer = new win.MutationObserver((records) => {
           if (applying || lang !== "es") return;

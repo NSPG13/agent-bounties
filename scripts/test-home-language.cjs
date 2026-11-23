@@ -56,6 +56,7 @@ const server = http.createServer((req, res) => {
 
       await page.locator('[data-site-header] .ab-lang-control button[data-lang-choice="en"]').click();
       assert.equal(await page.locator("html").getAttribute("lang"), "en");
+      assert.equal(await page.locator("[data-missing-ingredient]").innerText(), "More compute", "the hero phrase returns to English at once");
       await page.waitForTimeout(500);
       assert.equal(await bodyText(page), english, "English restores the original text exactly");
       assert.equal(await page.title(), englishTitle);
@@ -69,6 +70,18 @@ const server = http.createServer((req, res) => {
       assert.equal(await page.locator("html").getAttribute("lang"), "en");
       assert.deepEqual(errors, []);
       await context.close();
+    }
+    {
+      // With motion, the hero types its phrase in Spanish; switching back shows English at once.
+      const motion = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: "no-preference" });
+      await motion.route("**/*", (route) => new URL(route.request().url()).origin === origin ? route.continue() : route.fulfill({ status: 503, body: "" }));
+      const page = await motion.newPage();
+      await page.goto(origin + "/?lang=es");
+      await page.waitForFunction(() => document.querySelector("[data-missing-ingredient]").textContent === "datos privados", null, { timeout: 15000 });
+      await page.locator('[data-site-header] .ab-lang-control button[data-lang-choice="en"]').click();
+      const english = ["More compute", "private data", "specialized software", "greater intelligence", "more agents", "an Independent verifier", "the right credentials", "influence with X"];
+      assert.ok(english.includes(await page.locator("[data-missing-ingredient]").textContent()), "the typed phrase is English right after switching");
+      await motion.close();
     }
     // Every page offers the switch, and the shared header and footer follow the choice.
     const context = await browser.newContext({ viewport: { width: 390, height: 844 } });

@@ -55,6 +55,8 @@ if (typeof document !== "undefined") {
       typeIngredient();
     }, 4500);
     reduced.addEventListener("change", () => { if (reduced.matches) finishTyping(); });
+    // A language change cancels any half-typed phrase and shows the current one in the new language.
+    window.addEventListener("agent-bounties:language", finishTyping);
     document.addEventListener("visibilitychange", () => { if (document.hidden) finishTyping(); });
     if (!reduced.matches && "IntersectionObserver" in window) {
       const reveal = new IntersectionObserver(entries => entries.forEach(entry => {
