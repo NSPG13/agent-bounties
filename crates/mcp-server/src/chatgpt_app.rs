@@ -725,17 +725,18 @@ fn build_prepared_form_handoff(
                         .to_string(),
                 );
             }
-            Some(objective)
+            Some(objective).filter(|objective| objective.chars().count() <= 1_000)
         }
+        // A legacy goal is already the composed goal, so it keeps its
+        // previous 4,000-character limit.
         (None, Some(goal)) => {
             warnings.push("goal is a deprecated alias; send objective instead".to_string());
-            Some(goal)
+            Some(goal).filter(|goal| goal.chars().count() <= 4_000)
         }
         (None, None) => None,
     }
-    .filter(|objective| objective.chars().count() <= 1_000)
     .ok_or_else(|| {
-        "[objective_required] Enter the objective of the bounty in up to 1,000 characters; put further details in description."
+        "[objective_required] Enter the objective of the bounty in up to 1,000 characters (a deprecated goal may hold up to 4,000); put further details in description."
             .to_string()
     })?
     .to_string();
@@ -964,6 +965,15 @@ fn build_prepared_form_handoff(
             query.append_pair("acceptance_criteria", criterion);
         }
         query.append_pair("total_budget_usdc", &total_budget_usdc);
+        if args.delivery_deadline.is_none() {
+            query.append_pair("task_window_days", &task_window_days.to_string());
+        }
+        if meta_child.is_some() {
+            // The site stages a qualifying child from this exact policy split
+            // instead of applying the platform split.
+            query.append_pair("solverReward", &format_usdc(solver_reward));
+            query.append_pair("verifierReward", &format_usdc(verifier_reward));
+        }
         query.append_pair("crowdfund", if args.crowdfund { "true" } else { "false" });
         if let Some(source_url) = &source_url {
             query.append_pair("sourceUrl", source_url);
@@ -6553,6 +6563,7 @@ mod tests {
             "solverReward",
             "verifierReward",
             "taskWindowDays",
+            "task_window_days",
             "deliveryDeadline",
             "evidenceSchema",
             "referenceAttachment",
@@ -6612,6 +6623,10 @@ mod tests {
         assert!(pairs
             .iter()
             .any(|(key, value)| key == "total_budget_usdc" && value == "10.00"));
+        // Automated mode carries the resolved work window.
+        assert!(pairs
+            .iter()
+            .any(|(key, value)| key == "task_window_days" && value == "7"));
         for legacy in [
             "goal",
             "criterion",
@@ -6621,6 +6636,20 @@ mod tests {
         ] {
             assert!(!pairs.iter().any(|(key, _)| key == legacy));
         }
+
+        // A legacy goal is the already-composed goal: up to 4,000 characters,
+        // sent to the form as the objective.
+        let mut args = plain_args();
+        args.objective = None;
+        args.goal = Some("g".repeat(3_500));
+        let handoff = build_bounty_post_handoff(&args, None).unwrap();
+        assert_eq!(handoff["goal"], "g".repeat(3_500));
+        assert!(query_pairs(&handoff)
+            .iter()
+            .any(|(key, value)| key == "objective" && *value == "g".repeat(3_500)));
+        assert!(query_pairs(&handoff)
+            .iter()
+            .any(|(key, value)| key == "task_window_days" && value == "30"));
 
         // When both names are sent, the approved name wins.
         let mut args = plain_args();
@@ -6657,7 +6686,15 @@ mod tests {
                 "objective_required",
                 Box::new(|args| {
                     args.objective = None;
-                    args.goal = Some("g".repeat(1_001));
+                    args.goal = Some("g".repeat(4_001));
+                }),
+            ),
+            (
+                "description_too_long",
+                Box::new(|args| {
+                    args.objective = None;
+                    args.goal = Some("g".repeat(3_000));
+                    args.description = Some("d".repeat(1_000));
                 }),
             ),
             (
@@ -6828,14 +6865,18 @@ mod tests {
             args.solver_reward_usdc = Some(solver.to_string());
             args.verifier_reward_usdc = Some(verifier.to_string());
             let handoff = build_bounty_post_handoff(&args, None).unwrap();
-            assert_eq!(
-                handoff["solver_reward_usdc"],
-                format_usdc(parse_usdc(solver, "solver").unwrap())
-            );
-            assert_eq!(
-                handoff["verifier_reward_usdc"],
-                format_usdc(parse_usdc(verifier, "verifier").unwrap())
-            );
+            let solver = format_usdc(parse_usdc(solver, "solver").unwrap());
+            let verifier = format_usdc(parse_usdc(verifier, "verifier").unwrap());
+            assert_eq!(handoff["solver_reward_usdc"], solver);
+            assert_eq!(handoff["verifier_reward_usdc"], verifier);
+            // The policy split reaches the site so it can stage the child.
+            let pairs = query_pairs(&handoff);
+            assert!(pairs
+                .iter()
+                .any(|(key, value)| key == "solverReward" && *value == solver));
+            assert!(pairs
+                .iter()
+                .any(|(key, value)| key == "verifierReward" && *value == verifier));
         }
         // Non-qualifying children are still rejected as today.
         for (solver, verifier) in [("0.99", "0.02"), ("0.995", "0.005"), ("1.50", "0.50")] {
@@ -6856,6 +6897,18 @@ mod tests {
         let handoff = build_bounty_post_handoff(&args, None).unwrap();
         assert_eq!(handoff["solver_reward_usdc"], "0.9");
         assert_eq!(handoff["verifier_reward_usdc"], "0.1");
+        let pairs = query_pairs(&handoff);
+        assert!(pairs
+            .iter()
+            .any(|(key, value)| key == "solverReward" && value == "0.9"));
+        assert!(pairs
+            .iter()
+            .any(|(key, value)| key == "verifierReward" && value == "0.1"));
+        // Ordinary bounties never carry the legacy split params.
+        let ordinary = build_bounty_post_handoff(&plain_args(), None).unwrap();
+        assert!(!query_pairs(&ordinary)
+            .iter()
+            .any(|(key, _)| key == "solverReward" || key == "verifierReward"));
         args.total_budget_usdc = Some("1.50".to_string());
         assert_eq!(error_code(&args), "min_total_budget");
         // Without a parent binding a 1 USDC total is below the minimum.

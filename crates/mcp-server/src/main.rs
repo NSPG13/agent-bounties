@@ -549,7 +549,7 @@ tool_args! {
             "description": {"type": ["string", "null"], "maxLength": 4000, "description": "Optional extra details. The objective and description together must stay within 4,000 characters; agents read them as one goal."},
             "total_budget_usdc": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]{1,2})?$", "description": "Total budget in display USDC with at most 2 decimal places, at least 2.22. The platform computes the split: a 10% review reward (at least 0.01 USDC) and the rest, at least 2 USDC, for the worker."},
             "timezone": {"type": ["string", "null"], "maxLength": 64, "description": "Optional IANA timezone name such as Europe/Paris, or an offset such as +02:00, used only to display delivery_deadline."},
-            "goal": {"type": "string", "minLength": 1, "maxLength": 1000, "deprecated": true, "description": "Deprecated alias of objective, used only when objective is absent."},
+            "goal": {"type": "string", "minLength": 1, "maxLength": 4000, "deprecated": true, "description": "Deprecated alias of objective, used only when objective is absent. It is treated as the already-composed goal and may hold up to 4,000 characters."},
             "acceptance_criteria": {
                 "type": "array", "minItems": 1, "maxItems": 20,
                 "items": {"type": "string", "minLength": 1, "maxLength": 1000},

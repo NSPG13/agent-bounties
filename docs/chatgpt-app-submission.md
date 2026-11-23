@@ -138,9 +138,9 @@ input; the response lists a `warnings` entry when one is used:
 
 | Deprecated field | Conversion |
 | --- | --- |
-| `goal` | Used as `objective` when `objective` is absent, with the same 1,000-character limit. |
-| `solver_reward_usdc` and `verifier_reward_usdc` | When `total_budget_usdc` is absent, their sum is the total budget and the platform split applies. The one exception is the existing `meta_child` policy, which keeps the routed caller split unchanged. |
-| `task_window_days` | Used only when there is no `delivery_deadline` (automated review). |
+| `goal` | Used when `objective` is absent. It is treated as the already-composed goal (up to 4,000 characters, as before) and sent to the form as `objective`. The 1,000-character limit applies only to `objective` itself. |
+| `solver_reward_usdc` and `verifier_reward_usdc` | When `total_budget_usdc` is absent, their sum is the total budget and the platform split applies. The one exception is the existing `meta_child` policy, which keeps the routed caller split unchanged. For `meta_child` handoffs only, the `post_url` also carries that policy split as `solverReward` and `verifierReward` so the form can stage the qualifying child. |
+| `task_window_days` | Used only when there is no `delivery_deadline` (automated review); the resolved window is sent in the `post_url` as `task_window_days`. |
 
 The retired `reference_attachment` (frozen homepage reference image) is no
 longer part of the schema. A client that still sends it is not rejected: the
