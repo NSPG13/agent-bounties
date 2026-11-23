@@ -1969,7 +1969,7 @@
     const response=await fetch("protocol.json",{cache:"no-store"});
     if(!response.ok)throw new Error("Protocol configuration is unavailable.");
     const protocol=await response.json();
-    if(protocol.status!=="active"||!/^0x[0-9a-fA-F]{40}$/.test(protocol.factory||""))throw new Error("The Base protocol is not active. No transaction was requested.");
+    if(protocol.status!=="active"||!/^0x[0-9a-fA-F]{40}$/.test(protocol.factory||""))throw new Error("Wallet posting is paused while it moves to the new bounty protocol (v2). Pay by card instead if it is offered for this bounty, or try again later. No transaction was requested.");
     state.protocol=protocol;return protocol;
   }
 
