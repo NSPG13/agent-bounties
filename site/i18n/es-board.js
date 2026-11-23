@@ -441,6 +441,14 @@
     "Rankings are temporarily unavailable. Try again in a moment.": "La clasificación no está disponible por el momento. Inténtalo en un momento.",
   };
   const patterns = [
+    // The board summary (marketplace.js): counts first, then optional timing, deadline and refresh parts.
+    [/^(\d+) (confirmed )?open now \((\d+) direct tasks · (\d+) competitions · (\d+) child-funding tasks\) · (\d+) scoring closed · (\d+) upcoming · (\d+) funded(.*)$/,
+      (_, now, confirmed, direct, competition, child, ended, upcoming, funded, rest) =>
+        `${now} ${confirmed ? "confirmadas " : ""}abiertas ahora (${direct} tareas directas · ${competition} competencias · ${child} tareas de financiamiento derivado) · ${ended} con puntuación cerrada · ${upcoming} próximas · ${funded} financiadas`
+        + rest
+          .replace(/ · Timing unavailable for (\d+); open-now total unconfirmed/, " · Horario no disponible para $1; total abierto ahora sin confirmar")
+          .replace(/ · (\d+) past deadline/, " · $1 con plazo vencido")
+          .replace(/ · refreshed /, " · actualizado ")],
     [/^Last recorded list · (.+)$/, "Última lista registrada · $1"],
     [/^Showing the last list recorded (.+) \((\d+) listings?\)\. It may be out of date; availability right now is unknown\. Use Refresh to try again\.$/, "Mostrando la última lista registrada el $1 ($2). Puede estar desactualizada; la disponibilidad en este momento es desconocida. Usa Actualizar para intentarlo de nuevo."],
     [/^The platform could not complete this step \((\d+)\)\. Your current request is preserved\.$/, "La plataforma no pudo completar este paso ($1). Tu solicitud actual se conserva."],
