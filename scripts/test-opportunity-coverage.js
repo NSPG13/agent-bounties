@@ -58,7 +58,7 @@ test('partial paid history retains payment and canonical identity guards', () =>
   payload.items[0].payment_state = 'escrowed';
   assert.throws(() => history.projection(payload, true));
 });
-test('the rendered board shows a healthy card and an explicit partial-list notice', async () => {
+test('a partial feed shows what loaded on the board without a notice', async () => {
   const market = require('../site/marketplace.js');
   const nodes = new Map();
   const doc = { visibilityState: 'visible', querySelector(selector) {
@@ -70,9 +70,11 @@ test('the rendered board shows a healthy card and an explicit partial-list notic
   const win = {location:new URL('https://agentizable.ai/marketplace.html'), setInterval() {}, async fetch() {return {ok:true,json:async()=>payload};}};
   market.startBoard(win, doc);
   await new Promise(resolve => setImmediate(resolve));
-  assert.match(nodes.get('[data-market-summary]').textContent, /full count is unknown/);
-  assert.match(nodes.get('[data-market-summary]').textContent, /1 checked listings shown/);
+  // Author decision: listings from a partial feed are shown as they are, with no missing-sources notice.
+  assert.doesNotMatch(nodes.get('[data-market-summary]').textContent, /full count is unknown|missing|checked listings shown/);
+  assert.match(nodes.get('[data-market-summary]').textContent, /1 funded/);
   assert.ok(nodes.get('[data-opportunity-list]').innerHTML.includes(item.title));
+  assert.doesNotMatch(nodes.get('[data-opportunity-list]').innerHTML, /full list|full count/);
 });
 test('ChatGPT widget distinguishes missing coverage from an empty checked page', () => {
   const fs = require('node:fs');
