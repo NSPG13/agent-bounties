@@ -29,7 +29,7 @@ test('all unavailable means unknown rather than a healthy zero; malformed partia
   const source = payload.source_statuses[0]; source.coverage = 'unavailable'; source.item_count = 0;
   source.protocol_statuses = source.protocol_statuses.map(s => status(s.protocol, 'unavailable', null));
   assert.equal(flow.fundedInventory(payload).coverage.state, 'unavailable');
-  assert.match(flow.fundedInventory(payload).coverage.message, /number of bounties is unknown/);
+  assert.match(flow.fundedInventory(payload).coverage.message, /Availability is unknown, not zero/);
   for (const mutate of [
     p => p.source_statuses[0].protocol_statuses.pop(),
     p => p.source_statuses[0].protocol_statuses[2].item_count = 0,

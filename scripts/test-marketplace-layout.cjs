@@ -111,8 +111,10 @@ async function auditJourney(browser, origin, width) {
   for (const state of ["future", "unknown", "degraded", "offline", "empty", "audit"]) {
     mode = state;
     await page.goto(origin);
+    // With no list recorded in this browser, a failed load shows no listings at all.
+    if (state === "degraded") await page.evaluate(() => localStorage.removeItem("agent-bounties.board-snapshot.v1"));
     if (["degraded", "offline"].includes(state)) {
-      await page.waitForFunction(() => document.querySelector("[data-live-weekly]").textContent.includes("inventory unavailable"));
+      await page.waitForFunction(() => document.querySelector("[data-live-weekly]").textContent.includes("Availability unknown"));
       assert.equal(await page.locator("[data-live-bounties]").innerText(), "—");
     } else if (state === "unknown") {
       await page.waitForFunction(() => document.querySelector("[data-live-weekly]").textContent.includes("timing unavailable"));
@@ -124,7 +126,7 @@ async function auditJourney(browser, origin, width) {
     await page.waitForFunction(() => document.querySelector("[data-opportunity-list]").getAttribute("aria-busy") === "false");
     const summary = await page.locator("[data-market-summary]").innerText();
     if (["degraded", "offline"].includes(state)) {
-      assert.match(summary, /Live inventory unavailable/);
+      assert.match(summary, /can’t load the list right now\. Availability is unknown/);
       assert.doesNotMatch(summary, /0 open/);
     } else if (state === "unknown") assert.match(summary, /Timing unavailable for 1; open-now total unconfirmed/);
     assert.equal(await page.locator(".opportunity-row").count(), ["degraded", "offline", "empty"].includes(state) ? 0 : state === "future" ? 2 : 3);
@@ -182,7 +184,16 @@ async function main() {
       await page.locator(".opportunity-row").waitFor();
       mode = "offline";
       await page.locator("[data-market-refresh]").click();
-      await page.getByText("The board couldn’t refresh.").waitFor();
+      // The last complete list this browser loaded is shown with its date, marked as possibly out of date.
+      await page.locator(".market-stale-notice").waitFor();
+      assert.match(await page.locator(".market-stale-notice").innerText(), /Last recorded list · .+\n?.*may be out of date, and availability right now is unknown/s);
+      assert.match(await page.locator("[data-market-summary]").innerText(), /^Showing the last list recorded .+ It may be out of date; availability right now is unknown\./);
+      assert.ok(await page.locator('.opportunity-row[data-stale="true"]').count() > 0);
+      assert.equal(await page.locator('.opportunity-row:not([data-stale="true"])').count(), 0);
+      await page.evaluate(() => localStorage.removeItem("agent-bounties.board-snapshot.v1"));
+      await page.locator("[data-market-refresh]").click();
+      await page.locator("[data-opportunity-list]").getByText("We can’t load the list right now.").waitFor();
+      assert.match(await page.locator("[data-opportunity-list]").innerText(), /doesn’t mean there are no bounties/);
       assert.equal(await page.locator(".opportunity-row").count(), 0);
       mode = "ready";
       await page.locator("[data-market-refresh]").click();
