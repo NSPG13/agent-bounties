@@ -7,6 +7,8 @@ use domain::{
 use serde::{Deserialize, Serialize};
 
 const DISCOVERY_SCHEMA: &str = "https://agentbounties.app/schemas/discovery-manifest.v2.json";
+/// `recovery_only` describes autonomous-v1 alone; agents must not read it as a closed network.
+const PROTOCOL_V1_STATUS_SCOPE: &str = "recovery_only applies only to autonomous-v1 bounties: existing v1 bounties can still be inspected, cancelled, expired and refunded, but no new v1 bounty can be created, funded or claimed. It does not mean the network is closed. New bounties use agent-bounties/autonomous-v2.";
 const GITHUB_ISSUE_TEMPLATE_URL: &str =
     "https://github.com/NSPG13/agent-bounties/issues/new?template=paid-bounty.yml";
 const STATIC_FUNDING_PAGE_URL: &str = "https://api.agentizable.ai/public/funding";
@@ -937,6 +939,8 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         protocol: serde_json::json!({
             "version": "agent-bounties/autonomous-v1",
             "status": "recovery_only",
+            "status_scope": PROTOCOL_V1_STATUS_SCOPE,
+            "new_bounties_protocol": "agent-bounties/autonomous-v2",
             "new_creation_enabled": false,
             "new_funding_enabled": false,
             "new_claims_enabled": false,
@@ -4015,6 +4019,11 @@ mod tests {
         assert_eq!(manifest.protocol["version"], "agent-bounties/autonomous-v1");
         assert_eq!(manifest.protocol["operator_settlement_signer"], false);
         assert_eq!(manifest.protocol["status"], "recovery_only");
+        assert_eq!(manifest.protocol["status_scope"], PROTOCOL_V1_STATUS_SCOPE);
+        assert_eq!(
+            manifest.protocol["new_bounties_protocol"],
+            "agent-bounties/autonomous-v2"
+        );
         for permission in [
             "new_creation_enabled",
             "new_funding_enabled",

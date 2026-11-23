@@ -163,6 +163,13 @@
     el('checkout').hidden = order.status !== 'awaiting_payment';
     el('refund-form').hidden = order.status !== 'awaiting_bank_settlement';
     if (order.status === 'funded') el('bounty-link').textContent = 'View your funded bounty on Basescan';
+    // The public page to share appears only once Base confirmed funding, and only on mainnet.
+    const shared = order.status === 'funded' && record.input.bounty.network === 'base-mainnet' && /^0x[0-9a-fA-F]{40}$/.test(record.input.bounty.predicted_bounty || '');
+    el('share').hidden = !shared;
+    if (shared) {
+      const url = location.origin + '/participate.html?bountyContract=' + record.input.bounty.predicted_bounty.toLowerCase() + '&network=base-mainnet';
+      el('share-link').href = url; el('share-link').textContent = url;
+    }
     el('refund-consent').checked = false;
     el('refund-info').textContent = order.status === 'awaiting_bank_settlement'
       ? 'You can cancel before funding and request a full refund of ' + core.money(record.total_minor, record.input.currency) + ', including the platform fee and all listed costs. This stops funding of the service.' : '';

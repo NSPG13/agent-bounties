@@ -114,8 +114,11 @@ body.market-page { line-height: 1.55; }
 .funded-amount { font-size: 36px; font-weight: 750; color: var(--market-green); letter-spacing: -.04em; margin: 0; }
 .funded-receipt p:not(.funded-amount) { font-size: 13px; color: var(--market-muted); }
 .funded-actions { display: flex; justify-content: center; flex-wrap: wrap; gap: 12px; }
-.funded-shell .funded-countdown { margin: 22px 0; font-size: 13px; }
-.funded-countdown button { color: var(--market-green); background: transparent; border: 0; text-decoration: underline; padding: 12px; cursor: pointer; }
+.funded-share { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--market-line); }
+.funded-share label { display: block; font-weight: 650; font-size: 14px; margin-bottom: 8px; }
+.funded-share-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.funded-share-row input { flex: 1 1 220px; min-width: 0; min-height: 46px; padding: 0 12px; border: 1px solid var(--market-line); border-radius: 12px; background: var(--market-panel); color: inherit; font: inherit; font-size: 13px; }
+.funded-share output { display: block; min-height: 1.2em; margin-top: 6px; font-size: 13px; color: var(--market-muted); }
 @keyframes feed-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @media (max-width: 1120px) { .feed-layout { grid-template-columns: 170px minmax(0, 760px); gap: 28px; } }
 @media (max-width: 760px) {
