@@ -1587,7 +1587,7 @@ def main() -> int:
             # homepage wallet onboarding. Only these reviewed scripts may run.
             scripts = re.findall(r"<script\b[^>]*>.*?</script\s*>", text, re.IGNORECASE | re.DOTALL)
             # The theme script runs blocking, before first paint, and only reads the theme key.
-            if scripts != ['<script src="managed-service-theme.js?v=20261115"></script>', '<script src="managed-service-core.js?v=20261030" defer></script>', '<script src="managed-service-page.js?v=20261121" defer></script>']:
+            if scripts != ['<script src="managed-service-theme.js?v=20261123"></script>', '<script src="managed-service-core.js?v=20261030" defer></script>', '<script src="managed-service-page.js?v=20261121" defer></script>']:
                 fail(f"{relative}: only the private managed-service scripts may load")
             if re.search(r"\bon\w+\s*=|shared-navigation:|<(?:iframe|form)\b", text, re.IGNORECASE):
                 fail(f"{relative}: inline handlers, shared journey handlers, forms and frames are forbidden")

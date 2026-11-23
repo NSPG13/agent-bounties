@@ -3,9 +3,10 @@
    listeners and makes no requests, so it never sees quote, order or account data. */
 (function () {
   'use strict';
-  let choice = 'dark';
-  try { const saved = window.localStorage.getItem('agent-bounties.theme'); if (saved === 'light' || saved === 'dark' || saved === 'auto') choice = saved; } catch (_) { /* Storage can be disabled. */ }
-  let light = choice === 'light';
-  try { if (choice === 'auto') light = window.matchMedia('(prefers-color-scheme: light)').matches; } catch (_) { /* Keep dark. */ }
-  document.documentElement.dataset.theme = light ? 'light' : 'dark';
+  // Only Light and Dark exist. Without a saved one (or with an older "auto"), follow the
+  // system preference; the main site saves that choice on its next visit.
+  let choice = null;
+  try { const saved = window.localStorage.getItem('agent-bounties.theme'); if (saved === 'light' || saved === 'dark') choice = saved; } catch (_) { /* Storage can be disabled. */ }
+  if (!choice) { try { choice = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'; } catch (_) { choice = 'dark'; } }
+  document.documentElement.dataset.theme = choice;
 })();
