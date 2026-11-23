@@ -710,7 +710,16 @@ ${competitionChildBrief(item)}`;
       if (!Number.isFinite(day) || day < weekStart || day > now) return total;
       return total + finiteNonNegative(item.settled_rounds, "Daily settled rounds");
     }, 0);
-    return { payout, live: availability.unavailable || coverage.state !== "complete" || coverage.limited ? null : availability.now, availability, coverage, completed, completedThisWeek };
+    return { payout, live: availability.unavailable || coverage.state !== "complete" || coverage.limited ? null : availability.now, availability, coverage, listed: items.length, completed, completedThisWeek };
+  }
+
+  // The status line under the metrics. A coverage notice shows only when no listing loaded,
+  // as on the board (#1817): a partial or limited feed with listings shows what loaded, without a notice.
+  function metricNotice(snapshot) {
+    const notice = snapshot.listed ? "" : snapshot.coverage.message;
+    if (notice) return { text: notice, hidden: false, state: snapshot.coverage.state === "complete" ? "partial" : snapshot.coverage.state };
+    if (snapshot.availability.unavailable) return { text: "Open-now total is unconfirmed while some timing is unavailable. See All funded on the board.", hidden: false, state: "unavailable" };
+    return { text: "", hidden: true, state: "ready" };
   }
 
   function start(win, doc) {
@@ -952,9 +961,10 @@ ${competitionChildBrief(item)}`;
       doc.querySelector("[data-live-weekly]").textContent = `${counts.direct} direct tasks · ${counts.competition} competitions · ${counts.child_funding} child-funding tasks${counts.unavailable ? ` confirmed open; timing unavailable for ${counts.unavailable}` : ""}`;
       doc.querySelector("[data-completed-weekly]").textContent = `+${formatter.format(snapshot.completedThisWeek)} settled in the last 7 days`;
       const status = doc.querySelector("[data-market-status]");
-      status.textContent = snapshot.coverage.message || (counts.unavailable ? "Open-now total is unconfirmed while some timing is unavailable. See All funded on the board." : "");
-      status.hidden = !counts.unavailable && !snapshot.coverage.message;
-      status.dataset.state = snapshot.coverage.limited ? "partial" : snapshot.coverage.state !== "complete" ? snapshot.coverage.state : counts.unavailable ? "unavailable" : "ready";
+      const notice = metricNotice(snapshot);
+      status.textContent = notice.text;
+      status.hidden = notice.hidden;
+      status.dataset.state = notice.state;
       fitMetricValues();
     }
 
@@ -2145,6 +2155,7 @@ ${competitionChildBrief(item)}`;
     isLocalHost,
     isReadyToEarn,
     marketSnapshot,
+    metricNotice,
     parseSceneTime,
     parseCompetitionPostingRequest,
     sceneBlend,

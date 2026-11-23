@@ -498,10 +498,23 @@ test("market snapshot exposes only truthful canonical evidence", () => {
     payout: 23.75,
     live: 2,
     coverage: { state: "complete", limited: false, missing: [], message: "" },
+    listed: 2,
     completed: 12,
     availability: { now: 2, upcoming: 0, ended: 0, closed: 0, unavailable: 0, direct: 2, competition: 0, child_funding: 0, unknown: 0 },
     completedThisWeek: 2,
   });
+});
+
+test("the status under the metrics shows a coverage notice only when no listing loaded", () => {
+  const availability = { now: 1, upcoming: 0, ended: 0, closed: 0, unavailable: 0, direct: 1, competition: 0, child_funding: 0, unknown: 0 };
+  const partial = { state: "partial", limited: false, missing: ["autonomous-v2"], message: "We can’t load the full list right now (missing: v2 bounties). The full count is unknown." };
+  const limited = { state: "complete", limited: true, missing: [], message: "Showing a limited page of checked listings; the full count is unknown." };
+  assert.deepEqual(home.metricNotice({ coverage: partial, availability, listed: 1 }), { text: "", hidden: true, state: "ready" }, "a partial feed with listings shows no notice");
+  assert.deepEqual(home.metricNotice({ coverage: limited, availability, listed: 300 }), { text: "", hidden: true, state: "ready" }, "a limited page with listings shows no notice");
+  assert.deepEqual(home.metricNotice({ coverage: partial, availability, listed: 0 }), { text: partial.message, hidden: false, state: "partial" }, "nothing loaded still explains why");
+  const unavailable = { state: "unavailable", limited: false, missing: ["autonomous"], message: "We can’t load the list right now. Availability is unknown, not zero; try Refresh." };
+  assert.deepEqual(home.metricNotice({ coverage: unavailable, availability, listed: 0 }), { text: unavailable.message, hidden: false, state: "unavailable" });
+  assert.equal(home.metricNotice({ coverage: partial, availability: { ...availability, unavailable: 1 }, listed: 1 }).text, "Open-now total is unconfirmed while some timing is unavailable. See All funded on the board.", "unknown timing is still explained");
 });
 
 test("partial, delayed, malformed, and non-ready evidence fail closed", () => {
