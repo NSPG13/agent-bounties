@@ -31,3 +31,9 @@
   .ab-site-header .ab-site-nav a { font-size: 13px; padding: 11px 16px; }
   .feed-heading { flex-wrap: wrap; }
 }
+
+/* English | Español, matching the Workspace switch with the site's forest tokens. */
+.ab-lang-control { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--ab-line, #2c4032); border-radius: 8px; background: var(--ab-panel, #101e16); }
+.ab-lang-control button { flex: 1; display: inline-flex; align-items: center; justify-content: center; padding: 5px 8px; min-height: 32px; border: 0; border-radius: 6px; background: transparent; color: var(--ab-muted, #aab9ae); font: inherit; font-size: .76rem; cursor: pointer; }
+.ab-lang-control button[aria-pressed="true"] { background: var(--ab-accent, #8ee46b); color: var(--ab-on-accent, #07110c); }
+.ab-lang-control button:focus-visible { outline: 2px solid var(--ab-accent, #8ee46b); outline-offset: 2px; }

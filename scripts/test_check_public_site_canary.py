@@ -162,11 +162,11 @@ class PublicSiteCanaryTests(unittest.TestCase):
     def with_beacon(self, beacon=None):
         return self.home.replace("</body>", (self.beacon() if beacon is None else beacon) + "</body>")
 
-    def test_reviewed_edge_beacon_or_eu_absence_preserves_all_23_assets(self):
+    def test_reviewed_edge_beacon_or_eu_absence_preserves_all_24_assets(self):
         for home in (self.home, self.with_beacon()):
             with self.subTest(beacon_present=home != self.home):
                 self.overrides["index.html"] = home.encode()
-                self.assertEqual(self.run_canary(), 23)
+                self.assertEqual(self.run_canary(), 24)
         self.assertTrue(all(urlsplit(url).netloc == "agentizable.ai" for url in self.requests))
 
     def test_changed_edge_script_attributes_or_config_fail(self):

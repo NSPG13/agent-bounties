@@ -36,6 +36,12 @@ def sync(check=False):
             login_attributes = ""
         # The header link leaves dialog ownership to the footer link on the homepage.
         header_login_attributes = " data-post-auth-start" if relative.as_posix() == "post.html" else ""
+        # Every page offers English | Español (author decision); untranslated text stays English.
+        language_switch = ('    <div class="ab-lang-control" role="group" aria-label="Language" data-i18n-skip>'
+                           '<button type="button" data-lang-choice="en" lang="en" aria-pressed="true">English</button>'
+                           '<button type="button" data-lang-choice="es" lang="es" aria-pressed="false">Español</button></div>\n'
+                           )
+        markup = markup.replace("{{language_switch}}", language_switch)
         markup = markup.replace("{{login_href}}", login_href).replace("{{login_attributes}}", login_attributes).replace("{{header_login_attributes}}", header_login_attributes)
         block = START + "\n" + markup + "\n" + END
         source = path.read_text(encoding="utf-8")
@@ -47,12 +53,13 @@ def sync(check=False):
             result = source[:header.start()] + block + source[header.end():] if header else re.sub(r'(<body\b[^>]*>)', lambda m: m[0] + "\n    " + block, source, count=1)
         # Render shared assets once, last in the head so page-local legacy
         # styles cannot override the shared shell or selected color theme.
-        result = re.sub(r'\s*<(?:link\b[^>]*href|script\b[^>]*src)="' + re.escape(prefix) + r'(?:site-navigation\.css|site-navigation\.js|forest-ui\.css|forest-theme\.js|forest-hall\.css)\?v=\d+"[^>]*>(?:</script>)?', '', result)
+        result = re.sub(r'\s*<(?:link\b[^>]*href|script\b[^>]*src)="' + re.escape(prefix) + r'(?:site-navigation\.css|site-navigation\.js|forest-ui\.css|forest-theme\.js|forest-hall\.css|i18n\.js)\?v=\d+"[^>]*>(?:</script>)?', '', result)
         home_atmosphere = '    <link rel="stylesheet" href="forest-hall.css?v=17">\n' if relative.as_posix() == "index.html" else ""
-        assets = f'''    <link rel="stylesheet" href="{prefix}site-navigation.css?v=7">
+        assets = f'''    <link rel="stylesheet" href="{prefix}site-navigation.css?v=8">
     <link rel="stylesheet" href="{prefix}forest-ui.css?v=7">
 {home_atmosphere}    <script src="{prefix}forest-theme.js?v=2"></script>
     <script src="{prefix}site-navigation.js?v=7" defer></script>
+    <script src="{prefix}i18n.js?v=3" defer></script>
 '''
         result = re.sub(r"[ \t]*</head>", lambda _: assets + "  </head>", result)
         footer_block = "<!-- shared-footer:start -->\n" + footer.replace("{{root}}", prefix or "./").replace("{{prefix}}", prefix).replace("{{login_href}}", login_href).replace("{{login_attributes}}", login_attributes) + "\n<!-- shared-footer:end -->"
