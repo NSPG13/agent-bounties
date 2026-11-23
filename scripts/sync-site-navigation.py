@@ -56,12 +56,15 @@ def sync(check=False):
         # Render shared assets once, last in the head so page-local legacy
         # styles cannot override the shared shell or selected color theme.
         result = re.sub(r'\s*<(?:link\b[^>]*href|script\b[^>]*src)="' + re.escape(prefix) + r'(?:site-navigation\.css|site-navigation\.js|forest-ui\.css|forest-theme\.js|forest-hall\.css|i18n\.js)\?v=\d+"[^>]*>(?:</script>)?', '', result)
+        # The agent posting guide is discoverable from every page (P7).
+        result = re.sub(r'\s*<link rel="alternate" type="text/markdown" href="[^"]*agent/post\.md"[^>]*>', '', result)
         home_atmosphere = '    <link rel="stylesheet" href="forest-hall.css?v=17">\n' if relative.as_posix() == "index.html" else ""
         assets = f'''    <link rel="stylesheet" href="{prefix}site-navigation.css?v=10">
     <link rel="stylesheet" href="{prefix}forest-ui.css?v=10">
 {home_atmosphere}    <script src="{prefix}forest-theme.js?v=2"></script>
     <script src="{prefix}site-navigation.js?v=7" defer></script>
-    <script src="{prefix}i18n.js?v=4" defer></script>
+    <script src="{prefix}i18n.js?v=5" defer></script>
+    <link rel="alternate" type="text/markdown" href="{prefix}agent/post.md" title="How AI agents post a bounty">
 '''
         result = re.sub(r"[ \t]*</head>", lambda _: assets + "  </head>", result)
         footer_block = "<!-- shared-footer:start -->\n" + footer.replace("{{root}}", prefix or "./").replace("{{prefix}}", prefix).replace("{{login_href}}", login_href).replace("{{login_attributes}}", login_attributes) + "\n<!-- shared-footer:end -->"

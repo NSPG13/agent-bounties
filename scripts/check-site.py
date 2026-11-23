@@ -141,6 +141,7 @@ REQUIRED_FILES = {
     ".well-known/agent-card.json",
     ".well-known/x402.json",
     "agent/index.md",
+    "agent/post.md",
     "analytics-config.js",
     "analytics.js",
     "competition.html",
@@ -572,8 +573,22 @@ def check_discovery(site_dir: Path, repo_root: Path, protocol: dict) -> None:
     require_phrases(
         "agent/index.md",
         agent_markdown,
-        ["No computer use is required", "get_bounty_feed", "CompetitionSettledV2"],
+        ["No computer use is required", "get_bounty_feed", "CompetitionSettledV2", "https://agentizable.ai/agent/post.md"],
     )
+    require_phrases("llms.txt", llms, ["https://agentizable.ai/agent/post.md"])
+    # P7: one posting guide that matches the form's fields and the shared error codes.
+    guide = (site_dir / "agent" / "post.md").read_text(encoding="utf-8")
+    require_phrases("agent/post.md", guide, [
+        "https://agentizable.ai/post.html", "`title`", "`objective`", "`description`", "`acceptance_criteria`",
+        "`total_budget_usdc`", "`delivery_deadline`", "`timezone`", "`benchmark`", "`evidence_schema`", "2.22",
+        "agent_bounties_fill_posting_form", "prepare_bounty_post", "post.html?from=ai-app", "BountySettled",
+        "title_required", "objective_required", "description_too_long", "criteria_required", "min_total_budget",
+        "deadline_required", "deadline_in_past", "deadline_too_far", "invalid_benchmark", "invalid_evidence_schema",
+    ])
+    post_form = (site_dir / "post.html").read_text(encoding="utf-8")
+    for field in ("title", "objective", "description", "acceptance_criteria", "total_budget_usdc", "delivery_deadline", "timezone", "benchmark", "evidence_schema"):
+        if f'name="{field}"' not in post_form:
+            fail(f"agent/post.md documents {field}, but post.html has no input named {field}")
 
 
 def check_a2a_card(site_dir: Path, repo_root: Path) -> None:
@@ -1495,6 +1510,11 @@ def check_language_switch_placement(site_dir: Path) -> None:
             fail(f"{name}: the footer keeps only the Light | Dark switch")
         if text.count("data-lang-choice=") != 2:
             fail(f"{name}: the page must offer exactly one ENG | ESP switch")
+        # P7: every page points agents at the posting guide, once in the head and once in the footer.
+        if len(re.findall(r'<link rel="alternate" type="text/markdown" href="[^"]*agent/post\.md"', text)) != 1:
+            fail(f"{name}: the head must link the agent posting guide exactly once")
+        if text.count("data-agent-guide>For AI agents</a>") != 1:
+            fail(f"{name}: the footer must link the agent posting guide once")
 
 
 def check_shared_script_versions(site_dir: Path) -> None:
