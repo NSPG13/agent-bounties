@@ -1020,6 +1020,9 @@
     if (!isMission) return;
     ui.missionTitle.textContent = state.missionPlan.title;
     ui.missionSummary.textContent = state.missionPlan.success_definition;
+    // The plan is the creator's own words: the language switch never translates it.
+    ui.missionTitle.setAttribute("data-i18n-skip", "");
+    ui.missionSummary.setAttribute("data-i18n-skip", "");
     ui.missionHorizon.textContent = `Mission horizon: ${state.horizon.label}`;
     ui.missionTasks.replaceChildren();
     for (const task of state.missionPlan.tasks) {
@@ -1033,6 +1036,7 @@
       const copy = document.createElement("span");
       const title = document.createElement("strong");
       title.textContent = task.title;
+      title.setAttribute("data-i18n-skip", "");
       const detail = document.createElement("small");
       detail.textContent = `${task.acceptance_criteria.length} completion checks${task.depends_on?.length ? ` · depends on ${task.depends_on.join(", ")}` : " · can start independently"}`;
       copy.append(title, detail);
@@ -1098,9 +1102,11 @@
       item.textContent = "Review the scope, feasibility and acceptance criteria carefully before approving. The creator accepts feasibility and verification risk.";
       ui.risks.append(item);
     } else {
+      const ownWords = new Set(state.draft.risk_flags || []);
       for (const risk of risks) {
         const item = document.createElement("li");
         item.textContent = risk;
+        if (ownWords.has(risk)) item.setAttribute("data-i18n-skip", "");
         ui.risks.append(item);
       }
     }
