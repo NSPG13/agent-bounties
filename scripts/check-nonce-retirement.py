@@ -14,15 +14,10 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 TEST = "nonce_retirement::local_rehearsal::"
+REHEARSALS = ("nonce77_retained_dispatch_local_chain_rehearsal", "nonce77_retirement_local_chain_rehearsal")
 
 
-def main() -> int:
-    if os.environ.get("AGENT_BOUNTIES_LOCAL_TEST_DATABASE") != "1":
-        return subprocess.call([sys.executable, "scripts/run-with-test-postgres.py", "--",
-                                sys.executable, "scripts/check-nonce-retirement.py"], cwd=ROOT)
-    anvil, cargo = shutil.which("anvil"), shutil.which("cargo")
-    if not anvil or not cargo:
-        raise RuntimeError("Anvil and Cargo are required; no remote-chain fallback exists")
+def run_rehearsal(anvil: str, cargo: str, name: str) -> None:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
@@ -30,7 +25,8 @@ def main() -> int:
     # Anvil's well-known development keys stay out of test output.
     with tempfile.TemporaryFile() as log:
         node = subprocess.Popen([anvil, "--host", "127.0.0.1", "--port", str(port),
-                                 "--chain-id", "8453", "--no-mining"], stdout=log, stderr=log)
+                                 "--chain-id", "8453", "--no-mining",
+                                 "--timestamp", str(int(time.time()) - 3600)], stdout=log, stderr=log)
         try:
             deadline = time.monotonic() + 15
             while time.monotonic() < deadline:
@@ -49,12 +45,12 @@ def main() -> int:
                 raise RuntimeError("Disposable Anvil did not become ready")
             environment = {**os.environ, "RETIREMENT_LOCAL_ANVIL_URL": url,
                            "AGENT_BOUNTIES_TEST_DATABASE_URL": os.environ["DATABASE_URL"]}
-            result = subprocess.run([cargo, "test", "-p", "api", TEST, "--", "--ignored",
+            result = subprocess.run([cargo, "test", "-p", "api", TEST + name, "--", "--exact", "--ignored",
                                      "--test-threads=1", "--nocapture"], cwd=ROOT, env=environment,
                                     text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             print(result.stdout, end="")
-            if result.returncode or not re.search(r"test result: ok\. 2 passed", result.stdout):
-                raise RuntimeError("Nonce retirement local-chain rehearsal did not pass")
+            if result.returncode or not re.search(r"test result: ok\. 1 passed", result.stdout):
+                raise RuntimeError(f"Nonce retirement local-chain rehearsal {name} did not pass")
         finally:
             node.terminate()
             try:
@@ -62,6 +58,21 @@ def main() -> int:
             except subprocess.TimeoutExpired:
                 node.kill()
                 node.wait()
+
+
+def main() -> int:
+    if os.environ.get("AGENT_BOUNTIES_LOCAL_TEST_DATABASE") != "1":
+        return subprocess.call([sys.executable, "scripts/run-with-test-postgres.py", "--",
+                                sys.executable, "scripts/check-nonce-retirement.py"], cwd=ROOT)
+    anvil, cargo = shutil.which("anvil"), shutil.which("cargo")
+    if not anvil or not cargo:
+        raise RuntimeError("Anvil and Cargo are required; no remote-chain fallback exists")
+    # Each rehearsal gets its own disposable chain. Anvil 1.10 advances block time
+    # even for zero-interval mining (about 1s per 5 blocks), so one shared chain
+    # drifts past the wall clock and the 90-second freshness bound. A genesis an
+    # hour back lets each rehearsal anchor its blocks behind the wall clock.
+    for name in REHEARSALS:
+        run_rehearsal(anvil, cargo, name)
     return 0
 
 
