@@ -23,7 +23,7 @@
     <link rel="stylesheet" href="posting-workspace.css?v=7">
     <link rel="stylesheet" href="marketplace-theme.css?v=4">
     <link rel="stylesheet" href="funding-guide.css?v=1">
-    <link rel="stylesheet" href="manual-posting.css?v=5">
+    <link rel="stylesheet" href="manual-posting.css?v=6">
     <link rel="stylesheet" href="site-navigation.css?v=7">
     <link rel="stylesheet" href="forest-ui.css?v=6">
     <script src="forest-theme.js?v=1"></script>
@@ -47,6 +47,12 @@
     <main class="posting-workspace" aria-label="Bounty draft and review">
       <section class="conversation-panel">
         <p class="posting-receipt" data-recorded-posting hidden>A wallet step is recorded. <a data-posting-receipt-link>Check funding and return to the board →</a></p>
+        <details class="saved-drafts" data-saved-drafts hidden>
+          <summary>Your saved drafts (<span data-saved-drafts-count>0</span>)</summary>
+          <p class="saved-drafts-note">Saved to your account. Open one to continue it here, on any device.</p>
+          <ul class="saved-drafts-list" data-saved-drafts-list></ul>
+          <p class="saved-drafts-status" data-saved-drafts-status role="status"></p>
+        </details>
 
         <ol class="ab-post-steps" aria-label="Create a bounty"><li><button type="button" data-stage-target="details" aria-current="step"><span>1</span>Details</button></li><li><button type="button" data-stage-target="review"><span>2</span>Review</button></li><li><button type="button" data-stage-target="fund" disabled><span>3</span>Fund</button></li></ol>
         <form id="bounty-composer-form" class="chat-composer-form">
@@ -361,6 +367,7 @@
     <script src="posting-brief.js?v=5"></script>
     <script src="posting-workspace.js?v=12"></script>
     <script src="forest-posting.js?v=4"></script>
+    <script src="posting-drafts.js?v=1"></script>
   <!-- shared-footer:start -->
 <footer class="ab-footer">
   <div class="ab-footer-main">
