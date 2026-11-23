@@ -80,3 +80,24 @@ test("manual form preserves explicit terms without an AI and rejects incomplete 
   assert.throws(() => brief.manualDraft({...input, objective:"Aim", goal:"x".repeat(4001)}, now), /objective and description together/);
   assert.doesNotMatch(brief.resolveDeadline("2026-11-01T01:30", "America/Chicago").error, /UTC offset/, "the form has no offset field to point at");
 });
+
+test("each form rule fails with one stable code and field, shared by the form and agents", () => {
+  const now = Date.parse("2026-11-01T12:00:00Z");
+  const ok = { title: "Landing page", objective: "Get more contacts", goal: "Get more contacts", criteria: "Loads on mobile", budget_usdc: "10", deadline_at: "2026-11-05T12:00:00Z", review_consent: true };
+  assert.equal(brief.manualDraft(ok, now).review_mode, "creator");
+  const cases = [
+    [{ title: "" }, "title_required", "title"],
+    [{ objective: "" }, "objective_required", "objective"],
+    [{ criteria: "" }, "criteria_required", "acceptance_criteria"],
+    [{ budget_usdc: "2.21" }, "min_total_budget", "total_budget_usdc"],
+    [{ deadline_at: "" }, "deadline_required", "delivery_deadline"],
+    [{ deadline_at: "2026-10-31T12:00:00Z" }, "deadline_in_past", "delivery_deadline"],
+    [{ deadline_at: "2026-12-05T12:00:00Z" }, "deadline_too_far", "delivery_deadline"],
+    [{ review_consent: false }, "review_consent_required", "review_consent"],
+  ];
+  for (const [change, code, field] of cases) {
+    assert.throws(() => brief.manualDraft({ ...ok, ...change }, now), (error) => error.code === code && error.field === field, code);
+  }
+  const split = brief.manualDraft({ ...ok, budget_usdc: "2.22" }, now);
+  assert.deepEqual([split.solver_reward_usdc, split.verifier_reward_usdc], ["2.00", "0.22"]);
+});

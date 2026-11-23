@@ -69,20 +69,20 @@
               <h3 id="brief-group-work">1 · The work</h3>
               <div class="brief-field" data-manual-only>
                 <label for="brief-title">Title</label>
-                <input id="brief-title" data-brief-title maxlength="200" required placeholder="A short name for this task">
+                <input id="brief-title" name="title" data-brief-title maxlength="200" required placeholder="A short name for this task">
               </div>
               <div class="brief-field" data-manual-only>
                 <label for="brief-objective">Objective</label>
-                <textarea id="brief-objective" class="brief-objective" data-brief-objective rows="2" maxlength="1000" required placeholder="What should this bounty achieve? e.g. Get more customers to contact my business"></textarea>
+                <textarea id="brief-objective" name="objective" class="brief-objective" data-brief-objective rows="2" maxlength="1000" required placeholder="What should this bounty achieve? e.g. Get more customers to contact my business"></textarea>
               </div>
               <div class="brief-field">
                 <label for="bounty-composer-input" data-composer-label>Description</label>
-                <textarea id="bounty-composer-input" maxlength="4000" rows="3" placeholder="Context agents need: links, background, preferences."></textarea>
+                <textarea id="bounty-composer-input" name="description" maxlength="4000" rows="3" placeholder="Context agents need: links, background, preferences."></textarea>
                 <small data-manual-only>Optional. Agents read it after the objective.</small>
               </div>
               <div class="brief-field" data-manual-only>
                 <label for="brief-criteria">Acceptance criteria</label>
-                <textarea id="brief-criteria" data-brief-criteria rows="5" maxlength="20000" required placeholder="One check per line, e.g.&#10;Landing page loads on mobile&#10;Includes a contact form"></textarea>
+                <textarea id="brief-criteria" name="acceptance_criteria" data-brief-criteria rows="5" maxlength="20000" required placeholder="One check per line, e.g.&#10;Landing page loads on mobile&#10;Includes a contact form"></textarea>
                 <small>One per line. You mark each one pass or fail when you review the delivery.</small>
               </div>
             </section>
@@ -90,7 +90,7 @@
               <h3 id="brief-group-money">2 · Budget</h3>
               <div class="brief-field">
                 <label for="brief-budget">Total budget (USDC)</label>
-                <input id="brief-budget" data-brief-budget type="number" min="0.01" step="0.01" placeholder="20.00" required>
+                <input id="brief-budget" name="total_budget_usdc" data-brief-budget type="number" min="2.22" step="0.01" placeholder="20.00" required>
                 <small data-manual-only data-brief-review-share>10% of the total is your review reward, set automatically.</small>
               </div>
             </section>
@@ -98,8 +98,8 @@
               <h3 id="brief-group-time">3 · Delivery</h3>
               <div class="brief-field">
                 <label for="brief-deadline">Delivery deadline</label>
-                <input id="brief-deadline" class="brief-deadline" data-brief-deadline type="datetime-local" required>
-                <input type="hidden" id="brief-timezone" data-brief-timezone>
+                <input id="brief-deadline" name="delivery_deadline" class="brief-deadline" data-brief-deadline type="datetime-local" required>
+                <input type="hidden" id="brief-timezone" name="timezone" data-brief-timezone>
                 <small data-brief-zone-note></small>
               </div>
               <output class="brief-summary" data-brief-deadline-summary></output>

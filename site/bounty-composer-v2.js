@@ -5,7 +5,7 @@
   const MAX_AI_ROUNDS = 3;
   const MAX_PLAN_TASKS = 6;
   const MAX_TASK_DAYS = 30;
-  const MIN_TOTAL_USDC = 2.01;
+  const MIN_TOTAL_USDC = 2.22;
   const MIN_SOLVER_USDC_BASE_UNITS = 2_000_000n;
   const metaChild = typeof module === "object" && module.exports ? require("./meta-child.js") : window.AgentBountiesMetaChild;
   const MAX_TOTAL_USDC = 9_000_000_000;
@@ -467,23 +467,16 @@
     return BigInt(Math.round(number * 1_000_000));
   }
 
+  // The platform's one split, the same as the form's (posting-brief.js): the review reward is 10% of the
+  // total rounded to the cent and at least 0.01 USDC; the worker receives the rest and at least 2 USDC.
   function splitReward(total) {
     const totalUnits = usdcBaseUnits(total);
-    if (totalUnits < 2_010_000n) {
-      throw new Error("Public bounties require at least 2 USDC for the solver plus a verifier reserve.");
+    const verifier = (() => { const cents = (totalUnits + 50_000n) / 100_000n; return (cents < 1n ? 1n : cents) * 10_000n; })();
+    const solver = totalUnits - verifier;
+    if (solver < MIN_SOLVER_USDC_BASE_UNITS) {
+      throw new Error("Enter a total budget of at least 2.22 USDC: the worker receives at least 2 USDC after the 10% review reward.");
     }
-    const proportional = totalUnits / 50n;
-    const verifier = proportional < 10_000n ? 10_000n : proportional;
-    let cappedVerifier = verifier > totalUnits / 5n ? totalUnits / 5n : verifier;
-    if (totalUnits - cappedVerifier < MIN_SOLVER_USDC_BASE_UNITS) {
-      cappedVerifier = totalUnits - MIN_SOLVER_USDC_BASE_UNITS;
-    }
-    if (cappedVerifier % 2n !== 0n) cappedVerifier -= 1n;
-    const solver = totalUnits - cappedVerifier;
-    if (solver < MIN_SOLVER_USDC_BASE_UNITS || cappedVerifier < 10_000n) {
-      throw new Error("The solver reward must remain at least 2 USDC and the verifier reserve at least 0.01 USDC.");
-    }
-    return { total: totalUnits, solver, verifier: cappedVerifier };
+    return { total: totalUnits, solver, verifier };
   }
 
   function parsePreparedRewardSplit(solverValue, verifierValue, parent = null) {
@@ -518,7 +511,7 @@
       if (totalUnits !== 1000000n) throw new Error("This parent's qualifying child must total exactly 1 USDC.");
       return metaChild.rewards(preparedRewards?.solver ?? 990000n, preparedRewards?.verifier ?? 10000n, parent);
     }
-    if (preparedRewards && preparedRewards.total === totalUnits) return preparedRewards;
+    // Total budget only (owner decision): a split prepared elsewhere never overrides the platform's split.
     return splitReward(total);
   }
 
@@ -883,7 +876,7 @@
       label: "Total bounty funding",
       placeholder: "Example: 25 USDC",
       button: "Create bounty card",
-      hint: "The total includes the solver reward and a verifier reserve. Minimum: 2.01 USDC total, including at least 2 USDC for the solver.",
+      hint: "The total includes the worker reward and a 10% review reward. Minimum: 2.22 USDC total, so the worker receives at least 2 USDC.",
     });
   }
 
