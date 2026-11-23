@@ -84,6 +84,18 @@ const server = http.createServer((req, res) => {
       await motion.close();
     }
     {
+      // Board and bounty pages load their own Spanish dictionary.
+      const board = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
+      await board.route("**/*", (route) => new URL(route.request().url()).origin === origin ? route.continue() : route.fulfill({ status: 503, body: "" }));
+      const page = await board.newPage();
+      for (const [file, heading] of [["earn.html", "Tablero de recompensas"], ["participate.html", "Tu espacio de la recompensa"], ["competition.html", "Espacio de la competencia"], ["leaderboard.html", "Cómo funciona la clasificación"], ["recover-bounty.html", "Recuperar los fondos de una recompensa"], ["check-work.html", "Antes de entregar"]]) {
+        await page.goto(`${origin}/${file}?lang=es`);
+        await page.getByText(heading, { exact: true }).first().waitFor();
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${file} fits at 390px in Spanish`);
+      }
+      await board.close();
+    }
+    {
       // A bounty titled with a dictionary phrase keeps its own words in Spanish mode.
       const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
       await ctx.route("**/*", (route) => new URL(route.request().url()).origin === origin ? route.continue() : route.fulfill({ status: 503, body: "" }));

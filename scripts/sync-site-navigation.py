@@ -59,7 +59,7 @@ def sync(check=False):
     <link rel="stylesheet" href="{prefix}forest-ui.css?v=7">
 {home_atmosphere}    <script src="{prefix}forest-theme.js?v=2"></script>
     <script src="{prefix}site-navigation.js?v=7" defer></script>
-    <script src="{prefix}i18n.js?v=3" defer></script>
+    <script src="{prefix}i18n.js?v=4" defer></script>
 '''
         result = re.sub(r"[ \t]*</head>", lambda _: assets + "  </head>", result)
         footer_block = "<!-- shared-footer:start -->\n" + footer.replace("{{root}}", prefix or "./").replace("{{prefix}}", prefix).replace("{{login_href}}", login_href).replace("{{login_attributes}}", login_attributes) + "\n<!-- shared-footer:end -->"
