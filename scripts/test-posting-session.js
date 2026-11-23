@@ -516,3 +516,40 @@ test("a failed account save marks its message as an error so the posting form ke
   assert.equal(output.dataset.tone, "error", "the failure is marked so the form does not hide it");
   assert.ok(server.requests.some((request) => !request.owner), "the failing save reached the server");
 });
+
+test("status copy never asks a signed-in person to sign in and reports the account check honestly", async () => {
+  const { MESSAGES } = posting;
+  const win = browser(new Server()); seed(win);
+  const session = posting.create(win);
+  assert.equal(session.snapshot().status, "checking");
+  assert.equal(session.snapshot().message, MESSAGES.checking, "before the account check answers, no sign-in state is claimed");
+  await session.hydrate({ authenticated: false });
+  assert.equal(session.snapshot().message, MESSAGES.signedOut);
+  await session.hydrate(account());
+  assert.doesNotMatch(session.snapshot().message, /sign in/i);
+  const empty = posting.create(browser(new Server()));
+  await empty.hydrate(account());
+  assert.equal(empty.snapshot().message, MESSAGES.signedInEmpty);
+  assert.doesNotMatch(empty.snapshot().message, /sign in/i, "a signed-in person with no draft yet is not told to sign in");
+  const unknown = posting.create(browser(new Server()));
+  unknown.accountUnavailable();
+  assert.equal(unknown.snapshot().message, MESSAGES.accountUnknown, "a failed check is neither signed in nor signed out");
+  await unknown.hydrate(account());
+  unknown.accountUnavailable();
+  assert.notEqual(unknown.snapshot().message, MESSAGES.accountUnknown, "a later failure elsewhere does not overwrite a known account state");
+});
+
+test("a restored draft says approval is kept only when the server copy carries it for these exact terms", async () => {
+  const { MESSAGES } = posting;
+  const one = await ready(); await one.session.approve();
+  const kept = await second(one.server);
+  assert.equal(await kept.session.approved(), true);
+  assert.equal(kept.session.snapshot().message, MESSAGES.restoredApproved);
+  edit(one.win, (value) => { value.draft.solver_reward_usdc = "9.50"; });
+  await one.session.flush();
+  assert.equal(one.server.record().approved_draft_hash, null, "a material edit clears the saved approval");
+  const cleared = await second(one.server);
+  assert.equal(await cleared.session.approved(), false);
+  assert.equal(cleared.session.snapshot().message, MESSAGES.restoredNeedsApproval);
+  assert.doesNotMatch(cleared.session.snapshot().message, /kept|preserved/i);
+});

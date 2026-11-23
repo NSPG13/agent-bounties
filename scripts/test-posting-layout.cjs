@@ -156,6 +156,8 @@ async function recoveryRegressions(browser, origin) {
       return { review: window.AgentBountiesComposer.review(), journey: window.AgentBountiesWorkflow.createClient(window).load(), approval: JSON.parse(sessionStorage.getItem("agent-bounties.posting-approval.v1")), continuation: session.snapshot().continuation_url };
     });
     assert.equal(approved.review.explicitly_approved, true);
+    assert.equal(approved.review.next_required_action, "fund_with_wallet", "Approved terms lead to the wallet step");
+    assert.equal(approved.review.funding_ready, true);
     assert.ok(approved.approval.hash);
     const exactTarget = page.url();
     const account = page.locator("[data-post-auth-start]");
@@ -341,6 +343,7 @@ async function recoveryRegressions(browser, origin) {
       assert.equal(await p.locator("[data-brief-budget]").inputValue(), "5");
       const review = await p.evaluate(() => window.AgentBountiesComposer.review());
       assert.equal(review.explicitly_approved, false); assert.equal(review.status, "no_staged_bounty");
+      assert.equal(review.funding_ready, false); assert.equal(review.next_required_action, "prepare_terms");
       assert.equal(await p.evaluate(() => sessionStorage.getItem("agent-bounties.posting-approval.v1")), null);
       assert.deepEqual(await p.evaluate(() => window.__walletRequests), []);
     } finally { await next.close(); }

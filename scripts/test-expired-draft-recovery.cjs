@@ -88,6 +88,7 @@ function fixture(expired) {
         assert.equal(review.saved_operation.revision, 2);
         assert.equal(review.saved_operation.operation_id, operation);
         assert.equal(review.funding_ready, !expired);
+        assert.equal(review.next_required_action, expired ? "agree_new_delivery_deadline" : "fund_with_wallet");
         assert.equal(record.ui.preview_hidden, false);
         assert.equal(review.recovery_code, expired ? "delivery_deadline_expired" : null);
         assert.equal(record.tools.agent_bounties_get_journey.result.journey.id, operation);
