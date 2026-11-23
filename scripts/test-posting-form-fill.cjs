@@ -82,6 +82,21 @@ const server = http.createServer((req, res) => {
     await page.waitForURL("**/post.html?from=webmcp");
     await page.waitForFunction(() => document.querySelector('[name="title"]')?.value === "From the board");
 
+    // The saved draft always carries the platform split, so an approval covers the exact rewards that fund.
+    const splitPage = await context.newPage(); splitPage.on("pageerror", (error) => errors.push(error.message));
+    await splitPage.goto(origin + "/post.html");
+    await splitPage.waitForFunction(() => window.AgentBountiesComposer?.stage);
+    await splitPage.evaluate(() => window.AgentBountiesComposer.stage({ title: "Old split", goal: "Keep the worker paid", acceptance_criteria: ["Done"], solver_reward_usdc: "9.80", verifier_reward_usdc: "0.20", task_window_days: 3, review_mode: "creator", delivery_deadline: new Date(Date.now() + 3 * 86400000).toISOString() }));
+    const staged = await splitPage.evaluate(() => window.AgentBountiesWorkflow.createClient(window).load().draft);
+    assert.deepEqual([staged.solver_reward_usdc, staged.verifier_reward_usdc], ["9", "1"], "a staged draft is saved with the platform split");
+    // A draft saved earlier with another split is corrected on restore; the changed saved terms void any old approval.
+    await splitPage.evaluate(() => { const client = window.AgentBountiesWorkflow.createClient(window), journey = client.load(); client.save({ ...journey, draft: { ...journey.draft, solver_reward_usdc: "9.8", verifier_reward_usdc: "0.2" } }); });
+    await splitPage.reload();
+    await splitPage.waitForFunction(() => window.AgentBountiesWorkflow.createClient(window).load()?.draft?.solver_reward_usdc === "9");
+    assert.equal(await splitPage.evaluate(() => window.AgentBountiesWorkflow.createClient(window).load().draft.verifier_reward_usdc), "1");
+    assert.equal(await splitPage.evaluate(() => window.AgentBountiesComposer.review().explicitly_approved), false);
+    await splitPage.close();
+
     assert.deepEqual(writes, [], "filling the form makes no external writes");
     assert.deepEqual(errors, []);
     console.log("Posting form fill: named fields, platform split, coded field errors, deprecated aliases, agents-only verification, cross-page handoff; nothing staged or signed");

@@ -70,6 +70,9 @@
       review_reward_usdc: String(original.review_reward_usdc || "").slice(0, 30),
       ...(original.objective !== undefined ? { objective: String(original.objective || "").slice(0, 1000), description: String(original.description || "").slice(0, 4000) } : {}),
       review_consent: original.review_consent === true,
+      // Agent-prefilled automated verification travels with the brief across devices.
+      ...(original.benchmark ? { benchmark: String(original.benchmark).slice(0, 20000) } : {}),
+      ...(original.evidence_schema ? { evidence_schema: String(original.evidence_schema).slice(0, 20000) } : {}),
     } : {};
     const brief = journey.brief ? { ...manual, goal: String(original.goal || journey.draft?.goal || journey.goal || "").trim(),
       budget_usdc: decimal ? `${BigInt(decimal[1])}${fraction ? `.${fraction}` : ""}` : budget,

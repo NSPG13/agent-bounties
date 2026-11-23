@@ -696,8 +696,20 @@
     const days = Number(prepared.task_window_days || MAX_TASK_DAYS);
     const parentContext = prepared.meta_child || (new URLSearchParams(window.location.search).has("parentBounty") ? state.metaParent : null);
     const metaParent = parentContext ? await metaChild.resolve(parentContext, window.AgentBountiesWorkflow.createClient(window)) : null;
-    const preparedRewards = parsePreparedRewardSplit(prepared.solver_reward_usdc, prepared.verifier_reward_usdc, metaParent);
+    let preparedRewards = parsePreparedRewardSplit(prepared.solver_reward_usdc, prepared.verifier_reward_usdc, metaParent);
     const total = Number(preparedRewards.total) / 1_000_000;
+    // Total budget only: the saved draft carries the platform split, so an approval always covers the
+    // exact rewards that fund. A draft saved with another split is corrected and needs a fresh approval.
+    let splitChanged = false;
+    if (!metaParent) {
+      const platform = splitReward(total);
+      if (platform.solver !== preparedRewards.solver || platform.verifier !== preparedRewards.verifier) {
+        const usdcText = (units) => (Number(units) / 1_000_000).toFixed(6).replace(/\.?0+$/, "");
+        prepared = { ...prepared, solver_reward_usdc: usdcText(platform.solver), verifier_reward_usdc: usdcText(platform.verifier) };
+        preparedRewards = platform;
+        splitChanged = true;
+      }
+    }
     if (!Number.isInteger(days) || days < 1 || days > MAX_TASK_DAYS) throw new Error(`The task window must be from 1 to ${MAX_TASK_DAYS} days.`);
     const bountyImage = normalizeBountyImage(prepared.image);
     if (prepared.image_required === true && !bountyImage) {
@@ -750,8 +762,10 @@
     const journey = client.load() || client.start({ role: "post" });
     const operationId = prepared.posting_operation_id || new URLSearchParams(window.location.search).get("operation_id");
     if (!restoring) client.save({ ...journey, ...(operationId && window.AgentBountiesWorkflow.UUID.test(operationId) ? { id: operationId } : {}), role: "post", goal: prepared.goal, draft: prepared, draft_stale: false, brief: { ...journey.brief, goal: prepared.goal, budget_usdc: String(total), deadline_at: prepared.delivery_deadline || journey.brief?.deadline_at || null } });
+    else if (splitChanged) client.save({ ...journey, draft: prepared });
     await renderPreview();
     state.approved = await postingSession.approved();
+    if (splitChanged) setStatus("The reward split now follows the platform rule: 10% review reward, the rest for the worker. Review and approve the updated card.", "pending");
     syncPrimaryAction();
     updatePostingCost();
   }
