@@ -182,8 +182,11 @@
     const limited = payload.has_more === true || (payload.has_more === undefined && payload.items.length >= 300);
     if (payload.has_more !== undefined && typeof payload.has_more !== "boolean") throw new Error("Page coverage is malformed.");
     return { state, limited, missing, message: state === "complete" ? (limited ? "Showing a limited page of checked listings; the full count is unknown." : "") : state === "unavailable"
-      ? "Listings are unavailable. The number of bounties is unknown; try Refresh."
-      : `Showing checked listings. Some listings are missing (${missing.map(protocol => labels[protocol]).join(", ")}); the full count is unknown.` };
+      ? "We can’t load the list right now. Availability is unknown, not zero; try Refresh."
+      : `We can’t load the full list right now (missing: ${missing.map(protocol => labels[protocol]).join(", ")}). The full count is unknown.`,
+    // The board's empty-state body, under a heading that already says the list can't load.
+    detail: state === "complete" ? "" : state === "unavailable" ? "Availability is unknown; try Refresh."
+      : `Missing: ${missing.map(protocol => labels[protocol]).join(", ")}. The full count is unknown.` };
   }
   function fundedInventory(payload) {
     if (payload?.schema_version !== "agent-bounties/opportunity-projection-v1" || payload.network !== NETWORK
