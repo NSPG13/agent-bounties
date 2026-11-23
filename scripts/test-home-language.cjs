@@ -1,0 +1,88 @@
+"use strict";
+// English | Español on the home page: default English, Spanish via the switch or
+// ?lang=es, remembered, <html lang> follows, and English restores the original text.
+const assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path"), http = require("node:http");
+const { chromium } = require("../tools/browser-layout/node_modules/playwright");
+const site = path.resolve(__dirname, "../site"), shots = process.env.HOME_LANGUAGE_SHOTS || "";
+const mime = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".json": "application/json", ".woff2": "font/woff2", ".png": "image/png", ".webp": "image/webp", ".jpg": "image/jpeg", ".mp4": "video/mp4" };
+const server = http.createServer((req, res) => {
+  const pathname = new URL(req.url, "http://localhost").pathname;
+  let file = path.resolve(site, "." + (pathname === "/" ? "/index.html" : pathname));
+  if (!file.startsWith(site + path.sep)) return res.writeHead(403).end();
+  try { if (fs.statSync(file).isDirectory()) file = path.join(file, "index.html"); res.writeHead(200, { "Content-Type": mime[path.extname(file)] || "application/octet-stream" }).end(fs.readFileSync(file)); }
+  catch (_) { res.writeHead(404).end(); }
+});
+
+(async () => {
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const browser = await chromium.launch();
+  const bodyText = (page) => page.evaluate(() => document.body.innerText);
+  try {
+    for (const width of [1440, 390]) for (const theme of ["light", "dark"]) {
+      const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 }, colorScheme: theme, reducedMotion: "reduce", deviceScaleFactor: shots ? 2 : 1 });
+      await context.route("**/*", (route) => new URL(route.request().url()).origin === origin ? route.continue() : route.fulfill({ status: 503, body: "" }));
+      const page = await context.newPage(), errors = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      await page.goto(origin + "/");
+      await page.evaluate(() => document.fonts.ready);
+      const deny = page.locator("[data-google-analytics-deny]");
+      if (await deny.count() && await deny.isVisible()) await deny.click();
+      const control = page.locator("[data-site-header] .ab-lang-control");
+      assert.equal(await page.locator("html").getAttribute("lang"), "en", "English by default");
+      assert.equal(await control.locator('button[data-lang-choice="en"]').getAttribute("aria-pressed"), "true");
+      assert.deepEqual(await control.locator("button").allInnerTexts(), ["English", "Español"]);
+      assert.ok(await control.isVisible(), "the switch is visible in the header");
+      await page.waitForTimeout(1500); // Let the page's own scripts settle their text first.
+      const english = await bodyText(page), englishTitle = await page.title();
+      if (shots) await page.screenshot({ path: path.join(shots, `home-en-${width}-${theme}.png`) });
+
+      await control.locator('button[data-lang-choice="es"]').click();
+      assert.equal(await page.locator("html").getAttribute("lang"), "es");
+      assert.equal(await page.title(), "Agentizable.ai | Paga por resultados verificables");
+      assert.match(await page.locator("#post-a-bounty").innerText(), /Publicar una recompensa/);
+      assert.equal(await control.locator('button[data-lang-choice="es"]').getAttribute("aria-pressed"), "true");
+      assert.deepEqual(await control.locator("button").allInnerTexts(), ["English", "Español"], "the switch itself is not translated");
+      assert.equal(await page.evaluate(() => localStorage.getItem("agent-bounties.lang")), "es");
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "Spanish text fits without horizontal scroll");
+      if (shots) await page.screenshot({ path: path.join(shots, `home-es-${width}-${theme}.png`) });
+      // Text the page writes later is translated too.
+      await page.locator("[data-deck-next]").click();
+      assert.equal(await page.locator("[data-deck-status]").innerText(), "Ejemplo 2 de 3");
+
+      await page.reload();
+      assert.equal(await page.locator("html").getAttribute("lang"), "es", "the choice is remembered");
+      assert.match(await page.locator("#post-a-bounty").innerText(), /Publicar una recompensa/);
+
+      await page.locator('[data-site-header] .ab-lang-control button[data-lang-choice="en"]').click();
+      assert.equal(await page.locator("html").getAttribute("lang"), "en");
+      await page.waitForTimeout(500);
+      assert.equal(await bodyText(page), english, "English restores the original text exactly");
+      assert.equal(await page.title(), englishTitle);
+
+      // ?lang= wins over the saved choice and is remembered.
+      await page.goto(origin + "/?lang=es");
+      assert.equal(await page.locator("html").getAttribute("lang"), "es");
+      await page.goto(origin + "/");
+      assert.equal(await page.locator("html").getAttribute("lang"), "es");
+      await page.goto(origin + "/?lang=en");
+      assert.equal(await page.locator("html").getAttribute("lang"), "en");
+      assert.deepEqual(errors, []);
+      await context.close();
+    }
+    // Every page offers the switch, and the shared header and footer follow the choice.
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    await context.route("**/*", (route) => new URL(route.request().url()).origin === origin ? route.continue() : route.fulfill({ status: 503, body: "" }));
+    const page = await context.newPage();
+    for (const file of ["post.html", "earn.html", "about.html", "blog/"]) {
+      await page.goto(`${origin}/${file}?lang=es`);
+      const control = page.locator("[data-site-header] .ab-lang-control");
+      assert.equal(await control.count(), 1, `${file} has the language switch`);
+      assert.equal(await page.locator("html").getAttribute("lang"), "es", `${file} follows the choice`);
+      assert.equal(await page.locator(".ab-footer").getByText("Términos del servicio").count(), 1, `${file} footer is translated`);
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${file} fits at 390px`);
+    }
+    await context.close();
+    console.log("Language switch: on every page; home fully in Español via switch and ?lang, remembered, html lang, exact English restore at 1440px and 390px, light and dark");
+  } finally { await browser.close(); server.close(); }
+})().catch((error) => { console.error(error); process.exitCode = 1; });

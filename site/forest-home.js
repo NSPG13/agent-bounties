@@ -31,14 +31,16 @@ if (typeof document !== "undefined") {
       "influence with X",
     ];
     let ingredientIndex = 0, typingTimer;
+    // Type the phrase in the page's language, so Spanish never shows half-typed English.
+    const localized = phrase => (document.documentElement.lang === "es" && window.AgentBountiesI18n?.translate(phrase)) || phrase;
     const finishTyping = () => {
       window.clearTimeout(typingTimer);
-      if (ingredient) ingredient.textContent = ingredients[ingredientIndex];
+      if (ingredient) ingredient.textContent = localized(ingredients[ingredientIndex]);
     };
     const typeIngredient = () => {
       if (!ingredient) return;
       window.clearTimeout(typingTimer);
-      const phrase = ingredients[ingredientIndex];
+      const phrase = localized(ingredients[ingredientIndex]);
       let length = 0;
       const typeNext = () => {
         ingredient.textContent = phrase.slice(0, ++length);

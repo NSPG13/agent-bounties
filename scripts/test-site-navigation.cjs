@@ -107,7 +107,7 @@ async function main() {
           // journey handlers or analytics may see quote, order or account state.
           await page.goto(`${origin}/${file}`);
           assert.equal(await page.locator("[data-site-header], .ab-footer").count(), 0, "private order page remains isolated");
-          assert.deepEqual(await page.locator("script").evaluateAll(els => els.map(el => el.getAttribute("src"))), ["managed-service-theme.js?v=20261115", "managed-service-core.js?v=20261030", "managed-service-page.js?v=20261117"]);
+          assert.deepEqual(await page.locator("script").evaluateAll(els => els.map(el => el.getAttribute("src"))), ["managed-service-theme.js?v=20261115", "managed-service-core.js?v=20261030", "managed-service-page.js?v=20261121"]);
           assert.equal(await page.locator('meta[name="robots"]').getAttribute("content"), "noindex, nofollow");
           continue;
         }
@@ -136,7 +136,7 @@ async function main() {
         if (!reference) reference = appearance;
         assert.deepEqual(appearance, reference, `same homepage header: ${file} at ${width}`);
         assert.equal(await page.locator(".ab-site-menu, [data-site-header] .ab-site-login").count(), 0);
-        for (const n of [1, 2]) await assertFits(page, `.ab-site-nav a:nth-child(${n})`);
+        for (const n of [1, 2]) await assertFits(page, `.ab-site-nav a:nth-of-type(${n})`);
         if (redirects) {
           assert.equal(await page.locator('meta[http-equiv="refresh"]').getAttribute("content"), `0; url=${workspaceHandoff}`);
           assert.equal(await page.locator('meta[name="robots"]').getAttribute("content"), "noindex, nofollow");
@@ -167,7 +167,7 @@ async function main() {
     const fallback = await nojs.newPage();
     for (const file of ["index.html", "about.html", "blog/index.html", "metrics.html", "install/chatgpt-dev/index.html"]) {
       await fallback.goto(`${origin}/${file}`);
-      for (const n of [1, 2]) await assertFits(fallback, `.ab-site-nav a:nth-child(${n})`);
+      for (const n of [1, 2]) await assertFits(fallback, `.ab-site-nav a:nth-of-type(${n})`);
     }
     await nojs.close();
     for (const [width, height] of [[1440,900],[946,838],[640,480],[390,600],[320,480],[768,320],[480,360]]) {
@@ -225,7 +225,7 @@ async function main() {
         const nav = await page.locator(".ab-site-nav a").evaluateAll(els => els.map(el => ({ text: el.textContent.trim(), background: getComputedStyle(el).backgroundColor })));
         assert.deepEqual(nav.map(item => item.text), ["Account", "Workspace"], file);
         assert.ok(nav[0].background === "rgba(0, 0, 0, 0)" && nav[1].background !== "rgba(0, 0, 0, 0)", `signed-in primary is Workspace: ${file} ${JSON.stringify(nav)}`);
-        for (const n of [1, 2]) await assertFits(page, `.ab-site-nav a:nth-child(${n})`);
+        for (const n of [1, 2]) await assertFits(page, `.ab-site-nav a:nth-of-type(${n})`);
       }
       console.log(`Header: Log in primary when signed out, Workspace primary when signed in, ${width}px`);
       await ctx.close();
