@@ -15,7 +15,7 @@
         "prepare_moonpay_onramp",
         "render_bounty_feed"
       ],
-      "normalized_descriptors_sha256": "2c3055c25432719184dc130ce6bc122f440f509c089c6413836078898f9b7af1"
+      "normalized_descriptors_sha256": "30150f6e4cf4cff7d057f4edc50cd4cdd3884826b7217bcfa661ca582358e63f"
     },
     "core": {
       "tool_count": 41,
@@ -62,7 +62,7 @@
         "upload_verification_artifact",
         "validate_verification_plan"
       ],
-      "normalized_descriptors_sha256": "79b97576093664d505218f0988d23a2cd4dd7cbc967a35e057ed8d022b9b4d78"
+      "normalized_descriptors_sha256": "5964d457f366be39c835cc6c2bd183354b6ab5f0aa3f48eb637b3a0549b19ba2"
     }
   }
 }

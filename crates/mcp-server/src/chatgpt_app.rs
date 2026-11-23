@@ -313,9 +313,11 @@ pub(super) async fn prepare_bounty_post_handoff(
     // Fail closed on every non-file field before downloading or persisting an
     // optional approved image.
     let mut stable_args = args.clone();
-    stable_args.posting_operation_id = Some(prepared_posting_operation_id(args)?);
+    stable_args.posting_operation_id =
+        Some(prepared_posting_operation_id(args).map_err(with_error_code("invalid_request"))?);
     let args = &stable_args;
-    let validation_image = sandbox_bounty_image_reference(args)?;
+    let validation_image =
+        sandbox_bounty_image_reference(args).map_err(with_error_code("invalid_request"))?;
     let validation_handoff = build_bounty_post_handoff(args, validation_image.as_ref())?;
     let mut handoff = if validation_image.is_none() {
         validation_handoff
@@ -382,7 +384,7 @@ async fn attach_distribution_attribution(
         .append_pair("handoff", &reserved.id.to_string());
     if post_url.as_str().len() > 12_000 {
         return Err(
-            "the attributed bounty is too large for a safe browser handoff; shorten the goal or acceptance criteria"
+            "[handoff_too_large] the attributed bounty is too large for a safe browser handoff; shorten the objective, description or acceptance criteria"
                 .to_string(),
         );
     }
@@ -545,78 +547,361 @@ async fn record_prepare_handoff_failure(
         .await;
 }
 
+/// Share of the total budget paid as the review reward. It is identical to the
+/// posting form (`REVIEW_SHARE_PERCENT` in site/posting-brief.js) and is not a
+/// caller-supplied field.
+pub(crate) const REVIEW_SHARE_PERCENT: u64 = 10;
+const MIN_WORKER_REWARD_CENTS: u64 = 200;
+// Same upper bound as the posting form.
+const MAX_TOTAL_BUDGET_CENTS: u64 = 900_000_000_000;
+const MAX_CREATOR_DEADLINE_DAYS: i64 = 30;
+const MIN_TOTAL_BUDGET_ERROR: &str = "[min_total_budget] Enter a total budget of at least 2.22 USDC: the worker receives at least 2 USDC after the 10% review reward.";
+const RETIRED_REFERENCE_WARNING: &str = "reference_attachment is retired and was ignored";
+
+/// The one platform split of a total budget, in USDC cents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PlatformSplit {
+    pub(crate) total_cents: u64,
+    pub(crate) worker_cents: u64,
+    pub(crate) review_cents: u64,
+}
+
+/// The review reward of a total budget: round(total * 10 / 100) cents, half
+/// up as in the form's `Math.round`, and at least one cent.
+pub(crate) fn review_reward_cents(total_cents: u64) -> u64 {
+    (total_cents
+        .saturating_mul(REVIEW_SHARE_PERCENT)
+        .saturating_add(50)
+        / 100)
+        .max(1)
+}
+
+fn split_total_cents(total_cents: u64) -> PlatformSplit {
+    let review_cents = review_reward_cents(total_cents).min(total_cents);
+    PlatformSplit {
+        total_cents,
+        worker_cents: total_cents - review_cents,
+        review_cents,
+    }
+}
+
+/// Split a public bounty total exactly as site/post.html does. The worker
+/// must receive at least 2 USDC, so the smallest total is 2.22 USDC.
+pub(crate) fn platform_split(total_cents: u64) -> Result<PlatformSplit, String> {
+    if total_cents == 0 || total_cents > MAX_TOTAL_BUDGET_CENTS {
+        return Err(MIN_TOTAL_BUDGET_ERROR.to_string());
+    }
+    let split = split_total_cents(total_cents);
+    if split.worker_cents < MIN_WORKER_REWARD_CENTS {
+        return Err(MIN_TOTAL_BUDGET_ERROR.to_string());
+    }
+    Ok(split)
+}
+
+/// Parse a display USDC amount with at most two decimal places into cents.
+pub(crate) fn parse_total_budget_cents(value: &str) -> Result<u64, String> {
+    let value = value.trim();
+    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+    let digits = |part: &str| part.bytes().all(|byte| byte.is_ascii_digit());
+    if whole.is_empty()
+        || whole.len() > 12
+        || !digits(whole)
+        || (value.contains('.') && fraction.is_empty())
+        || fraction.len() > 2
+        || !digits(fraction)
+    {
+        return Err(format!(
+            "{MIN_TOTAL_BUDGET_ERROR} Send total_budget_usdc as a decimal with at most 2 places."
+        ));
+    }
+    let whole = whole.parse::<u64>().map_err(|_| MIN_TOTAL_BUDGET_ERROR)?;
+    let fraction = format!("{fraction:0<2}")
+        .parse::<u64>()
+        .map_err(|_| MIN_TOTAL_BUDGET_ERROR)?;
+    Ok(whole * 100 + fraction)
+}
+
+fn format_cents(cents: u64) -> String {
+    format!("{}.{:02}", cents / 100, cents % 100)
+}
+
+/// Two decimal places for whole cents; up to six only for a legacy meta-child
+/// split that is not a whole number of cents.
+fn format_total_budget(micro: u64) -> String {
+    if micro.is_multiple_of(10_000) {
+        format_cents(micro / 10_000)
+    } else {
+        format_usdc(micro)
+    }
+}
+
+/// The goal agents read, composed exactly as the posting form does.
+pub(crate) fn compose_goal(objective: &str, description: Option<&str>) -> String {
+    match description {
+        Some(details) if !objective.is_empty() => format!("{objective}\n\nDetails: {details}"),
+        Some(details) => details.to_string(),
+        None => objective.to_string(),
+    }
+}
+
+fn qualifying_child_split(solver_reward: u64, verifier_reward: u64) -> bool {
+    solver_reward > 0
+        && verifier_reward >= 10_000
+        && verifier_reward.is_multiple_of(2)
+        && solver_reward.checked_add(verifier_reward) == Some(1_000_000)
+}
+
+fn with_error_code(code: &'static str) -> impl Fn(String) -> String {
+    move |error| coded_error(code, error)
+}
+
+fn coded_error(code: &str, error: String) -> String {
+    if error.starts_with('[') {
+        error
+    } else {
+        format!("[{code}] {error}")
+    }
+}
+
+fn nonblank(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn validate_display_timezone(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    let bytes = value.as_bytes();
+    let offset = bytes.len() == 6
+        && matches!(bytes[0], b'+' | b'-')
+        && bytes[3] == b':'
+        && [1, 2, 4, 5]
+            .iter()
+            .all(|index| bytes[*index].is_ascii_digit())
+        && value[1..3].parse::<u8>().is_ok_and(|hours| hours <= 14)
+        && value[4..6].parse::<u8>().is_ok_and(|minutes| minutes < 60);
+    let iana = !value.is_empty()
+        && value.len() <= 64
+        && value.split('/').all(|part| {
+            part.chars()
+                .next()
+                .is_some_and(|first| first.is_ascii_alphabetic())
+                && part
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '+'))
+        });
+    if offset || iana {
+        Ok(value.to_string())
+    } else {
+        Err("[invalid_timezone] timezone must be an IANA name such as Europe/Paris or an offset such as +02:00".to_string())
+    }
+}
+
+/// Validate prepared terms and build the link that pre-fills the posting form
+/// on site/post.html. Nothing is published here: the person reviews and
+/// publishes on that form. Every validation error starts with a stable code in
+/// brackets, the same codes the form uses.
 pub(super) fn build_bounty_post_handoff(
     args: &PrepareBountyPostArgs,
     image: Option<&BountyImageReference>,
 ) -> Result<Value, String> {
-    let title = bounded_text(&args.title, "title", 200)?;
-    let goal = bounded_text(&args.goal, "goal", 4_000)?;
+    build_prepared_form_handoff(args, image).map_err(with_error_code("invalid_request"))
+}
+
+fn build_prepared_form_handoff(
+    args: &PrepareBountyPostArgs,
+    image: Option<&BountyImageReference>,
+) -> Result<Value, String> {
+    let mut warnings = Vec::<String>::new();
+    let title = bounded_text(&args.title, "title", 200)
+        .map_err(|_| "[title_required] Enter a title of up to 200 characters.".to_string())?;
+
+    let objective = match (
+        nonblank(args.objective.as_deref()),
+        nonblank(args.goal.as_deref()),
+    ) {
+        (Some(objective), goal) => {
+            if goal.is_some() {
+                warnings.push(
+                    "goal is a deprecated alias of objective and was ignored because objective was supplied"
+                        .to_string(),
+                );
+            }
+            Some(objective)
+        }
+        (None, Some(goal)) => {
+            warnings.push("goal is a deprecated alias; send objective instead".to_string());
+            Some(goal)
+        }
+        (None, None) => None,
+    }
+    .filter(|objective| objective.chars().count() <= 1_000)
+    .ok_or_else(|| {
+        "[objective_required] Enter the objective of the bounty in up to 1,000 characters; put further details in description."
+            .to_string()
+    })?
+    .to_string();
+    let description = nonblank(args.description.as_deref()).map(str::to_string);
+    if description
+        .as_ref()
+        .is_some_and(|description| description.chars().count() > 4_000)
+    {
+        return Err(
+            "[description_too_long] Keep the description within 4,000 characters.".to_string(),
+        );
+    }
+    let goal = compose_goal(&objective, description.as_deref());
+    if goal.chars().count() > 4_000 {
+        return Err("[description_too_long] The objective and description together must stay under 4,000 characters. Shorten the description.".to_string());
+    }
+
+    const CRITERIA_ERROR: &str =
+        "[criteria_required] Add 1-20 acceptance criteria with up to 1,000 characters each.";
     if args.acceptance_criteria.is_empty() || args.acceptance_criteria.len() > 20 {
-        return Err("acceptance_criteria must contain between 1 and 20 items".to_string());
+        return Err(CRITERIA_ERROR.to_string());
     }
     let acceptance_criteria = args
         .acceptance_criteria
         .iter()
         .map(|criterion| bounded_text(criterion, "acceptance criterion", 1_000))
-        .collect::<Result<Vec<_>, _>>()?;
-    let solver_reward = parse_usdc(&args.solver_reward_usdc, "solver_reward_usdc")?;
-    let verifier_reward = parse_usdc(&args.verifier_reward_usdc, "verifier_reward_usdc")?;
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| CRITERIA_ERROR.to_string())?;
+
     let meta_child = validate_prepared_parent(args.meta_child.as_ref())?;
-    let qualifying_child_draft = meta_child.is_some()
-        && solver_reward > 0
-        && verifier_reward >= 10_000
-        && verifier_reward % 2 == 0
-        && solver_reward.checked_add(verifier_reward) == Some(1_000_000);
-    if solver_reward < 2_000_000 && !qualifying_child_draft {
-        return Err("public bounties require at least 2 USDC for the solver".to_string());
-    }
-    if verifier_reward < 10_000 {
-        return Err("public bounties require at least 0.01 USDC for the verifier".to_string());
-    }
+    let legacy_split = args.solver_reward_usdc.is_some() || args.verifier_reward_usdc.is_some();
+    // Amounts below are USDC base units (six decimals).
+    let platform_economics = |total_cents: u64| -> Result<(u64, u64), String> {
+        let split = split_total_cents(total_cents);
+        let (solver, verifier) = (split.worker_cents * 10_000, split.review_cents * 10_000);
+        if meta_child.is_some()
+            && total_cents <= MAX_TOTAL_BUDGET_CENTS
+            && qualifying_child_split(solver, verifier)
+        {
+            return Ok((solver, verifier));
+        }
+        let split = platform_split(total_cents)?;
+        Ok((split.worker_cents * 10_000, split.review_cents * 10_000))
+    };
+    let (solver_reward, verifier_reward) = if let Some(total) = args.total_budget_usdc.as_deref() {
+        if legacy_split {
+            warnings.push("solver_reward_usdc and verifier_reward_usdc are deprecated and were ignored; the platform computes the split from total_budget_usdc".to_string());
+        }
+        platform_economics(parse_total_budget_cents(total)?)?
+    } else {
+        let (Some(solver), Some(verifier)) = (
+            args.solver_reward_usdc.as_deref(),
+            args.verifier_reward_usdc.as_deref(),
+        ) else {
+            return Err(MIN_TOTAL_BUDGET_ERROR.to_string());
+        };
+        let solver_reward = parse_usdc(solver, "solver_reward_usdc")
+            .map_err(with_error_code("min_total_budget"))?;
+        let verifier_reward = parse_usdc(verifier, "verifier_reward_usdc")
+            .map_err(with_error_code("min_total_budget"))?;
+        let total = solver_reward
+            .checked_add(verifier_reward)
+            .ok_or_else(|| MIN_TOTAL_BUDGET_ERROR.to_string())?;
+        if meta_child.is_some() {
+            // Existing meta-child policy, unchanged: the routed caller split is
+            // kept, and an exact 1 USDC qualifying child may pay under 2 USDC.
+            if solver_reward < 2_000_000 && !qualifying_child_split(solver_reward, verifier_reward)
+            {
+                return Err(
+                    "[min_total_budget] public bounties require at least 2 USDC for the solver"
+                        .to_string(),
+                );
+            }
+            if verifier_reward < 10_000 {
+                return Err(
+                    "[min_total_budget] public bounties require at least 0.01 USDC for the verifier"
+                        .to_string(),
+                );
+            }
+            (solver_reward, verifier_reward)
+        } else {
+            if !total.is_multiple_of(10_000) {
+                return Err(format!("{MIN_TOTAL_BUDGET_ERROR} solver_reward_usdc plus verifier_reward_usdc must be whole cents; send total_budget_usdc instead."));
+            }
+            warnings.push("solver_reward_usdc and verifier_reward_usdc are deprecated; their sum was used as total_budget_usdc and the platform computes the split".to_string());
+            platform_economics(total / 10_000)?
+        }
+    };
     let target = solver_reward
         .checked_add(verifier_reward)
-        .ok_or_else(|| "combined USDC target is too large".to_string())?;
+        .ok_or_else(|| MIN_TOTAL_BUDGET_ERROR.to_string())?;
+    let total_budget_usdc = format_total_budget(target);
+
     let source_url = optional_https_url(args.source_url.as_deref(), "source_url")?;
-    let task_window_days = args.task_window_days.unwrap_or(30);
-    if !(1..=30).contains(&task_window_days) {
-        return Err("task_window_days must be from 1 to 30".to_string());
-    }
     let discovery_source = args
         .discovery_source
         .as_deref()
         .map(|value| bounded_text(value, "discovery_source", 500))
         .transpose()?;
+    let timezone = nonblank(args.timezone.as_deref())
+        .map(validate_display_timezone)
+        .transpose()?;
     let review_mode = args.review_mode.as_deref().unwrap_or("automated");
-    match review_mode {
+    let task_window_days = match review_mode {
         "creator" => {
-            if meta_child.is_some() || args.benchmark.is_some() || args.evidence_schema.is_some() {
-                return Err("Creator review cannot replace a meta-child verifier or an automated benchmark. Omit benchmark and evidence_schema when explicitly selecting creator review.".to_string());
+            if meta_child.is_some() {
+                return Err("Creator review cannot replace a meta-child verifier. Omit meta_child when explicitly selecting creator review.".to_string());
+            }
+            if args.benchmark.is_some() {
+                return Err("[invalid_benchmark] Creator review cannot replace an automated benchmark. Omit benchmark and evidence_schema when explicitly selecting creator review.".to_string());
+            }
+            if args.evidence_schema.is_some() {
+                return Err("[invalid_evidence_schema] Creator review cannot replace an automated benchmark. Omit benchmark and evidence_schema when explicitly selecting creator review.".to_string());
             }
             let deadline = args.delivery_deadline.as_deref().ok_or(
-                "Creator review requires the exact agreed delivery_deadline with timezone offset.",
+                "[deadline_required] Creator review requires the exact agreed delivery_deadline with timezone offset.",
             )?;
             let parsed = chrono::DateTime::parse_from_rfc3339(deadline).map_err(|_| {
-                "delivery_deadline must be an ISO timestamp including its timezone offset"
+                "[deadline_required] delivery_deadline must be an ISO timestamp including its timezone offset"
                     .to_string()
             })?;
-            let now = chrono::Utc::now();
-            if parsed <= now || parsed > now + chrono::Duration::days(366) {
+            let remaining = parsed.with_timezone(&chrono::Utc) - chrono::Utc::now();
+            if remaining <= chrono::Duration::zero() {
                 return Err(
-                    "Creator review requires a future delivery deadline within 366 days."
+                    "[deadline_in_past] Choose a future delivery deadline within 30 days."
                         .to_string(),
                 );
             }
+            if remaining > chrono::Duration::days(MAX_CREATOR_DEADLINE_DAYS) {
+                return Err("[deadline_too_far] Choose a future delivery deadline within 30 days. Use a smaller milestone for longer work.".to_string());
+            }
+            if args.task_window_days.is_some() {
+                warnings.push(
+                    "task_window_days is deprecated and was ignored because delivery_deadline is set"
+                        .to_string(),
+                );
+            }
+            // As on the form: whole days remaining before the deadline.
+            let days = (remaining.num_seconds() + 86_399) / 86_400;
+            days.clamp(1, MAX_CREATOR_DEADLINE_DAYS) as u8
         }
         "automated" => {
             if args.delivery_deadline.is_some() {
                 return Err("An automated benchmark does not enforce a calendar delivery deadline. Select creator review or explicitly agree a relative work window.".to_string());
             }
-            validate_prepared_verifier(args.benchmark.as_ref(), args.evidence_schema.as_ref())?;
+            validate_prepared_verifier(args.benchmark.as_ref(), args.evidence_schema.as_ref())
+                .map_err(|error| {
+                    let code = if error.starts_with("evidence_schema") {
+                        "invalid_evidence_schema"
+                    } else {
+                        "invalid_benchmark"
+                    };
+                    coded_error(code, error)
+                })?;
+            let task_window_days = args.task_window_days.unwrap_or(30);
+            if !(1..=30).contains(&task_window_days) {
+                return Err("task_window_days must be from 1 to 30".to_string());
+            }
+            task_window_days
         }
         _ => return Err("review_mode must be creator or automated".to_string()),
-    }
+    };
     let posting_operation_id = prepared_posting_operation_id(args)?;
-    validate_prepared_reference(args.reference_attachment.as_ref())?;
+    if args.retired_reference_attachment.is_some() {
+        warnings.push(RETIRED_REFERENCE_WARNING.to_string());
+    }
     match (
         image,
         args.image_prompt.as_deref(),
@@ -645,6 +930,8 @@ pub(super) fn build_bounty_post_handoff(
         }
     }
 
+    // The link carries the approved posting-form names; the person reviews and
+    // publishes on that form.
     let mut post_url = Url::parse(POST_PAGE_URL).expect("static post URL is valid");
     {
         let mut query = post_url.query_pairs_mut();
@@ -652,7 +939,10 @@ pub(super) fn build_bounty_post_handoff(
         query.append_pair("operation_id", &posting_operation_id.to_string());
         query.append_pair("reviewMode", review_mode);
         if let Some(deadline) = &args.delivery_deadline {
-            query.append_pair("deliveryDeadline", deadline);
+            query.append_pair("delivery_deadline", deadline);
+        }
+        if let Some(timezone) = &timezone {
+            query.append_pair("timezone", timezone);
         }
         if let Some(parent) = &meta_child {
             query.append_pair(
@@ -665,21 +955,15 @@ pub(super) fn build_bounty_post_handoff(
                 query.append_pair("intendedChildSolver", solver);
             }
         }
-        if let Some(reference) = &args.reference_attachment {
-            query.append_pair(
-                "referenceAttachment",
-                &serde_json::to_string(reference)
-                    .map_err(|_| "reference_attachment could not be encoded")?,
-            );
-        }
         query.append_pair("title", &title);
-        query.append_pair("goal", &goal);
-        for criterion in &acceptance_criteria {
-            query.append_pair("criterion", criterion);
+        query.append_pair("objective", &objective);
+        if let Some(description) = &description {
+            query.append_pair("description", description);
         }
-        query.append_pair("solverReward", &format_usdc(solver_reward));
-        query.append_pair("verifierReward", &format_usdc(verifier_reward));
-        query.append_pair("taskWindowDays", &task_window_days.to_string());
+        for criterion in &acceptance_criteria {
+            query.append_pair("acceptance_criteria", criterion);
+        }
+        query.append_pair("total_budget_usdc", &total_budget_usdc);
         query.append_pair("crowdfund", if args.crowdfund { "true" } else { "false" });
         if let Some(source_url) = &source_url {
             query.append_pair("sourceUrl", source_url);
@@ -699,7 +983,7 @@ pub(super) fn build_bounty_post_handoff(
         }
         if let Some(evidence_schema) = args.evidence_schema.as_ref() {
             query.append_pair(
-                "evidenceSchema",
+                "evidence_schema",
                 &serde_json::to_string(evidence_schema).map_err(|_| {
                     "evidence_schema could not be encoded for browser review".to_string()
                 })?,
@@ -715,7 +999,7 @@ pub(super) fn build_bounty_post_handoff(
     }
     if post_url.as_str().len() > 12_000 {
         return Err(
-            "the prepared bounty is too large for a safe browser handoff; shorten the goal or acceptance criteria"
+            "[handoff_too_large] the prepared bounty is too large for a safe browser handoff; shorten the objective, description or acceptance criteria"
                 .to_string(),
         );
     }
@@ -726,13 +1010,16 @@ pub(super) fn build_bounty_post_handoff(
         "posting_operation_id": posting_operation_id,
         "review_mode": review_mode,
         "delivery_deadline": args.delivery_deadline,
+        "timezone": timezone,
         "meta_child": meta_child,
-        "reference_attachment": args.reference_attachment,
         "verification_prepared": review_mode == "creator",
-        "review_disclosure": if review_mode == "creator" { Some("The creator reviews every published check and confirms the verdict. The creator-review reserve is paid to the creator on pass or fail. This is human review; wallet and legal confirmations remain with the creator.") } else { Some(service_runtime::verifier_readiness::UNAVAILABLE) },
+        "review_disclosure": if review_mode == "creator" { Some("The creator reviews every published check and confirms the verdict. The 10% review reward is paid to the creator on pass or fail. This is human review; wallet and legal confirmations remain with the creator.") } else { Some(service_runtime::verifier_readiness::UNAVAILABLE) },
         "title": title,
+        "objective": objective,
+        "description": description,
         "goal": goal,
         "acceptance_criteria": acceptance_criteria,
+        "total_budget_usdc": total_budget_usdc,
         "solver_reward_usdc": format_usdc(solver_reward),
         "verifier_reward_usdc": format_usdc(verifier_reward),
         "target_usdc": format_usdc(target),
@@ -746,8 +1033,9 @@ pub(super) fn build_bounty_post_handoff(
         "post_url": post_url.as_str(),
         "bounty_created": false,
         "wallet_signature_requested": false,
-        "next_action": if review_mode == "creator" { "Open the secure handoff, review every field, and choose whether to deposit 0 USDC now or fully fund. Then connect the creator wallet and approve only the exact Base transaction shown by that wallet." } else { service_runtime::verifier_readiness::UNAVAILABLE },
-        "evidence_boundary": "No bounty id or contract exists yet. Only confirmed CanonicalBountyCreated proves creation; FundingAdded and BountyBecameClaimable prove funding and claimability."
+        "warnings": warnings,
+        "next_action": if review_mode == "creator" { "Open the link: it pre-fills the posting form on agentizable.ai/post.html. The person reviews every field there and publishes; choose whether to deposit 0 USDC now or fully fund, then connect the creator wallet and approve only the exact Base transaction shown by that wallet." } else { service_runtime::verifier_readiness::UNAVAILABLE },
+        "evidence_boundary": "Nothing was published by this tool. No bounty id or contract exists yet. Only confirmed CanonicalBountyCreated proves creation; FundingAdded and BountyBecameClaimable prove funding and claimability."
     }))
 }
 
@@ -759,92 +1047,6 @@ fn prepared_posting_operation_id(args: &PrepareBountyPostArgs) -> Result<uuid::U
     // only an identifier: every persisted draft still requires its owner's session.
     let bytes = serde_json::to_vec(args).map_err(|_| "could not identify the posting operation")?;
     Ok(uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, &bytes))
-}
-
-fn validate_prepared_reference(reference: Option<&Value>) -> Result<(), String> {
-    let Some(value) = reference else {
-        return Ok(());
-    };
-    // Same immutable homepage originals as site/posting-reference.js. Validate
-    // before fetching any optional cover image; this descriptor cannot fetch URLs.
-    let (hash, length) = match (value["phase"].as_str(), value["variant"].as_str()) {
-        (Some("dawn"), Some("desktop")) => (
-            "a7cdaf198c5ed18cf4921d5d5a180353d7f461f96906822cfc3489e229d0c29a",
-            202068,
-        ),
-        (Some("dawn"), Some("mobile")) => (
-            "ded24e4a5aaa0593caf7411ba998bc8e36dea6cb6a5042b69762035645858629",
-            96120,
-        ),
-        (Some("day"), Some("desktop")) => (
-            "f9143ee70ca0551bc97562c89c96cc56b4a54391ab4034315148253b757fcaef",
-            256228,
-        ),
-        (Some("day"), Some("mobile")) => (
-            "7a62291ef8cafe5ce7371a55c79e44432cfe338c8e884d98c95b3fd1a4a172cd",
-            98768,
-        ),
-        (Some("dusk"), Some("desktop")) => (
-            "73e5628a4184a854654df37cc6cf46d18ba14a5f45962619a6606c5627bb24a9",
-            255156,
-        ),
-        (Some("dusk"), Some("mobile")) => (
-            "6a478e020ba6362ce8899d761d858e4dd6ba35221bc89fc76a078bd911bad5ad",
-            113114,
-        ),
-        (Some("night"), Some("desktop")) => (
-            "06fc595b47101033af0ac00a71b4052f31c84d924cc1078e37a42e855d7883fa",
-            149004,
-        ),
-        (Some("night"), Some("mobile")) => (
-            "9705a9ccb07c91ff4cdb360fc6dc6393c5fb7f149bb7479877b9bef4dfcc8b9c",
-            61982,
-        ),
-        _ => {
-            return Err(
-                "reference_attachment must identify a supported homepage background".to_string(),
-            )
-        }
-    };
-    let asset_url = format!("https://raw.githubusercontent.com/NSPG13/agent-bounties/933c9c446a76d26f148a4f2defacf6453d02a7b2/site/assets/solarpunk/scene-{}{}.webp", value["phase"].as_str().unwrap(), if value["variant"] == "mobile" { "-mobile" } else { "" });
-    let valid = value.as_object().is_some_and(|object| {
-        object.len() == 10
-            && object.keys().all(|key| {
-                [
-                    "version",
-                    "kind",
-                    "phase",
-                    "variant",
-                    "source_url",
-                    "asset_url",
-                    "captured_at",
-                    "sha256",
-                    "mime_type",
-                    "byte_length",
-                ]
-                .contains(&key.as_str())
-            })
-    }) && value["version"] == 1
-        && value["kind"] == "homepage_background"
-        && matches!(
-            value["source_url"].as_str(),
-            Some("https://agentizable.ai/" | "https://agentbounties.app/")
-        )
-        && value["asset_url"] == asset_url
-        && value["sha256"] == format!("sha256:{hash}")
-        && value["byte_length"] == length
-        && value["mime_type"] == "image/webp"
-        && value["captured_at"]
-            .as_str()
-            .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
-            .is_some_and(|time| time <= chrono::Utc::now() + chrono::Duration::minutes(5));
-    if !valid {
-        return Err(
-            "reference_attachment does not match its immutable image, digest and capture time"
-                .to_string(),
-        );
-    }
-    Ok(())
 }
 
 fn validate_prepared_parent(value: Option<&Value>) -> Result<Option<Value>, String> {
@@ -2906,7 +3108,9 @@ async fn call_tool(
                         "invalid_arguments",
                     )
                     .await;
-                    return Err(format!("invalid prepare_bounty_post arguments: {error}"));
+                    return Err(format!(
+                        "[invalid_request] invalid prepare_bounty_post arguments: {error}"
+                    ));
                 }
             };
             let value = match prepare_bounty_post_handoff(&state, &args, attribution).await {
@@ -3527,9 +3731,12 @@ async fn sandbox_tool_result(name: &str, arguments: &Value) -> Result<Value, Str
             false,
         ),
         "prepare_bounty_post" => {
-            let args: PrepareBountyPostArgs = serde_json::from_value(arguments.clone())
-                .map_err(|error| format!("invalid prepare_bounty_post arguments: {error}"))?;
-            let image = sandbox_bounty_image_reference(&args)?;
+            let args: PrepareBountyPostArgs =
+                serde_json::from_value(arguments.clone()).map_err(|error| {
+                    format!("[invalid_request] invalid prepare_bounty_post arguments: {error}")
+                })?;
+            let image =
+                sandbox_bounty_image_reference(&args).map_err(with_error_code("invalid_request"))?;
             let mut value = build_bounty_post_handoff(&args, image.as_ref())?;
             mark_sandbox(
                 &mut value,
@@ -4721,13 +4928,16 @@ fn post_handoff_output_schema() -> Value {
             "posting_operation_id": {"type": "string", "format": "uuid"},
             "review_mode": {"type": "string", "enum": ["creator", "automated"]},
             "delivery_deadline": {"type": ["string", "null"], "format": "date-time"},
+            "timezone": {"type": ["string", "null"]},
             "meta_child": {"type": ["object", "null"]},
-            "reference_attachment": {"type": ["object", "null"]},
             "verification_prepared": {"type": "boolean"},
             "review_disclosure": {"type": ["string", "null"]},
             "title": {"type": "string"},
+            "objective": {"type": "string"},
+            "description": {"type": ["string", "null"]},
             "goal": {"type": "string"},
             "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
+            "total_budget_usdc": {"type": "string"},
             "solver_reward_usdc": {"type": "string"},
             "verifier_reward_usdc": {"type": "string"},
             "target_usdc": {"type": "string"},
@@ -4758,10 +4968,11 @@ fn post_handoff_output_schema() -> Value {
             "post_url": {"type": "string"},
             "bounty_created": {"type": "boolean"},
             "wallet_signature_requested": {"type": "boolean"},
+            "warnings": {"type": "array", "items": {"type": "string"}},
             "next_action": {"type": "string"},
             "evidence_boundary": {"type": "string"}
         },
-        "required": ["schema", "state", "title", "goal", "acceptance_criteria", "solver_reward_usdc", "verifier_reward_usdc", "target_usdc", "task_window_days", "initial_funding_usdc", "crowdfund", "image", "post_url", "bounty_created", "wallet_signature_requested", "next_action", "evidence_boundary"],
+        "required": ["schema", "state", "title", "objective", "goal", "acceptance_criteria", "total_budget_usdc", "solver_reward_usdc", "verifier_reward_usdc", "target_usdc", "task_window_days", "initial_funding_usdc", "crowdfund", "image", "post_url", "bounty_created", "wallet_signature_requested", "warnings", "next_action", "evidence_boundary"],
         "additionalProperties": false
     })
 }
@@ -5277,7 +5488,7 @@ fn chatgpt_tool_description(name: &str, fallback: &'static str) -> &'static str 
         "publish_unfunded_bounty" => "Use this when an authenticated person explicitly wants to publish their prepared voluntary request. Require their website account, wallet session, or operator credential and reuse one idempotency key. No model is called, no solution is generated, and no payment is promised.",
         "list_unfunded_bounties" => "Use this when the person explicitly asks for voluntary or unpaid Agentizable work. Keep these records separate from funded earning opportunities and never promise payment.",
         "submit_unfunded_bounty_solution" => "Use this when the authenticated caller owns the registered solver agent, controls its verified payout wallet, and explicitly wants to publish or replace its public solution to an open unfunded request. This public write creates no payment claim.",
-        "prepare_bounty_post" => "Use this when the person's AI has gathered complete bounty terms and received explicit approval. Reuse posting_operation_id when resuming. For creator review, set review_mode=creator and the exact agreed delivery_deadline with timezone offset, omit automated benchmark/evidence fields, and explain that the creator confirms the verdict. Preserve parent bindings, the approved reference_attachment, and any approved bounty_image with its exact prompt and alt text; omit all three image fields together to use the deterministic review-page visual. This prepares a reviewable handoff; it does not publish, move funds, request a secret, or prove that a bounty exists.",
+        "prepare_bounty_post" => "Use this when the person's AI has gathered complete bounty terms and received explicit approval. Fill the approved posting-form fields: title, objective, optional description, acceptance_criteria, total_budget_usdc, delivery_deadline and optional timezone. The platform computes the split from total_budget_usdc (at least 2.22 USDC): a 10% review reward and at least 2 USDC for the worker; do not send your own split. The returned post_url pre-fills the form on agentizable.ai/post.html, where the person reviews and publishes. Nothing is published by this tool. Reuse posting_operation_id when resuming. For creator review, set review_mode=creator and the exact agreed delivery_deadline with timezone offset within 30 days, omit automated benchmark/evidence fields, and explain that the creator confirms the verdict. Preserve parent bindings and any approved bounty_image with its exact prompt and alt text; omit all three image fields together to use the deterministic review-page visual. Errors start with a stable code in brackets, such as [min_total_budget]. It does not move funds, request a secret, or prove that a bounty exists.",
         "list_autonomous_bounties" => "Use this when the person wants funded Agentizable work or canonical lifecycle inventory. Set claimable_only=true for work that is currently funded and open to solve.",
         "inspect_open_competition_v2" => "New users start with operation=guide. Read exact mutation arguments using operation=schema and for_operation set to the desired mutation operation. Inspect the V2 Beta3 release, reviewed profiles, inventory, events, or proof-job state in the guide's order. Treat only CompetitionSettledV2 as payment evidence.",
         "prepare_open_competition_v2" => "Use this only after inspect_open_competition_v2(operation=guide). Before each operation, read its exact arguments_schema with inspect_open_competition_v2(operation=schema, for_operation=the selected operation). Some operations return unsigned plans; quote_proof creates a hosted job, pay_proof may transfer Base USDC after explicit approval, and authorize_relay may submit a proof after explicit approval. Follow next_action and treat only CompetitionSettledV2 as payment evidence.",
@@ -5502,13 +5713,17 @@ mod tests {
     fn valid_args() -> PrepareBountyPostArgs {
         PrepareBountyPostArgs {
             title: "Fix the reconciliation regression".to_string(),
-            goal: "Make the committed regression test pass.".to_string(),
+            objective: Some("Make the committed regression test pass.".to_string()),
+            description: None,
+            total_budget_usdc: Some("2.22".to_string()),
+            timezone: None,
+            goal: None,
             acceptance_criteria: vec![
                 "The committed test exits zero.".to_string(),
                 "A regression test covers the prior failure.".to_string(),
             ],
-            solver_reward_usdc: "2.00".to_string(),
-            verifier_reward_usdc: "0.10".to_string(),
+            solver_reward_usdc: None,
+            verifier_reward_usdc: None,
             source_url: Some("https://github.com/NSPG13/agent-bounties/issues/386".to_string()),
             crowdfund: false,
             task_window_days: None,
@@ -5516,7 +5731,7 @@ mod tests {
             delivery_deadline: None,
             posting_operation_id: None,
             meta_child: None,
-            reference_attachment: None,
+            retired_reference_attachment: None,
             discovery_source: Some("ChatGPT user feedback".to_string()),
             benchmark: Some(json!({
                 "engine": "sandboxed_regression_v1",
@@ -5846,8 +6061,12 @@ mod tests {
             handoff["next_action"],
             service_runtime::verifier_readiness::UNAVAILABLE
         );
-        assert_eq!(handoff["target_usdc"], "2.1");
-        assert_eq!(handoff["initial_funding_usdc"], "2.1");
+        assert_eq!(handoff["target_usdc"], "2.22");
+        assert_eq!(handoff["initial_funding_usdc"], "2.22");
+        assert_eq!(handoff["total_budget_usdc"], "2.22");
+        assert_eq!(handoff["solver_reward_usdc"], "2");
+        assert_eq!(handoff["verifier_reward_usdc"], "0.22");
+        assert_eq!(handoff["warnings"], json!([]));
         assert_eq!(handoff["bounty_created"], false);
         assert_eq!(handoff["wallet_signature_requested"], false);
         assert_eq!(handoff["benchmark"], *args.benchmark.as_ref().unwrap());
@@ -5863,19 +6082,22 @@ mod tests {
             .iter()
             .any(|(key, value)| key == "title" && value == "Fix the reconciliation regression"));
         assert_eq!(
-            pairs.iter().filter(|(key, _)| key == "criterion").count(),
+            pairs
+                .iter()
+                .filter(|(key, _)| key == "acceptance_criteria")
+                .count(),
             2
         );
         assert!(pairs.iter().any(|(key, value)| {
             key == "benchmark" && value.contains("benchmarks/direct-growth-v2/a2a-agent-card")
         }));
         assert!(pairs.iter().any(
-            |(key, value)| key == "evidenceSchema" && value.contains("source_snapshot_digest")
+            |(key, value)| key == "evidence_schema" && value.contains("source_snapshot_digest")
         ));
     }
 
     #[test]
-    fn creator_handoff_preserves_deadline_operation_reference_and_approved_image() {
+    fn creator_handoff_preserves_deadline_operation_and_approved_image() {
         let mut args = valid_args();
         args.review_mode = Some("creator".to_string());
         let offset = chrono::FixedOffset::west_opt(6 * 3600).unwrap();
@@ -5886,9 +6108,6 @@ mod tests {
         args.benchmark = None;
         args.evidence_schema = None;
         args.posting_operation_id = Some(uuid::Uuid::new_v4());
-        args.reference_attachment = Some(
-            json!({"version":1, "kind":"homepage_background", "phase":"day", "variant":"desktop", "source_url":"https://agentizable.ai/", "asset_url":"https://raw.githubusercontent.com/NSPG13/agent-bounties/933c9c446a76d26f148a4f2defacf6453d02a7b2/site/assets/solarpunk/scene-day.webp", "sha256":"sha256:f9143ee70ca0551bc97562c89c96cc56b4a54391ab4034315148253b757fcaef", "mime_type":"image/webp", "byte_length":256228, "captured_at":chrono::Utc::now().to_rfc3339()}),
-        );
         let image = sandbox_bounty_image_reference(&args).unwrap().unwrap();
         let handoff = build_bounty_post_handoff(&args, Some(&image)).unwrap();
         let replay = build_bounty_post_handoff(&args, Some(&image)).unwrap();
@@ -5906,19 +6125,13 @@ mod tests {
         }
         assert_eq!(handoff["delivery_deadline"], exact);
         assert_eq!(handoff["review_mode"], "creator");
-        assert_eq!(
-            handoff["reference_attachment"],
-            *args.reference_attachment.as_ref().unwrap()
-        );
+        assert!(handoff.get("reference_attachment").is_none());
+        assert_eq!(handoff["task_window_days"], 2);
         assert_eq!(handoff["image"]["sha256"], image.sha256);
         let url = Url::parse(handoff["post_url"].as_str().unwrap()).unwrap();
         assert!(url
             .query_pairs()
-            .any(|(key, value)| key == "deliveryDeadline" && value == exact));
-        let original_reference = args.reference_attachment.clone();
-        args.reference_attachment.as_mut().unwrap()["sha256"] = json!("sha256:invented");
-        assert!(build_bounty_post_handoff(&args, Some(&image)).is_err());
-        args.reference_attachment = original_reference;
+            .any(|(key, value)| key == "delivery_deadline" && value == exact));
         args.benchmark = Some(json!({"engine":"invented"}));
         assert!(build_bounty_post_handoff(&args, Some(&image)).is_err());
         args.benchmark = None;
@@ -5933,14 +6146,19 @@ mod tests {
     #[test]
     fn parent_handoff_preserves_binding_without_asserting_qualification() {
         let mut args = valid_args();
-        args.solver_reward_usdc = "0.98".to_string();
-        args.verifier_reward_usdc = "0.02".to_string();
+        args.total_budget_usdc = None;
+        args.solver_reward_usdc = Some("0.98".to_string());
+        args.verifier_reward_usdc = Some("0.02".to_string());
         args.meta_child = Some(
             json!({"parent_bounty_contract":"0x1111111111111111111111111111111111111111", "intended_child_solver":"0x2222222222222222222222222222222222222222"}),
         );
         let image = sandbox_bounty_image_reference(&args).unwrap().unwrap();
         let handoff = build_bounty_post_handoff(&args, Some(&image)).unwrap();
         assert_eq!(handoff["meta_child"], *args.meta_child.as_ref().unwrap());
+        // The routed caller split of a qualifying 1 USDC child is unchanged.
+        assert_eq!(handoff["solver_reward_usdc"], "0.98");
+        assert_eq!(handoff["verifier_reward_usdc"], "0.02");
+        assert_eq!(handoff["total_budget_usdc"], "1.00");
         assert_eq!(handoff["bounty_created"], false);
         assert!(handoff["post_url"]
             .as_str()
@@ -6004,7 +6222,14 @@ mod tests {
         }
 
         let mut args = valid_args();
-        args.verifier_reward_usdc = "0.009999".to_string();
+        args.total_budget_usdc = None;
+        args.solver_reward_usdc = Some("2.00".to_string());
+        args.verifier_reward_usdc = Some("0.009999".to_string());
+        assert!(build_bounty_post_handoff(&args, None)
+            .unwrap_err()
+            .starts_with("[min_total_budget]"));
+        args.meta_child =
+            Some(json!({"parent_bounty_contract":"0x1111111111111111111111111111111111111111"}));
         assert!(build_bounty_post_handoff(&args, None)
             .unwrap_err()
             .contains("at least 0.01 USDC"));
@@ -6171,15 +6396,472 @@ mod tests {
             .contains("HTTPS"));
 
         args.source_url = None;
-        args.solver_reward_usdc = "0".to_string();
+        args.total_budget_usdc = None;
+        args.solver_reward_usdc = Some("0".to_string());
+        args.verifier_reward_usdc = Some("0.22".to_string());
         assert!(build_bounty_post_handoff(&args, Some(&image))
             .unwrap_err()
             .contains("greater than zero"));
 
-        args.solver_reward_usdc = "1.999999".to_string();
+        args.solver_reward_usdc = Some("1.999999".to_string());
         assert!(build_bounty_post_handoff(&args, Some(&image))
             .unwrap_err()
             .contains("at least 2 USDC"));
+
+        args.solver_reward_usdc = Some("2.00".to_string());
+        args.verifier_reward_usdc = Some("0.10".to_string());
+        assert!(build_bounty_post_handoff(&args, Some(&image))
+            .unwrap_err()
+            .starts_with("[min_total_budget] Enter a total budget of at least 2.22 USDC"));
+    }
+
+    fn plain_args() -> PrepareBountyPostArgs {
+        let mut args = valid_args();
+        args.image_prompt = None;
+        args.image_alt_text = None;
+        args.bounty_image = None;
+        args
+    }
+
+    fn creator_args() -> PrepareBountyPostArgs {
+        let mut args = plain_args();
+        args.review_mode = Some("creator".to_string());
+        args.benchmark = None;
+        args.evidence_schema = None;
+        args.delivery_deadline = Some(deadline_from_now(chrono::Duration::days(2)));
+        args
+    }
+
+    fn deadline_from_now(offset: chrono::Duration) -> String {
+        let zone = chrono::FixedOffset::east_opt(2 * 3600).unwrap();
+        (chrono::Utc::now() + offset)
+            .with_timezone(&zone)
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
+    }
+
+    fn query_pairs(handoff: &Value) -> Vec<(String, String)> {
+        Url::parse(handoff["post_url"].as_str().unwrap())
+            .unwrap()
+            .query_pairs()
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect()
+    }
+
+    fn error_code(args: &PrepareBountyPostArgs) -> String {
+        let error = build_bounty_post_handoff(args, None).unwrap_err();
+        assert!(error.starts_with('['), "uncoded error: {error}");
+        error[1..error.find(']').unwrap()].to_string()
+    }
+
+    #[test]
+    fn platform_split_matches_the_posting_form() {
+        let split = |total: &str| {
+            platform_split(parse_total_budget_cents(total).unwrap()).map(|split| {
+                (
+                    format_cents(split.worker_cents),
+                    format_cents(split.review_cents),
+                )
+            })
+        };
+        assert_eq!(split("2.22").unwrap(), ("2.00".into(), "0.22".into()));
+        assert_eq!(split("5.05").unwrap(), ("4.54".into(), "0.51".into()));
+        assert_eq!(split("10").unwrap(), ("9.00".into(), "1.00".into()));
+        assert_eq!(split("10.00").unwrap(), ("9.00".into(), "1.00".into()));
+        assert!(split("2.21").unwrap_err().starts_with(
+            "[min_total_budget] Enter a total budget of at least 2.22 USDC: the worker receives at least 2 USDC after the 10% review reward."
+        ));
+        assert_eq!(review_reward_cents(1), 1);
+        assert_eq!(review_reward_cents(5), 1);
+        assert_eq!(review_reward_cents(15), 2);
+        for invalid in ["", "abc", "2.221", "2.", ".5", "-3", "1e3", "9000000000.01"] {
+            assert!(
+                parse_total_budget_cents(invalid)
+                    .and_then(platform_split)
+                    .unwrap_err()
+                    .starts_with("[min_total_budget]"),
+                "accepted {invalid}"
+            );
+        }
+        assert_eq!(
+            compose_goal("Ship it.", Some("Use the staging branch.")),
+            "Ship it.\n\nDetails: Use the staging branch."
+        );
+        assert_eq!(compose_goal("Ship it.", None), "Ship it.");
+    }
+
+    #[test]
+    fn approved_form_names_prefill_the_post_form_without_legacy_params() {
+        let mut args = creator_args();
+        args.description = Some("Use the staging branch.".to_string());
+        args.total_budget_usdc = Some("5.05".to_string());
+        args.timezone = Some("Europe/Paris".to_string());
+        let deadline = args.delivery_deadline.clone().unwrap();
+        let handoff = build_bounty_post_handoff(&args, None).unwrap();
+
+        assert_eq!(handoff["state"], "review_required_not_published");
+        assert_eq!(handoff["bounty_created"], false);
+        assert_eq!(handoff["wallet_signature_requested"], false);
+        assert_eq!(
+            handoff["objective"],
+            "Make the committed regression test pass."
+        );
+        assert_eq!(handoff["description"], "Use the staging branch.");
+        assert_eq!(
+            handoff["goal"],
+            "Make the committed regression test pass.\n\nDetails: Use the staging branch."
+        );
+        assert_eq!(handoff["total_budget_usdc"], "5.05");
+        assert_eq!(handoff["solver_reward_usdc"], "4.54");
+        assert_eq!(handoff["verifier_reward_usdc"], "0.51");
+        assert_eq!(handoff["target_usdc"], "5.05");
+        assert_eq!(handoff["timezone"], "Europe/Paris");
+        assert_eq!(handoff["warnings"], json!([]));
+
+        let pairs = query_pairs(&handoff);
+        let value = |name: &str| {
+            pairs
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.as_str())
+        };
+        assert_eq!(value("from"), Some("ai-app"));
+        assert_eq!(value("reviewMode"), Some("creator"));
+        assert_eq!(value("title"), Some("Fix the reconciliation regression"));
+        assert_eq!(
+            value("objective"),
+            Some("Make the committed regression test pass.")
+        );
+        assert_eq!(value("description"), Some("Use the staging branch."));
+        assert_eq!(value("total_budget_usdc"), Some("5.05"));
+        assert_eq!(value("delivery_deadline"), Some(deadline.as_str()));
+        assert_eq!(value("timezone"), Some("Europe/Paris"));
+        assert!(value("operation_id").is_some());
+        assert_eq!(
+            pairs
+                .iter()
+                .filter(|(key, _)| key == "acceptance_criteria")
+                .map(|(_, value)| value.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "The committed test exits zero.",
+                "A regression test covers the prior failure."
+            ]
+        );
+        for legacy in [
+            "goal",
+            "criterion",
+            "solverReward",
+            "verifierReward",
+            "taskWindowDays",
+            "deliveryDeadline",
+            "evidenceSchema",
+            "referenceAttachment",
+        ] {
+            assert!(value(legacy).is_none(), "legacy param {legacy} emitted");
+        }
+
+        // Without a description the objective alone is the goal and the
+        // optional params are omitted.
+        let mut args = creator_args();
+        args.description = Some("   ".to_string());
+        let handoff = build_bounty_post_handoff(&args, None).unwrap();
+        assert_eq!(handoff["goal"], "Make the committed regression test pass.");
+        assert_eq!(handoff["description"], Value::Null);
+        let pairs = query_pairs(&handoff);
+        assert!(!pairs
+            .iter()
+            .any(|(key, _)| key == "description" || key == "timezone"));
+    }
+
+    #[test]
+    fn legacy_names_still_prepare_with_the_platform_split() {
+        let args: PrepareBountyPostArgs = serde_json::from_value(json!({
+            "title": "Publish the release checklist",
+            "goal": "Create a deterministic release checklist.",
+            "acceptance_criteria": ["The checklist names every release gate."],
+            "solver_reward_usdc": "9.50",
+            "verifier_reward_usdc": "0.50",
+            "task_window_days": 7
+        }))
+        .unwrap();
+        let handoff = build_bounty_post_handoff(&args, None).unwrap();
+        assert_eq!(
+            handoff["objective"],
+            "Create a deterministic release checklist."
+        );
+        assert_eq!(handoff["goal"], "Create a deterministic release checklist.");
+        assert_eq!(handoff["total_budget_usdc"], "10.00");
+        // The caller's 9.50 + 0.50 split never overrides the platform split.
+        assert_eq!(handoff["solver_reward_usdc"], "9");
+        assert_eq!(handoff["verifier_reward_usdc"], "1");
+        assert_eq!(handoff["target_usdc"], "10");
+        assert_eq!(handoff["task_window_days"], 7);
+        assert_eq!(handoff["review_mode"], "automated");
+        let warnings = handoff["warnings"].as_array().unwrap();
+        assert!(warnings.iter().any(|warning| warning
+            .as_str()
+            .unwrap()
+            .contains("goal is a deprecated alias")));
+        assert!(warnings.iter().any(|warning| warning
+            .as_str()
+            .unwrap()
+            .contains("solver_reward_usdc and verifier_reward_usdc are deprecated")));
+        let pairs = query_pairs(&handoff);
+        assert!(pairs.iter().any(|(key, value)| key == "objective"
+            && value == "Create a deterministic release checklist."));
+        assert!(pairs
+            .iter()
+            .any(|(key, value)| key == "total_budget_usdc" && value == "10.00"));
+        for legacy in [
+            "goal",
+            "criterion",
+            "solverReward",
+            "verifierReward",
+            "taskWindowDays",
+        ] {
+            assert!(!pairs.iter().any(|(key, _)| key == legacy));
+        }
+
+        // When both names are sent, the approved name wins.
+        let mut args = plain_args();
+        args.goal = Some("An older goal.".to_string());
+        args.solver_reward_usdc = Some("50".to_string());
+        args.verifier_reward_usdc = Some("50".to_string());
+        let handoff = build_bounty_post_handoff(&args, None).unwrap();
+        assert_eq!(
+            handoff["objective"],
+            "Make the committed regression test pass."
+        );
+        assert_eq!(handoff["total_budget_usdc"], "2.22");
+        assert_eq!(handoff["warnings"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn invalid_prepared_terms_return_stable_form_error_codes() {
+        type Mutation = Box<dyn Fn(&mut PrepareBountyPostArgs)>;
+        let cases: Vec<(&str, Mutation)> = vec![
+            (
+                "title_required",
+                Box::new(|args| args.title = " ".to_string()),
+            ),
+            (
+                "title_required",
+                Box::new(|args| args.title = "t".repeat(201)),
+            ),
+            ("objective_required", Box::new(|args| args.objective = None)),
+            (
+                "objective_required",
+                Box::new(|args| args.objective = Some("o".repeat(1_001))),
+            ),
+            (
+                "objective_required",
+                Box::new(|args| {
+                    args.objective = None;
+                    args.goal = Some("g".repeat(1_001));
+                }),
+            ),
+            (
+                "description_too_long",
+                Box::new(|args| args.description = Some("d".repeat(4_001))),
+            ),
+            (
+                "description_too_long",
+                Box::new(|args| {
+                    args.objective = Some("o".repeat(1_000));
+                    args.description = Some("d".repeat(3_000));
+                }),
+            ),
+            (
+                "criteria_required",
+                Box::new(|args| args.acceptance_criteria.clear()),
+            ),
+            (
+                "criteria_required",
+                Box::new(|args| args.acceptance_criteria = vec!["c".to_string(); 21]),
+            ),
+            (
+                "criteria_required",
+                Box::new(|args| args.acceptance_criteria = vec![" ".to_string()]),
+            ),
+            (
+                "min_total_budget",
+                Box::new(|args| args.total_budget_usdc = Some("2.21".to_string())),
+            ),
+            (
+                "min_total_budget",
+                Box::new(|args| args.total_budget_usdc = Some("2.221".to_string())),
+            ),
+            (
+                "min_total_budget",
+                Box::new(|args| args.total_budget_usdc = None),
+            ),
+            (
+                "min_total_budget",
+                Box::new(|args| {
+                    args.total_budget_usdc = None;
+                    args.solver_reward_usdc = Some("2.00".to_string());
+                }),
+            ),
+            (
+                "deadline_required",
+                Box::new(|args| args.delivery_deadline = None),
+            ),
+            (
+                "deadline_required",
+                Box::new(|args| args.delivery_deadline = Some("2026-09-10T21:00:00".to_string())),
+            ),
+            (
+                "deadline_in_past",
+                Box::new(|args| {
+                    args.delivery_deadline = Some(deadline_from_now(-chrono::Duration::hours(1)))
+                }),
+            ),
+            (
+                "deadline_too_far",
+                Box::new(|args| {
+                    args.delivery_deadline = Some(deadline_from_now(chrono::Duration::days(31)))
+                }),
+            ),
+            (
+                "invalid_benchmark",
+                Box::new(|args| args.benchmark = Some(json!({"engine": "invented"}))),
+            ),
+            (
+                "invalid_evidence_schema",
+                Box::new(|args| args.evidence_schema = Some(json!({"type": "object"}))),
+            ),
+            (
+                "invalid_timezone",
+                Box::new(|args| args.timezone = Some("not a zone!".to_string())),
+            ),
+            (
+                "invalid_request",
+                Box::new(|args| args.review_mode = Some("other".to_string())),
+            ),
+            (
+                "invalid_request",
+                Box::new(|args| args.source_url = Some("http://example.com".to_string())),
+            ),
+        ];
+        for (expected, mutate) in cases {
+            let mut args = creator_args();
+            mutate(&mut args);
+            assert_eq!(error_code(&args), expected);
+        }
+
+        // Automated benchmark validation keeps its two verifier codes.
+        let mut args = plain_args();
+        args.benchmark.as_mut().unwrap()["engine"] = json!("invented");
+        assert_eq!(error_code(&args), "invalid_benchmark");
+        let mut args = plain_args();
+        args.evidence_schema = Some(json!({"type": "object", "additionalProperties": false}));
+        assert_eq!(error_code(&args), "invalid_evidence_schema");
+        let mut args = plain_args();
+        args.evidence_schema = None;
+        assert_eq!(error_code(&args), "invalid_evidence_schema");
+        let mut args = plain_args();
+        args.delivery_deadline = Some(deadline_from_now(chrono::Duration::days(2)));
+        assert_eq!(error_code(&args), "invalid_request");
+
+        // A deadline up to 30 days ahead is accepted, as on the form.
+        let mut args = creator_args();
+        args.delivery_deadline = Some(deadline_from_now(
+            chrono::Duration::days(30) - chrono::Duration::minutes(5),
+        ));
+        assert_eq!(
+            build_bounty_post_handoff(&args, None).unwrap()["task_window_days"],
+            30
+        );
+        for timezone in [
+            "UTC",
+            "America/Argentina/Buenos_Aires",
+            "Etc/GMT+5",
+            "+05:30",
+            "-03:00",
+        ] {
+            let mut args = creator_args();
+            args.timezone = Some(timezone.to_string());
+            assert!(build_bounty_post_handoff(&args, None).is_ok(), "{timezone}");
+        }
+    }
+
+    #[test]
+    fn retired_reference_attachment_is_ignored_with_a_warning() {
+        let mut request = serde_json::to_value(creator_args()).unwrap();
+        let without = serde_json::from_value::<PrepareBountyPostArgs>(request.clone()).unwrap();
+        request["reference_attachment"] =
+            json!({"kind": "homepage_background", "sha256": "sha256:invented"});
+        let args = serde_json::from_value::<PrepareBountyPostArgs>(request).unwrap();
+        let handoff = build_bounty_post_handoff(&args, None).unwrap();
+        assert_eq!(
+            handoff["warnings"],
+            json!(["reference_attachment is retired and was ignored"])
+        );
+        assert!(handoff.get("reference_attachment").is_none());
+        assert!(!handoff["post_url"]
+            .as_str()
+            .unwrap()
+            .contains("referenceAttachment"));
+        assert!(serde_json::to_value(&args)
+            .unwrap()
+            .get("reference_attachment")
+            .is_none());
+        assert_eq!(
+            prepared_posting_operation_id(&args).unwrap(),
+            prepared_posting_operation_id(&without).unwrap()
+        );
+        let schema = PrepareBountyPostArgs::input_schema();
+        assert!(schema["properties"].get("reference_attachment").is_none());
+        assert!(post_handoff_output_schema()["properties"]
+            .get("reference_attachment")
+            .is_none());
+    }
+
+    #[test]
+    fn meta_child_economics_are_unchanged_by_the_platform_split() {
+        let parent = json!({"parent_bounty_contract":"0x1111111111111111111111111111111111111111"});
+        // Today's routed caller splits are kept for meta children.
+        for (solver, verifier) in [("0.99", "0.01"), ("0.98", "0.02"), ("2.00", "0.10")] {
+            let mut args = plain_args();
+            args.meta_child = Some(parent.clone());
+            args.total_budget_usdc = None;
+            args.solver_reward_usdc = Some(solver.to_string());
+            args.verifier_reward_usdc = Some(verifier.to_string());
+            let handoff = build_bounty_post_handoff(&args, None).unwrap();
+            assert_eq!(
+                handoff["solver_reward_usdc"],
+                format_usdc(parse_usdc(solver, "solver").unwrap())
+            );
+            assert_eq!(
+                handoff["verifier_reward_usdc"],
+                format_usdc(parse_usdc(verifier, "verifier").unwrap())
+            );
+        }
+        // Non-qualifying children are still rejected as today.
+        for (solver, verifier) in [("0.99", "0.02"), ("0.995", "0.005"), ("1.50", "0.50")] {
+            let mut args = plain_args();
+            args.meta_child = Some(parent.clone());
+            args.total_budget_usdc = None;
+            args.solver_reward_usdc = Some(solver.to_string());
+            args.verifier_reward_usdc = Some(verifier.to_string());
+            assert!(build_bounty_post_handoff(&args, None)
+                .unwrap_err()
+                .contains("at least 2 USDC for the solver"));
+        }
+        // A 1 USDC child sent with the approved name uses the platform split,
+        // which qualifies; other sub-minimum totals do not.
+        let mut args = plain_args();
+        args.meta_child = Some(parent.clone());
+        args.total_budget_usdc = Some("1.00".to_string());
+        let handoff = build_bounty_post_handoff(&args, None).unwrap();
+        assert_eq!(handoff["solver_reward_usdc"], "0.9");
+        assert_eq!(handoff["verifier_reward_usdc"], "0.1");
+        args.total_budget_usdc = Some("1.50".to_string());
+        assert_eq!(error_code(&args), "min_total_budget");
+        // Without a parent binding a 1 USDC total is below the minimum.
+        args.meta_child = None;
+        args.total_budget_usdc = Some("1.00".to_string());
+        assert_eq!(error_code(&args), "min_total_budget");
     }
 
     #[test]
@@ -7914,11 +8596,9 @@ mod tests {
                 "prepare_bounty_post",
                 json!({
                     "title": "Publish the sandbox release checklist",
-                    "goal": "Create a deterministic release checklist for the MCP app.",
+                    "objective": "Create a deterministic release checklist for the MCP app.",
                     "acceptance_criteria": ["The checklist names every required release gate."],
-                    "solver_reward_usdc": "2.00",
-                    "verifier_reward_usdc": "0.10",
-                    "task_window_days": 7,
+                    "total_budget_usdc": "2.22",
                     "crowdfund": false,
                     "discovery_source": "ephemeral ChatGPT QA",
                     "image_prompt": "A bounded green release checklist on a dark background.",
