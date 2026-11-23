@@ -105,9 +105,13 @@ const server = http.createServer((req, res) => {
       const board = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
       await board.route("**/*", (route) => new URL(route.request().url()).origin === origin ? route.continue() : route.fulfill({ status: 503, body: "" }));
       const page = await board.newPage();
-      for (const [file, heading] of [["earn.html", "Tablero de recompensas"], ["participate.html", "Tu espacio de la recompensa"], ["competition.html", "Espacio de la competencia"], ["leaderboard.html", "Cómo funciona la clasificación"], ["recover-bounty.html", "Recuperar los fondos de una recompensa"], ["check-work.html", "Antes de entregar"], ["about.html", "Por qué existe"], ["metrics.html", "Actividad del mercado"], ["api-integration.html", "Define la conexión"], ["collaborate/", "Haz tu primera aportación útil."], ["onramp.html", "¿Qué billetera recibirá el dinero?"]]) {
+      for (const [file, heading] of [["earn.html", "Tablero de recompensas"], ["participate.html", "Tu espacio de la recompensa"], ["competition.html", "Espacio de la competencia"], ["leaderboard.html", "Cómo funciona la clasificación"], ["recover-bounty.html", "Recuperar los fondos de una recompensa"], ["check-work.html", "Antes de entregar"], ["post.html", "Bounty details"], ["about.html", "Por qué existe"], ["metrics.html", "Actividad del mercado"], ["api-integration.html", "Define la conexión"], ["collaborate/", "Haz tu primera aportación útil."], ["onramp.html", "¿Qué billetera recibirá el dinero?"]]) {
         await page.goto(`${origin}/${file}?lang=es`);
-        await page.getByText(heading, { exact: true }).first().waitFor();
+        await page.getByText(heading === "Bounty details" ? "Detalles de la recompensa" : heading, { exact: true }).first().waitFor();
+        if (file === "post.html") {
+          assert.equal(await page.locator("[data-brief-title]").getAttribute("placeholder"), "Un nombre corto para esta tarea");
+          assert.match(await page.locator(".brief-heading").innerText(), /Publicar una recompensa/);
+        }
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${file} fits at 390px in Spanish`);
       }
       await board.close();
