@@ -164,6 +164,26 @@
       : '<div class="market-empty"><h2>No bounties in this view.</h2><p>Try another search or availability filter, or refresh later for new funded work.</p><button class="market-button market-button-secondary" type="button" data-market-clear>Clear filters</button></div>';
   }
 
+  // The last complete list this browser loaded, shown (dated) only when the list cannot load now.
+  const SNAPSHOT = "agent-bounties.board-snapshot.v1";
+  function saveSnapshot(win, recordedAt, items) {
+    if (!items.length || !Number.isFinite(Date.parse(recordedAt))) return;
+    try { win.localStorage.setItem(SNAPSHOT, JSON.stringify({ recorded_at: new Date(recordedAt).toISOString(), items: items.slice(0, 100) })); } catch (_) { /* A full or disabled store keeps no snapshot. */ }
+  }
+  function loadSnapshot(win) {
+    try {
+      const value = JSON.parse(win.localStorage.getItem(SNAPSHOT) || "null");
+      const items = Array.isArray(value?.items) ? value.items.filter((item) => item && typeof item.source_id === "string" && typeof item.title === "string") : [];
+      return items.length && Number.isFinite(Date.parse(value.recorded_at)) ? { recordedAt: value.recorded_at, items } : null;
+    } catch (_) { return null; }
+  }
+  function recordedLabel(recordedAt) {
+    return new Date(recordedAt).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
+  }
+  function staleNotice(recordedAt) {
+    return `<div class="market-stale-notice" role="status"><strong>Last recorded list · ${text(recordedLabel(recordedAt))}</strong><span>We can’t load the current list. This one may be out of date, and availability right now is unknown. Each bounty page checks its live status before you take part.</span></div>`;
+  }
+
   async function loadOpportunities(win, view = "live") { return view === "completed" ? submissions.loadCompleted(win) : workflow.loadFundedInventory(win); }
 
   function startBoard(win, doc) {
@@ -188,6 +208,17 @@
     const render = () => {
       const nowMs = Date.now();
       if (loading) return;
+      const live = selectedView() !== "completed";
+      const stale = live && (failure || (coverage.state !== "complete" && !items.length)) ? loadSnapshot(win) : null;
+      if (stale) {
+        const visible = filterItems(stale.items, search?.value, timing?.value || "now", nowMs, kind?.value || "all");
+        list.setAttribute("aria-busy", "false");
+        list.innerHTML = staleNotice(stale.recordedAt) + (visible.length ? visible.map((item, index) => renderOpportunity(item, index, nowMs)).join("") : '<div class="market-empty"><h2>No bounties in this view of the last recorded list.</h2><p>Try another filter, or use Refresh to load the current list.</p></div>');
+        list.querySelectorAll?.(".opportunity-row").forEach((row) => { row.dataset.stale = "true"; });
+        if (summary) summary.textContent = `Showing the last list recorded ${recordedLabel(stale.recordedAt)} (${stale.items.length} ${stale.items.length === 1 ? "listing" : "listings"}). It may be out of date; availability right now is unknown. Use Refresh to try again.`;
+        if (notice) notice.hidden = true;
+        return;
+      }
       if (failure) {
         list.setAttribute("aria-busy", "false");
         list.innerHTML = '<div class="market-empty"><h2>We can’t load the list right now.</h2><p>Availability is unknown. This doesn’t mean there are no bounties. Use Refresh to try again.</p></div>';
@@ -237,6 +268,7 @@
         coverage = checkedCoverage;
         loadedView = view;
         generatedAt = payload.generated_at;
+        if (view === "live" && coverage.state === "complete") saveSnapshot(win, generatedAt || new Date().toISOString(), ready);
       } catch (error) { if (version === requestVersion) { items = []; failure = error; } }
       finally { if (version === requestVersion) { loading = false; if (refresh) refresh.disabled = false; render(); } }
     };
@@ -246,5 +278,5 @@
     win.setInterval(() => { if (!loading && doc.visibilityState !== "hidden" && !list.contains?.(doc.activeElement)) reload(); }, 60_000);
   }
 
-  return { canonicalCoverage: workflow.canonicalCoverage, emptyState, amountNumber, apiBase, decisionContext, detailUrl, filterItems, formatUsdc, isReadyToEarn, isV2, loadOpportunities, opportunityFeedUrl, platformFeeLabel, renderOpportunity, scoringWindow, startBoard, timingState, windowLabel };
+  return { canonicalCoverage: workflow.canonicalCoverage, emptyState, loadSnapshot, saveSnapshot, recordedLabel, amountNumber, apiBase, decisionContext, detailUrl, filterItems, formatUsdc, isReadyToEarn, isV2, loadOpportunities, opportunityFeedUrl, platformFeeLabel, renderOpportunity, scoringWindow, startBoard, timingState, windowLabel };
 });
