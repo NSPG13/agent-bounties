@@ -228,7 +228,7 @@
       }
       const counts = workflow.inventoryCounts(selectedView() === "completed" ? [] : items, nowMs);
       const visible = filterItems(items, search?.value, timing?.value || "now", nowMs, kind?.value || "all");
-      list.innerHTML = visible.length ? visible.map((item, index) => renderOpportunity(item, index, nowMs)).join("") : coverage.state !== "complete" ? `<div class="market-empty"><h2>${coverage.state === "unavailable" ? "We can’t load the list right now." : "We can’t load the full list right now."}</h2><p>${text(coverage.detail || coverage.message)} This doesn’t mean there are no bounties.</p></div>` : emptyState(kind?.value, counts.unavailable);
+      list.innerHTML = visible.length ? visible.map((item, index) => renderOpportunity(item, index, nowMs)).join("") : coverage.state !== "complete" && !items.length ? `<div class="market-empty"><h2>${coverage.state === "unavailable" ? "We can’t load the list right now." : "We can’t load the full list right now."}</h2><p>${text(coverage.detail || coverage.message)} This doesn’t mean there are no bounties.</p></div>` : emptyState(kind?.value, counts.unavailable);
       list.querySelector?.("[data-market-clear]")?.addEventListener("click", () => {
         if (search) search.value = "";
         if (kind) kind.value = "all";
@@ -241,7 +241,8 @@
       list.setAttribute("aria-busy", "false");
       if (summary) summary.textContent = `${counts.now} ${counts.unavailable ? "confirmed " : ""}open now (${counts.direct} direct tasks · ${counts.competition} competitions · ${counts.child_funding} child-funding tasks) · ${counts.ended} scoring closed · ${counts.upcoming} upcoming · ${items.length} funded${counts.unavailable ? ` · Timing unavailable for ${counts.unavailable}; open-now total unconfirmed` : ""}${counts.closed ? ` · ${counts.closed} past deadline` : ""}${generatedAt ? ` · refreshed ${new Date(generatedAt).toLocaleTimeString()}` : ""}`;
       if (summary && selectedView() === "completed") summary.textContent = `${visible.length} completed ${visible.length === 1 ? "bounty" : "bounties"}${items.length === 300 ? " · showing the latest 300" : ""} · Open a submission to see the work and result.`;
-      if (summary && coverage.message) summary.textContent = `${coverage.message} ${visible.length} checked listings shown.`;
+      // A partial feed shows what loaded without a notice (author decision); only an empty one explains itself.
+      if (summary && coverage.message && !items.length) summary.textContent = `${coverage.message} ${visible.length} checked listings shown.`;
       if (notice && selectedView() === "completed") notice.hidden = true;
       if (notice && postedContract && selectedView() !== "completed") {
         const match = items.find((item) => item.source_id.toLowerCase() === postedContract);
