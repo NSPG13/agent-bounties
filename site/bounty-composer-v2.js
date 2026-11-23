@@ -2515,11 +2515,18 @@
     }
     const fromAiApp = ["ai-app", "chatgpt-app"].includes(params.get("from"));
     if (fromAiApp) { enableAiHandoffReview(); track("canonical_post_handoff_viewed"); }
+    // The prefill link carries the form's approved names (6B-2); the older names stay accepted.
     const title = params.get("title");
-    const goal = params.get("goal");
-    const criteria = params.getAll("criterion");
-    const solver = params.get("solverReward");
-    const verifier = params.get("verifierReward");
+    const objective = params.get("objective"), description = params.get("description");
+    const goal = params.get("goal") || (objective && objective.trim() ? (description && description.trim() ? `${objective.trim()}\n\nDetails: ${description.trim()}` : objective.trim()) : null);
+    const criteria = params.getAll("acceptance_criteria").length ? params.getAll("acceptance_criteria") : params.getAll("criterion");
+    const total = params.get("total_budget_usdc");
+    const split = (() => { try { return total ? splitReward(total) : null; } catch (error) { setStatus(error.message || String(error), "error"); return null; } })();
+    const solver = split ? (Number(split.solver) / 1_000_000).toFixed(2) : params.get("solverReward");
+    const verifier = split ? (Number(split.verifier) / 1_000_000).toFixed(2) : params.get("verifierReward");
+    const handoffDeadline = params.get("delivery_deadline") || params.get("deliveryDeadline");
+    const handoffDays = params.get("taskWindowDays") ? Number(params.get("taskWindowDays"))
+      : Number.isFinite(Date.parse(handoffDeadline)) ? Math.max(1, Math.ceil((Date.parse(handoffDeadline) - Date.now()) / 86400000)) : MAX_TASK_DAYS;
 
     if (title && goal && criteria.length && solver && verifier) {
       try {
@@ -2539,15 +2546,15 @@
           acceptance_criteria: criteria,
           solver_reward_usdc: solver,
           verifier_reward_usdc: verifier,
-          task_window_days: Number(params.get("taskWindowDays") || MAX_TASK_DAYS),
+          task_window_days: handoffDays,
           source_url: params.get("sourceUrl"),
           review_mode: params.get("reviewMode") || "automated",
-          delivery_deadline: params.get("deliveryDeadline"),
+          delivery_deadline: handoffDeadline,
           posting_operation_id: params.get("operation_id"),
           crowdfund: params.get("crowdfund") === "true",
           discovery_source: params.get("discoverySource") || "AI assistant via MCP",
           benchmark: parseHandoffJson("benchmark"),
-          evidence_schema: parseHandoffJson("evidenceSchema"),
+          evidence_schema: parseHandoffJson("evidence_schema") || parseHandoffJson("evidenceSchema"),
           image_required: Boolean(params.get("imageUrl")),
           image: params.get("imageUrl") ? {
               source: "chatgpt_user_generated",
