@@ -105,6 +105,17 @@ const server = http.createServer((req, res) => {
       await page.waitForTimeout(200);
       assert.equal(await page.locator("[data-card-title]").textContent(), "Research", "user titles are never translated");
       assert.equal(await page.locator("[data-card-criteria] li").textContent(), "Pass the regression tests", "user criteria are never translated");
+      // A creator's terms on creator-open stay as written, even when they match a board phrase.
+      await page.goto(origin + "/creator-open.html?lang=es");
+      await page.evaluate(() => {
+        document.querySelector("#open-bounty-title").textContent = "First accepted result wins";
+        document.querySelector("#open-goal").textContent = "First accepted result wins";
+        document.querySelector("#open-criteria").innerHTML = "<li>First accepted result wins</li>";
+      });
+      await page.waitForTimeout(200);
+      for (const selector of ["#open-bounty-title", "#open-goal", "#open-criteria li"]) {
+        assert.equal(await page.locator(selector).textContent(), "First accepted result wins", `${selector} keeps the creator's words`);
+      }
       await ctx.close();
     }
     // Every page offers the switch, and the shared header and footer follow the choice.

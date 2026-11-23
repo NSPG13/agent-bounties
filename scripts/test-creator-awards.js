@@ -60,6 +60,9 @@ test('the public result preserves A’s passing work, B’s exact files, review 
   assert.equal(row.criteria.length, 3);
   assert.ok(html.includes('200 mm instead of 350 mm'));
   assert.ok(html.includes('55 mm instead of 45 mm'));
+  // Titles, reasons and findings are people's own words: the language switch never translates them.
+  assert.ok(html.includes('<h1 data-i18n-skip>'));
+  assert.equal((html.match(/<p data-i18n-skip>/g) || []).length, 1 + row.criteria.length, "the reason and every finding are marked");
 });
 test('untrusted text and URLs in review data cannot create HTML or script links', () => {
   const row = awards.validate(copy())[0]; row.title = '<script>bad()</script>'; row.winner.source_url = 'javascript:bad()'; row.winner.image = '../private.png';
