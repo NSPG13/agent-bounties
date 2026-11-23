@@ -83,6 +83,18 @@ const server = http.createServer((req, res) => {
       assert.ok(english.includes(await page.locator("[data-missing-ingredient]").textContent()), "the typed phrase is English right after switching");
       await motion.close();
     }
+    {
+      // A bounty titled with a dictionary phrase keeps its own words in Spanish mode.
+      const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
+      await ctx.route("**/*", (route) => new URL(route.request().url()).origin === origin ? route.continue() : route.fulfill({ status: 503, body: "" }));
+      const page = await ctx.newPage();
+      await page.goto(origin + "/post.html?lang=es");
+      await page.evaluate(() => { const title = document.querySelector("[data-card-title]"); title.textContent = "Research"; document.querySelector("[data-card-criteria]").innerHTML = "<li>Pass the regression tests</li>"; });
+      await page.waitForTimeout(200);
+      assert.equal(await page.locator("[data-card-title]").textContent(), "Research", "user titles are never translated");
+      assert.equal(await page.locator("[data-card-criteria] li").textContent(), "Pass the regression tests", "user criteria are never translated");
+      await ctx.close();
+    }
     // Every page offers the switch, and the shared header and footer follow the choice.
     const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
     await context.route("**/*", (route) => new URL(route.request().url()).origin === origin ? route.continue() : route.fulfill({ status: 503, body: "" }));

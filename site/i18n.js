@@ -11,6 +11,9 @@
   "use strict";
   const KEY = "agent-bounties.lang", LANGS = ["en", "es"], ATTRS = ["aria-label", "placeholder", "title", "alt"];
   const SKIP = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEXTAREA", "CODE", "PRE"]);
+  // People's own words (bounty titles, goals, criteria, draft and activity titles) are never
+  // translated, even when they happen to match a dictionary phrase.
+  const USER_CONTENT = "[data-i18n-skip], [data-card-title], [data-card-goal], [data-card-criteria], .feed-art-title, .opportunity-main > p, .saved-draft-head > a, .account-inbox-row-head > a, [data-funded-title]";
 
   // Exact English text → Spanish. Whitespace is normalized before lookup.
   const ES = {
@@ -407,7 +410,7 @@
     function translateNode(node) {
       if (node.nodeType === 3) {
         const parent = node.parentElement;
-        if (!parent || SKIP.has(parent.tagName) || parent.closest("[data-i18n-skip]")) return;
+        if (!parent || SKIP.has(parent.tagName) || parent.closest(USER_CONTENT)) return;
         const current = node.nodeValue, known = originals.get(node);
         // A script may have replaced the text since it was translated: start from the new English.
         const english = known && current === known.es ? known.en : current;
@@ -418,7 +421,7 @@
         if (current !== value) node.nodeValue = value;
         return;
       }
-      if (node.nodeType !== 1 || SKIP.has(node.tagName) || node.hasAttribute("data-i18n-skip")) return;
+      if (node.nodeType !== 1 || SKIP.has(node.tagName) || node.matches(USER_CONTENT)) return;
       for (const name of ATTRS) {
         if (!node.hasAttribute(name)) continue;
         const saved = attrOriginals.get(node) || {}, current = node.getAttribute(name);
