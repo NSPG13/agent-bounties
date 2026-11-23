@@ -126,7 +126,22 @@
     if (!Number.isFinite(remaining) || remaining <= 0) throw fieldError("deadline_in_past", "delivery_deadline", "Choose a future delivery deadline within 30 days. Use a smaller milestone for longer work.");
     if (remaining > 30 * 86400000) throw fieldError("deadline_too_far", "delivery_deadline", "Choose a future delivery deadline within 30 days. Use a smaller milestone for longer work.");
     if (brief.review_consent !== true) throw fieldError("review_consent_required", "review_consent", "Confirm that you will review submissions yourself.");
-    return { title, goal, acceptance_criteria: criteria, solver_reward_usdc: ((total - reserve) / 100).toFixed(2), verifier_reward_usdc: (reserve / 100).toFixed(2), task_window_days: Math.max(1, Math.ceil(remaining / 86400000)), delivery_deadline: brief.deadline_at, review_mode: "creator", discovery_source: "Platform form (no AI)" };
+    const draft = { title, goal, acceptance_criteria: criteria, solver_reward_usdc: ((total - reserve) / 100).toFixed(2), verifier_reward_usdc: (reserve / 100).toFixed(2), task_window_days: Math.max(1, Math.ceil(remaining / 86400000)), delivery_deadline: brief.deadline_at, review_mode: "creator", discovery_source: "Platform form (no AI)" };
+    // Automated verification is an advanced, agent-prefilled section: a supported benchmark replaces creator review.
+    const benchmark = jsonObject(brief.benchmark, "invalid_benchmark", "benchmark", "The benchmark must be one JSON object.");
+    if (!benchmark) return draft;
+    const evidenceSchema = jsonObject(brief.evidence_schema, "invalid_evidence_schema", "evidence_schema", "The evidence schema must be one JSON object.");
+    const { delivery_deadline: _creatorDeadline, ...automated } = draft;
+    return { ...automated, review_mode: "automated", benchmark, ...(evidenceSchema ? { evidence_schema: evidenceSchema } : {}), discovery_source: "Platform form (agent-prefilled verification)" };
+  }
+  function jsonObject(value, code, field, message) {
+    if (value && typeof value === "object") { if (Array.isArray(value)) throw fieldError(code, field, message); return value; }
+    const text = String(value ?? "").trim();
+    if (!text) return null;
+    let parsed;
+    try { parsed = JSON.parse(text); } catch (_) { throw fieldError(code, field, message); }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw fieldError(code, field, message);
+    return parsed;
   }
   return Object.freeze({ manualDraft, fieldError, fallbackGoal, composeGoal, reviewReward, REVIEW_SHARE_PERCENT, resolveDeadline, wallTime, proposedSplit, estimateBudget, countdown, warnings, cents });
 });

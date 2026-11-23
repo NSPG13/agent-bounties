@@ -18,6 +18,9 @@
   const criteria = document.querySelector("[data-brief-criteria]");
   const objective = document.querySelector("[data-brief-objective]");
   const reviewShare = document.querySelector("[data-brief-review-share]");
+  const benchmark = document.querySelector("[data-brief-benchmark]");
+  const evidenceSchema = document.querySelector("[data-brief-evidence-schema]");
+  const advanced = document.querySelector("[data-advanced-verification]");
   function showReviewShare() {
     if (!reviewShare) return;
     const reward = helper.reviewReward(budget.value);
@@ -133,6 +136,9 @@
     }
     if (document.activeElement !== title) title.value = brief.title ?? journey.draft?.title ?? "";
     if (document.activeElement !== criteria) criteria.value = brief.criteria ?? journey.draft?.acceptance_criteria?.join("\n") ?? "";
+    if (benchmark) benchmark.value = brief.benchmark ?? "";
+    if (evidenceSchema) evidenceSchema.value = brief.evidence_schema ?? "";
+    if (advanced && (benchmark?.value || evidenceSchema?.value)) advanced.open = true;
     showReviewShare();
     setMode();
     status.textContent = journey.draft ? "Draft saved on this device. Review the proposal below." : "Brief saved on this device. Complete the details to prepare your proposal.";
@@ -147,14 +153,16 @@
     const manual = mode.value === "manual";
     const brief = { preparation_mode: mode.value, title: title.value, criteria: criteria.value, review_reward_usdc: helper.reviewReward(budget.value), review_consent: manual,
       ...(manual ? { objective: objective.value, description: goal.value } : {}),
-      goal: manual ? helper.composeGoal(objective.value, goal.value) : ownGoal(goal.value, current), budget_usdc: budget.value, deadline_at: result.iso, deadline_local: deadline.value, timezone: timezone.value.trim() };
+      goal: manual ? helper.composeGoal(objective.value, goal.value) : ownGoal(goal.value, current), budget_usdc: budget.value, deadline_at: result.iso, deadline_local: deadline.value, timezone: timezone.value.trim(),
+      ...(benchmark?.value.trim() ? { benchmark: benchmark.value } : {}), ...(evidenceSchema?.value.trim() ? { evidence_schema: evidenceSchema.value } : {}) };
     // Compare decisions, not display formatting, so restoring an old brief
     // does not invalidate approval simply because display fields were added.
     const before = current.brief || {};
     const manualChanged = mode.value === "manual" && (brief.title !== (before.title ?? current.draft?.title ?? "")
       || brief.criteria !== (before.criteria ?? current.draft?.acceptance_criteria?.join("\n") ?? "")
       || brief.objective !== (before.objective ?? "")
-      || brief.review_consent !== (before.review_consent === true));
+      || brief.review_consent !== (before.review_consent === true)
+      || (brief.benchmark || "") !== (before.benchmark || "") || (brief.evidence_schema || "") !== (before.evidence_schema || ""));
     const beforeGoal = before.preparation_mode === "manual" && Object.prototype.hasOwnProperty.call(before, "description") ? before.goal : ownGoal(before.goal || current.draft?.goal || current.goal || "", current);
     const changed = manualChanged || brief.goal !== beforeGoal
       || Number(brief.budget_usdc) !== Number(before.budget_usdc || (current.draft ? Number(current.draft.solver_reward_usdc) + Number(current.draft.verifier_reward_usdc) : ""))
@@ -169,7 +177,7 @@
     window.history?.replaceState?.(null, "", url);
     setMode(); save();
   });
-  for (const input of [goal, budget, deadline, title, objective, criteria]) input?.addEventListener("input", save);
+  for (const input of [goal, budget, deadline, title, objective, criteria, benchmark, evidenceSchema]) input?.addEventListener("input", save);
   // "Edit brief" refills the field from the proposal; keep this form's own label and an empty description empty.
   document.querySelector("[data-revise-card]")?.addEventListener("click", () => {
     setMode();

@@ -63,3 +63,7 @@
 .posting-page .saved-draft-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; }
 .posting-page .saved-draft-feedback:empty { display: none; }
 .posting-page .saved-draft-feedback { margin: 6px 0 0; font-size: 13px; }
+/* Automated verification is filled in by agents only; it stays collapsed and read-only for people. */
+.posting-page .brief-advanced > summary { cursor: pointer; margin: 0 0 12px; font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--ab-moss, var(--ab-muted)); }
+.posting-page .brief-advanced > p { margin: 0 0 12px; color: var(--ab-muted); font-size: 13px; line-height: 1.5; }
+.posting-page .brief-advanced textarea[readonly] { font-family: var(--ab-mono, ui-monospace, monospace); font-size: 13px; }

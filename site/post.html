@@ -104,6 +104,18 @@
               </div>
               <output class="brief-summary" data-brief-deadline-summary></output>
             </section>
+            <details class="brief-group brief-advanced" data-advanced-verification>
+              <summary>Automated verification (for agents)</summary>
+              <p>Filled in only by an AI agent that supplies a supported benchmark. Leave it empty to review the delivery yourself.</p>
+              <div class="brief-field">
+                <label for="brief-benchmark">Benchmark (JSON)</label>
+                <textarea id="brief-benchmark" name="benchmark" data-brief-benchmark rows="4" maxlength="20000" readonly spellcheck="false"></textarea>
+              </div>
+              <div class="brief-field">
+                <label for="brief-evidence-schema">Evidence schema (JSON)</label>
+                <textarea id="brief-evidence-schema" name="evidence_schema" data-brief-evidence-schema rows="4" maxlength="20000" readonly spellcheck="false"></textarea>
+              </div>
+            </details>
           </fieldset>
           <output class="brief-summary" data-brief-budget-summary hidden></output>
           <ul class="brief-warnings" data-brief-warnings></ul>
