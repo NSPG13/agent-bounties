@@ -305,7 +305,8 @@ test("head-loaded analytics preserves the optional choice until the page body ex
     assert.equal(scripts.length, 0, "no Google script before consent");
     assert.equal(typeof ready, "function");
     if (optOutBeforeReady) result.analytics.optOut();
-    document.body = { appendChild(element) { notice = element; } };
+    // The consent bar is the first element of the body, above the header.
+    document.body = { prepend(element) { notice = element; } };
     ready();
     if (optOutBeforeReady) assert.equal(notice, undefined, "recheck opt-out at DOM readiness");
     else {
