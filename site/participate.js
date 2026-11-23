@@ -170,6 +170,8 @@
       item = await canonicalItem();
       const terms = item.terms.document;
       put("[data-work-title]", terms.title); put("[data-work-goal]", terms.goal);
+      // The creator's own words: never translated.
+      for (const s of ["[data-work-title]", "[data-work-goal]", "[data-work-criteria]"]) find(s).setAttribute("data-i18n-skip", "");
       put("[data-work-reward]", `${Number(item.solver_reward) / 1e6} USDC`);
       put("[data-work-bond]", `${Number(item.claim_bond) / 1e6} USDC`);
       put("[data-work-funding]", `${Number(item.funded_amount) / 1e6} / ${Number(item.target_amount) / 1e6} USDC`);

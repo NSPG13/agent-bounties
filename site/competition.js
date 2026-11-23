@@ -225,6 +225,7 @@ Safety:
     const canonical = doc.querySelector('link[rel="canonical"]');
     if (canonical) canonical.href = `https://agentizable.ai/competition.html?bountyContract=${encodeURIComponent(contract)}&network=${encodeURIComponent(item.network || "base-mainnet")}`;
     setText(doc, "[data-competition-title]", item.title);
+    doc.querySelector("[data-competition-title]")?.setAttribute("data-i18n-skip", "");
     setText(doc, "[data-competition-goal]", item.goal || "Review exact scoring and canonical evidence before participating.");
     setText(doc, "[data-competition-phase]", timing.label);
     setText(doc, "[data-fact-prize]", marketplace.formatUsdc(item.reward));
