@@ -101,6 +101,31 @@ const server = http.createServer((req, res) => {
       assert.equal(await linkPage.evaluate(() => window.AgentBountiesComposer.review().explicitly_approved), false, `${label}: nothing is approved until the person approves`);
       await linkPage.close();
     }
+    // An automated-review link has no deadline; it carries the agreed task window instead.
+    const automated = new URL(origin + "/post.html");
+    for (const [key, value] of Object.entries({ from: "ai-app", operation_id: "6b2a0000-0000-4000-8000-000000000003", reviewMode: "automated", title: "Fix the parser",
+      objective: "Make the tests pass", acceptance_criteria: "All tests pass", total_budget_usdc: "10.00", task_window_days: "5",
+      benchmark: JSON.stringify({ engine: "command", command: "npm test" }), evidence_schema: JSON.stringify({ type: "object" }) })) automated.searchParams.append(key, value);
+    const automatedPage = await context.newPage(); automatedPage.on("pageerror", (error) => errors.push(error.message));
+    await automatedPage.goto(automated.href);
+    await automatedPage.waitForFunction(() => window.AgentBountiesWorkflow.createClient(window).load()?.draft?.task_window_days === 5);
+    assert.equal(await automatedPage.evaluate(() => window.AgentBountiesWorkflow.createClient(window).load().draft.review_mode), "automated");
+    await automatedPage.close();
+
+    // The saved draft always carries the platform split, so an approval covers the exact rewards that fund.
+    const splitPage = await context.newPage(); splitPage.on("pageerror", (error) => errors.push(error.message));
+    await splitPage.goto(origin + "/post.html");
+    await splitPage.waitForFunction(() => window.AgentBountiesComposer?.stage);
+    await splitPage.evaluate(() => window.AgentBountiesComposer.stage({ title: "Old split", goal: "Keep the worker paid", acceptance_criteria: ["Done"], solver_reward_usdc: "9.80", verifier_reward_usdc: "0.20", task_window_days: 3, review_mode: "creator", delivery_deadline: new Date(Date.now() + 3 * 86400000).toISOString() }));
+    const staged = await splitPage.evaluate(() => window.AgentBountiesWorkflow.createClient(window).load().draft);
+    assert.deepEqual([staged.solver_reward_usdc, staged.verifier_reward_usdc], ["9", "1"], "a staged draft is saved with the platform split");
+    // A draft saved earlier with another split is corrected on restore; the changed saved terms void any old approval.
+    await splitPage.evaluate(() => { const client = window.AgentBountiesWorkflow.createClient(window), journey = client.load(); client.save({ ...journey, draft: { ...journey.draft, solver_reward_usdc: "9.8", verifier_reward_usdc: "0.2" } }); });
+    await splitPage.reload();
+    await splitPage.waitForFunction(() => window.AgentBountiesWorkflow.createClient(window).load()?.draft?.solver_reward_usdc === "9");
+    assert.equal(await splitPage.evaluate(() => window.AgentBountiesWorkflow.createClient(window).load().draft.verifier_reward_usdc), "1");
+    assert.equal(await splitPage.evaluate(() => window.AgentBountiesComposer.review().explicitly_approved), false);
+    await splitPage.close();
 
     assert.deepEqual(writes, [], "filling the form makes no external writes");
     assert.deepEqual(errors, []);
