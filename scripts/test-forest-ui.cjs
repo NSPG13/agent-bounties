@@ -120,4 +120,19 @@ async function main() {
       await page.locator("[data-forest-pause]").click();
       await page.evaluate(()=>scrollTo(0,0));
       await capture(page,`home-video-${width}`);
-      await page.locator("[data-forest-pause
+      await page.locator("[data-forest-pause]").click();
+      await page.evaluate(() => { account = "ready"; dispatchEvent(new Event("online")); });
+      await page.waitForSelector(".ab-site-login");
+      await page.getByRole("button", { name: "Sign up with Google" }).click();
+      await page.waitForLoadState("networkidle");
+      assert.ok(await page.evaluate(() => document.body.innerText.includes("Provider handoff reached.")), "oauth handoff");
+      await page.goBack();
+      await page.waitForSelector(".ab-site-login");
+      mode = "invalid";
+      await page.evaluate(() => dispatchEvent(new Event("online")));
+      await page.waitForSelector(".ab-prize:not(:visible)");
+      assert.ok(await page.locator("[data-leaderboard-table]").evaluate(el => getComputedStyle(el).display === "none"), "invalid table hidden");
+    }
+  } finally { await browser.close(); await new Promise(r => server.close(r)); }
+}
+main();
