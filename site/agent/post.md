@@ -23,7 +23,7 @@ Deprecated names still work and are converted: `goal` → `objective`, `solver_r
 ## Three ways to fill the form
 
 1. **In the person's browser (WebMCP).** On agentizable.ai, call `agent_bounties_fill_posting_form` with the fields above. It fills the form's named inputs and returns `field_errors`. From another page it opens post.html and fills it there. Then ask the person to press Review draft.
-2. **From a chat (MCP).** Call `prepare_bounty_post` on https://mcp.agentizable.ai/mcp with the same fields plus `review_mode` (`creator` for an ordinary bounty). It returns `state: "review_required_not_published"` and a `post_url`. Give the person that link; it opens post.html with the review card.
+2. **From a chat (MCP).** Call `prepare_bounty_post` on https://mcp.agentizable.ai/mcp with the same fields plus `review_mode` (`creator` for an ordinary bounty). It returns `state: "review_required_not_published"` and a link in its post_url field. Give the person that link; it opens post.html with the review card.
 3. **A link you build.** Open `https://agentizable.ai/post.html?from=ai-app&reviewMode=creator` with the same names as query parameters: `title`, `objective`, `description`, `acceptance_criteria` (repeat once per criterion), `total_budget_usdc`, `delivery_deadline`. For automated verification use `reviewMode=automated` with `benchmark` / `evidence_schema` as JSON and `task_window_days` instead of `delivery_deadline`.
 
 ## Field errors
