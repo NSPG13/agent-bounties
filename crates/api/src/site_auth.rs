@@ -397,6 +397,12 @@ pub fn router(service: SiteAuthService) -> Router {
             "/v1/site-auth/posting-drafts/:operation_id/delete",
             post(delete_posting_draft),
         )
+        .route(
+            "/v1/site-auth/bounty-images",
+            post(upload_bounty_image).layer(axum::extract::DefaultBodyLimit::max(
+                MAX_BOUNTY_IMAGE_BYTES + 1,
+            )),
+        )
         .route("/v1/site-auth/login/:provider", get(begin_oauth))
         .route("/v1/site-auth/callback/:provider", get(finish_oauth))
         .route("/v1/site-auth/logout", post(logout))
@@ -620,6 +626,153 @@ async fn save_posting_draft(
         Ok(draft) => posting_draft_response(&service, draft),
         Err(error) => posting_draft_error(error),
     }
+}
+
+/// Largest accepted bounty image, matching the `bounty_image_assets` bound.
+pub const MAX_BOUNTY_IMAGE_BYTES: usize = 5 * 1024 * 1024;
+/// Website uploads allowed per signed-in account in any one-hour window.
+pub const BOUNTY_IMAGE_UPLOADS_PER_HOUR: i64 = 30;
+
+/// PNG, JPEG or WebP, from the file's own leading bytes.
+pub fn detect_bounty_image_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        Some("image/jpeg")
+    } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
+fn valid_bounty_image_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+/// A signed-in website upload for the posting form. The body is the raw image;
+/// its declared Content-Type must match the bytes. The stored asset is
+/// content-addressed, and its URL ends in `/bounty-images/<sha256>`, which the
+/// terms validation requires. Uploading does not attach the image to any bounty.
+async fn upload_bounty_image(
+    Extension(service): Extension<SiteAuthService>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if !service.origin_is_allowed(&headers) {
+        return error_json(StatusCode::FORBIDDEN, "origin_not_allowed");
+    }
+    let Some(account_id) = service
+        .current_user(&headers)
+        .and_then(|user| service.account_id(&user))
+    else {
+        return error_json(StatusCode::UNAUTHORIZED, "authentication_required");
+    };
+    if !service.posting_drafts_enabled_for(&account_id) {
+        return error_json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "posting_drafts_not_enabled",
+        );
+    }
+    let declared = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| {
+            value
+                .split(';')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_ascii_lowercase()
+        });
+    let Some(declared) = declared
+        .filter(|value| matches!(value.as_str(), "image/png" | "image/jpeg" | "image/webp"))
+    else {
+        return error_json(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "image_type_not_supported",
+        );
+    };
+    if body.is_empty() {
+        return error_json(StatusCode::BAD_REQUEST, "image_empty");
+    }
+    if body.len() > MAX_BOUNTY_IMAGE_BYTES {
+        return error_json(StatusCode::PAYLOAD_TOO_LARGE, "image_too_large");
+    }
+    if detect_bounty_image_mime(&body) != Some(declared.as_str()) {
+        return error_json(StatusCode::UNSUPPORTED_MEDIA_TYPE, "image_type_mismatch");
+    }
+    let Some(store) = service.inner.store.as_ref() else {
+        return error_json(StatusCode::SERVICE_UNAVAILABLE, "image_storage_unavailable");
+    };
+    let sha256 = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&body));
+    let asset = db::NewBountyImageAsset {
+        sha256: sha256.clone(),
+        mime_type: declared.clone(),
+        content: body.to_vec(),
+    };
+    match store
+        .put_site_bounty_image_upload(&account_id, &asset, BOUNTY_IMAGE_UPLOADS_PER_HOUR)
+        .await
+    {
+        Ok(db::BountyImageUploadAdmission::Stored(_)) => no_store_json(
+            StatusCode::CREATED,
+            json!({
+                "asset_url": format!("{}/v1/public/bounty-images/{sha256}", service.inner.api_origin),
+                "sha256": sha256,
+                "mime_type": declared,
+                "byte_length": asset.content.len(),
+                "source": "creator_upload",
+                "evidence_boundary": "Stored image only. It becomes part of a bounty when its digest is in the published terms; alt text is required there.",
+            }),
+        ),
+        Ok(db::BountyImageUploadAdmission::RateLimited) => {
+            error_json(StatusCode::TOO_MANY_REQUESTS, "image_upload_limit_reached")
+        }
+        Err(DbError::BountyImageAssetConflict(_)) => {
+            error_json(StatusCode::CONFLICT, "image_digest_conflict")
+        }
+        Err(_) => error_json(StatusCode::SERVICE_UNAVAILABLE, "image_storage_unavailable"),
+    }
+}
+
+/// Public, immutable read of a stored bounty image by its digest, served by
+/// `GET /v1/public/bounty-images/:sha256` on the public router.
+pub async fn bounty_image_response(store: Option<&PostgresStore>, sha256: &str) -> Response {
+    if !valid_bounty_image_sha256(sha256) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(store) = store else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let asset = match store.get_bounty_image_asset(sha256).await {
+        Ok(Some(asset)) => asset,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let Some(mime) =
+        detect_bounty_image_mime(&asset.content).filter(|mime| *mime == asset.mime_type)
+    else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=31536000, immutable"),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("default-src 'none'; sandbox"),
+    );
+    (headers, asset.content).into_response()
 }
 
 /// Deletes the signed-in owner's saved draft from "Your activity". Only a draft that never
@@ -3039,6 +3192,198 @@ mod tests {
                 review_email_delivery_configured: false,
             }),
         }
+    }
+
+    async fn bounty_image_upload(
+        service: &SiteAuthService,
+        user: Option<&SessionUser>,
+        origin: Option<&str>,
+        content_type: Option<&str>,
+        body: Vec<u8>,
+    ) -> (StatusCode, Option<Value>) {
+        let mut request = axum::http::Request::builder()
+            .method(Method::POST)
+            .uri("/v1/site-auth/bounty-images");
+        if let Some(user) = user {
+            request = request.header(
+                header::COOKIE,
+                format!(
+                    "{SESSION_COOKIE}={}",
+                    sign_session(user.clone(), &[7; 32], Utc::now())
+                ),
+            );
+        }
+        if let Some(origin) = origin {
+            request = request.header(header::ORIGIN, origin);
+        }
+        if let Some(content_type) = content_type {
+            request = request.header(header::CONTENT_TYPE, content_type);
+        }
+        let response = router(service.clone())
+            .oneshot(request.body(axum::body::Body::from(body)).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 65_536)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&bytes).ok())
+    }
+
+    #[tokio::test]
+    async fn bounty_image_upload_requires_site_session_origin_and_matching_supported_type() {
+        const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
+        const JPEG: &[u8] = b"\xff\xd8\xff\xe0\0\x10JFIF";
+        const WEBP: &[u8] = b"RIFF\x10\0\0\0WEBPVP8 ";
+        assert_eq!(detect_bounty_image_mime(PNG), Some("image/png"));
+        assert_eq!(detect_bounty_image_mime(JPEG), Some("image/jpeg"));
+        assert_eq!(detect_bounty_image_mime(WEBP), Some("image/webp"));
+        assert_eq!(
+            detect_bounty_image_mime(b"<svg xmlns='http://www.w3.org/2000/svg'/>"),
+            None
+        );
+        assert_eq!(detect_bounty_image_mime(b"GIF89a"), None);
+
+        let user = test_user();
+        let site = Some("https://agentizable.ai");
+        let disabled = review_email_service(None);
+        let error =
+            |value: Option<Value>| value.and_then(|v| v["error"].as_str().map(String::from));
+        let (status, body) = bounty_image_upload(
+            &disabled,
+            Some(&user),
+            None,
+            Some("image/png"),
+            PNG.to_vec(),
+        )
+        .await;
+        assert_eq!(
+            (status, error(body).as_deref()),
+            (StatusCode::FORBIDDEN, Some("origin_not_allowed"))
+        );
+        let (status, _) = bounty_image_upload(
+            &disabled,
+            Some(&user),
+            Some("https://evil.example"),
+            Some("image/png"),
+            PNG.to_vec(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let (status, body) =
+            bounty_image_upload(&disabled, None, site, Some("image/png"), PNG.to_vec()).await;
+        assert_eq!(
+            (status, error(body).as_deref()),
+            (StatusCode::UNAUTHORIZED, Some("authentication_required"))
+        );
+        let (status, body) = bounty_image_upload(
+            &disabled,
+            Some(&user),
+            site,
+            Some("image/png"),
+            PNG.to_vec(),
+        )
+        .await;
+        assert_eq!(
+            (status, error(body).as_deref()),
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Some("posting_drafts_not_enabled")
+            )
+        );
+
+        let mut service = review_email_service(None);
+        Arc::get_mut(&mut service.inner)
+            .unwrap()
+            .posting_drafts_enabled = true;
+        for (content_type, body, expected, code) in [
+            (
+                None,
+                PNG.to_vec(),
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "image_type_not_supported",
+            ),
+            (
+                Some("image/svg+xml"),
+                PNG.to_vec(),
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "image_type_not_supported",
+            ),
+            (
+                Some("image/gif"),
+                b"GIF89a".to_vec(),
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "image_type_not_supported",
+            ),
+            (
+                Some("image/png"),
+                JPEG.to_vec(),
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "image_type_mismatch",
+            ),
+            (
+                Some("image/webp"),
+                b"<svg/>".to_vec(),
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "image_type_mismatch",
+            ),
+            (
+                Some("image/png"),
+                Vec::new(),
+                StatusCode::BAD_REQUEST,
+                "image_empty",
+            ),
+            // Accepted type and bytes: storage is the only thing missing here.
+            (
+                Some("image/png"),
+                PNG.to_vec(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "image_storage_unavailable",
+            ),
+            (
+                Some("IMAGE/JPEG; charset=binary"),
+                JPEG.to_vec(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "image_storage_unavailable",
+            ),
+        ] {
+            let (status, body) =
+                bounty_image_upload(&service, Some(&user), site, content_type, body).await;
+            assert_eq!(
+                (status, error(body).as_deref()),
+                (expected, Some(code)),
+                "{content_type:?}"
+            );
+        }
+        // Over 5 MiB is refused before the handler reads it.
+        let mut large = PNG.to_vec();
+        large.resize(MAX_BOUNTY_IMAGE_BYTES + 1, 0);
+        let (status, _) =
+            bounty_image_upload(&service, Some(&user), site, Some("image/png"), large).await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+        let mut exact = PNG.to_vec();
+        exact.resize(MAX_BOUNTY_IMAGE_BYTES, 0);
+        let (status, _) =
+            bounty_image_upload(&service, Some(&user), site, Some("image/png"), exact).await;
+        assert_eq!(
+            status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "exactly 5 MiB reaches storage"
+        );
+
+        // Public read: malformed digests are not found; a valid one needs storage.
+        assert_eq!(
+            bounty_image_response(None, "ABC").await.status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            bounty_image_response(None, &"A".repeat(64)).await.status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            bounty_image_response(None, &"a".repeat(64)).await.status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
     }
 
     async fn review_email_request(

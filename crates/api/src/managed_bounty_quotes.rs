@@ -28,7 +28,7 @@ use uuid::Uuid;
 
 const NONCE_DOMAIN: &[u8] = b"agent-bounties/managed-card-bounty/v1\0";
 const BITSO_TICKER: &str = "https://api.bitso.com/v3/ticker?book=usd_mxn";
-const DRAFT_KEYS: [&str; 7] = [
+const DRAFT_KEYS: [&str; 8] = [
     "title",
     "goal",
     "acceptance_criteria",
@@ -36,6 +36,7 @@ const DRAFT_KEYS: [&str; 7] = [
     "evidence_schema",
     "source_url",
     "image",
+    "images",
 ];
 
 /// Merchant configuration for card-paid bounties (`MANAGED_BOUNTY_QUOTES`, JSON).

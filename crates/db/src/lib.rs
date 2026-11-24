@@ -458,6 +458,14 @@ pub struct NewBountyImageAsset {
     pub content: Vec<u8>,
 }
 
+/// Result of a signed-in website image upload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BountyImageUploadAdmission {
+    Stored(BountyImageAsset),
+    /// The account already uploaded its hourly allowance; nothing was stored.
+    RateLimited,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BountyImageAsset {
     pub sha256: String,
@@ -1638,6 +1646,7 @@ impl PostgresStore {
                 SITE_WALLET_PROVIDER_MIGRATION,
                 include_str!("../../../migrations/0082_autonomous_canonical_checkpoints.sql"),
                 include_str!("../../../migrations/0083_site_posting_draft_tombstones.sql"),
+                include_str!("../../../migrations/0084_bounty_image_uploads.sql"),
                 SECURITY_PRINCIPALS_MIGRATION,
                 OWNED_MUTATIONS_MIGRATION,
                 VERIFIER_REVIEW_NOTIFICATIONS_MIGRATION,
@@ -4995,6 +5004,60 @@ impl PostgresStore {
             ));
         }
         Ok(stored)
+    }
+
+    /// Stores a signed-in website upload and records who uploaded it. Uploads per
+    /// account are counted over the last hour under a per-account transaction
+    /// lock, so parallel requests cannot exceed `limit_per_hour`.
+    pub async fn put_site_bounty_image_upload(
+        &self,
+        account_id: &str,
+        asset: &NewBountyImageAsset,
+        limit_per_hour: i64,
+    ) -> DbResult<BountyImageUploadAdmission> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(format!("bounty-image-upload:{account_id}"))
+            .execute(&mut *tx)
+            .await?;
+        let recent: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM bounty_image_uploads WHERE account_id = $1 AND uploaded_at > now() - interval '1 hour'",
+        )
+        .bind(account_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if recent >= limit_per_hour {
+            tx.rollback().await?;
+            return Ok(BountyImageUploadAdmission::RateLimited);
+        }
+        let row = sqlx::query(
+            r#"
+            INSERT INTO bounty_image_assets (sha256, mime_type, content)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (sha256) DO UPDATE SET
+              mime_type = bounty_image_assets.mime_type
+            RETURNING sha256, mime_type, content, created_at
+            "#,
+        )
+        .bind(&asset.sha256)
+        .bind(&asset.mime_type)
+        .bind(&asset.content)
+        .fetch_one(&mut *tx)
+        .await?;
+        let stored = bounty_image_asset_from_row(&row)?;
+        if stored.mime_type != asset.mime_type || stored.content != asset.content {
+            tx.rollback().await?;
+            return Err(DbError::BountyImageAssetConflict(
+                "bounty image hash already exists with different content metadata".to_string(),
+            ));
+        }
+        sqlx::query("INSERT INTO bounty_image_uploads (account_id, sha256) VALUES ($1, $2)")
+            .bind(account_id)
+            .bind(&asset.sha256)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(BountyImageUploadAdmission::Stored(stored))
     }
 
     pub async fn get_bounty_image_asset(&self, sha256: &str) -> DbResult<Option<BountyImageAsset>> {
@@ -13202,6 +13265,113 @@ mod tests {
                 "missing ChatGPT action intent invariant {invariant}"
             );
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn bounty_image_uploads_limit_each_account_per_hour_postgres() {
+        let store =
+            PostgresStore::connect(&std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap())
+                .await
+                .unwrap();
+        store.migrate().await.unwrap();
+        let account = format!("account-{}", Uuid::new_v4());
+        let other = format!("account-{}", Uuid::new_v4());
+        let asset = |seed: &str| {
+            let mut content = b"\x89PNG\r\n\x1a\n".to_vec();
+            content.extend_from_slice(format!("{seed}-{}", Uuid::new_v4()).as_bytes());
+            NewBountyImageAsset {
+                sha256: hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&content)),
+                mime_type: "image/png".to_string(),
+                content,
+            }
+        };
+        let first = asset("first");
+        let stored = store
+            .put_site_bounty_image_upload(&account, &first, 2)
+            .await
+            .unwrap();
+        assert!(
+            matches!(&stored, BountyImageUploadAdmission::Stored(asset) if asset.sha256 == first.sha256)
+        );
+        assert_eq!(
+            store
+                .get_bounty_image_asset(&first.sha256)
+                .await
+                .unwrap()
+                .unwrap()
+                .content,
+            first.content
+        );
+        // Re-uploading the same bytes is idempotent for the asset but still counts.
+        assert!(matches!(
+            store
+                .put_site_bounty_image_upload(&account, &first, 2)
+                .await
+                .unwrap(),
+            BountyImageUploadAdmission::Stored(_)
+        ));
+        let blocked = asset("blocked");
+        assert_eq!(
+            store
+                .put_site_bounty_image_upload(&account, &blocked, 2)
+                .await
+                .unwrap(),
+            BountyImageUploadAdmission::RateLimited
+        );
+        assert!(
+            store
+                .get_bounty_image_asset(&blocked.sha256)
+                .await
+                .unwrap()
+                .is_none(),
+            "nothing stored when limited"
+        );
+        // The limit is per account.
+        assert!(matches!(
+            store
+                .put_site_bounty_image_upload(&other, &blocked, 2)
+                .await
+                .unwrap(),
+            BountyImageUploadAdmission::Stored(_)
+        ));
+        // A digest already stored with different bytes is refused and not recorded.
+        let mut forged = asset("forged");
+        forged.sha256 = first.sha256.clone();
+        let third = format!("account-{}", Uuid::new_v4());
+        assert!(matches!(
+            store.put_site_bounty_image_upload(&third, &forged, 2).await,
+            Err(DbError::BountyImageAssetConflict(_))
+        ));
+        let recorded: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM bounty_image_uploads WHERE account_id = $1")
+                .bind(&third)
+                .fetch_one(&store.pool)
+                .await
+                .unwrap();
+        assert_eq!(recorded, 0);
+        // Parallel uploads cannot pass the limit together.
+        let racer = format!("account-{}", Uuid::new_v4());
+        let assets: Vec<_> = (0..6).map(|n| asset(&format!("race-{n}"))).collect();
+        let tasks: Vec<_> = assets
+            .into_iter()
+            .map(|asset| {
+                let (store, racer) = (store.clone(), racer.clone());
+                tokio::spawn(
+                    async move { store.put_site_bounty_image_upload(&racer, &asset, 3).await },
+                )
+            })
+            .collect();
+        let mut stored = 0;
+        for task in tasks {
+            if matches!(
+                task.await.unwrap(),
+                Ok(BountyImageUploadAdmission::Stored(_))
+            ) {
+                stored += 1;
+            }
+        }
+        assert_eq!(stored, 3);
     }
 
     #[test]

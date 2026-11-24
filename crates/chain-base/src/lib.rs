@@ -1813,6 +1813,7 @@ impl AutonomousBountyTxPlanner {
                 .clone()
                 .or_else(|| Some("routed standing-meta child preparation".to_string())),
             image: None,
+            images: Vec::new(),
             agent_eligibility: None,
             claim_coordination: None,
         };
@@ -6823,6 +6824,7 @@ pub fn build_autonomous_bounty_terms_record(
     if let Some(image) = &document.image {
         validate_bounty_image_reference(image)?;
     }
+    validate_bounty_terms_images(&document)?;
     validate_reconciled_regression_benchmark(&document)?;
     validate_contract_terms_document(&normalized_creator, &document.contract_terms, created_at)?;
     if creator_review::is_engine(&document.benchmark["engine"])
@@ -6878,6 +6880,64 @@ fn validate_bounty_image_reference(image: &BountyImageReference) -> Result<(), C
             "image must be a bounded user-generated ChatGPT asset with an HTTPS URL, SHA-256 digest, supported MIME type, prompt, and alt text"
                 .to_string(),
         ));
+    }
+    Ok(())
+}
+
+pub const MAX_BOUNTY_TERMS_IMAGES: usize = 4;
+
+fn is_lower_hex_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+/// `images`: at most four, each with alt text, a supported type and a URL that
+/// names its own digest; never combined with the legacy single `image`.
+fn validate_bounty_terms_images(
+    document: &AutonomousBountyTermsDocument,
+) -> Result<(), ChainBaseError> {
+    let invalid = |reason: &str| Err(ChainBaseError::InvalidTermsDocument(reason.to_string()));
+    if document.images.is_empty() {
+        return Ok(());
+    }
+    if document.image.is_some() {
+        return invalid("use either image or images, not both");
+    }
+    if document.images.len() > MAX_BOUNTY_TERMS_IMAGES {
+        return invalid("images allows at most 4 images");
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for image in &document.images {
+        let prompt_ok = match (image.source.as_str(), image.prompt.as_deref()) {
+            ("chatgpt_user_generated", Some(prompt)) | ("creator_upload", Some(prompt)) => {
+                !prompt.trim().is_empty() && prompt.len() <= 4_000
+            }
+            ("creator_upload", None) => true,
+            _ => false,
+        };
+        if !prompt_ok
+            || image.alt_text.trim().is_empty()
+            || image.alt_text.len() > 500
+            || !image.asset_url.starts_with("https://")
+            || image.asset_url.len() > 2_048
+            || !is_lower_hex_sha256(&image.sha256)
+            || !image
+                .asset_url
+                .ends_with(&format!("/bounty-images/{}", image.sha256))
+            || !matches!(
+                image.mime_type.as_str(),
+                "image/png" | "image/jpeg" | "image/webp"
+            )
+        {
+            return invalid(
+                "each image needs a creator_upload or chatgpt_user_generated source, alt text (at most 500 bytes), an HTTPS URL ending in /bounty-images/<sha256>, a lowercase SHA-256 digest and a PNG, JPEG or WebP type; ChatGPT images also need their prompt",
+            );
+        }
+        if !seen.insert(image.sha256.as_str()) {
+            return invalid("images must not repeat the same image");
+        }
     }
     Ok(())
 }
@@ -10607,6 +10667,128 @@ mod tests {
     }
 
     #[test]
+    fn terms_images_are_bounded_described_and_bound_to_their_digests() {
+        use domain::BountyTermsImage;
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../scripts/fixtures/terms-publication-readback.json"
+        ))
+        .unwrap();
+        let case = fixture["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["request"]["document"]["image"].is_null())
+            .unwrap();
+        let wallet = case["request"]["creator_wallet"].as_str().unwrap();
+        let now = DateTime::parse_from_rfc3339("2026-10-29T01:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let base: AutonomousBountyTermsDocument =
+            serde_json::from_value(case["request"]["document"].clone()).unwrap();
+        let without = build_autonomous_bounty_terms_record(wallet, base.clone(), now).unwrap();
+        let upload = |n: char| {
+            let sha256 = n.to_string().repeat(64);
+            BountyTermsImage {
+                source: "creator_upload".to_string(),
+                alt_text: format!("Image {n}"),
+                asset_url: format!("https://api.agentizable.ai/v1/public/bounty-images/{sha256}"),
+                sha256,
+                mime_type: "image/png".to_string(),
+                prompt: None,
+            }
+        };
+        let with_images = |images: Vec<BountyTermsImage>| {
+            let mut document = base.clone();
+            document.images = images;
+            build_autonomous_bounty_terms_record(wallet, document, now)
+        };
+
+        // An empty list is omitted, so the hash is the no-image hash.
+        assert_eq!(
+            with_images(Vec::new()).unwrap().terms_hash,
+            without.terms_hash
+        );
+        assert!(serde_json::to_value(&without.document)
+            .unwrap()
+            .get("images")
+            .is_none());
+        // One to four images are accepted, change the hash, and keep their order.
+        let four = with_images(vec![upload('a'), upload('b'), upload('c'), upload('d')]).unwrap();
+        assert_ne!(four.terms_hash, without.terms_hash);
+        let reordered =
+            with_images(vec![upload('b'), upload('a'), upload('c'), upload('d')]).unwrap();
+        assert_ne!(reordered.terms_hash, four.terms_hash);
+        let mut chatgpt = upload('e');
+        chatgpt.source = "chatgpt_user_generated".to_string();
+        chatgpt.prompt = Some("A clean diagram of the task".to_string());
+        assert!(with_images(vec![chatgpt.clone()]).is_ok());
+
+        let rejected = |images: Vec<BountyTermsImage>| {
+            matches!(
+                with_images(images),
+                Err(ChainBaseError::InvalidTermsDocument(_))
+            )
+        };
+        assert!(rejected(vec![
+            upload('a'),
+            upload('b'),
+            upload('c'),
+            upload('d'),
+            upload('e')
+        ]));
+        assert!(rejected(vec![upload('a'), upload('a')]), "duplicate digest");
+        for change in [
+            (|image: &mut BountyTermsImage| image.alt_text = "  ".to_string()) as fn(&mut _),
+            |image| image.alt_text = "x".repeat(501),
+            |image| image.source = "platform_generated".to_string(),
+            |image| image.mime_type = "image/svg+xml".to_string(),
+            |image| image.sha256 = image.sha256.to_uppercase(),
+            |image| image.asset_url = image.asset_url.replace("https://", "http://"),
+            |image| {
+                image.asset_url = format!(
+                    "https://api.agentizable.ai/v1/public/bounty-images/{}",
+                    "f".repeat(64)
+                )
+            },
+            |image| image.prompt = Some(" ".to_string()),
+        ] {
+            let mut image = upload('a');
+            change(&mut image);
+            assert!(rejected(vec![image]));
+        }
+        chatgpt.prompt = None;
+        assert!(rejected(vec![chatgpt]), "a ChatGPT image keeps its prompt");
+
+        // `image` and `images` are never combined.
+        let legacy_case = fixture["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| !case["request"]["document"]["image"].is_null())
+            .unwrap();
+        let mut both: AutonomousBountyTermsDocument =
+            serde_json::from_value(legacy_case["request"]["document"].clone()).unwrap();
+        assert_eq!(
+            both.image_list().len(),
+            1,
+            "an old single image still reads"
+        );
+        assert_eq!(
+            both.image_list()[0].sha256,
+            both.image.as_ref().unwrap().sha256
+        );
+        both.images = vec![upload('a')];
+        assert!(matches!(
+            build_autonomous_bounty_terms_record(
+                legacy_case["request"]["creator_wallet"].as_str().unwrap(),
+                both,
+                now,
+            ),
+            Err(ChainBaseError::InvalidTermsDocument(message)) if message.contains("not both")
+        ));
+    }
+
+    #[test]
     fn builds_content_addressed_autonomous_terms_commitments() {
         let now = Utc::now();
         let document = AutonomousBountyTermsDocument {
@@ -10649,6 +10831,7 @@ mod tests {
                 sha256: "ab".repeat(32),
                 mime_type: "image/webp".to_string(),
             }),
+            images: Vec::new(),
             agent_eligibility: None,
             claim_coordination: None,
         };
@@ -11546,6 +11729,7 @@ mod tests {
                     ),
                     discovery_source: Some("github-label:bounty".to_string()),
                     image: None,
+                    images: Vec::new(),
                     agent_eligibility: None,
                     claim_coordination: None,
                 },
@@ -11780,6 +11964,7 @@ mod tests {
                     source_url: None,
                     discovery_source: None,
                     image: None,
+                    images: Vec::new(),
                     agent_eligibility: None,
                     claim_coordination: None,
                 },

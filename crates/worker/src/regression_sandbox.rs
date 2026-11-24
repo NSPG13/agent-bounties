@@ -1449,6 +1449,7 @@ mod tests {
             source_url: None,
             discovery_source: None,
             image: None,
+            images: Vec::new(),
             agent_eligibility: None,
             claim_coordination: None,
         };

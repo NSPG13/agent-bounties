@@ -463,6 +463,27 @@ fn validate_review_binding(
             Ok::<_, StatusCode>(image)
         })
         .transpose()?;
+    // The approved image list (up to four, with alt text) binds the same way, in order.
+    let approved_images = reviewed
+        .get("images")
+        .filter(|v| !v.is_null())
+        .map(|value| {
+            let mut images: Vec<domain::BountyTermsImage> =
+                serde_json::from_value(value.clone()).map_err(|_| StatusCode::CONFLICT)?;
+            for image in &mut images {
+                image.alt_text = image.alt_text.trim().into();
+                image.prompt = image.prompt.as_deref().map(|prompt| prompt.trim().into());
+                image.asset_url = url::Url::parse(image.asset_url.trim())
+                    .map_err(|_| StatusCode::CONFLICT)?
+                    .to_string();
+            }
+            Ok::<_, StatusCode>(images)
+        })
+        .transpose()?
+        .unwrap_or_default();
+    if approved_images != terms.document.images {
+        return Err(StatusCode::CONFLICT);
+    }
     if reviewed.get("source_url").filter(|v| !v.is_null())
         != terms
             .document
@@ -1113,6 +1134,7 @@ mod tests {
             source_url: Some("https://example.test/reference".into()),
             discovery_source: None,
             image: None,
+            images: Vec::new(),
             agent_eligibility: None,
             claim_coordination: None,
         };
@@ -1169,6 +1191,59 @@ mod tests {
         changed.draft["draft"]["evidence_schema"]["x-agent-bounties-draft-visual"] =
             json!({"version":1});
         assert!(validate_review_binding(&changed, &terms, &fixture().2).is_ok());
+    }
+    #[test]
+    fn relay_binds_the_approved_image_list_in_order() {
+        let image = |n: char, alt: &str| {
+            let sha = n.to_string().repeat(64);
+            domain::BountyTermsImage {
+                source: "creator_upload".into(),
+                alt_text: alt.into(),
+                asset_url: format!("https://api.agentizable.ai/v1/public/bounty-images/{sha}"),
+                sha256: sha,
+                mime_type: "image/png".into(),
+                prompt: None,
+            }
+        };
+        let (mut saved, mut terms, create) = fixture();
+        let published = vec![image('a', "Front view"), image('b', "Back view")];
+        terms.document.images = published.clone();
+        // Approved but not published, or published but not approved, both fail.
+        assert_eq!(
+            validate_review_binding(&saved, &terms, &create),
+            Err(StatusCode::CONFLICT)
+        );
+        // Surrounding alt-text whitespace in the saved draft is normalized like `image`.
+        let mut approved = serde_json::to_value(&published).unwrap();
+        approved[0]["alt_text"] = json!("  Front view ");
+        saved.draft["draft"]["images"] = approved.clone();
+        assert!(validate_review_binding(&saved, &terms, &create).is_ok());
+        // Reordered or dropped images fail.
+        for change in [
+            json!([approved[1].clone(), approved[0].clone()]),
+            json!([approved[0].clone()]),
+        ] {
+            saved.draft["draft"]["images"] = change;
+            assert_eq!(
+                validate_review_binding(&saved, &terms, &create),
+                Err(StatusCode::CONFLICT)
+            );
+        }
+        let mut changed_alt = approved.clone();
+        changed_alt[1]["alt_text"] = json!("A different description");
+        saved.draft["draft"]["images"] = changed_alt;
+        assert_eq!(
+            validate_review_binding(&saved, &terms, &create),
+            Err(StatusCode::CONFLICT)
+        );
+        saved.draft["draft"]["images"] = json!("not a list");
+        assert_eq!(
+            validate_review_binding(&saved, &terms, &create),
+            Err(StatusCode::CONFLICT)
+        );
+        terms.document.images.clear();
+        saved.draft["draft"]["images"] = Value::Null;
+        assert!(validate_review_binding(&saved, &terms, &create).is_ok());
     }
     #[test]
     fn topup_rejects_unknown_fields_and_bad_location_or_amount() {
