@@ -80,3 +80,38 @@ test("manual form preserves explicit terms without an AI and rejects incomplete 
   assert.throws(() => brief.manualDraft({...input, objective:"Aim", goal:"x".repeat(4001)}, now), /objective and description together/);
   assert.doesNotMatch(brief.resolveDeadline("2026-11-01T01:30", "America/Chicago").error, /UTC offset/, "the form has no offset field to point at");
 });
+
+test("each form rule fails with one stable code and field, shared by the form and agents", () => {
+  const now = Date.parse("2026-11-01T12:00:00Z");
+  const ok = { title: "Landing page", objective: "Get more contacts", goal: "Get more contacts", criteria: "Loads on mobile", budget_usdc: "10", deadline_at: "2026-11-05T12:00:00Z", review_consent: true };
+  assert.equal(brief.manualDraft(ok, now).review_mode, "creator");
+  const cases = [
+    [{ title: "" }, "title_required", "title"],
+    [{ objective: "" }, "objective_required", "objective"],
+    [{ criteria: "" }, "criteria_required", "acceptance_criteria"],
+    [{ budget_usdc: "2.21" }, "min_total_budget", "total_budget_usdc"],
+    [{ deadline_at: "" }, "deadline_required", "delivery_deadline"],
+    [{ deadline_at: "2026-10-31T12:00:00Z" }, "deadline_in_past", "delivery_deadline"],
+    [{ deadline_at: "2026-12-05T12:00:00Z" }, "deadline_too_far", "delivery_deadline"],
+    [{ review_consent: false }, "review_consent_required", "review_consent"],
+  ];
+  for (const [change, code, field] of cases) {
+    assert.throws(() => brief.manualDraft({ ...ok, ...change }, now), (error) => error.code === code && error.field === field, code);
+  }
+  const split = brief.manualDraft({ ...ok, budget_usdc: "2.22" }, now);
+  assert.deepEqual([split.solver_reward_usdc, split.verifier_reward_usdc], ["2.00", "0.22"]);
+});
+
+test("an agent-prefilled benchmark turns the form draft into automated review without a creator deadline", () => {
+  const now = Date.parse("2026-11-01T12:00:00Z");
+  const ok = { title: "Fix the parser", objective: "Make the tests pass", goal: "Make the tests pass", criteria: "All tests pass", budget_usdc: "10", deadline_at: "2026-11-05T12:00:00Z", review_consent: true };
+  const draft = brief.manualDraft({ ...ok, benchmark: '{"kind":"command","command":"npm test"}', evidence_schema: '{"type":"object"}' }, now);
+  assert.equal(draft.review_mode, "automated");
+  assert.deepEqual(draft.benchmark, { kind: "command", command: "npm test" });
+  assert.deepEqual(draft.evidence_schema, { type: "object" });
+  assert.equal(draft.delivery_deadline, undefined);
+  assert.equal(draft.task_window_days, 4);
+  assert.throws(() => brief.manualDraft({ ...ok, benchmark: "[1]" }, now), (error) => error.code === "invalid_benchmark" && error.field === "benchmark");
+  assert.throws(() => brief.manualDraft({ ...ok, benchmark: '{"kind":"command"}', evidence_schema: "not json" }, now), (error) => error.code === "invalid_evidence_schema");
+  assert.equal(brief.manualDraft({ ...ok, benchmark: "  " }, now).review_mode, "creator");
+});

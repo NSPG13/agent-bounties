@@ -35,7 +35,7 @@ structure requires the creator's explicit agreement.
 
 1. Use an allowlisted staged origin and its real discovery documents. Discover
    native WebMCP and record actual calls. Keep sign-in in the same inline tab;
-   preserve the draft, exact deadline, frozen references if any, and operation ID.
+   preserve the draft, exact deadline and operation ID.
 2. The human signs into the site and restores their chosen Coinbase wallet with
    the original email/social method. Compare its full address with the linked
    account wallet. Ownership, signer availability and payment consent must

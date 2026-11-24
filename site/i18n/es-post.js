@@ -220,6 +220,21 @@
     "Platform": "Plataforma",
     "Test seed": "Semilla de prueba",
     "Required evidence": "Evidencia requerida",
+    // Unified posting form (6B).
+    "Automated verification (for agents)": "Verificación automática (para agentes)",
+    "Filled in only by an AI agent that supplies a supported benchmark. Leave it empty to review the delivery yourself.": "Solo la llena un agente de IA que aporta una prueba de referencia compatible. Déjala vacía para revisar tú la entrega.",
+    "Benchmark (JSON)": "Prueba de referencia (JSON)",
+    "Evidence schema (JSON)": "Esquema de evidencia (JSON)",
+    "The total includes the worker reward and a 10% review reward. Minimum: 2.22 USDC total, so the worker receives at least 2 USDC.": "El total incluye la recompensa del trabajo y una recompensa de revisión del 10 %. Mínimo: 2.22 USDC en total, para que el trabajo reciba al menos 2 USDC.",
+    "Enter a total budget of at least 2.22 USDC: the worker receives at least 2 USDC after the 10% review reward.": "Escribe un presupuesto total de al menos 2.22 USDC: el trabajo recibe al menos 2 USDC después de la recompensa de revisión del 10 %.",
+    "The benchmark must be one JSON object.": "La prueba de referencia debe ser un solo objeto JSON.",
+    "The evidence schema must be one JSON object.": "El esquema de evidencia debe ser un solo objeto JSON.",
+    "Choose a future delivery deadline within 30 days. Use a smaller milestone for longer work.": "Elige una fecha de entrega futura dentro de los próximos 30 días. Para trabajos más largos, usa una etapa más pequeña.",
+    "Enter a title of up to 200 characters.": "Escribe un título de hasta 200 caracteres.",
+    "Enter the objective of the bounty in up to 1,000 characters.": "Escribe el objetivo de la recompensa en hasta 1,000 caracteres.",
+    "Add 1–20 acceptance criteria, one per line, with up to 1,000 characters each.": "Agrega de 1 a 20 criterios de aceptación, uno por línea, de hasta 1,000 caracteres cada uno.",
+    "Describe the work in up to 4,000 characters.": "Describe el trabajo en hasta 4,000 caracteres.",
+    "The objective and description together must stay under 4,000 characters. Shorten the description.": "El objetivo y la descripción juntos deben tener menos de 4,000 caracteres. Acorta la descripción.",
   };
   const patterns = [
     [/^10% of the total \(([\d.]+) USDC\) is your review reward, set automatically\.$/, "El 10 % del total ($1 USDC) es tu recompensa de revisión, fijada automáticamente."],

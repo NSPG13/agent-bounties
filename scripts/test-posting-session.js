@@ -491,7 +491,8 @@ test("another device follows only the server-retired authorization into the unap
 
 test("native form inputs survive account synchronization and changes revoke approval", async () => {
   const one = await ready();
-  const manual = { preparation_mode: "manual", title: "Research", criteria: "Twenty sources\nCurrent prices", review_reward_usdc: "0.10", review_consent: true };
+  const manual = { preparation_mode: "manual", title: "Research", criteria: "Twenty sources\nCurrent prices", review_reward_usdc: "0.10", review_consent: true,
+    benchmark: '{"engine":"command","command":"npm test"}', evidence_schema: '{"type":"object"}' };
   edit(one.win, value => Object.assign(value.brief, manual));
   await one.session.flush(); await one.session.approve();
   const two = await second(one.server);

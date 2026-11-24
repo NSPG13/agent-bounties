@@ -20,8 +20,6 @@
     if (Date.parse(cutoff) > Date.now() + 366 * 86400000) throw new Error("The delivery deadline must be within 366 days; prepare a nearer milestone for longer work.");
     if (draft.benchmark && draft.benchmark.engine !== ENGINE) throw new Error("Do not replace an automated benchmark with creator review. Explicitly restage the selected policy without that benchmark.");
     const schema = evidenceSchema();
-    const reference = draft.reference_attachment || draft.evidence_schema?.["x-agent-bounties-reference-attachment"];
-    if (reference) schema["x-agent-bounties-reference-attachment"] = reference;
     return { ...draft, delivery_deadline: cutoff, benchmark: { engine: ENGINE, delivery_deadline: Math.floor(Date.parse(cutoff) / 1000), acceptance: "all_published_criteria", reviewer: "creator" }, evidence_schema: schema };
   }
   // Displaying saved terms cannot make them eligible for staging or funding.

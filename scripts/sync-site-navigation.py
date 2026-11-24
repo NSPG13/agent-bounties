@@ -56,7 +56,7 @@ def sync(check=False):
         result = re.sub(r'\s*<(?:link\b[^>]*href|script\b[^>]*src)="' + re.escape(prefix) + r'(?:site-navigation\.css|site-navigation\.js|forest-ui\.css|forest-theme\.js|forest-hall\.css|i18n\.js)\?v=\d+"[^>]*>(?:</script>)?', '', result)
         home_atmosphere = '    <link rel="stylesheet" href="forest-hall.css?v=17">\n' if relative.as_posix() == "index.html" else ""
         assets = f'''    <link rel="stylesheet" href="{prefix}site-navigation.css?v=9">
-    <link rel="stylesheet" href="{prefix}forest-ui.css?v=8">
+    <link rel="stylesheet" href="{prefix}forest-ui.css?v=9">
 {home_atmosphere}    <script src="{prefix}forest-theme.js?v=2"></script>
     <script src="{prefix}site-navigation.js?v=7" defer></script>
     <script src="{prefix}i18n.js?v=4" defer></script>

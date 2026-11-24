@@ -114,7 +114,6 @@
       review_mode: raw.review_mode === "creator" ? "creator" : "automated",
       delivery_deadline: window.AgentBountiesCreatorReview.deadline(raw.delivery_deadline),
       posting_operation_id: raw.posting_operation_id || null,
-      reference_attachment: raw.reference_attachment == null ? null : window.AgentBountiesPostingReference.validate(raw.reference_attachment),
       source_url: sourceUrl,
       crowdfund: Boolean(raw.crowdfund),
       discovery_source: boundedText(raw.discovery_source || "User-owned AI assistant", "Discovery source", 500),
