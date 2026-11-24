@@ -291,3 +291,6 @@ body.about-body {
   html { scroll-behavior: auto; }
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
 }
+
+/* Code blocks scroll inside the article instead of widening the page on phones. */
+.post-content pre { max-width: 100%; overflow-x: auto; }
