@@ -499,17 +499,39 @@ struct ChatgptFileInput {
 
 tool_args! {
     struct PrepareBountyPostArgs {
+        #[serde(default)]
         title: String,
-        goal: String,
+        // Approved posting-form names. Each is optional so that clients may
+        // still send the deprecated aliases below; skipping absent values keeps
+        // the derived operation id of an unchanged legacy request stable.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        objective: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        total_budget_usdc: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timezone: Option<String>,
+        // Deprecated alias of objective.
+        #[serde(default)]
+        goal: Option<String>,
+        #[serde(default)]
         acceptance_criteria: Vec<String>,
-        solver_reward_usdc: String,
-        verifier_reward_usdc: String,
+        // Deprecated aliases summed into total_budget_usdc. The platform split
+        // replaces them except under the existing meta_child policy.
+        #[serde(default)]
+        solver_reward_usdc: Option<String>,
+        #[serde(default)]
+        verifier_reward_usdc: Option<String>,
+        // Deprecated: used only when no delivery_deadline is set (automated mode).
         task_window_days: Option<u8>,
         review_mode: Option<String>,
         delivery_deadline: Option<String>,
         posting_operation_id: Option<uuid::Uuid>,
         meta_child: Option<Value>,
-        reference_attachment: Option<Value>,
+        // Retired frozen reference image: accepted, ignored and reported as a warning.
+        #[serde(default, rename = "reference_attachment", skip_serializing)]
+        retired_reference_attachment: Option<Value>,
         source_url: Option<String>,
         #[serde(default)]
         crowdfund: bool,
@@ -523,19 +545,22 @@ tool_args! {
     schema object_tool_schema(
         json!({
             "title": {"type": "string", "minLength": 1, "maxLength": 200, "description": "Concise public bounty title."},
-            "goal": {"type": "string", "minLength": 1, "maxLength": 4000, "description": "Public digital outcome the solver must deliver."},
+            "objective": {"type": "string", "minLength": 1, "maxLength": 1000, "description": "Public digital outcome the worker must deliver, in up to 1,000 characters."},
+            "description": {"type": ["string", "null"], "maxLength": 4000, "description": "Optional extra details. The objective and description together must stay within 4,000 characters; agents read them as one goal."},
+            "total_budget_usdc": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]{1,2})?$", "description": "Total budget in display USDC with at most 2 decimal places, at least 2.22. The platform computes the split: a 10% review reward (at least 0.01 USDC) and the rest, at least 2 USDC, for the worker."},
+            "timezone": {"type": ["string", "null"], "maxLength": 64, "description": "Optional IANA timezone name such as Europe/Paris, or an offset such as +02:00, used only to display delivery_deadline."},
+            "goal": {"type": "string", "minLength": 1, "maxLength": 4000, "deprecated": true, "description": "Deprecated alias of objective, used only when objective is absent. It is treated as the already-composed goal and may hold up to 4,000 characters."},
             "acceptance_criteria": {
                 "type": "array", "minItems": 1, "maxItems": 20,
                 "items": {"type": "string", "minLength": 1, "maxLength": 1000},
                 "description": "Binary or measurable public acceptance criteria."
             },
-            "solver_reward_usdc": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]{1,6})?$", "description": "Solver reward in display USDC, for example 2.00."},
-            "verifier_reward_usdc": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]{1,6})?$", "description": "Verifier reward and refundable claim bond in display USDC, for example 0.10. In creator mode, label this the creator-review reserve; it is paid to the creator on either verdict."},
-            "task_window_days": {"type": ["integer", "null"], "minimum": 1, "maximum": 30, "description": "Optional bounded work window in days; defaults to 30."},
+            "solver_reward_usdc": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]{1,6})?$", "deprecated": true, "description": "Deprecated. Send total_budget_usdc instead. When total_budget_usdc is absent, solver_reward_usdc plus verifier_reward_usdc is used as the total and the platform split replaces this split."},
+            "verifier_reward_usdc": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]{1,6})?$", "deprecated": true, "description": "Deprecated. Send total_budget_usdc instead; see solver_reward_usdc."},
+            "task_window_days": {"type": ["integer", "null"], "minimum": 1, "maximum": 30, "deprecated": true, "description": "Deprecated. Bounded automated work window in days, used only without delivery_deadline; defaults to 30."},
             "review_mode": {"type": ["string", "null"], "enum": ["creator", "automated", null], "description": "Creator review commits the creator as the sole human reviewer. The creator confirms the verdict; AI approval has no settlement authority."},
-            "delivery_deadline": {"type": ["string", "null"], "format": "date-time", "description": "For creator review, the exact agreed calendar deadline as an ISO timestamp with timezone offset. Never replace it with days after claim. Omit automated benchmark and evidence_schema fields in creator mode."},
+            "delivery_deadline": {"type": ["string", "null"], "format": "date-time", "description": "For creator review, the exact agreed calendar deadline as an ISO timestamp with timezone offset, in the future and within 30 days. Never replace it with days after claim. Omit automated benchmark and evidence_schema fields in creator mode."},
             "posting_operation_id": {"type": ["string", "null"], "format": "uuid", "description": "Stable posting journey identifier. Reuse it when resuming or retrying the same operation. If omitted, a deterministic identifier is derived from the unchanged preparation arguments."},
-            "reference_attachment": {"type": ["object", "null"], "description": "Preserve the approved compact homepage-background snapshot descriptor, including its commit-pinned asset_url, sha256 and captured_at. The first-party review validates the pinned bytes; never replace the user's reference."},
             "meta_child": {"type": ["object", "null"], "description": "Preserve the routed parent binding. The review page verifies the canonical parent before applying any child economics.", "properties": {"parent_bounty_contract": {"type": "string", "pattern": "^0x[0-9a-fA-F]{40}$"}, "intended_child_solver": {"type": ["string", "null"], "pattern": "^0x[0-9a-fA-F]{40}$"}}, "required": ["parent_bounty_contract"], "additionalProperties": false},
             "source_url": nullable_string_property("Optional public HTTPS source issue or task URL."),
             "crowdfund": {"type": "boolean", "default": false, "description": "Keep false to fund on creation. Set true only to deposit 0 USDC now."},
@@ -557,13 +582,7 @@ tool_args! {
                 "additionalProperties": false
             }
         }),
-        &[
-            "title",
-            "goal",
-            "acceptance_criteria",
-            "solver_reward_usdc",
-            "verifier_reward_usdc"
-        ],
+        &["title", "acceptance_criteria"],
     );
 }
 
@@ -3124,7 +3143,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         tool("get_posting_status", "Read canonical posting progress and gas sponsorship; return the existing first-party continuation URL. Never infer a failed transaction from an empty index or restart payment.", posting_guidance::status_schema()),
         tool(
             "prepare_bounty_post",
-            "Use this when a person wants their current AI assistant to prepare a reviewable Agentizable draft. It returns a portable card and secure review URL, moves no funds, and requests no wallet signature.",
+            "Use this when a person wants their current AI assistant to prepare a reviewable Agentizable draft. Fill the approved posting-form fields (title, objective, optional description, acceptance_criteria, total_budget_usdc of at least 2.22, delivery_deadline, optional timezone); the platform computes the review and worker split. It returns a secure link that pre-fills agentizable.ai/post.html, where the person reviews and publishes. Nothing is published, no funds move, and no wallet signature is requested.",
             PrepareBountyPostArgs::input_schema(),
         ),
         tool(
