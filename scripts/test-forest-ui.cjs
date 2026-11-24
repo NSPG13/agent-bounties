@@ -51,7 +51,13 @@ async function main() {
       const page=await ctx.newPage(), errors=[];page.on("pageerror", e=>errors.push(e.message));
       await page.goto(origin);
       await page.evaluate(()=>document.fonts.ready);
-      assert.equal(await page.locator("html").getAttribute("data-theme"),"dark","default ignores OS until Auto selected");
+      assert.equal(await page.locator("html").getAttribute("data-theme"),"light","a first visit follows the system preference");
+      assert.equal(await page.evaluate(()=>localStorage.getItem("agent-bounties.theme")),"light","and saves it as the choice");
+      assert.equal(await page.locator('button[data-theme-choice]').count(),2,"only Light and Dark are offered");
+      assert.equal(await page.locator('button[data-theme-choice="auto"]').count(),0);
+      await page.locator('button[data-theme-choice="dark"]').click();
+      assert.equal(await page.locator('button[data-theme-choice="dark"]').getAttribute("aria-pressed"),"true");
+      await page.evaluate(()=>scrollTo(0,0)); // The footer click scrolled away from the hero.
       assert.ok(await page.evaluate(()=>document.fonts.check('32px "Cal Sans"') && document.fonts.check('16px Satoshi')));
       assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth <= innerWidth),"home fits");
       await page.locator(".ab-forest-poster").evaluate(image => image.decode());
@@ -70,7 +76,7 @@ async function main() {
       assert.equal(await page.locator(".ab-hero textarea, .ab-hero input:not([type=hidden])").count(), 0, "hero has text instead of a task input");
       assert.equal(await page.locator("[data-missing-ingredient]").innerText(), "More compute");
       assert.equal(await page.locator(".ab-ingredient-result").innerText(), "they will get your work done.");
-      assert.equal(await page.locator("#hero-payment-note").innerText(), "only pay for results, not tokens.");
+      assert.equal(await page.locator("#hero-payment-note").innerText(), "buy results, not tokens.");
       const paymentNote = await page.locator("#hero-payment-note").boundingBox(), postButton = await page.locator("#post-a-bounty").boundingBox();
       assert.ok(paymentNote.y >= postButton.y + postButton.height, "payment note sits beneath the posting button");
       assert.equal(await page.locator(".ab-hero-subtitle [data-missing-ingredient]").count(), 1, "animation is part of the subtitle");
@@ -131,9 +137,13 @@ async function main() {
       assert.equal(await page.locator("html").getAttribute("data-theme"),"light");
       await capture(page,`home-light-${width}`);
       await page.reload();assert.equal(await page.locator("html").getAttribute("data-theme"),"light");
-      await page.locator('button[data-theme-choice="auto"]').click();await page.emulateMedia({colorScheme:"dark"});
-      await page.waitForFunction(()=>document.documentElement.dataset.theme==="dark");
-      assert.equal(await page.locator('button[data-theme-choice="auto"]').getAttribute("aria-pressed"),"true");
+      // The saved choice wins over a later system change; an older saved "auto" becomes the system preference once.
+      await page.emulateMedia({colorScheme:"dark"});await page.reload();
+      assert.equal(await page.locator("html").getAttribute("data-theme"),"light","a saved choice is not overridden by the system");
+      await page.evaluate(()=>localStorage.setItem("agent-bounties.theme","auto"));await page.reload();
+      assert.equal(await page.locator("html").getAttribute("data-theme"),"dark");
+      assert.equal(await page.evaluate(()=>localStorage.getItem("agent-bounties.theme")),"dark","a saved auto is replaced by a real choice");
+      await page.emulateMedia({colorScheme:"light"});
       await page.locator('button[data-theme-choice="dark"]').click();
       await page.locator("#post-a-bounty").click();
       await page.waitForURL("**/post.html?mode=manual#bounty-composer-form");

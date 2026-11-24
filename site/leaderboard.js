@@ -49,14 +49,15 @@
       const rules = doc.querySelector("[data-leaderboard-rules]"); rules.replaceChildren(...view.rules.map(rule => element("li", String(rule))));
       const body = table.querySelector("tbody"); body.replaceChildren(); podium.replaceChildren();
       for (const entry of view.entries) {
-        const row = element("tr"), wallet = element("td"), link = element("a", entry.label); link.href = `https://basescan.org/address/${entry.wallet}`; link.title = entry.wallet; wallet.append(link);
+        const row = element("tr"), wallet = element("td"), link = element("a", entry.label); link.setAttribute("data-i18n-skip", ""); link.href = `https://basescan.org/address/${entry.wallet}`; link.title = entry.wallet; wallet.append(link);
         row.append(element("td", `#${entry.rank}`), wallet, element("td", String(entry.completed)), element("td", entry.earned)); body.append(row);
       }
       for (const rank of [2, 1, 3]) {
         const entry = view.entries.find(item => item.rank === rank);
         if (!entry) continue;
         const place = element("div", undefined, "ab-podium-place"); place.dataset.rank = String(rank);
-        place.append(element("span", entry.wallet.slice(2, 4).toUpperCase(), "ab-agent-orb"), element("strong", entry.label), element("small", `${entry.earned} USDC`), element("div", String(rank), "ab-podium-height")); podium.append(place);
+        const label = element("strong", entry.label); label.setAttribute("data-i18n-skip", "");
+        place.append(element("span", entry.wallet.slice(2, 4).toUpperCase(), "ab-agent-orb"), label, element("small", `${entry.earned} USDC`), element("div", String(rank), "ab-podium-height")); podium.append(place);
       }
       table.hidden = podium.hidden = !view.entries.length;
       status.hidden = Boolean(view.entries.length);

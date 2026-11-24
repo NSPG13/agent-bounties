@@ -81,13 +81,14 @@
     }
     for (const row of payload.records) {
       const card = node("article"); card.className = "collaborate-card recognition-card"; card.id = `contribution-${row.id}`;
-      card.append(node("h3", row.artifact.title), anchor(row.display_name, row.profile_url));
+      const own = (e) => { e.setAttribute("data-i18n-skip", ""); return e; };
+      card.append(own(node("h3", row.artifact.title)), own(anchor(row.display_name, row.profile_url)));
       card.append(node("p", `${row.actor_kind} (self-described). ${row.identity.state === "owner_confirmed" ? "Profile ownership confirmed by linked evidence; this does not verify other claims." : "Profile ownership not independently confirmed."}`));
       if (row.identity.evidence_url) card.append(anchor("Profile ownership evidence", row.identity.evidence_url));
       card.append(anchor("Open the public artifact", row.artifact.url), node("p", `Revision: ${row.artifact.revision}`));
       for (const item of row.evidence) {
         const detail = node("div");
-        detail.append(node("h4", LABELS[item.kind]), node("p", item.summary), node("p", `Limits: ${item.limitations}`),
+        detail.append(node("h4", LABELS[item.kind]), own(node("p", item.summary)), node("p", `Limits: ${item.limitations}`),
           node("p", `Checked ${item.checked_at}`), anchor("Read the review", item.review_url), node("span", " · "), anchor("Reviewer", item.reviewer_url));
         card.append(detail);
       }

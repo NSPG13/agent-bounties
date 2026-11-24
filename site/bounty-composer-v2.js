@@ -5,7 +5,7 @@
   const MAX_AI_ROUNDS = 3;
   const MAX_PLAN_TASKS = 6;
   const MAX_TASK_DAYS = 30;
-  const MIN_TOTAL_USDC = 2.01;
+  const MIN_TOTAL_USDC = 2.22;
   const MIN_SOLVER_USDC_BASE_UNITS = 2_000_000n;
   const metaChild = typeof module === "object" && module.exports ? require("./meta-child.js") : window.AgentBountiesMetaChild;
   const MAX_TOTAL_USDC = 9_000_000_000;
@@ -210,7 +210,6 @@
     linkedWallets: [],
     accountSession: null,
     selectedWallet: null,
-    referenceAttachment: null,
     sourceUrl: null,
     canonical: null,
   };
@@ -410,6 +409,9 @@
       state.accountSession = null;
       state.linkedWallets = [];
       state.postingAccountStatus = "unavailable";
+      // Only a check that never answered changes the draft status line; a
+      // restoration error keeps its own message.
+      postingSession.accountUnavailable();
       syncPrimaryAction();
     }
     return state.postingAccountStatus;
@@ -465,23 +467,16 @@
     return BigInt(Math.round(number * 1_000_000));
   }
 
+  // The platform's one split, the same as the form's (posting-brief.js): the review reward is 10% of the
+  // total rounded to the cent and at least 0.01 USDC; the worker receives the rest and at least 2 USDC.
   function splitReward(total) {
     const totalUnits = usdcBaseUnits(total);
-    if (totalUnits < 2_010_000n) {
-      throw new Error("Public bounties require at least 2 USDC for the solver plus a verifier reserve.");
+    const verifier = (() => { const cents = (totalUnits + 50_000n) / 100_000n; return (cents < 1n ? 1n : cents) * 10_000n; })();
+    const solver = totalUnits - verifier;
+    if (solver < MIN_SOLVER_USDC_BASE_UNITS) {
+      throw new Error("Enter a total budget of at least 2.22 USDC: the worker receives at least 2 USDC after the 10% review reward.");
     }
-    const proportional = totalUnits / 50n;
-    const verifier = proportional < 10_000n ? 10_000n : proportional;
-    let cappedVerifier = verifier > totalUnits / 5n ? totalUnits / 5n : verifier;
-    if (totalUnits - cappedVerifier < MIN_SOLVER_USDC_BASE_UNITS) {
-      cappedVerifier = totalUnits - MIN_SOLVER_USDC_BASE_UNITS;
-    }
-    if (cappedVerifier % 2n !== 0n) cappedVerifier -= 1n;
-    const solver = totalUnits - cappedVerifier;
-    if (solver < MIN_SOLVER_USDC_BASE_UNITS || cappedVerifier < 10_000n) {
-      throw new Error("The solver reward must remain at least 2 USDC and the verifier reserve at least 0.01 USDC.");
-    }
-    return { total: totalUnits, solver, verifier: cappedVerifier };
+    return { total: totalUnits, solver, verifier };
   }
 
   function parsePreparedRewardSplit(solverValue, verifierValue, parent = null) {
@@ -524,7 +519,7 @@
       if (totalUnits !== 1000000n) throw new Error("This parent's qualifying child must total exactly 1 USDC.");
       return metaChild.rewards(preparedRewards?.solver ?? 990000n, preparedRewards?.verifier ?? 10000n, parent);
     }
-    if (preparedRewards && preparedRewards.total === totalUnits) return preparedRewards;
+    // Total budget only (owner decision): a split prepared elsewhere never overrides the platform's split.
     return splitReward(total);
   }
 
@@ -705,18 +700,25 @@
       ? window.AgentBountyAI.parseDraft(value)
       : value;
     if (!prepared || typeof prepared !== "object") throw new Error("The prepared bounty draft is invalid.");
-    prepared.reference_attachment ||= window.AgentBountiesWorkflow.createClient(window).load()?.reference_attachment || null;
 
     prepared = window.AgentBountiesCreatorReview[restoring ? "display" : "prepare"](prepared);
-    if (prepared.reference_attachment) {
-      prepared.reference_attachment = window.AgentBountiesPostingReference.validate(prepared.reference_attachment);
-      prepared.evidence_schema = window.AgentBountiesPostingReference.withEvidence(prepared.evidence_schema || {}, prepared.reference_attachment);
-    }
     const days = Number(prepared.task_window_days || MAX_TASK_DAYS);
     const parentContext = prepared.meta_child || (new URLSearchParams(window.location.search).has("parentBounty") ? state.metaParent : null);
     const metaParent = parentContext ? await metaChild.resolve(parentContext, window.AgentBountiesWorkflow.createClient(window)) : null;
-    const preparedRewards = parsePreparedRewardSplit(prepared.solver_reward_usdc, prepared.verifier_reward_usdc, metaParent);
+    let preparedRewards = parsePreparedRewardSplit(prepared.solver_reward_usdc, prepared.verifier_reward_usdc, metaParent);
     const total = Number(preparedRewards.total) / 1_000_000;
+    // Total budget only: the saved draft carries the platform split, so an approval always covers the
+    // exact rewards that fund. A draft saved with another split is corrected and needs a fresh approval.
+    let splitChanged = false;
+    if (!metaParent) {
+      const platform = splitReward(total);
+      if (platform.solver !== preparedRewards.solver || platform.verifier !== preparedRewards.verifier) {
+        const usdcText = (units) => (Number(units) / 1_000_000).toFixed(6).replace(/\.?0+$/, "");
+        prepared = { ...prepared, solver_reward_usdc: usdcText(platform.solver), verifier_reward_usdc: usdcText(platform.verifier) };
+        preparedRewards = platform;
+        splitChanged = true;
+      }
+    }
     if (!Number.isInteger(days) || days < 1 || days > MAX_TASK_DAYS) throw new Error(`The task window must be from 1 to ${MAX_TASK_DAYS} days.`);
     const bountyImage = normalizeBountyImage(prepared.image);
     if (prepared.image_required === true && !bountyImage) {
@@ -757,7 +759,6 @@
     state.preparedRewards = preparedRewards;
     state.metaParent = metaParent;
     state.bountyImage = bountyImage;
-    state.referenceAttachment = prepared.reference_attachment || null;
     state.sourceUrl = prepared.source_url || null;
     state.approved = false;
     ui.input.value = prepared.goal;
@@ -769,9 +770,11 @@
     const client = window.AgentBountiesWorkflow.createClient(window);
     const journey = client.load() || client.start({ role: "post" });
     const operationId = prepared.posting_operation_id || new URLSearchParams(window.location.search).get("operation_id");
-    if (!restoring) client.save({ ...journey, ...(operationId && window.AgentBountiesWorkflow.UUID.test(operationId) ? { id: operationId } : {}), role: "post", goal: prepared.goal, draft: prepared, draft_stale: false, reference_attachment: prepared.reference_attachment || null, brief: { ...journey.brief, goal: prepared.goal, budget_usdc: String(total), deadline_at: prepared.delivery_deadline || journey.brief?.deadline_at || null } });
+    if (!restoring) client.save({ ...journey, ...(operationId && window.AgentBountiesWorkflow.UUID.test(operationId) ? { id: operationId } : {}), role: "post", goal: prepared.goal, draft: prepared, draft_stale: false, brief: { ...journey.brief, goal: prepared.goal, budget_usdc: String(total), deadline_at: prepared.delivery_deadline || journey.brief?.deadline_at || null } });
+    else if (splitChanged) client.save({ ...journey, draft: prepared });
     await renderPreview();
     state.approved = await postingSession.approved();
+    if (splitChanged) setStatus("The reward split now follows the platform rule: 10% review reward, the rest for the worker. Review and approve the updated card.", "pending");
     syncPrimaryAction();
     updatePostingCost();
   }
@@ -889,7 +892,7 @@
       label: "Total bounty funding",
       placeholder: "Example: 25 USDC",
       button: "Create bounty card",
-      hint: "The total includes the solver reward and a verifier reserve. Minimum: 2.01 USDC total, including at least 2 USDC for the solver.",
+      hint: "The total includes the worker reward and a 10% review reward. Minimum: 2.22 USDC total, so the worker receives at least 2 USDC.",
     });
   }
 
@@ -1026,6 +1029,9 @@
     if (!isMission) return;
     ui.missionTitle.textContent = state.missionPlan.title;
     ui.missionSummary.textContent = state.missionPlan.success_definition;
+    // The plan is the creator's own words: the language switch never translates it.
+    ui.missionTitle.setAttribute("data-i18n-skip", "");
+    ui.missionSummary.setAttribute("data-i18n-skip", "");
     ui.missionHorizon.textContent = `Mission horizon: ${state.horizon.label}`;
     ui.missionTasks.replaceChildren();
     for (const task of state.missionPlan.tasks) {
@@ -1039,6 +1045,7 @@
       const copy = document.createElement("span");
       const title = document.createElement("strong");
       title.textContent = task.title;
+      title.setAttribute("data-i18n-skip", "");
       const detail = document.createElement("small");
       detail.textContent = `${task.acceptance_criteria.length} completion checks${task.depends_on?.length ? ` · depends on ${task.depends_on.join(", ")}` : " · can start independently"}`;
       copy.append(title, detail);
@@ -1087,15 +1094,6 @@
       ui.criteria.append(item);
     }
     renderVerifierTerms();
-    const reference = document.querySelector("[data-card-reference]");
-    if (reference) {
-      reference.replaceChildren(); reference.hidden = !state.referenceAttachment;
-      if (state.referenceAttachment) {
-        const link = document.createElement("a"); link.href = state.referenceAttachment.asset_url; link.target = "_blank"; link.rel = "noopener noreferrer"; link.textContent = "Frozen reference image";
-        const detail = document.createElement("p"); detail.textContent = `Captured ${state.referenceAttachment.captured_at} · ${state.referenceAttachment.sha256}`;
-        reference.append(link, detail);
-      }
-    }
     ui.risks.replaceChildren();
     const risks = [...(state.draft.risk_flags || [])];
     if (expiredDeliveryDeadline()) risks.unshift("Agree a new delivery deadline and review the updated terms before funding.");
@@ -1104,9 +1102,11 @@
       item.textContent = "Review the scope, feasibility and acceptance criteria carefully before approving. The creator accepts feasibility and verification risk.";
       ui.risks.append(item);
     } else {
+      const ownWords = new Set(state.draft.risk_flags || []);
       for (const risk of risks) {
         const item = document.createElement("li");
         item.textContent = risk;
+        if (ownWords.has(risk)) item.setAttribute("data-i18n-skip", "");
         ui.risks.append(item);
       }
     }
@@ -2612,7 +2612,6 @@
           review_mode: params.get("reviewMode") || "automated",
           delivery_deadline: params.get("deliveryDeadline"),
           posting_operation_id: params.get("operation_id"),
-          reference_attachment: parseHandoffJson("referenceAttachment"),
           crowdfund: params.get("crowdfund") === "true",
           discovery_source: params.get("discoverySource") || "AI assistant via MCP",
           benchmark: parseHandoffJson("benchmark"),
@@ -2752,10 +2751,23 @@
       if (state.draft && !blocker) { try { supportedVerificationPolicy(); } catch (error) { blocker = error.message; } }
       const expired = expiredDeliveryDeadline();
       if (expired) blocker = "The saved delivery deadline has passed. Agree a new deadline and review the updated terms before funding.";
+      const recorded = Boolean(postingJournal.load());
+      const approvedTerms = state.approved === true && !state.reviewStale;
+      // One machine-readable next step; it never claims funding is possible before approval.
+      const next_required_action = state.bountyContract ? "check_canonical_funding"
+        : recorded ? "reconcile_wallet_operation"
+        : expired ? "agree_new_delivery_deadline"
+        : !state.draft || state.reviewStale ? "prepare_terms"
+        : blocker ? "resolve_blocker"
+        : state.postingAccountStatus === "checking" || state.postingAccountStatus === "restoring" ? "wait_for_account_check"
+        : state.postingAccountStatus !== "ready" ? "sign_in"
+        : !approvedTerms ? "approve_terms"
+        : "fund_with_wallet";
       return {
         status: state.bountyContract ? "created_check_canonical_funding" : state.draft ? "staged" : "no_staged_bounty",
         explicitly_approved: state.approved === true,
-        funding_ready: Boolean(state.draft && !blocker),
+        funding_ready: next_required_action === "fund_with_wallet",
+        next_required_action,
         blocker,
         recovery_code: expired ? "delivery_deadline_expired" : null,
         saved_draft: expired ? window.AgentBountiesWorkflow.createClient(window).load()?.draft || null : null,
@@ -2778,36 +2790,18 @@
     },
   });
 
-  const referenceContainer = document.querySelector("[data-posting-reference]");
-  const referenceUi = referenceContainer ? window.AgentBountiesPostingReference.mount(referenceContainer, {
-    window,
-    getReference: () => window.AgentBountiesWorkflow.createClient(window).load()?.reference_attachment || null,
-    onChange: async (reference) => {
-      if (postingBusy || postingJournal.load()) throw new Error("The reference is fixed while a wallet operation is pending.");
-      const client = window.AgentBountiesWorkflow.createClient(window), journey = client.load() || client.start({ role: "post" });
-      window.AgentBountiesComposer.invalidate();
-      let draft = journey.draft;
-      if (draft) {
-        const schema = { ...draft.evidence_schema }; delete schema["x-agent-bounties-reference-attachment"];
-        draft = { ...draft, reference_attachment: reference, evidence_schema: window.AgentBountiesPostingReference.withEvidence(schema, reference) };
-      }
-      client.save({ ...journey, reference_attachment: reference, draft, draft_stale: Boolean(draft) });
-      setStatus("Reference saved. Review the updated proposal before approving it.", "pending");
-    },
-  }) : null;
   let restoringPosting = false, pollingPosting = false;
   async function restorePosting(journey) {
     if (restoringPosting || postingBusy) return;
     restoringPosting = true;
     try {
       restorationError = null;
-      referenceUi?.update(journey?.reference_attachment || null);
       if (journey?.draft) {
         const stale = journey.draft_stale;
         await importPreparedDraft(journey.draft, { restoring: true });
         if (stale) window.AgentBountiesComposer.invalidate();
       } else {
-        state.draft = null; state.initialDraft = null; state.approved = false; state.bountyImage = null; state.referenceAttachment = null;
+        state.draft = null; state.initialDraft = null; state.approved = false; state.bountyImage = null;
         state.provider = null; state.account = null; state.balances = null; state.canonical = null;
         ui.preview.hidden = true; ui.readiness.hidden = true; ui.fund.disabled = true; ui.fundNow.disabled = true;
       }

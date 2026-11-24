@@ -127,14 +127,7 @@ async function recoveryRegressions(browser, origin) {
     await page.goto(origin + "/post.html?from=webmcp&analytics=off");
     await awaitPosting(page);
     await page.evaluate(draft => window.AgentBountiesComposer.stage(draft), fixture);
-    // Capture real fixture bytes through the UI. The recorded reference is
-    // independent of a generated cover image and survives the server envelope.
-    // The posting form no longer shows the "Freeze a visual reference" panel; the
-    // reference helper still captures and verifies the same bytes for linked drafts.
-    const reference = await page.evaluate(() => window.AgentBountiesPostingReference.captureHomepage({ phase: "day", variant: "mobile" }, window));
-    assert.equal(reference.sha256, "sha256:" + createHash("sha256").update(fs.readFileSync(path.join(root, "site/assets/solarpunk/scene-day-mobile.webp"))).digest("hex"));
-    assert.equal(reference.byte_length, fs.statSync(path.join(root, "site/assets/solarpunk/scene-day-mobile.webp")).size);
-    await page.evaluate(draft => window.AgentBountiesComposer.stage(draft), { ...fixture, reference_attachment: reference });
+    await page.evaluate(draft => window.AgentBountiesComposer.stage(draft), fixture);
     await page.waitForFunction(() => document.querySelector("[data-approve-card]").dataset.nextAction === "approve");
     await page.locator("[data-approve-card]").click();
     await page.locator("#funding-dialog[open]").waitFor();
@@ -156,6 +149,8 @@ async function recoveryRegressions(browser, origin) {
       return { review: window.AgentBountiesComposer.review(), journey: window.AgentBountiesWorkflow.createClient(window).load(), approval: JSON.parse(sessionStorage.getItem("agent-bounties.posting-approval.v1")), continuation: session.snapshot().continuation_url };
     });
     assert.equal(approved.review.explicitly_approved, true);
+    assert.equal(approved.review.next_required_action, "fund_with_wallet", "Approved terms lead to the wallet step");
+    assert.equal(approved.review.funding_ready, true);
     assert.ok(approved.approval.hash);
     const exactTarget = page.url();
     const account = page.locator("[data-post-auth-start]");
@@ -171,8 +166,6 @@ async function recoveryRegressions(browser, origin) {
     const resumed = await page.evaluate(() => ({ draft: window.AgentBountiesWorkflow.createClient(window).load().draft, approval: JSON.parse(sessionStorage.getItem("agent-bounties.posting-approval.v1")), operation: window.AgentBountiesComposer.review().saved_operation.operation_id }));
     assert.equal(resumed.approval.hash, approved.approval.hash);
     assert.equal(resumed.operation, approved.journey.id);
-    assert.deepEqual(resumed.draft.reference_attachment, reference);
-    assert.deepEqual(resumed.draft.evidence_schema["x-agent-bounties-reference-attachment"], reference);
     assert.deepEqual(await page.evaluate(() => window.__walletWrites), []);
 
     // Explicit selection must show a window even when a session was restored.
@@ -227,11 +220,10 @@ async function recoveryRegressions(browser, origin) {
     await page.waitForFunction(id => new URL(document.querySelector("[data-return-link]").href).searchParams.get("operation_id") === id, approved.journey.id);
     await Promise.all([page.waitForURL(url => url.pathname === "/post.html"), page.getByRole("link", { name: "Return to bounty review", exact: true }).click()]);
     await page.locator("#funding-dialog[open]").waitFor();
-    const returned = await page.evaluate(() => ({ review: window.AgentBountiesComposer.review(), approval: JSON.parse(sessionStorage.getItem("agent-bounties.posting-approval.v1")), reference: window.AgentBountiesWorkflow.createClient(window).load().draft.reference_attachment }));
+    const returned = await page.evaluate(() => ({ review: window.AgentBountiesComposer.review(), approval: JSON.parse(sessionStorage.getItem("agent-bounties.posting-approval.v1")) }));
     assert.equal(returned.review.explicitly_approved, true);
     assert.equal(returned.review.saved_operation.operation_id, approved.journey.id);
     assert.equal(returned.approval.hash, approved.approval.hash);
-    assert.deepEqual(returned.reference, reference);
     assert.deepEqual(await page.evaluate(() => window.__walletRequests), []);
     await page.locator("[data-close-funding]").click();
     console.log("PASS visible restored-phone choice, explicit fresh QR, same-tab top-up with popups blocked, and exact approved-review return");
@@ -276,8 +268,6 @@ async function recoveryRegressions(browser, origin) {
       assert.equal(restoredTools.agent_bounties_get_journey.journey.id, approved.journey.id);
       assert.equal(restoredTools.agent_bounties_get_journey.next_action.tool, "agent_bounties_get_bounty_review");
       const remote = await resumedPage.evaluate(() => window.AgentBountiesWorkflow.createClient(window).load());
-      assert.deepEqual(remote.draft.reference_attachment, reference);
-      assert.deepEqual(remote.draft.evidence_schema["x-agent-bounties-reference-attachment"], reference);
       assert.equal(remote.id, approved.journey.id);
       assert.deepEqual(await resumedPage.evaluate(() => window.__walletRequests), [], "Continuing an approved draft must not reconnect or sign automatically");
       for (const outage of ["sessionReadFailure", "draftReadFailure"]) {
@@ -320,7 +310,7 @@ async function recoveryRegressions(browser, origin) {
     assert.deepEqual(await page.evaluate(() => window.AgentBountiesComposer.review().posting_operation.transactions), ["0x" + "4".repeat(64)]);
     assert.deepEqual(await page.evaluate(() => window.__walletWrites), []);
     assert.deepEqual(errors, [], "Recovery flow has no browser runtime errors");
-    console.log("PASS account-return approval, exact immutable reference, private continuation, linked-wallet public balances, and pending canonical recovery");
+    console.log("PASS account-return approval, private continuation, linked-wallet public balances, and pending canonical recovery");
   } finally { await context.close(); }
 
   const partialContext = await browser.newContext({ viewport: { width: 390, height: 844 } });
@@ -341,6 +331,7 @@ async function recoveryRegressions(browser, origin) {
       assert.equal(await p.locator("[data-brief-budget]").inputValue(), "5");
       const review = await p.evaluate(() => window.AgentBountiesComposer.review());
       assert.equal(review.explicitly_approved, false); assert.equal(review.status, "no_staged_bounty");
+      assert.equal(review.funding_ready, false); assert.equal(review.next_required_action, "prepare_terms");
       assert.equal(await p.evaluate(() => sessionStorage.getItem("agent-bounties.posting-approval.v1")), null);
       assert.deepEqual(await p.evaluate(() => window.__walletRequests), []);
     } finally { await next.close(); }

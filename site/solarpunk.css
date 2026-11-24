@@ -624,49 +624,6 @@ html[data-scene-ready="false"] .scene-plate {
   color: #d9ed9b;
 }
 
-.analytics-consent {
-  position: fixed;
-  z-index: 80;
-  right: 18px;
-  bottom: 18px;
-  width: min(410px, calc(100vw - 36px));
-  padding: 16px;
-  border: 1px solid rgba(202, 225, 177, .3);
-  border-radius: 14px 3px 14px 3px;
-  background: rgba(4, 13, 9, .96);
-  color: #dbe4d6;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, .55);
-  font-size: .78rem;
-}
-
-.analytics-consent p {
-  margin: 0;
-  line-height: 1.45;
-}
-
-.analytics-consent .actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.analytics-consent .button {
-  min-height: 38px;
-  padding: 0 14px;
-  border: 1px solid rgba(206, 229, 178, .35);
-  border-radius: 3px 12px 3px 12px;
-  background: transparent;
-  color: #e4eadf;
-}
-
-.analytics-consent .button.primary {
-  background: #9bc444;
-  color: #0c160d;
-  font-weight: 800;
-}
-
 .noscript-note {
   position: fixed;
   z-index: 90;
@@ -1314,7 +1271,7 @@ html[data-scene-ready="false"] .scene-plate {
   font-size: .7rem;
 }
 
-.account-identity button {
+.account-identity button:not(.ab-button) {
   padding: 8px 10px;
   border: 1px solid rgba(197, 220, 181, .2);
   border-radius: 2px 10px 2px 10px;
@@ -1323,7 +1280,7 @@ html[data-scene-ready="false"] .scene-plate {
   font-size: .7rem;
 }
 
-.account-identity button:hover {
+.account-identity button:not(.ab-button):hover {
   border-color: rgba(187, 221, 104, .5);
   color: #eef4e9;
 }
@@ -2356,7 +2313,7 @@ html[data-scene-ready="false"] .scene-plate {
     height: 46px;
   }
 
-  .account-identity button {
+  .account-identity button:not(.ab-button) {
     padding-inline: 8px;
   }
 
@@ -2523,9 +2480,11 @@ body .account-collapsible > summary h3 { margin: 0; }
 .account-collapsible.account-settings { padding: 12px 0; border: 0; border-bottom: 1px solid var(--ab-line, rgba(196, 221, 176, .14)); border-radius: 0; background: none; }
 .account-settings > section { padding: 0; border: 0; }
 .account-settings h4 { margin: 0 0 4px; color: var(--ab-ink, #e9eee3); font-size: .95rem; }
-.account-settings .account-signout { margin-top: 16px; }
+.account-identity .account-signout { justify-self: end; white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) { .account-collapsible > summary::after, .account-inbox-group > summary::after { transition: none; } }
 /* The three section headings read as one set, and their containers stay plain. */
 body .auth-dialog .account-collapsible { background: none; }
 body .auth-dialog .account-collapsible > summary h3 { margin: 0; color: var(--ab-ink, #e9eee3); font: 400 1.15rem/1.25 var(--ab-display, system-ui); letter-spacing: -.01em; }
 body .auth-dialog .account-settings > section { background: none; }
+/* With Sign out beside it, the provider line wraps instead of cutting "Connected with Google". */
+.account-identity small { white-space: normal; overflow-wrap: anywhere; }

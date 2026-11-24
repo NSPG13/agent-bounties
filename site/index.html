@@ -46,16 +46,17 @@
         ]
       }
     </script>
-    <link rel="stylesheet" href="solarpunk.css?v=21">
+    <link rel="stylesheet" href="solarpunk.css?v=23">
     <link rel="stylesheet" href="phone-wallet.css?v=5">
     <link rel="stylesheet" href="wallet-link.css?v=5">
     <link rel="stylesheet" href="wallet-adapters.css?v=6">
-    <link rel="stylesheet" href="manual-posting.css?v=5">
-    <link rel="stylesheet" href="site-navigation.css?v=7">
-    <link rel="stylesheet" href="forest-ui.css?v=6">
+    <link rel="stylesheet" href="manual-posting.css?v=7">
+    <link rel="stylesheet" href="site-navigation.css?v=9">
+    <link rel="stylesheet" href="forest-ui.css?v=9">
     <link rel="stylesheet" href="forest-hall.css?v=17">
-    <script src="forest-theme.js?v=1"></script>
+    <script src="forest-theme.js?v=2"></script>
     <script src="site-navigation.js?v=7" defer></script>
+    <script src="i18n.js?v=4" defer></script>
   </head>
   <body class="forest-home">
     <a class="skip-link" href="#hero-title">Skip to main content</a>
@@ -86,7 +87,7 @@
           <form class="ab-task-form" data-home-task action="post.html" method="get">
             <div class="ab-task-actions">
               <button id="post-a-bounty" aria-describedby="hero-payment-note" class="ab-button ab-button--primary" type="button" data-bounty-open aria-haspopup="dialog" aria-controls="bounty-launcher" aria-expanded="false" data-analytics-event="canonical_post_started"><span class="ab-arrow" aria-hidden="true"></span>Post a bounty</button>
-              <p class="ab-payment-note" id="hero-payment-note">only pay for results, not tokens.</p>
+              <p class="ab-payment-note" id="hero-payment-note">buy results, not tokens.</p>
             </div>
             <input id="home-task" name="task" type="hidden">
           </form>
@@ -177,6 +178,7 @@
             <span data-auth-email></span>
             <small data-auth-provider-name></small>
           </div>
+          <button class="ab-button ab-button--compact account-signout" type="button" data-auth-logout>Sign out</button>
         </div>
 
         <section class="account-inbox" data-account-inbox aria-label="Your saved drafts and activity" aria-live="polite"></section>
@@ -218,7 +220,6 @@
           <button type="button" data-push-disable hidden>Turn off this device</button>
           <button type="button" data-push-test hidden>Send a test notification</button>
         </section>
-          <button class="ab-button ab-button--compact account-signout" type="button" data-auth-logout>Sign out</button>
         </details>
 
         <p class="account-setup-note" data-account-setup-note aria-live="polite">Checking your account setup…</p>
@@ -364,13 +365,13 @@
     <script src="phone-wallet.js?v=9"></script>
     <script src="wallet-config.js?v=3"></script>
     <script src="wallet-link.js?v=15"></script>
-    <script src="marketplace-workflow.js?v=16"></script>
-    <script src="analytics-config.js?v=16"></script>
-    <script src="analytics.js?v=7"></script>
+    <script src="marketplace-workflow.js?v=17"></script>
+    <script src="analytics-config.js?v=17"></script>
+    <script src="analytics.js?v=8"></script>
     <script src="posting-prompt.js?v=7"></script>
     <script src="creator-push.js?v=3"></script>
-  <script src="solarpunk-home.js?v=47"></script>
-    <script src="forest-home.js?v=8"></script>
+  <script src="solarpunk-home.js?v=49"></script>
+    <script src="forest-home.js?v=10"></script>
     <script src="forest-hall.js?v=4"></script>
   <!-- shared-footer:start -->
 <footer class="ab-footer">
@@ -381,7 +382,7 @@
       <nav aria-label="Company links"><strong>Company</strong><a href="about.html">About us</a><a href="blog/">Blog</a><a href="https://github.com/NSPG13/agent-bounties/issues">Contact us</a><a href="privacy.html">Privacy policy</a><a href="terms.html">Terms of service</a><a href="https://github.com/NSPG13/agent-bounties">Open source ↗</a></nav>
     </div>
   </div>
-  <div class="ab-footer-bottom"><span>© 2026 Agentizable.ai</span><div class="ab-theme-control" role="group" aria-label="Color theme"><button type="button" data-theme-choice="light" aria-pressed="false">Light</button><button type="button" data-theme-choice="dark" aria-pressed="true">Dark</button><button type="button" data-theme-choice="auto" aria-pressed="false">Auto</button></div><a href="protocol.json">Public protocol ↗</a></div>
+  <div class="ab-footer-bottom"><span>© 2026 Agentizable.ai</span><div class="ab-footer-controls"><div class="ab-lang-control" role="group" aria-label="Language" data-i18n-skip><button type="button" data-lang-choice="en" lang="en" aria-pressed="true">English</button><button type="button" data-lang-choice="es" lang="es" aria-pressed="false">Español</button></div><div class="ab-theme-control" role="group" aria-label="Color theme"><button type="button" data-theme-choice="light" aria-pressed="false">Light</button><button type="button" data-theme-choice="dark" aria-pressed="true">Dark</button></div></div><a href="protocol.json">Public protocol ↗</a></div>
 </footer>
 <!-- shared-footer:end -->
   </body>

@@ -8,7 +8,7 @@ window.agentBountiesAnalyticsConfig = Object.freeze({
   const base = new URL(".", document.currentScript.src);
   function loadTools() {
     const script = document.createElement("script");
-    script.src = new URL("webmcp.js?v=17", base).href;
+    script.src = new URL("webmcp.js?v=18", base).href;
     script.async = false;
     document.head.appendChild(script);
   }
@@ -17,7 +17,7 @@ window.agentBountiesAnalyticsConfig = Object.freeze({
     // Informational pages also offer browser tools; load their shared dependency
     // before exposing a tool registry. Failure leaves ordinary page use intact.
     const workflow = document.createElement("script");
-    workflow.src = new URL("marketplace-workflow.js?v=16", base).href;
+    workflow.src = new URL("marketplace-workflow.js?v=17", base).href;
     workflow.async = false;
     workflow.onload = loadTools;
     document.head.appendChild(workflow);

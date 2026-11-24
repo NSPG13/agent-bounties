@@ -27,7 +27,7 @@ same-tab operation return when rebasing. No data migration is required.
 
 Regression coverage adds restored-session choice, explicit new pairing, native
 phone handoff, cancellation, failed disconnect, blocked popups, and a real-browser
-top-up round trip preserving the approval hash and frozen reference. Public
+top-up round trip preserving the approval hash. Public
 payment claims still require canonical evidence.
 
 Rollback: revert the follow-up commit and its paired browser asset versions.

@@ -50,6 +50,8 @@ test('confirmed review expiry belongs to the exact round and displays its bond r
   assert.match(html, /2 USDC of claim bond was returned to the solver/);
   assert.match(html, /did not pay a solver reward/);
   assert.match(html, /bounty reopened for another attempt/);
+  // The bounty's own title is the creator's words: the language switch never translates it.
+  assert.match(html, /<h1 data-i18n-skip>/);
   assert.match(html, /View confirmed round outcome/);
   assert.doesNotMatch(html, /<strong>Submitted<\/strong>|View confirmed payment/);
   const next = event('submission_added', { tx_hash: hash('b'), block_number: 11, data: { ...submitted.data, round: 2 } });

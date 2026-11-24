@@ -26,6 +26,8 @@ if (new URL(base).hostname !== '127.0.0.1') throw new Error('Requires loopback s
   await page.goto(base + '/install/github/');
   await page.getByRole('link', { name: 'Review this bounty draft' }).waitFor();
   assert.equal(await page.locator('[data-github-origin-items] img').count(), 0);
+  // The issue's own title and goal are never translated by the language switch.
+  assert.equal(await page.locator('[data-github-origin-items] h3[data-i18n-skip], [data-github-origin-items] h3 + p[data-i18n-skip]').count(), 2);
   assert.equal(await page.locator('[data-github-origin-install]').getAttribute('href'), 'https://github.com/apps/agent-bounties-fixture/installations/new');
   await page.getByRole('link', { name: 'Review this bounty draft' }).click();
   await page.waitForFunction(() => !document.querySelector('#open-origin-notice').hidden);

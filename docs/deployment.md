@@ -92,7 +92,9 @@ API release. Do not describe queued builds or source settings as live recovery.
 
 `site/protocol.json` and `deployments/base-mainnet.json` are authoritative.
 The historical deployment record remains `active`; the public protocol is now
-`recovery_only` and denies new hosted v1 exposure. Both retain the exact
+`recovery_only` and denies new hosted v1 exposure. `recovery_only` describes
+v1 only: new bounties use autonomous-v2 (`deployments/autonomous-v2-base-mainnet.json`),
+which `protocol.json` names under `new_bounties`. Both retain the exact
 factory, implementation, transaction, block, and runtime hashes. Any future
 address or hash change requires a new deployment record and chain attestation.
 

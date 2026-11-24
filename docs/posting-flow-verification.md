@@ -47,10 +47,9 @@ by reconciliation. Completion requires matching creation, full funding,
 claimability and this exact bounty in ready-to-earn inventory. The final record
 captures these observed checks, operation ID and bounty contract.
 
-The nine compared fields are operation ID, goal, acceptance criteria, worker
-reward, review reserve, task window, review mode, exact ISO deadline with offset
-and frozen reference. References are actual local image bytes with timestamp
-and SHA-256 binding. The example is a fixed 2.00 + 0.01 USDC creator-review bounty.
+The eight compared fields are operation ID, goal, acceptance criteria, worker
+reward, review reserve, task window, review mode and exact ISO deadline with
+offset. The frozen reference image was retired with the unified posting form. The example is a fixed 2.00 + 0.01 USDC creator-review bounty.
 The requested 200 USDC, 1-per-response/10-per-referral campaign remains unsupported
 and was not converted or implemented.
 

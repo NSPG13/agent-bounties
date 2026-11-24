@@ -133,7 +133,7 @@ function postingController(fetchImpl) {
   const context = { ui, state, API: 'https://api.agentizable.ai', AbortController,
     fetch: fetchImpl, postingAccountStatus: composer.postingAccountStatus, postingPrimaryAction: composer.postingPrimaryAction,
     expiredDeliveryDeadline: () => false, supportedVerificationPolicy: () => {}, syncCardPayment: () => {},
-    postingJournal: { load: () => null }, postingSession: { canContinue: () => false, invalidate: () => {}, hydrate: async () => {}, approved: async () => false, snapshot: () => ({ status: "saved", conflict: false }) },
+    postingJournal: { load: () => null }, postingSession: { canContinue: () => false, invalidate: () => {}, hydrate: async () => {}, approved: async () => false, snapshot: () => ({ status: "saved", conflict: false }), unavailableCalls: 0, accountUnavailable() { this.unavailableCalls++; } },
     restoration: Promise.resolve(), restorationError: null,
     setStatus(message) { context.message = message; }, updatePostingTracker: () => {},
     window: { location: { hostname: 'agentizable.ai' },
@@ -196,6 +196,7 @@ for (const phase of ['headers', 'body']) test(`hung session ${phase} times out a
   for (const timer of [...c.timers.values()]) timer();
   await pending;
   assert.equal(c.state.postingAccountStatus, 'unavailable');
+  assert.equal(c.context.postingSession.unavailableCalls, 1, "a check that never answered is reported to the draft status line");
   assert.equal(c.state.accountSession, null);
   assert.equal(c.state.linkedWallets.length, 0);
   assert.equal(c.ui.approve.textContent, 'CHECK ACCOUNT TO POST');

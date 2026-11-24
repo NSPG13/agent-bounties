@@ -107,22 +107,41 @@
     const aim = String(objective || "").trim(), details = String(description || "").trim();
     return aim && details ? `${aim}\n\nDetails: ${details}` : aim || details;
   }
+  // One stable code and field per rule, shared by the form, WebMCP and the prefill routes.
+  function fieldError(code, field, message) { const error = new Error(message); error.code = code; error.field = field; return error; }
   function manualDraft(brief, now = Date.now()) {
     const title = String(brief.title || "").trim();
     const criteria = String(brief.criteria || "").split(/\r?\n/).map(s => s.trim()).filter(Boolean);
     const goal = String(brief.goal || "").trim() || fallbackGoal(title, criteria);
-    if (!title || title.length > 200) throw new Error("Enter a title of up to 200 characters.");
+    if (!title || title.length > 200) throw fieldError("title_required", "title", "Enter a title of up to 200 characters.");
     // Briefs saved before the objective field existed have no objective key; new ones must fill it.
-    if (Object.prototype.hasOwnProperty.call(brief, "objective") && (!String(brief.objective || "").trim() || String(brief.objective).trim().length > 1000)) throw new Error("Enter the objective of the bounty in up to 1,000 characters.");
-    if (!goal) throw new Error("Describe the work in up to 4,000 characters.");
-    if (goal.length > 4000) throw new Error(Object.prototype.hasOwnProperty.call(brief, "objective") ? "The objective and description together must stay under 4,000 characters. Shorten the description." : "Describe the work in up to 4,000 characters.");
-    if (!criteria.length || criteria.length > 20 || criteria.some(s => s.length > 1000)) throw new Error("Add 1–20 acceptance criteria, one per line, with up to 1,000 characters each.");
+    if (Object.prototype.hasOwnProperty.call(brief, "objective") && (!String(brief.objective || "").trim() || String(brief.objective).trim().length > 1000)) throw fieldError("objective_required", "objective", "Enter the objective of the bounty in up to 1,000 characters.");
+    if (!goal) throw fieldError("description_required", "description", "Describe the work in up to 4,000 characters.");
+    if (goal.length > 4000) throw fieldError("description_too_long", "description", Object.prototype.hasOwnProperty.call(brief, "objective") ? "The objective and description together must stay under 4,000 characters. Shorten the description." : "Describe the work in up to 4,000 characters.");
+    if (!criteria.length || criteria.length > 20 || criteria.some(s => s.length > 1000)) throw fieldError("criteria_required", "acceptance_criteria", "Add 1–20 acceptance criteria, one per line, with up to 1,000 characters each.");
     const total = cents(brief.budget_usdc), reserve = total === null ? null : reviewRewardCents(total);
-    if (total === null || total > 900000000000 || total - reserve < 200) throw new Error(`Enter a total budget of at least 2.22 USDC: the worker receives at least 2 USDC after the ${REVIEW_SHARE_PERCENT}% review reward.`);
+    if (total === null || total > 900000000000 || total - reserve < 200) throw fieldError("min_total_budget", "total_budget_usdc", `Enter a total budget of at least 2.22 USDC: the worker receives at least 2 USDC after the ${REVIEW_SHARE_PERCENT}% review reward.`);
+    if (!Number.isFinite(Date.parse(brief.deadline_at))) throw fieldError("deadline_required", "delivery_deadline", "Choose a future delivery deadline within 30 days. Use a smaller milestone for longer work.");
     const remaining = Date.parse(brief.deadline_at) - now;
-    if (!Number.isFinite(remaining) || remaining <= 0 || remaining > 30 * 86400000) throw new Error("Choose a future delivery deadline within 30 days. Use a smaller milestone for longer work.");
-    if (brief.review_consent !== true) throw new Error("Confirm that you will review submissions yourself.");
-    return { title, goal, acceptance_criteria: criteria, solver_reward_usdc: ((total - reserve) / 100).toFixed(2), verifier_reward_usdc: (reserve / 100).toFixed(2), task_window_days: Math.max(1, Math.ceil(remaining / 86400000)), delivery_deadline: brief.deadline_at, review_mode: "creator", discovery_source: "Platform form (no AI)" };
+    if (!Number.isFinite(remaining) || remaining <= 0) throw fieldError("deadline_in_past", "delivery_deadline", "Choose a future delivery deadline within 30 days. Use a smaller milestone for longer work.");
+    if (remaining > 30 * 86400000) throw fieldError("deadline_too_far", "delivery_deadline", "Choose a future delivery deadline within 30 days. Use a smaller milestone for longer work.");
+    if (brief.review_consent !== true) throw fieldError("review_consent_required", "review_consent", "Confirm that you will review submissions yourself.");
+    const draft = { title, goal, acceptance_criteria: criteria, solver_reward_usdc: ((total - reserve) / 100).toFixed(2), verifier_reward_usdc: (reserve / 100).toFixed(2), task_window_days: Math.max(1, Math.ceil(remaining / 86400000)), delivery_deadline: brief.deadline_at, review_mode: "creator", discovery_source: "Platform form (no AI)" };
+    // Automated verification is an advanced, agent-prefilled section: a supported benchmark replaces creator review.
+    const benchmark = jsonObject(brief.benchmark, "invalid_benchmark", "benchmark", "The benchmark must be one JSON object.");
+    if (!benchmark) return draft;
+    const evidenceSchema = jsonObject(brief.evidence_schema, "invalid_evidence_schema", "evidence_schema", "The evidence schema must be one JSON object.");
+    const { delivery_deadline: _creatorDeadline, ...automated } = draft;
+    return { ...automated, review_mode: "automated", benchmark, ...(evidenceSchema ? { evidence_schema: evidenceSchema } : {}), discovery_source: "Platform form (agent-prefilled verification)" };
   }
-  return Object.freeze({ manualDraft, fallbackGoal, composeGoal, reviewReward, REVIEW_SHARE_PERCENT, resolveDeadline, wallTime, proposedSplit, estimateBudget, countdown, warnings, cents });
+  function jsonObject(value, code, field, message) {
+    if (value && typeof value === "object") { if (Array.isArray(value)) throw fieldError(code, field, message); return value; }
+    const text = String(value ?? "").trim();
+    if (!text) return null;
+    let parsed;
+    try { parsed = JSON.parse(text); } catch (_) { throw fieldError(code, field, message); }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw fieldError(code, field, message);
+    return parsed;
+  }
+  return Object.freeze({ manualDraft, fieldError, fallbackGoal, composeGoal, reviewReward, REVIEW_SHARE_PERCENT, resolveDeadline, wallTime, proposedSplit, estimateBudget, countdown, warnings, cents });
 });

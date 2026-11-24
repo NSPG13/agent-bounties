@@ -20,6 +20,7 @@
   const lifecycle = new AbortController();
   const NETWORK = "base-mainnet";
   const PENDING_DRAFT_KEY = "agent-bounties.webmcp.pending-funded-draft.v1";
+  const PENDING_FORM_KEY = "agent-bounties.webmcp.pending-form-fill.v1";
   const registrations = [];
   const names = [];
   const fallbackTools = new Map();
@@ -194,7 +195,6 @@
       review_mode: input.review_mode === "creator" ? "creator" : "automated",
       delivery_deadline: input.delivery_deadline || null,
       posting_operation_id: input.posting_operation_id || null,
-      reference_attachment: input.reference_attachment ? flow.publicJson(input.reference_attachment) : client.load()?.reference_attachment || null,
       ...(input.image ? { image: flow.publicJson(input.image), image_required: input.image_required === true } : {}),
       source_url: sourceUrl,
       crowdfund: false,
@@ -503,7 +503,6 @@
         review_mode: { type: "string", enum: ["automated", "creator"], description: "For design work without a supported automated benchmark, explicitly propose creator review: the poster signs the completion verdict. It is not automatic or independent verification. Meta children still require automated review." },
         delivery_deadline: { type: "string", description: "Exact agreed ISO timestamp with timezone offset. Required for creator review; preserve the person’s calendar deadline." },
         posting_operation_id: { type: "string", format: "uuid" },
-        reference_attachment: { type: "object", description: "Exact timestamped and hashed frozen reference returned by capture_homepage_reference." },
         image: { type: "object", description: "Preserve the person's approved bounty cover image and its complete metadata." },
         image_required: { type: "boolean" },
         source_url: { type: ["string", "null"], maxLength: 2048 },
@@ -541,6 +540,107 @@
         approval_required: true,
         wallet_confirmation_required: true,
       };
+    },
+  });
+
+
+  // The posting form is the only place a bounty is published (owner rule). Agents fill its named
+  // inputs exactly as a person would; the person then reviews, approves and signs on the same page.
+  const FORM_INPUTS = { title: "[data-brief-title]", objective: "[data-brief-objective]", description: "#bounty-composer-input",
+    acceptance_criteria: "[data-brief-criteria]", total_budget_usdc: "[data-brief-budget]", delivery_deadline: "[data-brief-deadline]",
+    benchmark: "[data-brief-benchmark]", evidence_schema: "[data-brief-evidence-schema]" };
+  function formValues(input, now = Date.now()) {
+    const text = (value) => value == null ? "" : String(value);
+    // Deprecated aliases, converted on input: goal → objective, the two rewards → total, a day count → deadline.
+    const total = input.total_budget_usdc ?? (input.solver_reward_usdc != null && input.verifier_reward_usdc != null
+      ? (Math.round((Number(input.solver_reward_usdc) + Number(input.verifier_reward_usdc)) * 100) / 100).toFixed(2) : "");
+    const deadline = input.delivery_deadline ?? (Number.isInteger(input.task_window_days) ? new Date(now + input.task_window_days * 86400000).toISOString() : "");
+    const criteria = Array.isArray(input.acceptance_criteria) ? input.acceptance_criteria.map(text).join("\n") : text(input.acceptance_criteria);
+    const json = (value) => value && typeof value === "object" ? JSON.stringify(value, null, 2) : text(value);
+    return { title: text(input.title), objective: text(input.objective ?? input.goal), description: text(input.description),
+      acceptance_criteria: criteria, total_budget_usdc: text(total), delivery_deadline: text(deadline),
+      benchmark: json(input.benchmark), evidence_schema: json(input.evidence_schema) };
+  }
+  async function fillPostingForm(values) {
+    await parentReady;
+    const helper = await waitFor(() => window.AgentBountiesPostingBrief, 5000);
+    const form = await waitFor(() => document.querySelector("#bounty-composer-form"), 5000);
+    if (!helper || !form) throw new Error("The posting form is not ready. Retry the same call.");
+    const mode = form.querySelector("[data-brief-mode]");
+    if (mode && mode.value !== "manual" && !mode.disabled) { mode.value = "manual"; mode.dispatchEvent(new Event("change", { bubbles: true })); }
+    // Start the journey first: starting it restores unfocused fields from the saved brief, which would
+    // otherwise clear the first value filled here.
+    if (!client.load()) client.start({ role: "post" });
+    const zone = form.querySelector("[data-brief-timezone]")?.value || Intl.DateTimeFormat().resolvedOptions().timeZone;
+    for (const [name, selector] of Object.entries(FORM_INPUTS)) {
+      const field = form.querySelector(selector);
+      if (!field) continue;
+      let value = values[name] ?? "";
+      if (name === "delivery_deadline" && value) {
+        const instant = Date.parse(value);
+        value = Number.isFinite(instant) ? helper.wallTime(instant, zone) : "";
+      }
+      field.value = value;
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    if ((values.benchmark || values.evidence_schema) && form.querySelector("[data-advanced-verification]")) form.querySelector("[data-advanced-verification]").open = true;
+    const brief = client.load()?.brief || {};
+    const fieldErrors = [];
+    try { helper.manualDraft(brief); }
+    catch (error) { fieldErrors.push({ code: error.code || "invalid_brief", field: error.field || null, message: error.message }); }
+    for (const [name, selector] of Object.entries(FORM_INPUTS)) {
+      const field = form.querySelector(selector);
+      if (field && !field.checkValidity() && !fieldErrors.some((item) => item.field === name)) fieldErrors.push({ code: "invalid_value", field: name, message: field.validationMessage });
+    }
+    return {
+      status: fieldErrors.length ? "form_needs_changes" : "form_filled",
+      field_errors: fieldErrors,
+      next_action: fieldErrors.length ? "Correct the listed fields with the person, then fill the form again."
+        : "Ask the person to check the form and press Review draft. Nothing is posted, funded or signed until they approve the card and confirm in their wallet.",
+      approval_required: true,
+      wallet_confirmation_required: true,
+    };
+  }
+  function consumePendingForm() {
+    if (!isPost) return;
+    let values = null;
+    try { const raw = window.sessionStorage.getItem(PENDING_FORM_KEY); if (!raw) return; window.sessionStorage.removeItem(PENDING_FORM_KEY); values = JSON.parse(raw); }
+    catch (_error) { return; }
+    const run = () => fillPostingForm(values).catch(reportError);
+    if (document.readyState === "complete") run(); else window.addEventListener("load", run, { once: true });
+  }
+
+  register({
+    name: "agent_bounties_fill_posting_form",
+    title: "Fill the bounty posting form",
+    description: "Fill the posting form on agentizable.ai/post.html with the person's bounty, using the same fields a person types. Returns field errors to correct. This never publishes, approves, signs or funds: the person reviews the card, approves it and confirms in their own wallet. The platform computes the reward split from the total budget.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string", minLength: 1, maxLength: 200 },
+        objective: { type: "string", minLength: 1, maxLength: 1000, description: "What the bounty must achieve." },
+        description: { type: "string", maxLength: 4000, description: "Optional context, links and preferences. Objective and description together stay under 4,000 characters." },
+        acceptance_criteria: { type: "array", minItems: 1, maxItems: 20, items: { type: "string", minLength: 1, maxLength: 1000 } },
+        total_budget_usdc: { type: "string", pattern: "^\\d+(?:\\.\\d{1,2})?$", description: "At least 2.22. The platform keeps 10% as the review reward; the worker receives the rest." },
+        delivery_deadline: { type: "string", description: "ISO 8601 date-time with offset, in the future and within 30 days. The only deadline." },
+        benchmark: { type: "object", description: "Advanced, agents only: a supported executable benchmark. It replaces creator review." },
+        evidence_schema: { type: "object", description: "Advanced, agents only: the evidence schema paired with the benchmark." },
+        goal: { type: "string", maxLength: 1000, description: "Deprecated alias of objective." },
+        solver_reward_usdc: { type: "string", description: "Deprecated: send total_budget_usdc." },
+        verifier_reward_usdc: { type: "string", description: "Deprecated: send total_budget_usdc." },
+        task_window_days: { type: "integer", minimum: 1, maximum: 30, description: "Deprecated: send delivery_deadline." },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, untrustedContentHint: false },
+    async execute(input) {
+      const values = formValues(input || {});
+      if (isPost) return fillPostingForm(values);
+      try { window.sessionStorage.setItem(PENDING_FORM_KEY, JSON.stringify(values)); }
+      catch (_error) { throw new Error("This browser cannot keep the form values across navigation. Open /post.html and call this tool again."); }
+      const target = new URL("/post.html?from=webmcp", window.location.origin).href;
+      window.setTimeout(() => window.location.assign(target), 0);
+      return { status: "navigating_to_form", url: target, approval_required: true, wallet_confirmation_required: true };
     },
   });
 
@@ -706,25 +806,11 @@
       : journey.draft ? { tool: "agent_bounties_stage_funded_bounty", input: journey.draft }
       : journey.selected ? { tool: "agent_bounties_inspect_opportunity", input: { opportunity_id: journey.selected } }
       : journey.role === "earn" ? { tool: "agent_bounties_list_ready_work", input: { limit: 5, timing: "now" } }
-      : { tool: "agent_bounties_stage_funded_bounty", missing: "Use the saved brief to prepare deliverables and checks. For design work, propose explicit creator review and the agreed calendar delivery deadline; for automated work, prepare a supported benchmark. Ask only for missing business decisions." };
+      : { tool: "agent_bounties_fill_posting_form", missing: "Use the saved brief to prepare deliverables and checks. For design work, propose explicit creator review and the agreed calendar delivery deadline; for automated work, prepare a supported benchmark. Ask only for missing business decisions." };
     return { journey, next_action: next, guidance: flow.GUIDANCE, user_confirmation_required: false, storage: window.AgentBountiesPostingSession?.create(window).snapshot() || "this browser session; no wallet authority" };
   }
   register({ name: "agent_bounties_get_journey", title: "Continue my marketplace task", description: "Resume the current posting or earning journey. Returns the saved outcome and one next action; do not restart the interview or repeat earlier approvals.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, untrustedContentHint: true }, async execute() { await waitForPostingRestoration(); return journeyResult(client.load()); } });
-  if (isPost) register({ name: "agent_bounties_capture_homepage_reference", title: "Freeze a homepage background reference",
-    description: "Read and hash the selected actual homepage background image, attach its immutable copy and timestamp to this draft, and invalidate changed terms approval. This captures the background asset, not the page text or animated effects. No publication or wallet request.",
-    inputSchema: { type: "object", properties: { phase: { type: "string", enum: ["dawn", "day", "dusk", "night"] }, variant: { type: "string", enum: ["desktop", "mobile"] } }, required: ["phase", "variant"], additionalProperties: false },
-    annotations: { readOnlyHint: false, untrustedContentHint: false }, async execute(input) {
-      if (flow.createPostingJournal(window).load()) throw new Error("Reconcile the current wallet operation before changing its reference.");
-      const helper = await waitFor(() => window.AgentBountiesPostingReference, 8000);
-      if (!helper) throw new Error("The reference capture controls are not ready.");
-      const reference = await helper.captureHomepage(input, window), journey = client.load() || client.start({ role: "post" });
-      window.AgentBountiesComposer?.invalidate();
-      let draft = journey.draft;
-      if (draft) { const schema = { ...draft.evidence_schema }; delete schema["x-agent-bounties-reference-attachment"]; draft = { ...draft, reference_attachment: reference, evidence_schema: helper.withEvidence(schema, reference) }; }
-      client.save({ ...journey, reference_attachment: reference, draft, draft_stale: Boolean(draft) });
-      return { status: "reference_saved_not_published", reference_attachment: reference, next_action: "Restage and review the exact draft with this reference." };
-    } });
   register({ name: "agent_bounties_inspect_opportunity", title: "Explain this opportunity", description: "Read the current canonical opportunity, costs, bond, deadline, exact terms and evidence requirements. Translate these into a short recommendation for the person. No claim, publication or spending.",
     inputSchema: { type: "object", properties: { opportunity_id: { type: "string", minLength: 1, maxLength: 240 } }, required: ["opportunity_id"], additionalProperties: false }, annotations: { readOnlyHint: true, untrustedContentHint: true },
     execute(input) { return client.inspect(input.opportunity_id); } });
@@ -812,4 +898,5 @@
     });
   }
   consumePendingDraft();
+  consumePendingForm();
 })();

@@ -107,7 +107,7 @@ async function main() {
           // journey handlers or analytics may see quote, order or account state.
           await page.goto(`${origin}/${file}`);
           assert.equal(await page.locator("[data-site-header], .ab-footer").count(), 0, "private order page remains isolated");
-          assert.deepEqual(await page.locator("script").evaluateAll(els => els.map(el => el.getAttribute("src"))), ["managed-service-theme.js?v=20261115", "managed-service-core.js?v=20261030", "managed-service-page.js?v=20261117"]);
+          assert.deepEqual(await page.locator("script").evaluateAll(els => els.map(el => el.getAttribute("src"))), ["managed-service-theme.js?v=20261123", "managed-service-core.js?v=20261030", "managed-service-page.js?v=20261121"]);
           assert.equal(await page.locator('meta[name="robots"]').getAttribute("content"), "noindex, nofollow");
           continue;
         }
@@ -136,7 +136,7 @@ async function main() {
         if (!reference) reference = appearance;
         assert.deepEqual(appearance, reference, `same homepage header: ${file} at ${width}`);
         assert.equal(await page.locator(".ab-site-menu, [data-site-header] .ab-site-login").count(), 0);
-        for (const n of [1, 2]) await assertFits(page, `.ab-site-nav a:nth-child(${n})`);
+        for (const n of [1, 2]) await assertFits(page, `.ab-site-nav a:nth-of-type(${n})`);
         if (redirects) {
           assert.equal(await page.locator('meta[http-equiv="refresh"]').getAttribute("content"), `0; url=${workspaceHandoff}`);
           assert.equal(await page.locator('meta[name="robots"]').getAttribute("content"), "noindex, nofollow");
@@ -167,7 +167,7 @@ async function main() {
     const fallback = await nojs.newPage();
     for (const file of ["index.html", "about.html", "blog/index.html", "metrics.html", "install/chatgpt-dev/index.html"]) {
       await fallback.goto(`${origin}/${file}`);
-      for (const n of [1, 2]) await assertFits(fallback, `.ab-site-nav a:nth-child(${n})`);
+      for (const n of [1, 2]) await assertFits(fallback, `.ab-site-nav a:nth-of-type(${n})`);
     }
     await nojs.close();
     for (const [width, height] of [[1440,900],[946,838],[640,480],[390,600],[320,480],[768,320],[480,360]]) {
@@ -225,9 +225,39 @@ async function main() {
         const nav = await page.locator(".ab-site-nav a").evaluateAll(els => els.map(el => ({ text: el.textContent.trim(), background: getComputedStyle(el).backgroundColor })));
         assert.deepEqual(nav.map(item => item.text), ["Account", "Workspace"], file);
         assert.ok(nav[0].background === "rgba(0, 0, 0, 0)" && nav[1].background !== "rgba(0, 0, 0, 0)", `signed-in primary is Workspace: ${file} ${JSON.stringify(nav)}`);
-        for (const n of [1, 2]) await assertFits(page, `.ab-site-nav a:nth-child(${n})`);
+        for (const n of [1, 2]) await assertFits(page, `.ab-site-nav a:nth-of-type(${n})`);
       }
       console.log(`Header: Log in primary when signed out, Workspace primary when signed in, ${width}px`);
+      await ctx.close();
+    }
+    // The optional analytics choice is one thin bar at the top of the page, in the normal flow:
+    // it never covers a button, on desktop or phone.
+    for (const width of [1280, 390]) {
+      const ctx = await context({ viewport: { width, height: 800 } });
+      await ctx.route("**/analytics-config.js*", route => route.fulfill({ contentType: "text/javascript",
+        body: fs.readFileSync(path.join(site, "analytics-config.js"), "utf8").replace(/googleMeasurementId: "[^"]*"/, 'googleMeasurementId: "G-TEST12345"') }));
+      const page = await ctx.newPage();
+      for (const file of ["index.html", "post.html", "earn.html", "about.html"]) {
+        await page.goto(`${origin}/${file}`);
+        const bar = page.locator("[data-google-analytics-consent]");
+        await bar.waitFor();
+        const layout = await bar.evaluate(el => {
+          const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+          const covered = [...document.querySelectorAll("button, a.button, a.ab-button, .ab-site-nav a, input, select, textarea")]
+            .filter(other => !el.contains(other) && other.checkVisibility?.())
+            .map(other => other.getBoundingClientRect())
+            .filter(o => o.width && o.height && o.left < r.right && o.right > r.left && o.top < r.bottom && o.bottom > r.top);
+          return { first: document.body.firstElementChild === el, position: s.position, top: Math.round(r.top), height: Math.round(r.height), covered: covered.length };
+        });
+        assert.equal(layout.first, true, `${file}: the bar is the first element of the page`);
+        assert.equal(layout.position, "static", `${file}: the bar is in the normal flow`);
+        assert.equal(layout.covered, 0, `${file} at ${width}: the bar covers no control`);
+        if (width >= 1280) assert.ok(layout.height <= 56, `${file}: the bar stays thin on desktop (${layout.height}px)`);
+        await page.locator("[data-google-analytics-deny]").click();
+        assert.equal(await bar.count(), 0, "No thanks removes the bar");
+        await page.evaluate(() => localStorage.clear());
+      }
+      console.log(`Analytics bar: thin, in flow and covering no control at ${width}px`);
       await ctx.close();
     }
   } finally { await browser.close(); }

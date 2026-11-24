@@ -31,7 +31,7 @@ async function layout(page) {
   assert.notEqual(await page.evaluate(() => getComputedStyle(document.documentElement).scrollbarWidth), "none");
 }
 async function auditJourney(browser, origin, width) {
-  const context = await browser.newContext({ viewport: { width, height: 900 }, reducedMotion: "reduce" });
+  const context = await browser.newContext({ viewport: { width, height: 900 }, reducedMotion: "reduce", colorScheme: "dark" });
   let mode = "audit";
   await context.route("**/*", route => {
     const url = new URL(route.request().url());
@@ -111,8 +111,10 @@ async function auditJourney(browser, origin, width) {
   for (const state of ["future", "unknown", "degraded", "offline", "empty", "audit"]) {
     mode = state;
     await page.goto(origin);
+    // With no list recorded in this browser, a failed load shows no listings at all.
+    if (state === "degraded") await page.evaluate(() => localStorage.removeItem("agent-bounties.board-snapshot.v1"));
     if (["degraded", "offline"].includes(state)) {
-      await page.waitForFunction(() => document.querySelector("[data-live-weekly]").textContent.includes("inventory unavailable"));
+      await page.waitForFunction(() => document.querySelector("[data-live-weekly]").textContent.includes("Availability unknown"));
       assert.equal(await page.locator("[data-live-bounties]").innerText(), "—");
     } else if (state === "unknown") {
       await page.waitForFunction(() => document.querySelector("[data-live-weekly]").textContent.includes("timing unavailable"));
@@ -124,7 +126,7 @@ async function auditJourney(browser, origin, width) {
     await page.waitForFunction(() => document.querySelector("[data-opportunity-list]").getAttribute("aria-busy") === "false");
     const summary = await page.locator("[data-market-summary]").innerText();
     if (["degraded", "offline"].includes(state)) {
-      assert.match(summary, /Live inventory unavailable/);
+      assert.match(summary, /can’t load the list right now\. Availability is unknown/);
       assert.doesNotMatch(summary, /0 open/);
     } else if (state === "unknown") assert.match(summary, /Timing unavailable for 1; open-now total unconfirmed/);
     assert.equal(await page.locator(".opportunity-row").count(), ["degraded", "offline", "empty"].includes(state) ? 0 : state === "future" ? 2 : 3);
@@ -151,7 +153,7 @@ async function main() {
   });
   try {
     for (const [width, height] of [[1440,900],[946,838],[640,480],[390,600],[320,480],[768,320],[480,360]]) {
-      const context = await browser.newContext({ viewport: { width, height }, reducedMotion: "reduce" });
+      const context = await browser.newContext({ viewport: { width, height }, reducedMotion: "reduce", colorScheme: "dark" });
       const page = await context.newPage(), errors = [];
       let mode = "ready";
       page.on("pageerror", e => errors.push(e.message));
@@ -182,7 +184,16 @@ async function main() {
       await page.locator(".opportunity-row").waitFor();
       mode = "offline";
       await page.locator("[data-market-refresh]").click();
-      await page.getByText("The board couldn’t refresh.").waitFor();
+      // The last complete list this browser loaded is shown with its date, marked as possibly out of date.
+      await page.locator(".market-stale-notice").waitFor();
+      assert.match(await page.locator(".market-stale-notice").innerText(), /Last recorded list · .+\n?.*may be out of date, and availability right now is unknown/s);
+      assert.match(await page.locator("[data-market-summary]").innerText(), /^Showing the last list recorded .+ It may be out of date; availability right now is unknown\./);
+      assert.ok(await page.locator('.opportunity-row[data-stale="true"]').count() > 0);
+      assert.equal(await page.locator('.opportunity-row:not([data-stale="true"])').count(), 0);
+      await page.evaluate(() => localStorage.removeItem("agent-bounties.board-snapshot.v1"));
+      await page.locator("[data-market-refresh]").click();
+      await page.locator("[data-opportunity-list]").getByText("We can’t load the list right now.").waitFor();
+      assert.match(await page.locator("[data-opportunity-list]").innerText(), /doesn’t mean there are no bounties/);
       assert.equal(await page.locator(".opportunity-row").count(), 0);
       mode = "ready";
       await page.locator("[data-market-refresh]").click();
@@ -198,8 +209,12 @@ async function main() {
       }
       await page.goto(`${origin}/funded.html?bountyContract=${contract}&network=base-mainnet`);
       await page.getByRole("heading", { name: "Bounty funded." }).waitFor();
-      await page.locator("[data-funded-stay]").click();
       assert.equal(await page.locator("[data-funded-amount]").innerText(), "17.068098 USDC");
+      // Confirmed funding returns the public link to share, and the page stays put so it can be copied.
+      assert.equal(await page.locator("[data-funded-share-url]").inputValue(), `${origin}/participate.html?bountyContract=${contract.toLowerCase()}&network=base-mainnet`);
+      assert.ok(await page.locator("[data-funded-share-copy]").isVisible());
+      await page.waitForTimeout(1500);
+      assert.equal(new URL(page.url()).pathname, "/funded.html", "No timed navigation away from the share link");
       await layout(page); await bounds(page, "[data-funded-board]"); await bounds(page, "[data-funded-workspace]");
       if (process.env.MARKET_LAYOUT_ARTIFACTS && width === 1440) await page.screenshot({ path: path.join(process.env.MARKET_LAYOUT_ARTIFACTS, "funded.png"), fullPage: true });
       mode = "pending";
@@ -208,7 +223,6 @@ async function main() {
         await page.reload();
         await page.getByText(/Funding is confirmed, but the bounty is not ready for work/).waitFor();
         assert.match(await page.locator("[data-funded-status]").innerText(), /benchmark not approved/);
-        assert.equal(await page.locator("[data-funded-redirect]").isVisible(), false);
         await page.goto(`${origin}/participate.html?bountyContract=${contract}&network=base-mainnet`);
         await page.getByText(/Funded · waiting for verification readiness/).waitFor();
         assert.equal(await page.locator("[data-work-prepare]").isVisible(), false);
@@ -217,15 +231,13 @@ async function main() {
       }
       await page.reload(); await page.getByRole("heading", { name: "Funding is still being checked." }).waitFor();
       assert.equal(await page.locator("[data-funded-receipt]").isVisible(), false);
+      assert.equal(await page.locator("[data-funded-share-url]").isVisible(), false, "No share link before confirmed funding");
       mode = "offline";
       await page.locator("[data-funded-recheck]").click(); await page.getByRole("heading", { name: "We couldn’t check funding." }).waitFor();
       mode = "ready";
       await page.locator("[data-funded-recheck]").click(); await page.getByRole("heading", { name: "Bounty funded." }).waitFor();
-      // Offline recovery deliberately stays in place for review.
-      assert.equal(await page.locator("[data-funded-redirect]").isVisible(), false);
       if (width === 1440) {
-        await page.reload();
-        await page.waitForURL(`**/earn.html?posted=${contract}`);
+        await Promise.all([page.waitForURL(`**/earn.html?posted=${contract}`), page.locator("[data-funded-board]").click()]);
         await page.locator(".opportunity-row").waitFor();
         // A confirmed journal is archived only by choosing another posting task.
         await page.evaluate(({ contract, id }) => {

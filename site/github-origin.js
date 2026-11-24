@@ -25,7 +25,9 @@
         const draft = item.plan?.draft;
         if (!/^[0-9a-f-]{36}$/i.test(item.id || "") || !draft || draft.ready_for_publish !== false || typeof draft.title !== "string" || typeof draft.goal !== "string") continue;
         const article = doc.createElement("article"), title = doc.createElement("h3"), goal = doc.createElement("p"), review = doc.createElement("a"), note = doc.createElement("p");
-        title.textContent = draft.title; goal.textContent = draft.goal; note.textContent = "Private draft from GitHub. Check the goal, criteria and budget before making any terms public. Nothing is funded or published.";
+        title.textContent = draft.title; goal.textContent = draft.goal;
+        // The issue's own title and goal: the language switch never translates them.
+        title.setAttribute("data-i18n-skip", ""); goal.setAttribute("data-i18n-skip", ""); note.textContent = "Private draft from GitHub. Check the goal, criteria and budget before making any terms public. Nothing is funded or published.";
         review.textContent = "Review this bounty draft"; review.href = `../../creator-open.html?github_origin=${encodeURIComponent(item.id)}`;
         article.append(title, goal, note, review); items.append(article);
       }

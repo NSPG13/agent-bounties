@@ -120,6 +120,11 @@ REQUIRED_FILES = {
     "app-testing.html",
     "api-integration.html",
     "site-navigation.css",
+    "i18n.js",
+    "i18n/es-board.js",
+    "i18n/es-post.js",
+    "i18n/es-info.js",
+    "i18n/es-guides.js",
     "site-navigation.js",
     "funded.html",
     "submissions.html",
@@ -169,7 +174,7 @@ REQUIRED_FILES = {
     "posting-prompt.js",
     "posting-auth.js",
     "posting-brief.js",
-    "posting-reference.js",
+    "posting-drafts.js",
     "posting-session.js",
     "posting-v2-plan.js",
     "posting-draft-canary.html",
@@ -271,6 +276,11 @@ ALLOWED_UI_CODE = {
     "leaderboard.js",
     "posting-draft-canary.js",
     "site-navigation.css",
+    "i18n.js",
+    "i18n/es-board.js",
+    "i18n/es-post.js",
+    "i18n/es-info.js",
+    "i18n/es-guides.js",
     "site-navigation.js",
     "funded.js",
     "submissions.js",
@@ -282,7 +292,7 @@ ALLOWED_UI_CODE = {
     "posting-prompt.js",
     "posting-auth.js",
     "posting-brief.js",
-    "posting-reference.js",
+    "posting-drafts.js",
     "posting-session.js",
     "posting-v2-plan.js",
     "posting-workspace.js",
@@ -780,7 +790,7 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
             "data-card-verifier",
             "function renderVerifierTerms",
             "if (!ui.verifierSummary || !ui.verifier) return;",
-            'bounty-composer-v2.js?v=42',
+            'bounty-composer-v2.js?v=48',
             "function verificationReadiness",
             "verificationReadiness(benchmark, state.draft?.evidence_schema)",
             'sourceSnapshotDigest.pattern === "^sha256:[0-9a-f]{64}$"',
@@ -817,8 +827,8 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
         [
             'data-post-auth-start',
             'posting-auth.js?v=3',
-            'solarpunk-home.js?v=47',
-            'bounty-composer-v2.js?v=42',
+            'solarpunk-home.js?v=49',
+            'bounty-composer-v2.js?v=48',
             'label: "LOG IN TO POST"',
             'credentials: "include"',
             'account_status === "ready" && payload.account_complete === true',
@@ -1492,6 +1502,30 @@ def check_install_distribution(repo_root: Path, site_dir: Path) -> None:
             fail(f"universal install discovery is missing intent phrase: {phrase}")
 
 
+def check_language_switch_placement(site_dir: Path) -> None:
+    # Owner decision: the English | Español switch lives in the footer, beside Light | Dark,
+    # as one group in the same format, on every page with the shared header; never in the header.
+    pages = [page for page in site_dir.rglob("*.html") if "data-site-header" in page.read_text(encoding="utf-8")]
+    if not pages:
+        fail("no pages carry the shared header")
+    for page in pages:
+        text = page.read_text(encoding="utf-8")
+        name = page.relative_to(site_dir).as_posix()
+        header = re.search(r'<header class="ab-site-header" data-site-header>.*?</header>', text, re.S)
+        if not header or "ab-lang-control" in header[0] or "data-lang-choice" in header[0]:
+            fail(f"{name}: the language switch must not be in the header")
+        group = re.search(r'<div class="ab-footer-bottom">.*?<div class="ab-footer-controls">'
+                          r'(<div class="ab-lang-control" role="group" aria-label="Language" data-i18n-skip>.*?</div>)'
+                          r'(<div class="ab-theme-control" role="group" aria-label="Color theme">.*?</div>)</div>', text, re.S)
+        if not group:
+            fail(f"{name}: the footer must hold the language switch directly beside the theme switch in .ab-footer-controls")
+        if text.count("data-lang-choice=") != 2:
+            fail(f"{name}: the page must offer exactly one English | Español switch")
+        for choice in ("en", "es"):
+            if f'data-lang-choice="{choice}"' not in group[1]:
+                fail(f"{name}: the footer language switch is missing {choice}")
+
+
 def check_shared_script_versions(site_dir: Path) -> None:
     # These keys must be newer than every key used before the Agentizable cutover.
     # A per-page increment can collide with a key already cached by another page.
@@ -1576,7 +1610,7 @@ def main() -> int:
         if re.search(r"Agent Bounties|AgentBounties\.app|agentbounties\.app", text, re.I):
             fail(f"{relative} contains retired public branding or an active legacy URL")
         prefix = "../" * (len(PurePosixPath(relative).parts) - 1)
-        analytics_version = 7
+        analytics_version = 8
         parser = PageParser()
         parser.feed(text)
         # Match the clean URL that Cloudflare Pages serves after redirecting
@@ -1617,7 +1651,7 @@ def main() -> int:
             # homepage wallet onboarding. Only these reviewed scripts may run.
             scripts = re.findall(r"<script\b[^>]*>.*?</script\s*>", text, re.IGNORECASE | re.DOTALL)
             # The theme script runs blocking, before first paint, and only reads the theme key.
-            if scripts != ['<script src="managed-service-theme.js?v=20261115"></script>', '<script src="managed-service-core.js?v=20261030" defer></script>', '<script src="managed-service-page.js?v=20261117" defer></script>']:
+            if scripts != ['<script src="managed-service-theme.js?v=20261123"></script>', '<script src="managed-service-core.js?v=20261030" defer></script>', '<script src="managed-service-page.js?v=20261121" defer></script>']:
                 fail(f"{relative}: only the private managed-service scripts may load")
             if re.search(r"\bon\w+\s*=|shared-navigation:|<(?:iframe|form)\b", text, re.IGNORECASE):
                 fail(f"{relative}: inline handlers, shared journey handlers, forms and frames are forbidden")
@@ -1686,6 +1720,7 @@ def main() -> int:
     check_marketplace(site_dir)
     check_transactional_handoffs(site_dir)
     check_shared_script_versions(site_dir)
+    check_language_switch_placement(site_dir)
     subprocess.run([sys.executable, str(repo_root / "scripts/sync-site-navigation.py"), "--check"], check=True)
     check_metrics(site_dir)
     check_blog(site_dir)
