@@ -82,6 +82,36 @@ const server = http.createServer((req, res) => {
     await page.waitForURL("**/post.html?from=webmcp");
     await page.waitForFunction(() => document.querySelector('[name="title"]')?.value === "From the board");
 
+    // A prepared link (MCP prepare_bounty_post) prefills post.html with the same names; older links still work.
+    const linkDeadline = new Date(Date.now() + 4 * 86400000).toISOString();
+    for (const [label, query] of [
+      ["new names", { title: "Linked bounty", objective: "Translate the help page", description: "Spanish (Mexico).", acceptance_criteria: ["Every heading translated", "Links unchanged"], total_budget_usdc: "10.00", delivery_deadline: linkDeadline }],
+      ["older names", { title: "Linked bounty", goal: "Translate the help page\n\nDetails: Spanish (Mexico).", criterion: ["Every heading translated", "Links unchanged"], solverReward: "9.80", verifierReward: "0.20", deliveryDeadline: linkDeadline }],
+    ]) {
+      const linkPage = await context.newPage(); linkPage.on("pageerror", (error) => errors.push(error.message));
+      const url = new URL(origin + "/post.html");
+      url.searchParams.set("from", "ai-app"); url.searchParams.set("operation_id", "6b2a0000-0000-4000-8000-00000000000" + (label === "new names" ? "1" : "2")); url.searchParams.set("reviewMode", "creator");
+      for (const [key, value] of Object.entries(query)) for (const item of [].concat(value)) url.searchParams.append(key, item);
+      await linkPage.goto(url.href);
+      await linkPage.locator("#bounty-preview").waitFor({ state: "visible" });
+      await linkPage.waitForFunction(() => /9\.00/.test(document.querySelector("[data-card-reward]")?.textContent || ""));
+      assert.equal(await linkPage.locator("[data-card-title]").textContent(), "Linked bounty", label);
+      assert.match(await linkPage.locator("[data-card-goal]").textContent(), /Translate the help page\s+Details: Spanish \(Mexico\)\./, label);
+      assert.equal(await linkPage.locator("[data-card-criteria] li").count(), 2, label);
+      assert.equal(await linkPage.evaluate(() => window.AgentBountiesComposer.review().explicitly_approved), false, `${label}: nothing is approved until the person approves`);
+      await linkPage.close();
+    }
+    // An automated-review link has no deadline; it carries the agreed task window instead.
+    const automated = new URL(origin + "/post.html");
+    for (const [key, value] of Object.entries({ from: "ai-app", operation_id: "6b2a0000-0000-4000-8000-000000000003", reviewMode: "automated", title: "Fix the parser",
+      objective: "Make the tests pass", acceptance_criteria: "All tests pass", total_budget_usdc: "10.00", task_window_days: "5",
+      benchmark: JSON.stringify({ engine: "command", command: "npm test" }), evidence_schema: JSON.stringify({ type: "object" }) })) automated.searchParams.append(key, value);
+    const automatedPage = await context.newPage(); automatedPage.on("pageerror", (error) => errors.push(error.message));
+    await automatedPage.goto(automated.href);
+    await automatedPage.waitForFunction(() => window.AgentBountiesWorkflow.createClient(window).load()?.draft?.task_window_days === 5);
+    assert.equal(await automatedPage.evaluate(() => window.AgentBountiesWorkflow.createClient(window).load().draft.review_mode), "automated");
+    await automatedPage.close();
+
     // The saved draft always carries the platform split, so an approval covers the exact rewards that fund.
     const splitPage = await context.newPage(); splitPage.on("pageerror", (error) => errors.push(error.message));
     await splitPage.goto(origin + "/post.html");
