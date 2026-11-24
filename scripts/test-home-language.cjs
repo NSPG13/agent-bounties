@@ -1,5 +1,5 @@
 "use strict";
-// English | Español on the home page: default English, Spanish via the switch or
+// ENG | ESP on the home page: default English, Spanish via the switch or
 // ?lang=es, remembered, <html lang> follows, and English restores the original text.
 const assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path"), http = require("node:http");
 const { chromium } = require("../tools/browser-layout/node_modules/playwright");
@@ -28,28 +28,37 @@ const server = http.createServer((req, res) => {
       await page.evaluate(() => document.fonts.ready);
       const deny = page.locator("[data-google-analytics-deny]");
       if (await deny.count() && await deny.isVisible()) await deny.click();
-      const control = page.locator(".ab-footer .ab-lang-control");
-      assert.equal(await page.locator("[data-site-header] .ab-lang-control, [data-site-header] [data-lang-choice]").count(), 0, "the header has no language switch");
+      const control = page.locator("[data-site-header] .ab-lang-control");
+      assert.equal(await page.locator(".ab-footer .ab-lang-control, .ab-footer [data-lang-choice]").count(), 0, "the footer has no language switch");
+      assert.equal(await page.locator(".ab-footer .ab-theme-control").count(), 1, "the footer keeps Light | Dark");
       assert.equal(await page.locator("html").getAttribute("lang"), "en", "English by default");
       assert.equal(await control.locator('button[data-lang-choice="en"]').getAttribute("aria-pressed"), "true");
-      assert.deepEqual(await control.locator("button").allInnerTexts(), ["English", "Español"]);
-      await control.scrollIntoViewIfNeeded();
-      assert.ok(await control.isVisible(), "the switch is visible in the footer");
-      // Beside Light | Dark: one group, same line, same format, no overlap.
+      assert.deepEqual(await control.locator("button").allInnerTexts(), ["ENG", "ESP"]);
+      assert.equal(await page.getByRole("button", { name: "English", exact: true }).count(), 1, "ENG is announced as English");
+      assert.equal(await page.getByRole("button", { name: "Español", exact: true }).count(), 1, "ESP is announced as Español");
+      assert.deepEqual(await control.locator("button").evaluateAll((buttons) => buttons.map((button) => button.lang)), ["en", "es"]);
+      assert.ok(await control.isVisible(), "the switch is visible in the header");
+      // In the header before Log in: inside the bar, on the buttons' line, overlapping nothing,
+      // with the theme pill's format and active state.
       const layout = await page.evaluate(() => {
-        const lang = document.querySelector(".ab-footer .ab-lang-control"), theme = document.querySelector(".ab-footer .ab-theme-control");
+        const header = document.querySelector("[data-site-header]"), lang = header.querySelector(".ab-lang-control"), theme = document.querySelector(".ab-footer .ab-theme-control");
         const box = (node) => node.getBoundingClientRect(), style = (node) => getComputedStyle(node);
-        const pick = (node) => ({ height: box(node).height, padding: style(node).padding, border: style(node).border, radius: style(node).borderRadius, font: style(node).font, color: style(node).color, background: style(node).backgroundColor });
-        const button = (control, pressed) => control.querySelector(`button[aria-pressed="${pressed}"]`);
-        return { sameGroup: lang.parentElement === theme.parentElement && lang.parentElement.classList.contains("ab-footer-controls") && lang.nextElementSibling === theme,
-          a: box(lang), b: box(theme), control: [pick(lang), pick(theme)], on: [pick(button(lang, "true")), pick(button(theme, "true"))], off: [pick(button(lang, "false")), pick(button(theme, "false"))] };
+        const pick = (node) => ({ border: style(node).borderTopWidth + " " + style(node).borderTopStyle + " " + style(node).borderTopColor, radius: style(node).borderRadius, color: style(node).color, background: style(node).backgroundColor });
+        const pressed = (control, value) => control.querySelector(`button[aria-pressed="${value}"]`);
+        const others = [header.querySelector(".ab-site-brand"), ...header.querySelectorAll(".ab-site-nav a")].filter((node) => box(node).width > 0);
+        const apart = (a, b) => a.right <= b.left + .5 || b.right <= a.left + .5 || a.bottom <= b.top + .5 || b.bottom <= a.top + .5;
+        return { first: lang.parentElement.classList.contains("ab-site-nav") && lang.nextElementSibling === header.querySelector(".ab-site-signin"),
+          inside: [lang, ...lang.querySelectorAll("button")].every((node) => box(node).top >= box(header).top && box(node).bottom <= box(header).bottom && box(node).left >= 0 && box(node).right <= innerWidth),
+          apart: others.every((node) => apart(box(lang), box(node))), centred: Math.abs((box(lang).top + box(lang).bottom) - (box(header.querySelector(".ab-site-signin")).top + box(header.querySelector(".ab-site-signin")).bottom)) < 2,
+          control: [lang, theme].map((node) => { const { color, ...outline } = pick(node); return outline; }), on: [pick(pressed(lang, "true")), pick(pressed(theme, "true"))], off: [pick(pressed(lang, "false")), pick(pressed(theme, "false"))] };
       });
-      assert.ok(layout.sameGroup, "the language switch sits directly beside the theme switch");
-      assert.ok(Math.abs((layout.a.top + layout.a.height / 2) - (layout.b.top + layout.b.height / 2)) < 1, "both are vertically centered on one line");
-      assert.ok(layout.a.right <= layout.b.left, "the two switches do not overlap");
-      assert.deepEqual(layout.control[0], layout.control[1], "the containers share one format");
-      assert.deepEqual(layout.on[0], layout.on[1], "the active buttons share one format");
-      assert.deepEqual(layout.off[0], layout.off[1], "the inactive buttons share one format");
+      assert.ok(layout.first, "the language switch comes directly before Log in");
+      assert.ok(layout.inside, "the switch fits inside the header bar");
+      assert.ok(layout.apart, "the switch overlaps neither the brand nor the Log in and Workspace buttons");
+      assert.ok(layout.centred, "the switch is centred on the buttons' line");
+      assert.deepEqual(layout.control[0], layout.control[1], "the switch uses the theme pill's outline");
+      assert.deepEqual(layout.on[0], layout.on[1], "the active button looks like the theme pill's active button");
+      assert.deepEqual(layout.off[0], layout.off[1], "the inactive button looks like the theme pill's inactive button");
       await page.waitForTimeout(1500); // Let the page's own scripts settle their text first.
       const english = await bodyText(page), englishTitle = await page.title();
       if (shots) await page.screenshot({ path: path.join(shots, `home-en-${width}-${theme}.png`) });
@@ -59,7 +68,7 @@ const server = http.createServer((req, res) => {
       assert.equal(await page.title(), "Agentizable.ai | Paga por resultados verificables");
       assert.match(await page.locator("#post-a-bounty").innerText(), /Publicar una recompensa/);
       assert.equal(await control.locator('button[data-lang-choice="es"]').getAttribute("aria-pressed"), "true");
-      assert.deepEqual(await control.locator("button").allInnerTexts(), ["English", "Español"], "the switch itself is not translated");
+      assert.deepEqual(await control.locator("button").allInnerTexts(), ["ENG", "ESP"], "the switch itself is not translated");
       assert.equal(await page.evaluate(() => localStorage.getItem("agent-bounties.lang")), "es");
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "Spanish text fits without horizontal scroll");
       if (shots) await page.screenshot({ path: path.join(shots, `home-es-${width}-${theme}.png`) });
@@ -71,7 +80,7 @@ const server = http.createServer((req, res) => {
       assert.equal(await page.locator("html").getAttribute("lang"), "es", "the choice is remembered");
       assert.match(await page.locator("#post-a-bounty").innerText(), /Publicar una recompensa/);
 
-      await page.locator('.ab-footer .ab-lang-control button[data-lang-choice="en"]').click();
+      await page.locator('[data-site-header] .ab-lang-control button[data-lang-choice="en"]').click();
       assert.equal(await page.locator("html").getAttribute("lang"), "en");
       assert.equal(await page.locator("[data-missing-ingredient]").innerText(), "More compute", "the hero phrase returns to English at once");
       await page.waitForTimeout(500);
@@ -95,7 +104,7 @@ const server = http.createServer((req, res) => {
       const page = await motion.newPage();
       await page.goto(origin + "/?lang=es");
       await page.waitForFunction(() => document.querySelector("[data-missing-ingredient]").textContent === "datos privados", null, { timeout: 15000 });
-      await page.locator('.ab-footer .ab-lang-control button[data-lang-choice="en"]').click();
+      await page.locator('[data-site-header] .ab-lang-control button[data-lang-choice="en"]').click();
       const english = ["More compute", "private data", "specialized software", "greater intelligence", "more agents", "an Independent verifier", "the right credentials", "influence with X"];
       assert.ok(english.includes(await page.locator("[data-missing-ingredient]").textContent()), "the typed phrase is English right after switching");
       await motion.close();
@@ -145,9 +154,9 @@ const server = http.createServer((req, res) => {
     const page = await context.newPage();
     for (const file of ["post.html", "earn.html", "about.html", "blog/", "blog/check-agent-work-before-committing-funds.html"]) {
       await page.goto(`${origin}/${file}?lang=es`);
-      const control = page.locator(".ab-footer .ab-footer-controls > .ab-lang-control");
-      assert.equal(await control.count(), 1, `${file} has the language switch in the footer`);
-      assert.equal(await page.locator("[data-site-header] [data-lang-choice]").count(), 0, `${file} header has no language switch`);
+      const control = page.locator("[data-site-header] .ab-site-nav > .ab-lang-control");
+      assert.equal(await control.count(), 1, `${file} has the language switch in the header`);
+      assert.equal(await page.locator(".ab-footer [data-lang-choice]").count(), 0, `${file} footer has no language switch`);
       assert.equal(await page.locator("html").getAttribute("lang"), "es", `${file} follows the choice`);
       assert.equal(await page.locator(".ab-footer").getByText("Términos del servicio").count(), 1, `${file} footer is translated`);
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${file} fits at 390px`);
