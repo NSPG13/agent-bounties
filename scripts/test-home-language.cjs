@@ -159,6 +159,10 @@ const server = http.createServer((req, res) => {
       assert.equal(await page.locator(".ab-footer [data-lang-choice]").count(), 0, `${file} footer has no language switch`);
       assert.equal(await page.locator("html").getAttribute("lang"), "es", `${file} follows the choice`);
       assert.equal(await page.locator(".ab-footer").getByText("Términos del servicio").count(), 1, `${file} footer is translated`);
+      const guide = page.locator(".ab-footer [data-agent-guide]");
+      assert.equal(await guide.textContent(), "Para agentes de IA", `${file} footer links the agent posting guide`);
+      assert.match(await guide.getAttribute("href"), /(^|\/)agent\/post\.md$/);
+      assert.equal(await page.locator('head link[rel="alternate"][type="text/markdown"][href$="agent/post.md"]').count(), 1, `${file} head links the agent posting guide`);
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${file} fits at 390px`);
     }
     await context.close();

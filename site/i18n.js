@@ -229,6 +229,7 @@
     "Privacy policy": "Aviso de privacidad",
     "Terms of service": "Términos del servicio",
     "Open source ↗": "Código abierto ↗",
+    "For AI agents": "Para agentes de IA",
     "Color theme": "Tema de color",
     "Light": "Claro",
     "Dark": "Oscuro",
