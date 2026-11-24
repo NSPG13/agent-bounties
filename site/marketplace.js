@@ -184,6 +184,18 @@
     return `<div class="market-stale-notice" role="status"><strong>Last recorded list · ${text(recordedLabel(recordedAt))}</strong><span>We can’t load the current list. This one may be out of date, and availability right now is unknown. Each bounty page checks its live status before you take part.</span></div>`;
   }
 
+  // Owner decision: when only competition sources are missing and every bounty source
+  // loaded a complete, unlimited page with no listings, there are no open bounties.
+  // Competitions stay unconfirmed, and an old list is not substituted.
+  const COMPETITION_PROTOCOLS = new Set(["open-competition-v1", "open-competition-v2-beta3"]);
+  const NO_OPEN_BOUNTIES = "No open bounties right now.";
+  const COMPETITIONS_UNCONFIRMED = "Competitions are temporarily unavailable, so we can’t confirm whether any competitions are open. Refresh later.";
+  const NO_OPEN_SUMMARY = "0 open bounties · competitions unconfirmed";
+  function onlyCompetitionsMissing(coverage, items) {
+    return coverage?.state === "partial" && coverage.limited === false && Array.isArray(items) && items.length === 0
+      && Array.isArray(coverage.missing) && coverage.missing.length > 0 && coverage.missing.every((protocol) => COMPETITION_PROTOCOLS.has(protocol));
+  }
+
   async function loadOpportunities(win, view = "live") { return view === "completed" ? submissions.loadCompleted(win) : workflow.loadFundedInventory(win); }
 
   function startBoard(win, doc) {
@@ -209,7 +221,8 @@
       const nowMs = Date.now();
       if (loading) return;
       const live = selectedView() !== "completed";
-      const stale = live && (failure || (coverage.state !== "complete" && !items.length)) ? loadSnapshot(win) : null;
+      const noOpenBounties = live && !failure && loadedView === "live" && onlyCompetitionsMissing(coverage, items);
+      const stale = live && !noOpenBounties && (failure || (coverage.state !== "complete" && !items.length)) ? loadSnapshot(win) : null;
       if (stale) {
         const visible = filterItems(stale.items, search?.value, timing?.value || "now", nowMs, kind?.value || "all");
         list.setAttribute("aria-busy", "false");
@@ -228,7 +241,8 @@
       }
       const counts = workflow.inventoryCounts(selectedView() === "completed" ? [] : items, nowMs);
       const visible = filterItems(items, search?.value, timing?.value || "now", nowMs, kind?.value || "all");
-      list.innerHTML = visible.length ? visible.map((item, index) => renderOpportunity(item, index, nowMs)).join("") : coverage.state !== "complete" && !items.length ? `<div class="market-empty"><h2>${coverage.state === "unavailable" ? "We can’t load the list right now." : "We can’t load the full list right now."}</h2><p>${text(coverage.detail || coverage.message)} This doesn’t mean there are no bounties.</p></div>` : emptyState(kind?.value, counts.unavailable);
+      list.innerHTML = visible.length ? visible.map((item, index) => renderOpportunity(item, index, nowMs)).join("") : noOpenBounties
+        ? `<div class="market-empty"><h2>${NO_OPEN_BOUNTIES}</h2><p>${COMPETITIONS_UNCONFIRMED}</p></div>` : coverage.state !== "complete" && !items.length ? `<div class="market-empty"><h2>${coverage.state === "unavailable" ? "We can’t load the list right now." : "We can’t load the full list right now."}</h2><p>${text(coverage.detail || coverage.message)} This doesn’t mean there are no bounties.</p></div>` : emptyState(kind?.value, counts.unavailable);
       list.querySelector?.("[data-market-clear]")?.addEventListener("click", () => {
         if (search) search.value = "";
         if (kind) kind.value = "all";
@@ -242,7 +256,7 @@
       if (summary) summary.textContent = `${counts.now} ${counts.unavailable ? "confirmed " : ""}open now (${counts.direct} direct tasks · ${counts.competition} competitions · ${counts.child_funding} child-funding tasks) · ${counts.ended} scoring closed · ${counts.upcoming} upcoming · ${items.length} funded${counts.unavailable ? ` · Timing unavailable for ${counts.unavailable}; open-now total unconfirmed` : ""}${counts.closed ? ` · ${counts.closed} past deadline` : ""}${generatedAt ? ` · refreshed ${new Date(generatedAt).toLocaleTimeString()}` : ""}`;
       if (summary && selectedView() === "completed") summary.textContent = `${visible.length} completed ${visible.length === 1 ? "bounty" : "bounties"}${items.length === 300 ? " · showing the latest 300" : ""} · Open a submission to see the work and result.`;
       // A partial feed shows what loaded without a notice (author decision); only an empty one explains itself.
-      if (summary && coverage.message && !items.length) summary.textContent = `${coverage.message} ${visible.length} checked listings shown.`;
+      if (summary && coverage.message && !items.length) summary.textContent = noOpenBounties ? NO_OPEN_SUMMARY : `${coverage.message} ${visible.length} checked listings shown.`;
       if (notice && selectedView() === "completed") notice.hidden = true;
       if (notice && postedContract && selectedView() !== "completed") {
         const match = items.find((item) => item.source_id.toLowerCase() === postedContract);
@@ -279,5 +293,5 @@
     win.setInterval(() => { if (!loading && doc.visibilityState !== "hidden" && !list.contains?.(doc.activeElement)) reload(); }, 60_000);
   }
 
-  return { canonicalCoverage: workflow.canonicalCoverage, emptyState, loadSnapshot, saveSnapshot, recordedLabel, amountNumber, apiBase, decisionContext, detailUrl, filterItems, formatUsdc, isReadyToEarn, isV2, loadOpportunities, opportunityFeedUrl, platformFeeLabel, renderOpportunity, scoringWindow, startBoard, timingState, windowLabel };
+  return { canonicalCoverage: workflow.canonicalCoverage, emptyState, loadSnapshot, onlyCompetitionsMissing, saveSnapshot, recordedLabel, amountNumber, apiBase, decisionContext, detailUrl, filterItems, formatUsdc, isReadyToEarn, isV2, loadOpportunities, opportunityFeedUrl, platformFeeLabel, renderOpportunity, scoringWindow, startBoard, timingState, windowLabel };
 });
