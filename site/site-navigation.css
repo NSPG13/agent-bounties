@@ -32,4 +32,15 @@
   .feed-heading { flex-wrap: wrap; }
 }
 
-/* English | Español, matching the Workspace switch with the site's forest tokens. */
+/* ENG | ESP in the header: the theme pill's format and active state (forest-ui.css), sized to sit beside Log in. */
+.ab-site-header .ab-lang-control { flex-shrink: 0; align-items: center; }
+.ab-site-header .ab-lang-control button { display: inline-flex; align-items: center; justify-content: center; min-height: 34px; padding: 5px 11px; font: 700 13px/1 var(--ab-body, system-ui); letter-spacing: .04em; cursor: pointer; }
+.ab-site-header .ab-lang-control button:focus-visible { outline: 2px solid var(--ab-accent, #8ee46b); outline-offset: 2px; }
+@media (min-width: 1100px) { .ab-site-header .ab-lang-control button { min-height: 42px; padding: 6px 14px; font-size: 15px; } }
+@media (max-width: 700px) { .ab-site-header .ab-lang-control button { min-height: 36px; padding: 5px 10px; font-size: 12px; } }
+/* Narrow phones: the switch, Log in and Workspace stay on one row. */
+@media (max-width: 380px) {
+  .ab-site-header .ab-site-nav { gap: 6px; }
+  .ab-site-header .ab-site-nav a { padding: 11px 12px; }
+  .ab-site-header .ab-lang-control button { padding: 5px 8px; }
+}

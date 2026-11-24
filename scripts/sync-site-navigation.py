@@ -36,12 +36,14 @@ def sync(check=False):
             login_attributes = ""
         # The header link leaves dialog ownership to the footer link on the homepage.
         header_login_attributes = " data-post-auth-start" if relative.as_posix() == "post.html" else ""
-        # Every page offers English | Español (author decision); untranslated text stays English.
-        # It sits in the footer beside the theme switch, in the same format (owner decision).
-        language_switch = ('<div class="ab-lang-control" role="group" aria-label="Language" data-i18n-skip>'
-                           '<button type="button" data-lang-choice="en" lang="en" aria-pressed="true">English</button>'
-                           '<button type="button" data-lang-choice="es" lang="es" aria-pressed="false">Español</button></div>'
+        # Every page offers ENG | ESP (author decision); untranslated text stays English.
+        # It sits in the header before Log in, as a compact pill (owner decision); the
+        # accessible names stay "English" and "Español".
+        language_switch = ('    <div class="ab-lang-control" role="group" aria-label="Language" data-i18n-skip>'
+                           '<button type="button" data-lang-choice="en" lang="en" aria-label="English" aria-pressed="true">ENG</button>'
+                           '<button type="button" data-lang-choice="es" lang="es" aria-label="Español" aria-pressed="false">ESP</button></div>\n'
                            )
+        markup = markup.replace("{{language_switch}}", language_switch)
         markup = markup.replace("{{login_href}}", login_href).replace("{{login_attributes}}", login_attributes).replace("{{header_login_attributes}}", header_login_attributes)
         block = START + "\n" + markup + "\n" + END
         source = path.read_text(encoding="utf-8")
@@ -55,14 +57,14 @@ def sync(check=False):
         # styles cannot override the shared shell or selected color theme.
         result = re.sub(r'\s*<(?:link\b[^>]*href|script\b[^>]*src)="' + re.escape(prefix) + r'(?:site-navigation\.css|site-navigation\.js|forest-ui\.css|forest-theme\.js|forest-hall\.css|i18n\.js)\?v=\d+"[^>]*>(?:</script>)?', '', result)
         home_atmosphere = '    <link rel="stylesheet" href="forest-hall.css?v=17">\n' if relative.as_posix() == "index.html" else ""
-        assets = f'''    <link rel="stylesheet" href="{prefix}site-navigation.css?v=9">
-    <link rel="stylesheet" href="{prefix}forest-ui.css?v=9">
+        assets = f'''    <link rel="stylesheet" href="{prefix}site-navigation.css?v=10">
+    <link rel="stylesheet" href="{prefix}forest-ui.css?v=10">
 {home_atmosphere}    <script src="{prefix}forest-theme.js?v=2"></script>
     <script src="{prefix}site-navigation.js?v=7" defer></script>
     <script src="{prefix}i18n.js?v=4" defer></script>
 '''
         result = re.sub(r"[ \t]*</head>", lambda _: assets + "  </head>", result)
-        footer_block = "<!-- shared-footer:start -->\n" + footer.replace("{{root}}", prefix or "./").replace("{{prefix}}", prefix).replace("{{login_href}}", login_href).replace("{{login_attributes}}", login_attributes).replace("{{language_switch}}", language_switch) + "\n<!-- shared-footer:end -->"
+        footer_block = "<!-- shared-footer:start -->\n" + footer.replace("{{root}}", prefix or "./").replace("{{prefix}}", prefix).replace("{{login_href}}", login_href).replace("{{login_attributes}}", login_attributes) + "\n<!-- shared-footer:end -->"
         existing_footer = r'<!-- shared-footer:start -->.*?<!-- shared-footer:end -->'
         if re.search(existing_footer, result, re.S):
             result = re.sub(existing_footer, lambda _: footer_block, result, flags=re.S)

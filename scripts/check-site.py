@@ -1473,27 +1473,28 @@ def check_install_distribution(repo_root: Path, site_dir: Path) -> None:
 
 
 def check_language_switch_placement(site_dir: Path) -> None:
-    # Owner decision: the English | Español switch lives in the footer, beside Light | Dark,
-    # as one group in the same format, on every page with the shared header; never in the header.
+    # Owner decision: the ENG | ESP switch lives in the shared header, before Log in, on every
+    # page with the shared header; the footer keeps only Light | Dark.
     pages = [page for page in site_dir.rglob("*.html") if "data-site-header" in page.read_text(encoding="utf-8")]
     if not pages:
         fail("no pages carry the shared header")
+    switch = ('<div class="ab-lang-control" role="group" aria-label="Language" data-i18n-skip>'
+              '<button type="button" data-lang-choice="en" lang="en" aria-label="English" aria-pressed="true">ENG</button>'
+              '<button type="button" data-lang-choice="es" lang="es" aria-label="Español" aria-pressed="false">ESP</button></div>')
     for page in pages:
         text = page.read_text(encoding="utf-8")
         name = page.relative_to(site_dir).as_posix()
         header = re.search(r'<header class="ab-site-header" data-site-header>.*?</header>', text, re.S)
-        if not header or "ab-lang-control" in header[0] or "data-lang-choice" in header[0]:
-            fail(f"{name}: the language switch must not be in the header")
-        group = re.search(r'<div class="ab-footer-bottom">.*?<div class="ab-footer-controls">'
-                          r'(<div class="ab-lang-control" role="group" aria-label="Language" data-i18n-skip>.*?</div>)'
-                          r'(<div class="ab-theme-control" role="group" aria-label="Color theme">.*?</div>)</div>', text, re.S)
-        if not group:
-            fail(f"{name}: the footer must hold the language switch directly beside the theme switch in .ab-footer-controls")
+        nav = header and re.search(r'<nav class="ab-site-nav"[^>]*>\s*(.*?)</nav>', header[0], re.S)
+        if not nav or not nav[1].startswith(switch) or not re.match(r'\s*<a class="ab-site-signin"', nav[1][len(switch):]):
+            fail(f"{name}: the header navigation must start with the ENG | ESP switch, directly before Log in")
+        footer = re.search(r'<!-- shared-footer:start -->.*?<!-- shared-footer:end -->', text, re.S)
+        if not footer or "data-lang-choice" in footer[0] or "ab-footer-controls" in footer[0]:
+            fail(f"{name}: the footer must not hold a language switch")
+        if not re.search(r'<div class="ab-footer-bottom"><span>[^<]*</span><div class="ab-theme-control" role="group" aria-label="Color theme">', footer[0]):
+            fail(f"{name}: the footer keeps only the Light | Dark switch")
         if text.count("data-lang-choice=") != 2:
-            fail(f"{name}: the page must offer exactly one English | Español switch")
-        for choice in ("en", "es"):
-            if f'data-lang-choice="{choice}"' not in group[1]:
-                fail(f"{name}: the footer language switch is missing {choice}")
+            fail(f"{name}: the page must offer exactly one ENG | ESP switch")
 
 
 def check_shared_script_versions(site_dir: Path) -> None:
