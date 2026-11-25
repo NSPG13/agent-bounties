@@ -26,7 +26,7 @@ En Workspace, `get_context` devuelve `usage_measurement` solo para tu propio pue
 
 El gateway es un intermediario opcional entre tu cliente y tu propio proveedor de modelos. Usas tu propia clave de proveedor (BYOK). El proveedor te cobra directamente, igual que sin el gateway.
 
-- **Dos credenciales.** Un administrador de la plataforma emite una sola vez una credencial de inferencia revocable para tu puesto. Guárdala en `AGENTIZABLE_GATEWAY_KEY`. Guarda tu propia clave de proveedor en `AGENTIZABLE_PROVIDER_KEY`. Las dos se quedan en tu equipo. Nunca pegues ninguna en un chat, un mensaje de Workspace, una URL o un archivo versionado.
+- **Dos credenciales.** Un administrador de la plataforma emite una sola vez una credencial de inferencia revocable para tu puesto. Guárdala en `AGENTIZABLE_GATEWAY_KEY`. Guarda tu propia clave de proveedor en `AGENTIZABLE_PROVIDER_KEY`. Las dos se guardan solo en tu equipo y se envían por HTTPS con cada solicitud: la credencial de inferencia al gateway, y tu clave de proveedor al gateway, que la reenvía a tu proveedor. Nunca pegues ninguna en un chat, un mensaje de Workspace, una URL o un archivo versionado.
 - **Dos cabeceras.** Cada solicitud envía tu clave de proveedor en `X-Agentizable-Provider-Key` y tu tarea en `X-Agentizable-Task`.
 - **Proveedores.** Tu puesto elige un proveedor de la lista permitida del gateway. El gateway nunca reenvía a una URL arbitraria. El primer grupo es OpenAI, xAI y la API compatible con OpenAI de Gemini. Después llegan los formatos nativos Anthropic Messages y Gemini. Otros proveedores se agregan solo cuando pasan sus pruebas de ruta y de conteo.
 - **Revocación.** Al revocar la credencial se detienen las solicitudes nuevas de inmediato.
@@ -70,7 +70,7 @@ X-Agentizable-Task: $AGENTIZABLE_TASK"
 
 ### Gemini CLI (todavía no disponible)
 
-Gemini CLI puede apuntar a otra URL base (`GOOGLE_GEMINI_BASE_URL`, en modo de clave de API), pero no tiene una forma documentada de agregar la cabecera de la clave de proveedor. Se está probando un adaptador local que agrega esa cabecera en tu equipo. El adaptador lee tu clave solo de tu entorno; tu clave nunca va en una URL y no se guarda en el gateway. Esta sección tendrá los pasos exactos cuando el adaptador pase sus pruebas. Ten en cuenta que la documentación de Gemini CLI dice que fue reemplazado por Antigravity CLI.
+Gemini CLI puede apuntar a otra URL base (`GOOGLE_GEMINI_BASE_URL`, en modo de clave de API), pero no tiene una forma documentada de agregar la cabecera de la clave de proveedor. Está previsto un adaptador local que agrega esa cabecera en tu equipo. El adaptador lee tu clave solo de tu entorno; tu clave nunca va en una URL y no se guarda en el gateway. Esta sección tendrá los pasos exactos cuando el adaptador pase sus pruebas.
 
 ### Clientes genéricos compatibles con OpenAI (perfil previsto)
 

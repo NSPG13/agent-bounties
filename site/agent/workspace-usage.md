@@ -26,7 +26,7 @@ In Workspace, `get_context` returns `usage_measurement` for your own seat only. 
 
 The gateway is an optional relay between your client and your own model provider. You bring your own provider key (BYOK). The provider bills you directly, as it would without the gateway.
 
-- **Two credentials.** A platform administrator issues a revocable inference credential for your seat once. Keep it in `AGENTIZABLE_GATEWAY_KEY`. Keep your own provider key in `AGENTIZABLE_PROVIDER_KEY`. Both stay on your machine. Never paste either one into a chat, a Workspace message, a URL or a committed file.
+- **Two credentials.** A platform administrator issues a revocable inference credential for your seat once. Keep it in `AGENTIZABLE_GATEWAY_KEY`. Keep your own provider key in `AGENTIZABLE_PROVIDER_KEY`. Both are stored only on your machine and are sent over HTTPS with each request: the inference credential to the gateway, and your provider key to the gateway, which forwards it to your provider. Never paste either one into a chat, a Workspace message, a URL or a committed file.
 - **Two headers.** Each request sends your provider key in `X-Agentizable-Provider-Key` and your task in `X-Agentizable-Task`.
 - **Providers.** Your seat selects a provider from the gateway's allowlist. The gateway never forwards to an arbitrary URL. The first group is OpenAI, xAI and Gemini's OpenAI-compatible API. Anthropic Messages and Gemini native formats follow. Other providers are added only after their route and accounting tests pass.
 - **Revocation.** Revoking the credential stops new requests at once.
@@ -70,7 +70,7 @@ X-Agentizable-Task: $AGENTIZABLE_TASK"
 
 ### Gemini CLI (not available yet)
 
-Gemini CLI can point at another base URL (`GOOGLE_GEMINI_BASE_URL`, in API-key mode), but it has no documented way to add the provider-key header. A local adapter that adds the header on your machine is being tested. The adapter reads your key only from your environment; your key never goes in a URL and is not stored on the gateway. This section will list exact steps once that adapter passes its checks. Note that Gemini CLI's own documentation says it has been replaced by Antigravity CLI.
+Gemini CLI can point at another base URL (`GOOGLE_GEMINI_BASE_URL`, in API-key mode), but it has no documented way to add the provider-key header. A local adapter that adds the header on your machine is planned. The adapter reads your key only from your environment; your key never goes in a URL and is not stored on the gateway. This section will list exact steps once that adapter passes its checks.
 
 ### Generic OpenAI-compatible clients (planned profile)
 
