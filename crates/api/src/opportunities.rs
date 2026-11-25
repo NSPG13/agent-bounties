@@ -256,6 +256,10 @@ pub struct OpportunityItem {
     pub next_action: OpportunityNextAction,
     pub embeds: OpportunityEmbedLinks,
     pub image: OpportunityImage,
+    /// Every image in the published terms (up to four, each with alt text), or
+    /// the legacy single image. `image` is the first of these or the fallback.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<OpportunityImage>,
     pub discovery_factors: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -470,6 +474,7 @@ pub fn render_opportunity_feeds(
                 "verification_details": item.verification_details,
                 "terms_hash": item.terms_hash,
                 "image": item.image,
+                "images": item.images,
                 "next_action": item.next_action,
                 "evidence_boundary": item.evidence_boundary,
             }
@@ -748,6 +753,7 @@ pub fn unfunded_opportunity(
         },
         embeds,
         image,
+        images: Vec::new(),
         discovery_factors: base_factors(
             "unfunded_offchain",
             work_state,
@@ -879,6 +885,7 @@ pub fn legacy_opportunity(
         next_action,
         embeds,
         image,
+        images: Vec::new(),
         discovery_factors: base_factors(
             "legacy_bounty",
             work_state,
@@ -955,16 +962,22 @@ pub fn canonical_opportunity(
         .collect();
     let opportunity_id = format!("canonical:{network}:{}", item.bounty_contract);
     let embeds = opportunity_embed_links(api, &opportunity_id, Some(network));
-    let image = terms
-        .and_then(|record| record.document.image.as_ref())
+    let images: Vec<OpportunityImage> = terms
+        .map(|record| record.document.image_list())
+        .unwrap_or_default()
+        .into_iter()
         .map(|image| OpportunityImage {
-            source: image.source.clone(),
-            prompt: Some(image.prompt.clone()),
-            alt_text: image.alt_text.clone(),
-            asset_url: image.asset_url.clone(),
-            sha256: Some(image.sha256.clone()),
-            mime_type: image.mime_type.clone(),
+            source: image.source,
+            prompt: image.prompt,
+            alt_text: image.alt_text,
+            asset_url: image.asset_url,
+            sha256: Some(image.sha256),
+            mime_type: image.mime_type,
         })
+        .collect();
+    let image = images
+        .first()
+        .cloned()
         .unwrap_or_else(|| fallback_opportunity_image(&embeds, &title));
     let gross_cash_margin = item.gross_cash_margin.parse::<i128>().ok()?;
     let cash_economics = OpportunityCashEconomics {
@@ -1042,6 +1055,7 @@ pub fn canonical_opportunity(
         next_action,
         embeds,
         image,
+        images,
         discovery_factors: base_factors(
             "canonical_base",
             work_state,
@@ -1562,6 +1576,7 @@ pub fn open_competition_v2_opportunities(
             next_action,
             embeds,
             image,
+            images: Vec::new(),
             discovery_factors: base_factors(
                 "canonical_base",
                 work_state,
@@ -1831,6 +1846,7 @@ pub fn open_competition_opportunities(
             next_action,
             embeds,
             image,
+            images: Vec::new(),
             discovery_factors: vec![
                 "source_type=canonical_base".to_string(),
                 format!("work_state={work_state}"),
@@ -2859,6 +2875,7 @@ mod tests {
                     sha256: "ab".repeat(32),
                     mime_type: "image/webp".to_string(),
                 }),
+                images: Vec::new(),
                 agent_eligibility: None,
                 claim_coordination: None,
             },
@@ -3046,6 +3063,46 @@ mod tests {
         assert_eq!(ready.next_action.action, "prepare_agent_to_earn");
         assert_eq!(ready.image.source, "chatgpt_user_generated");
         assert_eq!(ready.image.sha256, Some("ab".repeat(32)));
+        // An old single-image bounty still reads, as a one-image list.
+        assert_eq!(ready.images, vec![ready.image.clone()]);
+
+        // New terms project every image in order; `image` is the first.
+        let mut listed = canonical("claimable", "1000000", true);
+        let terms = listed.terms.as_mut().unwrap();
+        terms.document.image = None;
+        terms.document.images = ['c', 'd']
+            .into_iter()
+            .map(|n| {
+                let sha256 = n.to_string().repeat(64);
+                domain::BountyTermsImage {
+                    source: "creator_upload".to_string(),
+                    alt_text: format!("View {n}"),
+                    asset_url: format!(
+                        "https://api.agentizable.ai/v1/public/bounty-images/{sha256}"
+                    ),
+                    sha256,
+                    mime_type: "image/jpeg".to_string(),
+                    prompt: None,
+                }
+            })
+            .collect();
+        let listed = canonical_opportunity(&listed, "base-mainnet", "https://api.example").unwrap();
+        assert_eq!(listed.images.len(), 2);
+        assert_eq!(listed.images[1].alt_text, "View d");
+        assert_eq!(listed.images[1].prompt, None);
+        assert_eq!(listed.image, listed.images[0]);
+        let feed = serde_json::to_value(&listed).unwrap();
+        assert_eq!(feed["images"].as_array().unwrap().len(), 2);
+        // Without images the field is omitted and the fallback card stays.
+        let mut plain = canonical("claimable", "1000000", true);
+        plain.terms.as_mut().unwrap().document.image = None;
+        let plain = canonical_opportunity(&plain, "base-mainnet", "https://api.example").unwrap();
+        assert!(plain.images.is_empty());
+        assert_eq!(plain.image.source, "content_derived_legacy_card");
+        assert!(serde_json::to_value(&plain)
+            .unwrap()
+            .get("images")
+            .is_none());
 
         let unavailable = canonical_opportunity(
             &canonical("claimable", "1000000", false),

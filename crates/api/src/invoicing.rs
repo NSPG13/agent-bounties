@@ -1012,6 +1012,7 @@ pub(crate) fn invoice_bounty_terms_document(
         source_url: request.source_url.clone(),
         discovery_source: Some("invoiced-seller-of-record".to_string()),
         image: None,
+        images: Vec::new(),
         agent_eligibility: None,
         claim_coordination: None,
     })
