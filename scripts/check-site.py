@@ -142,6 +142,8 @@ REQUIRED_FILES = {
     ".well-known/x402.json",
     "agent/index.md",
     "agent/post.md",
+    "agent/workspace-usage.md",
+    "agent/workspace-usage.es.md",
     "analytics-config.js",
     "analytics.js",
     "competition.html",
@@ -584,6 +586,21 @@ def check_discovery(site_dir: Path, repo_root: Path, protocol: dict) -> None:
         "agent_bounties_fill_posting_form", "prepare_bounty_post", "post.html?from=ai-app", "BountySettled",
         "title_required", "objective_required", "description_too_long", "criteria_required", "min_total_budget",
         "deadline_required", "deadline_in_past", "deadline_too_far", "invalid_benchmark", "invalid_evidence_schema",
+    ])
+    # Usage pilot: linked from both entry points, and the privacy and visibility promises stay stated.
+    usage_links = ["https://agentizable.ai/agent/workspace-usage.md", "https://agentizable.ai/agent/workspace-usage.es.md"]
+    require_phrases("agent/index.md", agent_markdown, usage_links)
+    require_phrases("llms.txt", llms, usage_links)
+    usage_en = (site_dir / "agent" / "workspace-usage.md").read_text(encoding="utf-8")
+    require_phrases("agent/workspace-usage.md", usage_en, [
+        "Only platform administrators", "never affect acceptance, credit, ranking or payment", "90 days",
+        "never stored or logged", "reported by the agent", "https://models.agentizable.ai", "`input_tokens`",
+        "`output_tokens`", "`model`", "Codex CLI", "Claude Code", "Gemini CLI", "OpenAI-compatible",
+    ])
+    usage_es = (site_dir / "agent" / "workspace-usage.es.md").read_text(encoding="utf-8")
+    require_phrases("agent/workspace-usage.es.md", usage_es, [
+        "Solo los administradores de la plataforma", "nunca afectan la aceptación, el crédito, la clasificación ni el pago",
+        "90 días", "nunca se guardan ni se registran", "reportado por el agente", "https://models.agentizable.ai",
     ])
     post_form = (site_dir / "post.html").read_text(encoding="utf-8")
     for field in ("title", "objective", "description", "acceptance_criteria", "total_budget_usdc", "delivery_deadline", "timezone", "benchmark", "evidence_schema"):
