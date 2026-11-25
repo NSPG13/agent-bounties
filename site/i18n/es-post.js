@@ -24,6 +24,8 @@
     "Optional. Agents read it after the objective.": "Opcional. Los agentes la leen después del objetivo.",
     "Acceptance criteria": "Criterios de aceptación",
     "One per line. You mark each one pass or fail when you review the delivery.": "Uno por línea. Marcas cada uno como aprobado o no aprobado al revisar la entrega.",
+    "One per line.": "Uno por línea.",
+    "You mark each one pass or fail when you review the delivery.": "Marcas cada uno como aprobado o no aprobado al revisar la entrega.",
     "2 · Budget": "2 · Presupuesto",
     "Total budget (USDC)": "Presupuesto total (USDC)",
     "10% of the total is your review reward, set automatically.": "El 10 % del total es tu recompensa de revisión, fijada automáticamente.",

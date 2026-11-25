@@ -46,17 +46,19 @@
         ]
       }
     </script>
-    <link rel="stylesheet" href="solarpunk.css?v=23">
+    <link rel="stylesheet" href="solarpunk.css?v=24">
     <link rel="stylesheet" href="phone-wallet.css?v=5">
     <link rel="stylesheet" href="wallet-link.css?v=5">
     <link rel="stylesheet" href="wallet-adapters.css?v=6">
-    <link rel="stylesheet" href="manual-posting.css?v=7">
+    <link rel="stylesheet" href="manual-posting.css?v=8">
     <link rel="stylesheet" href="site-navigation.css?v=10">
     <link rel="stylesheet" href="forest-ui.css?v=10">
     <link rel="stylesheet" href="forest-hall.css?v=17">
     <script src="forest-theme.js?v=2"></script>
     <script src="site-navigation.js?v=7" defer></script>
-    <script src="i18n.js?v=5" defer></script>
+    <script src="i18n.js?v=6" defer></script>
+    <link rel="stylesheet" href="info-tip.css?v=1">
+    <script src="info-tip.js?v=2" defer></script>
     <link rel="alternate" type="text/markdown" href="agent/post.md" title="How AI agents post a bounty">
   </head>
   <body class="forest-home">
@@ -188,10 +190,7 @@
         <details class="account-wallets account-collapsible" data-account-section="wallets">
           <summary><h3 id="linked-wallets-title">Linked wallets <span class="account-section-count" data-wallet-count></span></h3></summary>
           <header>
-            <div>
-              <p>Needed only to solve bounties and receive payouts. Posting and paying by card need no wallet. Use a phone wallet, a browser wallet, or create one here.</p>
-            </div>
-            <button type="button" data-wallet-link>Link wallet</button>
+            <button type="button" data-wallet-link>Link wallet</button><span data-info-tip>Needed only to solve bounties and receive payouts. Posting and paying by card need no wallet. Use a phone wallet, a browser wallet, or create one here.</span>
           </header>
           <ul data-wallet-list>
             <li class="wallet-empty">No wallet linked. You only need one to solve bounties and receive payouts.</li>
@@ -216,9 +215,8 @@
           <summary><h3 id="account-settings-title">Settings</h3></summary>
         <section class="account-review-emails" aria-labelledby="push-notifications-title">
           <h4 id="push-notifications-title">Browser notifications</h4>
-          <p>Receive claims and review reminders on this device, including when this page is closed. Your browser’s push service handles encrypted delivery.</p>
           <p data-push-status aria-live="polite">Sign in to manage browser notifications.</p>
-          <button type="button" data-push-enable disabled>Enable on this device</button>
+          <button type="button" data-push-enable disabled>Enable on this device</button><span data-info-tip>Receive claims and review reminders on this device, including when this page is closed. Your browser’s push service handles encrypted delivery.</span>
           <button type="button" data-push-disable hidden>Turn off this device</button>
           <button type="button" data-push-test hidden>Send a test notification</button>
         </section>
