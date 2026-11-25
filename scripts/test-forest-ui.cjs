@@ -131,6 +131,7 @@ async function main() {
       mode = "invalid";
       await page.evaluate(() => dispatchEvent(new Event("online")));
       await page.waitForSelector(".ab-prize:not(:visible)");
+      assert.ok(await page.locator(".ab-prize").evaluate(el => getComputedStyle(el).display === "none"), "prize hidden");
       assert.ok(await page.locator("[data-leaderboard-table]").evaluate(el => getComputedStyle(el).display === "none"), "invalid table hidden");
     }
   } finally { await browser.close(); await new Promise(r => server.close(r)); }
