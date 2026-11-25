@@ -55,7 +55,7 @@ def sync(check=False):
             result = source[:header.start()] + block + source[header.end():] if header else re.sub(r'(<body\b[^>]*>)', lambda m: m[0] + "\n    " + block, source, count=1)
         # Render shared assets once, last in the head so page-local legacy
         # styles cannot override the shared shell or selected color theme.
-        result = re.sub(r'\s*<(?:link\b[^>]*href|script\b[^>]*src)="' + re.escape(prefix) + r'(?:site-navigation\.css|site-navigation\.js|forest-ui\.css|forest-theme\.js|forest-hall\.css|i18n\.js)\?v=\d+"[^>]*>(?:</script>)?', '', result)
+        result = re.sub(r'\s*<(?:link\b[^>]*href|script\b[^>]*src)="' + re.escape(prefix) + r'(?:site-navigation\.css|site-navigation\.js|forest-ui\.css|forest-theme\.js|forest-hall\.css|i18n\.js|info-tip\.css|info-tip\.js)\?v=\d+"[^>]*>(?:</script>)?', '', result)
         # The agent posting guide is discoverable from every page (P7).
         result = re.sub(r'\s*<link rel="alternate" type="text/markdown" href="[^"]*agent/post\.md"[^>]*>', '', result)
         home_atmosphere = '    <link rel="stylesheet" href="forest-hall.css?v=17">\n' if relative.as_posix() == "index.html" else ""
@@ -63,7 +63,9 @@ def sync(check=False):
     <link rel="stylesheet" href="{prefix}forest-ui.css?v=10">
 {home_atmosphere}    <script src="{prefix}forest-theme.js?v=2"></script>
     <script src="{prefix}site-navigation.js?v=7" defer></script>
-    <script src="{prefix}i18n.js?v=5" defer></script>
+    <script src="{prefix}i18n.js?v=6" defer></script>
+    <link rel="stylesheet" href="{prefix}info-tip.css?v=1">
+    <script src="{prefix}info-tip.js?v=1" defer></script>
     <link rel="alternate" type="text/markdown" href="{prefix}agent/post.md" title="How AI agents post a bounty">
 '''
         result = re.sub(r"[ \t]*</head>", lambda _: assets + "  </head>", result)

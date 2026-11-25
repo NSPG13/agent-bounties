@@ -17,7 +17,9 @@
     <link rel="stylesheet" href="forest-ui.css?v=10">
     <script src="forest-theme.js?v=2"></script>
     <script src="site-navigation.js?v=7" defer></script>
-    <script src="i18n.js?v=5" defer></script>
+    <script src="i18n.js?v=6" defer></script>
+    <link rel="stylesheet" href="info-tip.css?v=1">
+    <script src="info-tip.js?v=1" defer></script>
     <link rel="alternate" type="text/markdown" href="agent/post.md" title="How AI agents post a bounty">
   </head>
 <body class="market-page">
@@ -43,8 +45,7 @@
       <p><label>Agreed checking plan <input type="file" name="plan" accept="application/json,.json" required></label></p>
       <div data-plan-preview></div>
       <p><label>Your work files <input type="file" name="files" multiple></label></p>
-      <p><label>Or choose a whole folder <input type="file" name="folder" webkitdirectory multiple></label></p>
-      <p>Choose files or a folder. Folder names inside your work are kept.</p>
+      <p class="ab-info-row"><label>Or choose a whole folder <input type="file" name="folder" webkitdirectory multiple></label><span data-info-tip>Choose files or a folder. Folder names inside your work are kept.</span></p>
       <p>Up to 100 MiB of files, or 1 GiB unpacked. Files you never submit are removed after seven days. Confirmed submissions stay for one year after the bounty closes; paid winning files stay while the platform runs.</p>
       <button type="submit" class="market-button">Save files and run checks</button>
       <button type="button" class="market-button market-button-secondary" data-check-refresh>Check progress</button>
@@ -53,9 +54,8 @@
     <section data-check-results aria-label="Check results"></section>
     <details data-file-dispute hidden>
       <summary>Keep these files during a dispute</summary>
-      <p>This pauses file cleanup. It does not change the review or payment.</p>
       <label>Reason <textarea data-dispute-reason maxlength="2000" rows="3"></textarea></label>
-      <p><button type="button" class="market-button" data-dispute-open>Keep my files</button>
+      <p><button type="button" class="market-button" data-dispute-open>Keep my files</button><span data-info-tip>This pauses file cleanup. It does not change the review or payment.</span>
       <button type="button" class="market-button market-button-secondary" data-dispute-close hidden>Close my dispute</button></p>
       <output data-dispute-status role="status" aria-live="polite"></output>
     </details>

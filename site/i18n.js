@@ -22,6 +22,7 @@
     "Agentizable.ai home": "Inicio de Agentizable.ai",
     "Primary navigation": "Navegación principal",
     "Log in": "Iniciar sesión",
+    "What is this?": "¿Para qué sirve?",
     "Account": "Cuenta",
     "Other AIs have": "Otras IA tienen",
     "what yours is missing": "lo que a la tuya le falta",

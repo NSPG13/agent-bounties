@@ -1293,8 +1293,8 @@ html[data-scene-ready="false"] .scene-plate {
 .account-wallets > header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 20px;
+  justify-content: flex-end;
+  gap: 4px;
 }
 
 .account-wallets h3 {
@@ -2318,8 +2318,8 @@ html[data-scene-ready="false"] .scene-plate {
   }
 
   .account-wallets > header {
-    align-items: flex-start;
-    gap: 12px;
+    align-items: center;
+    gap: 4px;
   }
 
   .account-wallets header p {

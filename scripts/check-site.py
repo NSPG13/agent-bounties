@@ -121,6 +121,8 @@ REQUIRED_FILES = {
     "api-integration.html",
     "site-navigation.css",
     "i18n.js",
+    "info-tip.js",
+    "info-tip.css",
     "i18n/es-board.js",
     "i18n/es-post.js",
     "i18n/es-info.js",
@@ -276,6 +278,8 @@ ALLOWED_UI_CODE = {
     "posting-draft-canary.js",
     "site-navigation.css",
     "i18n.js",
+    "info-tip.js",
+    "info-tip.css",
     "i18n/es-board.js",
     "i18n/es-post.js",
     "i18n/es-info.js",
@@ -590,6 +594,47 @@ def check_discovery(site_dir: Path, repo_root: Path, protocol: dict) -> None:
         if f'name="{field}"' not in post_form:
             fail(f"agent/post.md documents {field}, but post.html has no input named {field}")
 
+
+# Owner rule (Nov 25): "what is this for" help next to a button or control is a shared
+# info tip, not a visible line. Tips are plain-text <span data-info-tip> right after the
+# control (no links or controls inside), every page loads the component, and the help
+# lines that moved into tips do not come back as visible text.
+INFO_TIP_MOVED = {
+    "post.html": ["Optional. Agents read it after the objective.", "You mark each one pass or fail when you review the delivery.",
+                  "By OpenAI. Works with the ChatGPT desktop app.", "By Anthropic. Chrome on a computer, with a paid Claude plan.",
+                  "We check finalized chain state before preserving your draft"],
+    "index.html": ["Needed only to solve bounties and receive payouts.", "Receive claims and review reminders on this device"],
+    "onramp.html": ["Copy it from your wallet’s Receive screen."],
+    "check-work.html": ["Choose files or a folder. Folder names inside your work are kept.", "This pauses file cleanup."],
+    "collaborate/index.html": ["Use your existing connection or the public read-only feed.", "Start with a need you can describe."],
+    "api-integration.html": ["Review the terms first. Fund upfront with USDC on Base."],
+    "app-testing.html": ["Review the terms first. Fund upfront with USDC on Base."],
+    "bug-fix.html": ["Review the terms first. Fund upfront with USDC on Base."],
+}
+
+
+def check_info_tips(site_dir: Path) -> None:
+    tip_pattern = re.compile(r"<(\w+)\b[^>]*\bdata-info-tip\b[^>]*>(.*?)</\1>", re.S)
+    for path in sorted(site_dir.rglob("*.html")):
+        relative = path.relative_to(site_dir).as_posix()
+        html = path.read_text(encoding="utf-8")
+        if "data-site-header" in html and "info-tip.js?v=" not in html:
+            fail(f"{relative} must load the shared info tip (run scripts/sync-site-navigation.py)")
+        for tag, body in tip_pattern.findall(html):
+            if tag != "span":
+                fail(f"{relative}: an info tip must be a <span data-info-tip>, not <{tag}>")
+            if "<" in body or not body.strip() or len(body) > 320:
+                fail(f"{relative}: an info tip holds 1 to 320 characters of plain text, with no links or controls")
+        tips = " ".join(body for _, body in tip_pattern.findall(html))
+        for phrase in INFO_TIP_MOVED.get(relative, []):
+            if phrase not in tips:
+                fail(f"{relative}: the help line '{phrase}' must stay in a data-info-tip")
+            if html.count(phrase) != tips.count(phrase):
+                fail(f"{relative}: the help line '{phrase}' is back as visible text; use the shared info tip")
+    component = (site_dir / "info-tip.js").read_text(encoding="utf-8")
+    for phrase in ('icon.type = "button"', '"aria-describedby"', '"role", "tooltip"', '"Escape"', '"pointerdown"', "mouseenter", '"focus"', 'LABEL = "What is this?"'):
+        if phrase not in component:
+            fail(f"info-tip.js lost {phrase}")
 
 def check_a2a_card(site_dir: Path, repo_root: Path) -> None:
     site_card_path = site_dir / ".well-known" / "agent-card.json"
@@ -1701,6 +1746,7 @@ def main() -> int:
     check_protocol(protocol, deployment)
     check_discovery(site_dir, repo_root, protocol)
     check_a2a_card(site_dir, repo_root)
+    check_info_tips(site_dir)
     check_analytics(site_dir, repo_root)
     check_homepage(site_dir)
     check_install_distribution(repo_root, site_dir)
