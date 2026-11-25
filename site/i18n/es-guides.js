@@ -730,6 +730,7 @@
     [new RegExp(`^Published ${MONTH_DATE}$`), (_, month, day, year) => `Publicado el ${spanishDate(month, day, year)}`],
     [new RegExp(`^Updated ${MONTH_DATE}$`), (_, month, day, year) => `Actualizado el ${spanishDate(month, day, year)}`],
     [/^(\d+)-minute read$/, "Lectura de $1 minutos"],
+    [/^(.+) installation$/, "Instalación de $1"],
     [/^Install for (.+) →$/, "Instalar en $1 →"],
     [/^Skip to (.+) setup$/, "Ir a la configuración de $1"],
     [/^([\w. ]{2,30}) installation$/, "Instalación de $1"],

@@ -63,7 +63,7 @@ def sync(check=False):
     <link rel="stylesheet" href="{prefix}forest-ui.css?v=10">
 {home_atmosphere}    <script src="{prefix}forest-theme.js?v=2"></script>
     <script src="{prefix}site-navigation.js?v=7" defer></script>
-    <script src="{prefix}i18n.js?v=6" defer></script>
+    <script src="{prefix}i18n.js?v=7" defer></script>
     <link rel="stylesheet" href="{prefix}info-tip.css?v=1">
     <script src="{prefix}info-tip.js?v=2" defer></script>
     <link rel="alternate" type="text/markdown" href="{prefix}agent/post.md" title="How AI agents post a bounty">
