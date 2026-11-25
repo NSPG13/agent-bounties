@@ -77,6 +77,15 @@ const PAGES = [
         await page.mouse.click(5, 300);
         assert.equal(await tip.isHidden(), true, `${where}: a click outside closes it`);
       }
+      // Inside a transformed container (like the animated account dialog) the tip still
+      // opens right under its icon, not offset by the container's position.
+      await button.evaluate((node) => { const box = node.closest(".ab-info").parentElement; box.style.transform = "translateY(0) scale(1)"; box.style.marginLeft = "4px"; });
+      await button.focus();
+      const gap = await button.evaluate((node) => { const icon = node.getBoundingClientRect(), tip = node.nextElementSibling.getBoundingClientRect(); return { below: tip.top - icon.bottom, above: icon.top - tip.bottom, left: tip.left, right: tip.right }; });
+      assert.ok(Math.abs(gap.below - 6) <= 1.5 || Math.abs(gap.above - 6) <= 1.5, `${where}: in a transformed container the tip sits 6px from its icon (${JSON.stringify(gap)})`);
+      assert.ok(gap.left >= 7.5 && gap.right <= width - 7.5, `${where}: in a transformed container the tip stays on screen`);
+      await page.keyboard.press("Escape");
+      await button.evaluate((node) => { const box = node.closest(".ab-info").parentElement; box.style.transform = ""; box.style.marginLeft = ""; node.blur(); });
       // Keyboard: focus opens, Esc closes and keeps focus on the icon.
       await button.focus();
       assert.equal(await tip.isVisible(), true, `${where}: keyboard focus opens the tip`);

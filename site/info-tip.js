@@ -39,9 +39,13 @@
       const icon = tip.previousElementSibling;
       tip.hidden = false;
       icon.setAttribute("aria-expanded", "true");
-      const at = place(icon, tip, viewport());
-      tip.style.left = at.left + "px";
-      tip.style.top = at.top + "px";
+      // A transformed ancestor (such as an animated dialog) becomes the containing block
+      // of a fixed element, so measure where (0, 0) really lands and convert.
+      tip.style.left = "0px";
+      tip.style.top = "0px";
+      const origin = tip.getBoundingClientRect(), at = place(icon, tip, viewport());
+      tip.style.left = Math.round(at.left - origin.left) + "px";
+      tip.style.top = Math.round(at.top - origin.top) + "px";
       open = { tip, icon, pinned: Boolean(pinned) || Boolean(open && open.tip === tip && open.pinned) };
     }
     function hide() {
