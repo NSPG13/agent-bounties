@@ -1,0 +1,25 @@
+{
+  "schema": "claim-readiness/v1",
+  "cases": [
+    {"name": "healthy_direct", "bounty_id": "B-1001",
+     "reward_usdc": 12.5, "refundable_bond_usdc": 2.0,
+     "external_spend_usdc": 1.25, "gross_cash_margin_usdc": 9.25,
+     "status": "claimable", "next_action": "claim",
+     "notes": "gross cash margin is not guaranteed net profit"},
+    {"name": "recovery_reserved", "bounty_id": "B-1002",
+     "reward_usdc": 8.0, "refundable_bond_usdc": 4.0,
+     "external_spend_usdc": 0.5, "gross_cash_margin_usdc": 3.5,
+     "status": "recovery-reserved", "next_action": "wait_for_recovery_release",
+     "notes": "escrow reserved for recovery; not claimable"},
+    {"name": "unprofitable", "bounty_id": "B-1003",
+     "reward_usdc": 3.0, "refundable_bond_usdc": 5.0,
+     "external_spend_usdc": 0.75, "gross_cash_margin_usdc": -2.75,
+     "status": "unprofitable", "next_action": "skip",
+     "notes": "bond exceeds reward after external spend"},
+    {"name": "non_creator_failure", "bounty_id": "B-1004",
+     "reward_usdc": 0.0, "refundable_bond_usdc": 0.0,
+     "external_spend_usdc": 0.0, "gross_cash_margin_usdc": 0.0,
+     "status": "failed", "next_action": "report_non_creator_failure",
+     "notes": "failure is not attributable to the creator"}
+  ]
+}
