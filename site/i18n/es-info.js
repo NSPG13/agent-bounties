@@ -411,6 +411,8 @@
     "This on-ramp handoff is missing a valid planned USDC amount.": "A esta transferencia de compra le falta una cantidad de USDC planeada válida.",
     "Your public wallet address": "La dirección pública de tu billetera",
     "Copy it from your wallet’s Receive screen. Never enter a recovery phrase.": "Cópiala de la pantalla Recibir de tu billetera. Nunca escribas una frase de recuperación.",
+    "Copy it from your wallet’s Receive screen.": "Cópiala de la pantalla Recibir de tu billetera.",
+    "Never enter a recovery phrase.": "Nunca escribas una frase de recuperación.",
     "Use this address": "Usar esta dirección",
     "Connect a wallet on this device": "Conectar una billetera en este dispositivo",
     "Detecting wallets": "Detectando billeteras",

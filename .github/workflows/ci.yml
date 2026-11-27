@@ -129,6 +129,7 @@ jobs:
         run: |
           python3 scripts/run-required-postgres-test.py -p db distribution_
           python3 scripts/run-required-postgres-test.py -p db site_posting_drafts
+          python3 scripts/run-required-postgres-test.py -p db bounty_image_uploads_
           python3 scripts/run-required-postgres-test.py -p worker open_competition_v2_shadow::tests::postgres_shadow_cache_certifies_full_sets_and_recovers_from_disagreement --exact
           python3 scripts/run-required-postgres-test.py -p db tests::x402_relay_attempt_is_idempotent_and_lease_bounded --exact
           python3 scripts/run-required-postgres-test.py -p api github_issue_api_sync_postgres

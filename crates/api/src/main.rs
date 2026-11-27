@@ -679,6 +679,7 @@ use worker::{
         PublishAutonomousBountyTermsRequest,
         domain::AutonomousBountyTermsDocument,
         domain::BountyImageReference,
+        domain::BountyTermsImage,
         PublishAutonomousSubmissionEvidenceRequest,
         payments_stripe::ConnectAccountSnapshot,
         wallet_funding::ReadinessInput,
@@ -902,6 +903,14 @@ impl Modify for SecurityAddon {
             SecurityScheme::Http(ingest_bearer),
         );
     }
+}
+
+/// Public, immutable bounty image read for website uploads (content-addressed).
+async fn public_bounty_image(
+    State(state): State<Arc<AppState>>,
+    Path(sha256): Path<String>,
+) -> Response {
+    site_auth::bounty_image_response(state.store.as_ref(), &sha256).await
 }
 
 #[derive(Clone)]
@@ -2765,6 +2774,7 @@ async fn main() -> anyhow::Result<()> {
             get(github_bounty_discovery),
         )
         .route("/v1/opportunities", get(list_opportunities))
+        .route("/v1/public/bounty-images/:sha256", get(public_bounty_image))
         .route("/v1/opportunities/stream", get(stream_opportunities))
         .route(
             "/v1/opportunities/:opportunity_id/comments",

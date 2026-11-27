@@ -1,0 +1,22 @@
+/* Shared ⓘ info tip (info-tip.js). One look on every page, light and dark. */
+.ab-info { display: inline-flex; align-items: center; vertical-align: middle; margin-inline-start: .3rem; }
+.ab-info-tip {
+  display: inline-grid; place-items: center; inline-size: 1.5rem; block-size: 1.5rem; min-inline-size: 24px; min-block-size: 24px;
+  margin: 0; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--ab-muted, #53675a);
+  font: inherit; line-height: 1; cursor: help; flex: none;
+}
+.ab-info-tip svg { inline-size: 1rem; block-size: 1rem; }
+.ab-info-tip:hover, .ab-info-tip[aria-expanded="true"] { color: var(--ab-ink, #15281c); }
+.ab-info-tip:focus-visible { outline: 2px solid var(--ab-accent, #8ee46b); outline-offset: 1px; }
+.ab-info-tip-text {
+  position: fixed; z-index: 1000; box-sizing: border-box; inline-size: max-content; max-inline-size: min(240px, calc(100vw - 16px));
+  padding: .5rem .65rem; border: 1px solid var(--ab-line, #d2ddcf); border-radius: 8px;
+  background: var(--ab-panel, #fff); color: var(--ab-ink, #15281c); box-shadow: 0 8px 24px #0003;
+  font-size: .8125rem; font-weight: 400; line-height: 1.4; letter-spacing: normal; text-align: start; text-transform: none; white-space: normal; overflow-wrap: anywhere;
+}
+.ab-info-tip-text[hidden] { display: none; }
+/* A label or button with its tip on one line. */
+.ab-info-row { display: inline-flex; align-items: center; flex-wrap: wrap; gap: .15rem; max-inline-size: 100%; }
+div.ab-info-row, p.ab-info-row { display: flex; }
+p.ab-info-row { align-items: flex-end; }
+.ab-info-row > .ab-info, .ab-info-row > [data-manual-only] > .ab-info { margin-inline-start: .15rem; }

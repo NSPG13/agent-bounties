@@ -435,6 +435,41 @@ pub struct BountyImageReference {
     pub mime_type: String,
 }
 
+/// One image in a bounty's published terms. The SHA-256 digest is part of the
+/// terms hash, and `asset_url` must end in `/bounty-images/<sha256>`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct BountyTermsImage {
+    /// `creator_upload` (signed-in upload) or `chatgpt_user_generated`.
+    pub source: String,
+    pub alt_text: String,
+    pub asset_url: String,
+    pub sha256: String,
+    pub mime_type: String,
+    /// Required for `chatgpt_user_generated`; optional otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+}
+
+impl AutonomousBountyTermsDocument {
+    /// Every image a reader should show: `images`, or the legacy single `image`.
+    pub fn image_list(&self) -> Vec<BountyTermsImage> {
+        if !self.images.is_empty() {
+            return self.images.clone();
+        }
+        self.image
+            .iter()
+            .map(|image| BountyTermsImage {
+                source: image.source.clone(),
+                alt_text: image.alt_text.clone(),
+                asset_url: image.asset_url.clone(),
+                sha256: image.sha256.clone(),
+                mime_type: image.mime_type.clone(),
+                prompt: Some(image.prompt.clone()),
+            })
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AutonomousBountyTermsDocument {
     pub schema_version: String,
@@ -447,8 +482,14 @@ pub struct AutonomousBountyTermsDocument {
     pub verification_policy: Value,
     pub source_url: Option<String>,
     pub discovery_source: Option<String>,
+    /// Legacy single image (one approved ChatGPT image). New terms use `images`;
+    /// this stays byte-for-byte so older terms hashes still verify.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<BountyImageReference>,
+    /// Up to four images, each with required alt text. Omitted when empty so
+    /// documents without images hash exactly as before this field existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<BountyTermsImage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_eligibility: Option<AgentEligibilityPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1629,6 +1670,7 @@ mod tests {
             source_url: None,
             discovery_source: None,
             image: None,
+            images: Vec::new(),
             agent_eligibility: None,
             claim_coordination: None,
         })

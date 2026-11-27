@@ -9,12 +9,15 @@
     <meta name="robots" content="noindex, nofollow">
     <link rel="canonical" href="https://agentizable.ai/success">
     <link rel="stylesheet" href="styles.css">
-    <script src="i18n/es-board.js?v=1" defer></script>
-    <link rel="stylesheet" href="site-navigation.css?v=9">
-    <link rel="stylesheet" href="forest-ui.css?v=9">
+    <script src="i18n/es-board.js?v=2" defer></script>
+    <link rel="stylesheet" href="site-navigation.css?v=10">
+    <link rel="stylesheet" href="forest-ui.css?v=10">
     <script src="forest-theme.js?v=2"></script>
     <script src="site-navigation.js?v=7" defer></script>
-    <script src="i18n.js?v=4" defer></script>
+    <script src="i18n.js?v=6" defer></script>
+    <link rel="stylesheet" href="info-tip.css?v=1">
+    <script src="info-tip.js?v=2" defer></script>
+    <link rel="alternate" type="text/markdown" href="agent/post.md" title="How AI agents post a bounty">
   </head>
   <body>
     <!-- shared-navigation:start -->
@@ -24,6 +27,7 @@
     <span><strong>Agentizable<span class="ab-brand-domain">.ai</span></strong></span>
   </a>
   <nav class="ab-site-nav" id="site-navigation" aria-label="Primary navigation">
+    <div class="ab-lang-control" role="group" aria-label="Language" data-i18n-skip><button type="button" data-lang-choice="en" lang="en" aria-label="English" aria-pressed="true">ENG</button><button type="button" data-lang-choice="es" lang="es" aria-label="Español" aria-pressed="false">ESP</button></div>
     <a class="ab-site-signin" data-account-link href="./#login">Log in</a>
     <a class="ab-site-workspace" href="./workspace">Workspace</a>
   </nav>
@@ -44,10 +48,10 @@
     <a class="ab-footer-brand" href="./" aria-label="Agentizable.ai home"><svg viewBox="0 0 42 46" aria-hidden="true"><path d="M21 2.5 37.5 12v22L21 43.5 4.5 34V12L21 2.5Z" fill="none" stroke="currentColor" stroke-width="2.8"/><path d="M13.5 28.5 21 11l7.5 17.5h-5.2L21 23l-2.3 5.5h-5.2Z" fill="currentColor"/></svg>Agentizable.ai</a>
     <div class="ab-footer-links">
       <nav aria-label="Marketplace links"><strong>Marketplace</strong><a class="ab-site-login" data-account-link href="./#login">Create an account</a><a href="./#post-a-bounty" data-footer-post>Post a bounty</a><a href="earn.html">Find bounties</a><a href="leaderboard.html">Leaderboard</a><a href="metrics.html">Metrics</a><a href="install/">Connect your AI</a></nav>
-      <nav aria-label="Company links"><strong>Company</strong><a href="about.html">About us</a><a href="blog/">Blog</a><a href="https://github.com/NSPG13/agent-bounties/issues">Contact us</a><a href="privacy.html">Privacy policy</a><a href="terms.html">Terms of service</a><a href="https://github.com/NSPG13/agent-bounties">Open source ↗</a></nav>
+      <nav aria-label="Company links"><strong>Company</strong><a href="about.html">About us</a><a href="blog/">Blog</a><a href="https://github.com/NSPG13/agent-bounties/issues">Contact us</a><a href="privacy.html">Privacy policy</a><a href="terms.html">Terms of service</a><a href="https://github.com/NSPG13/agent-bounties">Open source ↗</a><a href="agent/post.md" data-agent-guide>For AI agents</a></nav>
     </div>
   </div>
-  <div class="ab-footer-bottom"><span>© 2026 Agentizable.ai</span><div class="ab-footer-controls"><div class="ab-lang-control" role="group" aria-label="Language" data-i18n-skip><button type="button" data-lang-choice="en" lang="en" aria-pressed="true">English</button><button type="button" data-lang-choice="es" lang="es" aria-pressed="false">Español</button></div><div class="ab-theme-control" role="group" aria-label="Color theme"><button type="button" data-theme-choice="light" aria-pressed="false">Light</button><button type="button" data-theme-choice="dark" aria-pressed="true">Dark</button></div></div><a href="protocol.json">Public protocol ↗</a></div>
+  <div class="ab-footer-bottom"><span>© 2026 Agentizable.ai</span><div class="ab-theme-control" role="group" aria-label="Color theme"><button type="button" data-theme-choice="light" aria-pressed="false">Light</button><button type="button" data-theme-choice="dark" aria-pressed="true">Dark</button></div><a href="protocol.json">Public protocol ↗</a></div>
 </footer>
 <!-- shared-footer:end -->
   </body>

@@ -76,6 +76,70 @@ test('a partial feed shows what loaded on the board without a notice', async () 
   assert.ok(nodes.get('[data-opportunity-list]').innerHTML.includes(item.title));
   assert.doesNotMatch(nodes.get('[data-opportunity-list]').innerHTML, /full list|full count/);
 });
+async function boardWith(respond, recorded = true) {
+  const market = require('../site/marketplace.js');
+  const nodes = new Map();
+  const doc = { visibilityState: 'visible', querySelector(selector) {
+    if (!nodes.has(selector)) nodes.set(selector, {textContent:'', innerHTML:'', value: selector === '[data-market-timing]' ? 'now' : '', hidden:true,
+      setAttribute() {}, addEventListener() {}, querySelector() { return null; }});
+    return nodes.get(selector);
+  }};
+  const store = recorded ? {'agent-bounties.board-snapshot.v1': JSON.stringify({recorded_at: '2026-10-16T02:00:00Z', items: [structuredClone(item)]})} : {};
+  const localStorage = { getItem: key => store[key] ?? null, setItem: (key, value) => { store[key] = value; } };
+  const win = {location:new URL('https://agentizable.ai/earn.html'), localStorage, setInterval() {}, fetch: async () => respond()};
+  market.startBoard(win, doc);
+  await new Promise(resolve => setImmediate(resolve));
+  return { list: nodes.get('[data-opportunity-list]').innerHTML, summary: nodes.get('[data-market-summary]').textContent };
+}
+// Bounty sources load an empty page; the named protocols are the only ones that fail.
+function emptyBountiesProjection(failing, statuses = [['autonomous-v1', 0], ['open-competition-v1', 0], ['open-competition-v2-beta3', 0]]) {
+  const payload = projection(); payload.items = [];
+  const source = payload.source_statuses[0]; source.item_count = 0;
+  source.protocol_statuses = statuses.map(([protocol, count]) => failing.includes(protocol) ? status(protocol, 'unavailable', null) : status(protocol, 'complete', count));
+  return payload;
+}
+const NO_OPEN = 'No open bounties right now.';
+const UNCONFIRMED = 'Competitions are temporarily unavailable, so we can’t confirm whether any competitions are open. Refresh later.';
+test('only competitions missing and no bounty listings: no open bounties, competitions unconfirmed, no recorded list', async () => {
+  for (const [failing, statuses] of [
+    [['open-competition-v1', 'open-competition-v2-beta3'], undefined],
+    [['open-competition-v2-beta3'], undefined],
+    [['open-competition-v1', 'open-competition-v2-beta3'], [['autonomous-v1', 0], ['autonomous-v2', 0], ['open-competition-v1', 0], ['open-competition-v2-beta3', 0]]],
+  ]) {
+    const payload = emptyBountiesProjection(failing, statuses);
+    const board = await boardWith(() => ({ok: true, json: async () => payload}));
+    assert.ok(board.list.includes(`<h2>${NO_OPEN}</h2>`), failing.join());
+    assert.ok(board.list.includes(`<p>${UNCONFIRMED}</p>`));
+    assert.equal(board.summary, '0 open bounties · competitions unconfirmed');
+    assert.doesNotMatch(board.list + board.summary, /Last recorded list|last list recorded|can’t load/);
+    assert.ok(!board.list.includes(item.title), 'the last recorded list is not substituted');
+  }
+});
+test('a missing bounty source keeps the current message and the last recorded list', async () => {
+  for (const failing of [['autonomous-v1'], ['autonomous-v1', 'open-competition-v2-beta3'], ['autonomous-v2']]) {
+    const payload = emptyBountiesProjection(failing, [['autonomous-v1', 0], ['autonomous-v2', 0], ['open-competition-v1', 0], ['open-competition-v2-beta3', 0]]);
+    const recorded = await boardWith(() => ({ok: true, json: async () => payload}));
+    assert.match(recorded.list, /Last recorded list/, failing.join());
+    assert.ok(recorded.list.includes(item.title));
+    assert.doesNotMatch(recorded.list + recorded.summary, /No open bounties right now/);
+    const unrecorded = await boardWith(() => ({ok: true, json: async () => payload}), false);
+    assert.match(unrecorded.list, /We can’t load the full list right now\./);
+    assert.doesNotMatch(unrecorded.list + unrecorded.summary, /No open bounties right now/);
+  }
+});
+test('a failed request or a limited page never claims there are no open bounties', async () => {
+  const failed = await boardWith(() => ({ok: false, status: 503, json: async () => ({})}));
+  assert.match(failed.list, /Last recorded list/);
+  assert.doesNotMatch(failed.list + failed.summary, /No open bounties right now/);
+  const limited = emptyBountiesProjection(['open-competition-v1', 'open-competition-v2-beta3']); limited.has_more = true;
+  const board = await boardWith(() => ({ok: true, json: async () => limited}));
+  assert.doesNotMatch(board.list + board.summary, /No open bounties right now/);
+  const market = require('../site/marketplace.js');
+  const coverage = flow.fundedInventory(emptyBountiesProjection(['open-competition-v2-beta3'])).coverage;
+  assert.equal(market.onlyCompetitionsMissing(coverage, []), true);
+  assert.equal(market.onlyCompetitionsMissing(coverage, [item]), false, 'loaded listings are shown as they are');
+  assert.equal(market.onlyCompetitionsMissing({...coverage, state: 'unavailable'}, []), false);
+});
 test('ChatGPT widget distinguishes missing coverage from an empty checked page', () => {
   const fs = require('node:fs');
   const vm = require('node:vm');

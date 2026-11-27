@@ -121,6 +121,8 @@ REQUIRED_FILES = {
     "api-integration.html",
     "site-navigation.css",
     "i18n.js",
+    "info-tip.js",
+    "info-tip.css",
     "i18n/es-board.js",
     "i18n/es-post.js",
     "i18n/es-info.js",
@@ -141,6 +143,7 @@ REQUIRED_FILES = {
     ".well-known/agent-card.json",
     ".well-known/x402.json",
     "agent/index.md",
+    "agent/post.md",
     "analytics-config.js",
     "analytics.js",
     "competition.html",
@@ -277,6 +280,8 @@ ALLOWED_UI_CODE = {
     "posting-draft-canary.js",
     "site-navigation.css",
     "i18n.js",
+    "info-tip.js",
+    "info-tip.css",
     "i18n/es-board.js",
     "i18n/es-post.js",
     "i18n/es-info.js",
@@ -602,9 +607,64 @@ def check_discovery(site_dir: Path, repo_root: Path, protocol: dict) -> None:
     require_phrases(
         "agent/index.md",
         agent_markdown,
-        ["No computer use is required", "get_bounty_feed", "CompetitionSettledV2"],
+        ["No computer use is required", "get_bounty_feed", "CompetitionSettledV2", "https://agentizable.ai/agent/post.md"],
     )
+    require_phrases("llms.txt", llms, ["https://agentizable.ai/agent/post.md"])
+    # P7: one posting guide that matches the form's fields and the shared error codes.
+    guide = (site_dir / "agent" / "post.md").read_text(encoding="utf-8")
+    require_phrases("agent/post.md", guide, [
+        "https://agentizable.ai/post.html", "`title`", "`objective`", "`description`", "`acceptance_criteria`",
+        "`total_budget_usdc`", "`delivery_deadline`", "`timezone`", "`benchmark`", "`evidence_schema`", "2.22",
+        "agent_bounties_fill_posting_form", "prepare_bounty_post", "post.html?from=ai-app", "BountySettled",
+        "title_required", "objective_required", "description_too_long", "criteria_required", "min_total_budget",
+        "deadline_required", "deadline_in_past", "deadline_too_far", "invalid_benchmark", "invalid_evidence_schema",
+    ])
+    post_form = (site_dir / "post.html").read_text(encoding="utf-8")
+    for field in ("title", "objective", "description", "acceptance_criteria", "total_budget_usdc", "delivery_deadline", "timezone", "benchmark", "evidence_schema"):
+        if f'name="{field}"' not in post_form:
+            fail(f"agent/post.md documents {field}, but post.html has no input named {field}")
 
+
+# Owner rule (Nov 25): "what is this for" help next to a button or control is a shared
+# info tip, not a visible line. Tips are plain-text <span data-info-tip> right after the
+# control (no links or controls inside), every page loads the component, and the help
+# lines that moved into tips do not come back as visible text.
+INFO_TIP_MOVED = {
+    "post.html": ["Optional. Agents read it after the objective.", "You mark each one pass or fail when you review the delivery.",
+                  "By OpenAI. Works with the ChatGPT desktop app.", "By Anthropic. Chrome on a computer, with a paid Claude plan.",
+                  "We check finalized chain state before preserving your draft"],
+    "index.html": ["Needed only to solve bounties and receive payouts.", "Receive claims and review reminders on this device"],
+    "onramp.html": ["Copy it from your wallet’s Receive screen."],
+    "check-work.html": ["Choose files or a folder. Folder names inside your work are kept.", "This pauses file cleanup."],
+    "collaborate/index.html": ["Use your existing connection or the public read-only feed.", "Start with a need you can describe."],
+    "api-integration.html": ["Review the terms first. Fund upfront with USDC on Base."],
+    "app-testing.html": ["Review the terms first. Fund upfront with USDC on Base."],
+    "bug-fix.html": ["Review the terms first. Fund upfront with USDC on Base."],
+}
+
+
+def check_info_tips(site_dir: Path) -> None:
+    tip_pattern = re.compile(r"<(\w+)\b[^>]*\bdata-info-tip\b[^>]*>(.*?)</\1>", re.S)
+    for path in sorted(site_dir.rglob("*.html")):
+        relative = path.relative_to(site_dir).as_posix()
+        html = path.read_text(encoding="utf-8")
+        if "data-site-header" in html and "info-tip.js?v=" not in html:
+            fail(f"{relative} must load the shared info tip (run scripts/sync-site-navigation.py)")
+        for tag, body in tip_pattern.findall(html):
+            if tag != "span":
+                fail(f"{relative}: an info tip must be a <span data-info-tip>, not <{tag}>")
+            if "<" in body or not body.strip() or len(body) > 320:
+                fail(f"{relative}: an info tip holds 1 to 320 characters of plain text, with no links or controls")
+        tips = " ".join(body for _, body in tip_pattern.findall(html))
+        for phrase in INFO_TIP_MOVED.get(relative, []):
+            if phrase not in tips:
+                fail(f"{relative}: the help line '{phrase}' must stay in a data-info-tip")
+            if html.count(phrase) != tips.count(phrase):
+                fail(f"{relative}: the help line '{phrase}' is back as visible text; use the shared info tip")
+    component = (site_dir / "info-tip.js").read_text(encoding="utf-8")
+    for phrase in ('icon.type = "button"', '"aria-describedby"', '"role", "tooltip"', '"Escape"', '"pointerdown"', "mouseenter", '"focus"', 'LABEL = "What is this?"'):
+        if phrase not in component:
+            fail(f"info-tip.js lost {phrase}")
 
 def check_a2a_card(site_dir: Path, repo_root: Path) -> None:
     site_card_path = site_dir / ".well-known" / "agent-card.json"
@@ -1503,27 +1563,33 @@ def check_install_distribution(repo_root: Path, site_dir: Path) -> None:
 
 
 def check_language_switch_placement(site_dir: Path) -> None:
-    # Owner decision: the English | Español switch lives in the footer, beside Light | Dark,
-    # as one group in the same format, on every page with the shared header; never in the header.
+    # Owner decision: the ENG | ESP switch lives in the shared header, before Log in, on every
+    # page with the shared header; the footer keeps only Light | Dark.
     pages = [page for page in site_dir.rglob("*.html") if "data-site-header" in page.read_text(encoding="utf-8")]
     if not pages:
         fail("no pages carry the shared header")
+    switch = ('<div class="ab-lang-control" role="group" aria-label="Language" data-i18n-skip>'
+              '<button type="button" data-lang-choice="en" lang="en" aria-label="English" aria-pressed="true">ENG</button>'
+              '<button type="button" data-lang-choice="es" lang="es" aria-label="Español" aria-pressed="false">ESP</button></div>')
     for page in pages:
         text = page.read_text(encoding="utf-8")
         name = page.relative_to(site_dir).as_posix()
         header = re.search(r'<header class="ab-site-header" data-site-header>.*?</header>', text, re.S)
-        if not header or "ab-lang-control" in header[0] or "data-lang-choice" in header[0]:
-            fail(f"{name}: the language switch must not be in the header")
-        group = re.search(r'<div class="ab-footer-bottom">.*?<div class="ab-footer-controls">'
-                          r'(<div class="ab-lang-control" role="group" aria-label="Language" data-i18n-skip>.*?</div>)'
-                          r'(<div class="ab-theme-control" role="group" aria-label="Color theme">.*?</div>)</div>', text, re.S)
-        if not group:
-            fail(f"{name}: the footer must hold the language switch directly beside the theme switch in .ab-footer-controls")
+        nav = header and re.search(r'<nav class="ab-site-nav"[^>]*>\s*(.*?)</nav>', header[0], re.S)
+        if not nav or not nav[1].startswith(switch) or not re.match(r'\s*<a class="ab-site-signin"', nav[1][len(switch):]):
+            fail(f"{name}: the header navigation must start with the ENG | ESP switch, directly before Log in")
+        footer = re.search(r'<!-- shared-footer:start -->.*?<!-- shared-footer:end -->', text, re.S)
+        if not footer or "data-lang-choice" in footer[0] or "ab-footer-controls" in footer[0]:
+            fail(f"{name}: the footer must not hold a language switch")
+        if not re.search(r'<div class="ab-footer-bottom"><span>[^<]*</span><div class="ab-theme-control" role="group" aria-label="Color theme">', footer[0]):
+            fail(f"{name}: the footer keeps only the Light | Dark switch")
         if text.count("data-lang-choice=") != 2:
-            fail(f"{name}: the page must offer exactly one English | Español switch")
-        for choice in ("en", "es"):
-            if f'data-lang-choice="{choice}"' not in group[1]:
-                fail(f"{name}: the footer language switch is missing {choice}")
+            fail(f"{name}: the page must offer exactly one ENG | ESP switch")
+        # P7: every page points agents at the posting guide, once in the head and once in the footer.
+        if len(re.findall(r'<link rel="alternate" type="text/markdown" href="[^"]*agent/post\.md"', text)) != 1:
+            fail(f"{name}: the head must link the agent posting guide exactly once")
+        if text.count("data-agent-guide>For AI agents</a>") != 1:
+            fail(f"{name}: the footer must link the agent posting guide once")
 
 
 def check_shared_script_versions(site_dir: Path) -> None:
@@ -1714,6 +1780,7 @@ def main() -> int:
                       json_file(repo_root / "deployments" / "autonomous-v2-base-mainnet.json"))
     check_discovery(site_dir, repo_root, protocol)
     check_a2a_card(site_dir, repo_root)
+    check_info_tips(site_dir)
     check_analytics(site_dir, repo_root)
     check_homepage(site_dir)
     check_install_distribution(repo_root, site_dir)

@@ -172,8 +172,7 @@ button:disabled { cursor: default; }
 .ab-footer-links a { text-decoration: none; color: var(--ab-muted); }
 .ab-footer-links a:hover { color: var(--ab-ink); }
 .ab-footer-bottom { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 20px; color: var(--ab-muted); font-size: 13px; }
-/* Language and theme switches share one format and sit together as one group. */
-.ab-footer-controls { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* The theme switch (footer) and language switch (header) share one pill format and active state. */
 .ab-theme-control, .ab-lang-control { display: inline-flex; gap: 3px; padding: 3px; border: 1px solid var(--ab-line); border-radius: 999px; }
 .ab-theme-control button, .ab-lang-control button { border: 0; background: transparent; color: var(--ab-muted); border-radius: 999px; min-height: 36px; padding: 6px 14px; }
 .ab-theme-control button[aria-pressed="true"], .ab-lang-control button[aria-pressed="true"] { background: var(--ab-soft); color: var(--ab-ink); }
