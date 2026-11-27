@@ -76,6 +76,50 @@ class TestMCPChildBountyValidation(unittest.TestCase):
         self.assertFalse(c2["passed"])
         self.assertIn("exceeds", c2["reason"])
 
+    # --- REVIEW 5 CONTROLS: DECIMAL.AS_TUPLE() EXACTNESS & CALLER CONTEXT INDEPENDENCE ---
+    def test_reject_long_fractional_tail_sub_margin(self):
+        """
+        child_target_usdc='1.00000000000000000000000000001' has a 29-decimal-place tail.
+        Must not round to 1000000 micro-USDC under default precision; CONTROL_02 must fail against parent=2.
+        """
+        ev = dict(self.valid_evidence, parent_reward_usdc="2", child_target_usdc="1.00000000000000000000000000001")
+        res = self.handler.execute(ev)
+        self.assertFalse(res["all_controls_passed"])
+        c2 = next(c for c in res["controls"] if c["control_id"] == "CONTROL_02_MARGIN_AND_FUNDING")
+        self.assertFalse(c2["passed"])
+        self.assertIn("fractional micro-USDC", c2["reason"])
+
+    def test_accept_valid_trailing_zeroes_beyond_six_decimals(self):
+        """Valid trailing zeroes beyond 6 decimal places (e.g. '2.00000000') pass without rejection."""
+        ev = dict(self.valid_evidence, parent_reward_usdc="2.00000000", child_target_usdc="1.000000000")
+        res = self.handler.execute(ev)
+        self.assertTrue(res["all_controls_passed"])
+        c2 = next(c for c in res["controls"] if c["control_id"] == "CONTROL_02_MARGIN_AND_FUNDING")
+        self.assertTrue(c2["passed"])
+
+    def test_caller_low_precision_context_independence(self):
+        """
+        Caller context with prec=3 must not raise InvalidOperation or fail valid exact amounts like 2.01 and 1.01.
+        """
+        import decimal
+        with decimal.localcontext() as ctx:
+            ctx.prec = 3
+            ev = dict(self.valid_evidence, parent_reward_usdc="2.01", child_target_usdc="1.01")
+            res = self.handler.execute(ev)
+            self.assertTrue(res["all_controls_passed"])
+            c2 = next(c for c in res["controls"] if c["control_id"] == "CONTROL_02_MARGIN_AND_FUNDING")
+            self.assertTrue(c2["passed"])
+
+    def test_arbitrary_long_fractional_tail_rejection(self):
+        """Fractional tails with 50+ trailing zeroes and a trailing non-zero digit are rejected."""
+        long_fractional = "1." + "0" * 45 + "5"
+        ev = dict(self.valid_evidence, parent_reward_usdc=2.0, child_target_usdc=long_fractional)
+        res = self.handler.execute(ev)
+        self.assertFalse(res["all_controls_passed"])
+        c2 = next(c for c in res["controls"] if c["control_id"] == "CONTROL_02_MARGIN_AND_FUNDING")
+        self.assertFalse(c2["passed"])
+        self.assertIn("fractional micro-USDC", c2["reason"])
+
     # --- P2 REGRESSION 1: FLOAT SUBTRACTION PRECISION (MICRO-USDC NORMALIZATION) ---
     def test_exact_margin_with_float_representation(self):
         """parent_reward=2.01 and child_target=1.01 yields exact 1 USDC margin without binary float precision artifact."""

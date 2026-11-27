@@ -50,6 +50,8 @@ class SolutionHandler:
         Guards against booleans, non-numerics, large integers (OverflowError),
         fractional micro-USDC truncation (requiring exact integral micro-USDC),
         Decimal('1e1000000') overflows, and bounds (0 <= val <= 1,000,000).
+        Derives scaled integer directly from Decimal.as_tuple() independently
+        of the caller's active decimal context (rejecting non-zero discarded digits).
         """
         if isinstance(val, bool):
             return {"valid": False, "reason": f"Boolean value is strictly invalid for {field_name}"}
@@ -73,36 +75,65 @@ class SolutionHandler:
         except (InvalidOperation, OverflowError, ValueError, DecimalException):
             return {"valid": False, "reason": f"{field_name} could not be parsed to valid decimal"}
 
-        # Check exponent size to avoid Decimal('1e1000000') overflow
+        # Extract tuple directly: sign, digits, exponent
         try:
-            if d_val.as_tuple().exponent > 10:
+            t = d_val.as_tuple()
+            sign, digits, exponent = t.sign, t.digits, t.exponent
+        except Exception:
+            return {"valid": False, "reason": f"{field_name} could not be parsed to valid decimal"}
+
+        # Check for special non-finite exponents ('n', 'N', 'F')
+        if not isinstance(exponent, int):
+            return {"valid": False, "reason": f"{field_name} cannot be NaN, infinite, or non-finite"}
+
+        # Exact decimal bounds check against maximum limit (1,000,000 USDC)
+        try:
+            if d_val > self.MAX_BOUNDED_USDC:
                 return {"valid": False, "reason": f"{field_name} exceeds maximum bounded limit (1,000,000 USDC)"}
         except Exception:
             return {"valid": False, "reason": f"{field_name} exceeds numeric bounds"}
 
-        # Exact decimal bounds check BEFORE multiplication
-        try:
-            if d_val < Decimal(0):
-                return {"valid": False, "reason": f"{field_name} cannot be negative (got {d_val})"}
-            if d_val > self.MAX_BOUNDED_USDC:
-                return {"valid": False, "reason": f"{field_name} exceeds maximum bounded limit (1,000,000 USDC, got {d_val})"}
-        except (DecimalException, OverflowError):
-            return {"valid": False, "reason": f"{field_name} exceeds numeric bounds"}
+        # Check negative sign (reject non-zero negative values)
+        has_nonzero_digit = any(d != 0 for d in digits)
+        if sign != 0 and has_nonzero_digit:
+            return {"valid": False, "reason": f"{field_name} cannot be negative (got {val})"}
 
-        # Multiply by 1,000,000 in Decimal arithmetic
-        try:
-            micro_dec = d_val * self.DECIMAL_MICRO_PER_USDC
-        except (DecimalException, OverflowError):
-            return {"valid": False, "reason": f"{field_name} calculation overflowed"}
+        # If zero, return 0 micro-USDC immediately
+        if not has_nonzero_digit:
+            return {"valid": True, "micro_usdc": 0}
 
-        # Require exact integral micro-USDC: reject fractional micro-USDC instead of truncating
-        if micro_dec % Decimal(1) != Decimal(0):
-            return {"valid": False, "reason": f"{field_name} has fractional micro-USDC (precision beyond 6 decimal places is unsupported)"}
+        # Exponent bound check: if exponent > 6, minimum 1-digit value is 10^7 = 10,000,000 > 1,000,000 USDC
+        if exponent > 6:
+            return {"valid": False, "reason": f"{field_name} exceeds maximum bounded limit (1,000,000 USDC)"}
 
-        micro_val = int(micro_dec)
+        # Shift by +6 for micro-USDC scaling (1 USDC = 10^6 micro-USDC)
+        shift = exponent + 6
+        num_digits = len(digits)
 
+        if shift >= 0:
+            int_val = 0
+            for d in digits:
+                int_val = int_val * 10 + d
+            micro_val = int_val * (10 ** shift)
+        else:
+            discard_count = -shift
+            if discard_count >= num_digits:
+                # All digits fall into the fractional micro-USDC tail
+                return {"valid": False, "reason": f"{field_name} has fractional micro-USDC (precision beyond 6 decimal places is unsupported)"}
+
+            fractional_tail = digits[num_digits - discard_count:]
+            if any(d != 0 for d in fractional_tail):
+                return {"valid": False, "reason": f"{field_name} has fractional micro-USDC (precision beyond 6 decimal places is unsupported)"}
+
+            integral_digits = digits[:num_digits - discard_count]
+            int_val = 0
+            for d in integral_digits:
+                int_val = int_val * 10 + d
+            micro_val = int_val
+
+        # Exact boundary check in micro-USDC (0 <= micro_val <= 1,000,000 * 10^6)
         if micro_val < 0 or micro_val > self.MAX_BOUNDED_MICRO:
-            return {"valid": False, "reason": f"{field_name} exceeds bounded limits"}
+            return {"valid": False, "reason": f"{field_name} exceeds maximum bounded limit (1,000,000 USDC)"}
 
         return {"valid": True, "micro_usdc": micro_val}
 
