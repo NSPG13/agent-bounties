@@ -103,6 +103,7 @@ function postingWalletFixture({ balanceFailure = false } = {}) {
       return { wallet, usdc: 0n, eth: 18n, blockNumber: "0x123" };
     } } };
   const context = vm.createContext({ window, document, ui, state, URL,
+    v2FundingAmounts: () => ({ total: 2160000n }), legalBinding: () => "fixture-binding", v2CreationResumable: () => false,
     walletReadinessVersion: 0, walletConnecting: false, postingBusy: false, renderFundingGuide() {},
     discoverWallets: async () => [{ provider: phone, info: { name: "Phone wallet" } }], providerName: item => item.info?.name || "Wallet",
     loadProtocol: async () => ({ native_usdc: usdc, chain_id_hex: "0x2105" }),
@@ -129,7 +130,8 @@ test("top-up saves the approved operation before same-tab navigation and binds t
   const context = vm.createContext({ URL, postingBusy: false,
     state: { account: wallet, fundingUsdc: 2.01, accountSession: { authenticated: true } },
     postingSession: { async flush(options) { calls.push(["save", options.requireServer]); if (blocked) throw new Error("Draft changed on another device"); }, snapshot: () => ({ operation_id: operation }) },
-    window: { location: { href: "https://agentizable.ai/post.html?analytics=off", assign: url => calls.push(["navigate", url]) }, open: () => { throw new Error("Popups are blocked"); } },
+    window: { AgentBountiesFundingReadiness: helperContext(), location: { href: "https://agentizable.ai/post.html?analytics=off", assign: url => calls.push(["navigate", url]) }, open: () => { throw new Error("Popups are blocked"); } },
+    v2FundingAmounts: () => ({ total: 2160000n }),
     formatUsdc: value => value.toFixed(2), setPaymentStatus: text => statuses.push(text),
   });
   const source = fs.readFileSync(path.join(root, "site/bounty-composer-v2.js"), "utf8");
@@ -138,7 +140,7 @@ test("top-up saves the approved operation before same-tab navigation and binds t
   await open({ preventDefault() { prevented++; } });
   assert.equal(prevented, 1); assert.deepEqual(calls[0], ["save", true]);
   const destination = new URL(calls[1][1]), back = new URL(destination.searchParams.get("return"));
-  assert.equal(destination.pathname, "/onramp.html"); assert.equal(destination.searchParams.get("amount"), "2.01");
+  assert.equal(destination.pathname, "/onramp.html"); assert.equal(destination.searchParams.get("amount"), "2.16");
   assert.equal(destination.searchParams.get("wallet"), wallet); assert.equal(destination.searchParams.get("operation_id"), operation);
   assert.equal(back.pathname, "/post.html"); assert.equal(back.searchParams.get("operation_id"), operation);
   assert.equal(back.searchParams.get("analytics"), "off"); assert.equal(back.searchParams.get("funding_review"), "1");
@@ -163,7 +165,7 @@ test("both phone entry points reuse the connection, show the shortfall and make 
     }
     assert.equal(env.state.provider, env.phone);
     assert.match(env.element("[data-wallet-state]").textContent, /Connected for this session.*USDC shortfall/);
-    assert.equal(env.ui.missingUsdc.textContent, "2.01 USDC");
+    assert.equal(env.ui.missingUsdc.textContent, "2.16 USDC");
     assert.equal(env.ui.fundNow.disabled, true);
     assert.deepEqual(env.walletCalls, ["eth_requestAccounts", "eth_chainId"]);
     assert.ok(env.statuses.some(text => text.startsWith("Wallet connected.")));
@@ -516,15 +518,17 @@ test("saved wallet, case B: a phone wallet restores its session or shows its own
   assert.ok(env.walletCalls.includes("eth_requestAccounts"));
 });
 
-test("saved wallet, case C: an embedded wallet is loaded directly (its sign-in may open), never the chooser", async () => {
+test("saved wallet, case C: an embedded wallet is loaded directly (its sign-in may open), never the chooser, then turned away from wallet-paid USDC posting", async () => {
   const calls = [];
   const embedded = { agentBountiesCapabilities: { directTransactions: false, postingTransactions: true }, request: async ({ method }) => {
     calls.push(method); if (method === "eth_requestAccounts") return [wallet]; if (method === "eth_chainId") return "0x2105"; throw new Error("Unexpected wallet request: " + method); } };
   const env = savedWalletFixture({ record: { wallet_type: "embedded", provider_id: "coinbase-embedded" }, browser: [], embedded });
   await env.use();
   assert.equal(env.embeddedLoads, 1);
-  assert.equal(env.state.provider, embedded);
-  assert.deepEqual(calls, ["eth_requestAccounts", "eth_chainId"]);
+  // V2 USDC posting is sent and paid for by the creator's own wallet; a signature-only wallet can't.
+  assert.equal(env.state.provider, null);
+  assert.deepEqual(calls, [], "the embedded wallet is never asked to connect for this route");
+  assert.match(env.statuses.at(-1), /can't post with USDC yet\. Choose a browser or phone wallet that holds Base USDC and some Base ETH/);
 });
 
 test("saved wallet, case D: nothing in this browser can hold it, so the page says so instead of opening the chooser", async () => {

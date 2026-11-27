@@ -176,6 +176,12 @@
         return { kind: "allowance", amountUsdcUnits: allowance, movesUsdc: false, recipient: null, spender, expiresAt: null,
           summary: `Approve an allowance of ${formatUnits(allowance)} Base USDC for spender ${spender}. No USDC moves in this transaction. Token contract: ${BASE_USDC}. The allowance has no automatic expiry; it remains until spent or changed.` };
       }
+      if (selector === "0xed6662a2" && context.protocolVersion === "agent-bounties/autonomous-v2" && to === lower(context.factoryAddress)) {
+        if (word(data, 17) !== amount) throw new Error("The V2 creation amount differs from the fee-inclusive funding.");
+        const deadline = timestamp(word(data, 7));
+        return { kind: "creation", amountUsdcUnits: amount, movesUsdc: true, recipient: lower(context.bountyAddress), spender: to, expiresAt: deadline,
+          summary: `Create the reviewed V2 bounty and transfer ${formatUnits(amount)} Base USDC, including its platform fee, to ${lower(context.bountyAddress)} through factory ${to}. Funding deadline: ${deadline}. Your wallet pays the Base ETH network fee.` };
+      }
       if (["0x9d2e414c", "0x61407894"].includes(selector) && to === lower(context.factoryAddress)) {
         const authorized = selector === "0x61407894";
         if (word(data, authorized ? 16 : 15) !== amount) throw new Error("The creation amount differs from the reviewed funding.");

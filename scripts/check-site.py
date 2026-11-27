@@ -179,6 +179,7 @@ REQUIRED_FILES = {
     "posting-brief.js",
     "posting-drafts.js",
     "posting-session.js",
+    "posting-v2-plan.js",
     "posting-draft-canary.html",
     "posting-draft-canary.js",
     "posting-workspace.js",
@@ -226,6 +227,7 @@ REQUIRED_FILES = {
     "post.html",
     "privacy.html",
     "protocol.json",
+    "protocol-v2.json",
     "robots.txt",
     "sitemap.xml",
     "solarpunk-home.js",
@@ -297,6 +299,7 @@ ALLOWED_UI_CODE = {
     "posting-brief.js",
     "posting-drafts.js",
     "posting-session.js",
+    "posting-v2-plan.js",
     "posting-workspace.js",
     "posting-workspace.css",
     "manual-posting.css",
@@ -509,6 +512,33 @@ def check_protocol(protocol: dict, deployment: dict) -> None:
         fail("site and deployment manifests disagree on factory address")
     if deployment.get("policy", {}).get("operator_settlement_signer") is not False:
         fail("autonomous deployment must not configure a settlement operator")
+    # autonomous-v1 was retired for contract weaknesses; new posting uses protocol-v2.json.
+    if protocol.get("status") == "active" or protocol.get("new_creation_enabled") is not False:
+        fail("protocol.json (autonomous-v1) must stay retired for new creation")
+
+
+def check_protocol_v2(protocol: dict, deployment: dict) -> None:
+    verification = deployment.get("verification", {})
+    expected = {
+        "protocol_version": "agent-bounties/autonomous-v2",
+        "status": "active",
+        "creation_route": "direct_wallet",
+        "network": deployment.get("network"),
+        "chain_id": deployment.get("chain_id"),
+        "chain_id_hex": "0x2105",
+        "native_usdc": verification.get("settlement_token"),
+        "factory": deployment.get("factory"),
+        "implementation": verification.get("implementation"),
+        "deployment_transaction": deployment.get("deployment_transaction"),
+        "deployment_block": deployment.get("deployment_block"),
+        "platform_fee_bps": verification.get("platform_fee_bps"),
+        "platform_fee_recipient": verification.get("platform_fee_recipient"),
+    }
+    for key, value in expected.items():
+        if value is None or protocol.get(key) != value:
+            fail(f"protocol-v2.json {key} must match deployments/autonomous-v2-base-mainnet.json")
+    if deployment.get("network") != "base-mainnet" or deployment.get("chain_id") != 8453:
+        fail("protocol-v2.json must describe the Base mainnet v2 deployment")
 
 
 def check_discovery(site_dir: Path, repo_root: Path, protocol: dict) -> None:
@@ -820,7 +850,7 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
             "data-card-verifier",
             "function renderVerifierTerms",
             "if (!ui.verifierSummary || !ui.verifier) return;",
-            'bounty-composer-v2.js?v=48',
+            'bounty-composer-v2.js?v=50',
             "function verificationReadiness",
             "verificationReadiness(benchmark, state.draft?.evidence_schema)",
             'sourceSnapshotDigest.pattern === "^sha256:[0-9a-f]{64}$"',
@@ -858,7 +888,7 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
             'data-post-auth-start',
             'posting-auth.js?v=3',
             'solarpunk-home.js?v=49',
-            'bounty-composer-v2.js?v=48',
+            'bounty-composer-v2.js?v=50',
             'label: "LOG IN TO POST"',
             'credentials: "include"',
             'account_status === "ready" && payload.account_complete === true',
@@ -1226,7 +1256,7 @@ def check_transactional_handoffs(site_dir: Path) -> None:
             "topup-guide.css",
             "Buying crypto does not fund the bounty.",
             "ETH on Base for network fees",
-            "Signed new-bounty creation uses platform-paid gas",
+            "V2 wallet posting requires Base ETH for network fees",
         ],
     )
     onramp_js = (site_dir / "moonpay-onramp.js").read_text(encoding="utf-8")
@@ -1234,7 +1264,7 @@ def check_transactional_handoffs(site_dir: Path) -> None:
         "moonpay-onramp.js",
         onramp_js,
         [
-            "Signed creation uses platform-paid gas",
+            "V2 wallet posting requires Base ETH for network fees",
             'if (provider === "moonpay") throw new Error',
             'body.environment !== "live"',
             'body.destination_network !== "base-mainnet"',
@@ -1606,6 +1636,8 @@ def main() -> int:
         str(repo_root / "scripts/test-payout-proof.cjs"),
         str(repo_root / "scripts/test-solver-v2.cjs"),
         str(repo_root / "scripts/test-terms-publication.cjs"),
+        str(repo_root / "scripts/test-posting-v2-plan.cjs"),
+        str(repo_root / "scripts/test-website-v2-posting-fixture.cjs"),
     ], check=True)
     for relative in sorted(REQUIRED_FILES | EXPECTED_SCENE_ASSETS):
         if not (site_dir / relative).exists():
@@ -1744,6 +1776,8 @@ def main() -> int:
     protocol = json_file(site_dir / "protocol.json")
     deployment = json_file(repo_root / "deployments" / "base-mainnet.json")
     check_protocol(protocol, deployment)
+    check_protocol_v2(json_file(site_dir / "protocol-v2.json"),
+                      json_file(repo_root / "deployments" / "autonomous-v2-base-mainnet.json"))
     check_discovery(site_dir, repo_root, protocol)
     check_a2a_card(site_dir, repo_root)
     check_info_tips(site_dir)
