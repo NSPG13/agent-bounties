@@ -11,6 +11,9 @@
   "use strict";
   const KEY = "agent-bounties.lang", LANGS = ["en", "es"], ATTRS = ["aria-label", "placeholder", "title", "alt"];
   const SKIP = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEXTAREA", "CODE", "PRE"]);
+  // Text inside these is what people type or copy, so it stays as written, but their
+  // placeholder and accessible labels are interface text and are translated.
+  const NO_ATTRS = new Set(["SCRIPT", "STYLE", "NOSCRIPT"]);
   // People's own words (bounty titles, goals, criteria, draft and activity titles) are never
   // translated, even when they happen to match a dictionary phrase.
   const USER_CONTENT = "[data-i18n-skip], [data-card-title], [data-card-goal], [data-card-criteria], .feed-art-title, .opportunity-main > p, .saved-draft-head > a, .account-inbox-row-head > a, [data-funded-title]";
@@ -428,7 +431,7 @@
         if (current !== value) node.nodeValue = value;
         return;
       }
-      if (node.nodeType !== 1 || SKIP.has(node.tagName) || node.matches(USER_CONTENT)) return;
+      if (node.nodeType !== 1 || NO_ATTRS.has(node.tagName) || node.matches(USER_CONTENT)) return;
       for (const name of ATTRS) {
         if (!node.hasAttribute(name)) continue;
         const saved = attrOriginals.get(node) || {}, current = node.getAttribute(name);
@@ -438,6 +441,7 @@
         saved[name] = { en: english, es }; attrOriginals.set(node, saved);
         if (current !== es) node.setAttribute(name, es);
       }
+      if (SKIP.has(node.tagName)) return;
       for (const child of node.childNodes) translateNode(child);
     }
     function restore(node) {
