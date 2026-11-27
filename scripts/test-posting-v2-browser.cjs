@@ -16,7 +16,10 @@ const protocol=JSON.parse(fs.readFileSync(path.join(root,'site/protocol-v2.json'
 const hash=x=>evm.keccak256Hex(evm.textHex(publication.canonical(x)));
 const statement='Isolated browser fixture agreement. No payment or legal acceptance leaves this browser test.';
 const policy={schema_version:'agent-bounties/legal-policy-v1',terms_version:'fixture',privacy_version:'fixture',statement,statement_hash:'sha256:'+createHash('sha256').update(statement).digest('hex'),supported_actions:['post_bounty']};
-const scenarios=['success','changed-plan','second-request-lost','second-request-rejected','wrong-network','no-eth','account-during-estimate','chain-during-estimate','other-device-during-quote'];
+const scenarios=['success','changed-plan','second-request-lost','second-request-rejected','wrong-network','no-eth','account-during-estimate','chain-during-estimate','other-device-during-quote',
+ // Creation receipts: only an explicit status for the requested hash proves an outcome.
+ 'creation-reverted','receipt-empty','receipt-array','receipt-unknown-status','receipt-wrong-hash'];
+const uncertainReceipts=['receipt-empty','receipt-array','receipt-unknown-status','receipt-wrong-hash'];
 (async()=>{
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const origin='http://127.0.0.1:'+server.address().port;
  const browser=await playwright.chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE||undefined});
@@ -65,11 +68,19 @@ const scenarios=['success','changed-plan','second-request-lost','second-request-
     if(req.method==='eth_getBalance')return scenario==='no-eth'?'0x0':'0x2386f26fc10000';
     if(req.method==='eth_call')return req.params[0].data.startsWith('0x70a08231')?'0x5f5e100':'0x1';
     if(req.method==='eth_estimateGas'){if(scenario==='account-during-estimate')window.__changedAccount=true;if(scenario==='chain-during-estimate')window.__changedChain=true;return '0x186a0';}if(req.method==='eth_gasPrice')return '0xf4240';
-    if(req.method==='eth_getTransactionReceipt')return {status:'0x1',transactionHash:req.params[0]};
+    if(req.method==='eth_getTransactionReceipt'){
+     const hash=req.params[0],creation=hash==='0x'+'2'.repeat(64);
+     if(creation&&scenario==='creation-reverted')return {status:'0x0',transactionHash:hash};
+     if(creation&&scenario==='receipt-empty')return {};
+     if(creation&&scenario==='receipt-array')return [];
+     if(creation&&scenario==='receipt-unknown-status')return {status:true,transactionHash:hash};
+     if(creation&&scenario==='receipt-wrong-hash')return {status:'0x0',transactionHash:'0x'+'9'.repeat(64)};
+     return {status:'0x1',transactionHash:hash};
+    }
     if(req.method==='eth_sendTransaction'){
      window.__v2Sends++;if(window.__v2Sends===2&&scenario==='second-request-lost')throw Error('lost wallet reply');
      if(window.__v2Sends===2&&scenario==='second-request-rejected'&&!sessionStorage.getItem('__v2RejectedOnce')){sessionStorage.setItem('__v2RejectedOnce','1');throw Object.assign(Error('User rejected second request'),{code:4001});}
-     if(window.__v2Sends===2)window.__v2Finished=true;
+     if(window.__v2Sends===2&&!/^(creation-reverted|receipt-)/.test(scenario))window.__v2Finished=true;
      return '0x'+String(window.__v2Sends).repeat(64);
     }
     throw Error('Unexpected wallet request '+req.method);
@@ -103,6 +114,23 @@ const scenarios=['success','changed-plan','second-request-lost','second-request-
     // The wallet may have the creation: never offer it again, only reconcile.
     assert.equal(journal.transactions.length,1);assert.equal(journal.phase,'sending');assert.equal(await page.locator('[data-fund-now]').isDisabled(),true);
     await page.reload();await awaitPosting(page);assert.ok(await page.evaluate(()=>JSON.parse(sessionStorage.getItem('agent-bounties.posting-operation.v1'))));
+   }
+   if(scenario==='creation-reverted'){
+    // An explicit 0x0 receipt for the requested hash proves the creation reverted: no USDC moved.
+    assert.equal(journal.transactions.length,2);assert.equal(journal.phase,'v2_creation_pending');
+    assert.match(await page.locator('[data-payment-status]').textContent(),/reverted.*No USDC has moved/);
+    assert.equal(await page.locator('[data-fund-now]').isEnabled(),true);assert.equal(await page.locator('[data-fund-now]').innerText(),'Finish posting');
+   }
+   if(uncertainReceipts.includes(scenario)){
+    // A malformed or mismatched receipt proves nothing: stay locked, never claim that no USDC moved.
+    assert.equal(journal.transactions.length,2);assert.notEqual(journal.phase,'v2_creation_pending');
+    const status=await page.locator('[data-payment-status]').textContent();
+    assert.match(status,/could not be verified.*do not pay again/);assert.doesNotMatch(status,/No USDC has moved|reverted|Finish posting/);
+    assert.equal(await page.locator('[data-fund-now]').isDisabled(),true);assert.notEqual(await page.locator('[data-fund-now]').innerText(),'Finish posting');
+    await page.reload();await awaitPosting(page);
+    const kept=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('agent-bounties.posting-operation.v1')));
+    assert.ok(kept);assert.notEqual(kept.phase,'v2_creation_pending');assert.equal(kept.transactions.length,2);
+    assert.equal((await page.evaluate(()=>window.__v2Requests||[])).filter(r=>r.method==='eth_sendTransaction').length,0,'a reload never re-sends an uncertain creation');
    }
    if(scenario==='second-request-rejected'){
     // A refused creation moved no USDC: the same bounty can be finished, even after a reload.

@@ -2197,7 +2197,14 @@
     if (!/^0x[0-9a-fA-F]{64}$/.test(hash)) throw new Error("The wallet response is uncertain. Check the recorded posting before retrying.");
     postingJournal.checkpoint("submitted", hash); await postingSession.flush({ requireServer: true }); return hash;
   }
-  async function waitReceipt(hash,timeoutMs=150000){const started=Date.now();while(Date.now()-started<timeoutMs){const receipt=await state.provider.request({method:"eth_getTransactionReceipt",params:[hash]});if(receipt){if(receipt.status!=="0x1")throw Object.assign(new Error(`The Base transaction reverted: ${hash}`),{reverted:true});return receipt;}await new Promise((resolve)=>setTimeout(resolve,1600));}throw new Error("The transaction is still pending. Check the wallet or Base explorer before trying again.");}
+  async function waitReceipt(hash,timeoutMs=150000){const started=Date.now();while(Date.now()-started<timeoutMs){const receipt=await state.provider.request({method:"eth_getTransactionReceipt",params:[hash]});if(receipt){
+        // Only a well-formed receipt for this exact hash, with an explicit status, proves an outcome.
+        // Any other reply is uncertain: the recorded operation stays locked and is only reconciled.
+        const bound=typeof receipt==="object"&&!Array.isArray(receipt)&&typeof receipt.transactionHash==="string"&&receipt.transactionHash.toLowerCase()===String(hash).toLowerCase();
+        if(bound&&receipt.status==="0x1")return receipt;
+        if(bound&&receipt.status==="0x0")throw Object.assign(new Error(`The Base transaction reverted: ${hash}`),{reverted:true});
+        throw Object.assign(new Error(`The wallet's receipt for ${hash} could not be verified, so its outcome is unknown.`),{uncertainReceipt:true});
+      }await new Promise((resolve)=>setTimeout(resolve,1600));}throw new Error("The transaction is still pending. Check the wallet or Base explorer before trying again.");}
   async function sendWalletCalls(calls,protocol){
     postingJournal.checkpoint("sending",null,"wallet_sendCalls");
     await prepareWalletRequest(calls);
@@ -2492,7 +2499,9 @@
         ? "Wallet request cancelled. Your draft is saved. Choose Review and post when you are ready."
         : v2CreationResumable()
           ? `${error.code === 4001 ? "The wallet request was cancelled." : error.message || String(error)} No USDC has moved; an approved allowance for this exact bounty may remain. Choose Finish posting to create this same bounty when ready.`
-          : error.message || String(error), "error");
+          : error.uncertainReceipt
+            ? `${error.message} This page keeps checking the same operation; do not pay again.`
+            : error.message || String(error), "error");
       ui.fundNow.disabled = Boolean(postingJournal.load() && !postingSession.canContinue() && !v2CreationResumable());
       if (postingSession.canContinue()) ui.fundNow.textContent = "Continue funding";
       else if (v2CreationResumable()) ui.fundNow.textContent = "Finish posting";

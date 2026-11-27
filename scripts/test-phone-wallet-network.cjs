@@ -65,7 +65,7 @@ async function fixture({ adapted = true, change = null, pending = false, rejectA
     if (request.method === "eth_getTransactionReceipt") {
       const index = hashes.indexOf(request.params[0]);
       assert.ok(index >= 0 && index < sends, "receipts are read only for returned hashes");
-      return { status: index + 1 === revertAt ? "0x0" : "0x1" };
+      return { status: index + 1 === revertAt ? "0x0" : "0x1", transactionHash: request.params[0] };
     }
     if (request.method === "eth_call" && request.params[0].data.startsWith("0xdd62ed3e")) {
       assert.equal(request.params[0].to, protocol.native_usdc);
